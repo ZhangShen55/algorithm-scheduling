@@ -1,20 +1,17 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+# 项目上下文会在生成 OpenSpec 工件时提供给 AI。
+context: |
+  OpenSpec 的提案、设计、任务和规范记录使用中文正文。
+  服务名、接口路径、字段名、能力标识和 OpenSpec 语法关键字保持原样。
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+# 各类工件的持久规则。
+rules:
+  proposal:
+    - 使用中文编写章节标题和说明正文
+  design:
+    - 使用中文编写章节标题和说明正文
+  tasks:
+    - 使用中文编写任务分组和任务内容
+  specs:
+    - Requirement 与 Scenario 的名称和正文使用中文，保留 OpenSpec 强制语法关键字

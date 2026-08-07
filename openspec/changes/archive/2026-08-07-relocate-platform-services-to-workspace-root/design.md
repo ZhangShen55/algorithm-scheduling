@@ -1,4 +1,4 @@
-## Context
+## 背景
 
 当前四个服务位于 `algorithm-scheduling-platform/services`，在文件层面已有 `app/`、测试、配置和 Dockerfile，但运行入口和业务模块仍大量使用 `services.<service_name>` 导入。Dockerfile 复制整个 `services` 目录，平台 `pyproject.toml` 也将 `services*`、`packages*` 和 `scripts*` 打包为一个分发物。这意味着服务看起来独立，实际上仍依赖原单体包布局。
 
@@ -6,7 +6,7 @@
 
 此外，工作区目前没有 Git 元数据，却包含模型权重、媒体样例、日志、缓存、虚拟环境和生成文件。目录迁移前需要建立可恢复、可审查的版本基线，但不能将大模型、秘密信息和运行产物直接加入仓库。
 
-## Goals / Non-Goals
+## 目标 / 非目标
 
 **Goals:**
 
@@ -25,7 +25,7 @@
 - 不拆分或发布独立的公共 PyPI 包；本阶段只形成工作区内可安装的公共分发包。
 - 不自动向远端执行 `git push`；远端推送在迁移验证完成后由用户明确确认。
 
-## Decisions
+## 设计决策
 
 ### 1. 四个服务直接成为工作区根目录项目
 
@@ -99,7 +99,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port PORT --workers 1
 
 `control_service` 继续负责任务事实、事务内 Outbox 写入、实例注册与容量租约；`orchestrator_service` 继续负责 Outbox 发布、Kafka、DAG 和通用节点执行。视觉与在线服务仍为可选部署。算子的现有业务接口和 `operator_registry_client` 注册协议不因目录移动而改变。
 
-## Risks / Trade-offs
+## 风险与权衡
 
 - [风险] 四个 `app` 包在工作区根测试进程中发生模块缓存冲突 → 服务测试在各自目录单独运行，跨服务验证改为子进程或网络边界。
 - [风险] 公共包仍位于 `algorithm-scheduling-platform`，独立服务并非完全零依赖 → 将其定义为显式可安装依赖并锁定边界；是否拆成独立仓库留待后续交付演进。
@@ -108,7 +108,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port PORT --workers 1
 - [风险] 当前无 Git 历史，迁移失败难以恢复 → 在移动前创建安全基线提交，迁移使用 Git 感知移动，不删除用户文件。
 - [权衡] 此次保留 `algorithm-scheduling-platform` 支撑目录，不能一次消除全部“杂乱感” → 优先解决可部署服务边界；支撑目录重命名或再分层作为后续独立变更。
 
-## Migration Plan
+## 迁移计划
 
 1. 审计工作区大文件、秘密、缓存、运行产物和现有忽略文件。
 2. 创建根 `.gitignore`，初始化 Git，配置 `origin`，生成并检查移动前安全基线。
@@ -121,6 +121,6 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port PORT --workers 1
 
 回滚时回到移动前基线提交即可恢复原目录。运行时契约未变化，因此不涉及数据库、Kafka 或线上数据回滚。
 
-## Open Questions
+## 待确认问题
 
 无阻塞问题。`algorithm-scheduling-platform` 支撑目录是否后续改名，可在本次迁移完成后单独讨论。

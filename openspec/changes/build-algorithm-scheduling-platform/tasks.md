@@ -1,4 +1,4 @@
-## 1. Platform Repository and Local Infrastructure
+## 1. 平台仓库与本地基础设施
 
 - [x] 1.1 Create the `algorithm-scheduling-platform` monorepo with four service packages and three shared packages from the approved layout
 - [x] 1.2 Define typed configuration loading, structured logging, trace context, error envelopes, and shared status constants
@@ -6,14 +6,14 @@
 - [x] 1.4 Add shared `/data/course` and `/data/result` directory configuration plus startup permission checks
 - [x] 1.5 Add CI commands for linting, type checks, unit tests, contract tests, and database migration validation
 
-## 2. Database Foundation
+## 2. 数据库基础
 
 - [x] 2.1 Design the PostgreSQL logical schema for courses, task types, nodes, result metadata, Outbox, operator audit data, and visual fallback values
 - [x] 2.2 Add initial migrations with integer status constraints and uniqueness for `(task_id, task_type)`
 - [x] 2.3 Implement transactional repository methods for sparse task creation, idempotent lookup, node state updates, and structured result persistence
 - [x] 2.4 Add indexes and concurrency tests for ready-node claiming, task querying, and Outbox scanning
 
-## 3. control-service Course APIs
+## 3. control-service 课程接口
 
 - [x] 3.1 Implement `POST /api/course-jobs` with `task_types`-scoped validation and the HTTP 200 business response envelope
 - [x] 3.2 Implement request merging for ASR defaults and persistence of `effective_params`
@@ -21,7 +21,7 @@
 - [x] 3.4 Implement `GET /api/course-jobs/{task_id}` returning all four task types, nodes, status text, Chinese reasons, file metadata, and structured results
 - [x] 3.5 Add API tests for PPT-only, ASR-only, combined teacher tasks, student region inputs, duplicate submissions, and missing selected inputs
 
-## 4. Outbox and Core Orchestration
+## 4. Outbox 与核心编排
 
 - [x] 4.1 Implement transactional Outbox creation inside the course submission transaction
 - [x] 4.2 Implement a non-blocking Outbox Publisher loop with publish confirmation, idempotency key, and metrics
@@ -30,7 +30,7 @@
 - [x] 4.5 Implement `URGENT` and `NORMAL` non-preemptive ready-node selection with FIFO ordering inside each priority
 - [x] 4.6 Add restart, duplicate-event, concurrent-claim, unavailable-operator, and priority-order tests
 
-## 5. Operator Registry and Capacity Routing
+## 5. 算子注册与容量路由
 
 - [x] 5.1 Implement register, heartbeat, unregister, list, lease, and release APIs in `control-service`
 - [x] 5.2 Implement Redis TTL heartbeat state and atomic capacity lease scripts with expiry recovery
@@ -39,7 +39,7 @@
 - [x] 5.5 Add `/ops/health`, `/ops/status`, and `/ops/drain` integration requirements and contract tests
 - [x] 5.6 Migrate all platform identifiers and tests to `vbas` and reject legacy `tias` registration codes
 
-## 6. Media Workspace and PPT Pipeline
+## 6. 媒体工作区与 PPT 管道
 
 - [x] 6.1 Implement safe URL download and media metadata inspection into `/data/course/{task_id}`
 - [x] 6.2 Implement shared-download reuse when multiple task types in one submission require the same teacher video
@@ -48,7 +48,7 @@
 - [x] 6.5 Implement per-slide OCR and `/v1/extract_keywords` calls with structured result persistence and progress counts
 - [x] 6.6 Add end-to-end tests for slice-only completion visibility, delayed OCR availability, and per-slide keyword identity
 
-## 7. ASR and Course Overview Pipeline
+## 7. ASR 与课程脑图管道
 
 - [x] 7.1 Implement teacher-video audio extraction to a compatible local WAV file
 - [x] 7.2 Implement the offline ASR v1.1.8 adapter with explicit effective parameters and business-error-body detection
@@ -78,7 +78,7 @@
 - [x] 9.5 Implement realtime ASR WebSocket connection routing, sticky capacity lease, bidirectional proxy, and disconnect cleanup
 - [x] 9.6 Add concurrency, no-capacity, operator-disconnect, multi-image compatibility, and WebSocket stickiness tests
 
-## 10. Operator Deployment Migration
+## 10. 算子部署迁移
 
 - [x] 10.1 Add registry client integration to `asr_offline`, `asr_online`, `ppt_slice`, `ocr`, `text_analysis`, `vbas`, `facerec`, and `screen_det`
 - [x] 10.2 Configure offline and online ASR as one worker per endpoint with separate ports and GPU labels, removing internal Nginx/multi-worker assumptions
@@ -86,7 +86,7 @@
 - [x] 10.4 Verify each operator keeps its existing inference path, request, response, model loading, and default port behavior
 - [x] 10.5 Add Docker restart policies, shared mounts, health checks, and per-instance environment configuration
 
-## 11. Result Lifecycle, Observability, and Operations
+## 11. 结果生命周期、可观测性与运维
 
 - [x] 11.1 Implement node response mapping that separates `path/count` file artifacts from structured `result` values
 - [x] 11.2 Implement terminal cleanup that removes only `/data/course/{task_id}` after durable results are confirmed
@@ -95,7 +95,7 @@
 - [x] 11.5 Add operations APIs for course state, node state, registered instances, DRAINING, queues, and storage usage
 - [x] 11.6 Document backup, restart, disk cleanup, operator drain, and single-machine recovery procedures
 
-## 12. End-to-End Acceptance and A-service Handoff
+## 12. 端到端验收与 A 服务交接
 
 - [x] 12.1 Run PPT-only, ASR-only, teacher-only, student-only, and combined-request end-to-end acceptance flows
 - [x] 12.2 Verify completed task-type reuse and later task-type append behavior for the same `task_id`

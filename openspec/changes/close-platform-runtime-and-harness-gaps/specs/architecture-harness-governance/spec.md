@@ -1,29 +1,29 @@
 ## ADDED Requirements
 
-### Requirement: Platform has scoped durable agent instructions
-The workspace SHALL contain `algorithm-scheduling-platform/AGENTS.md` defining the platform's durable service boundaries, contracts, dependency ownership, entrypoints, required verification, and prohibited shortcuts. Root `AGENTS.md` SHALL include the platform in the project map without duplicating platform-specific detail.
+### Requirement: 平台具有明确范围的持久化 Agent 指令
+工作区 SHALL 包含 `algorithm-scheduling-platform/AGENTS.md`，用于定义平台持久化的服务边界、契约、依赖所有权、入口点、必需验证和禁止的捷径。根 `AGENTS.md` SHALL 在项目地图中包含平台，但不重复平台专属细节。
 
-#### Scenario: An agent modifies orchestrator runtime
-- **WHEN** an agent reads the applicable AGENTS files
-- **THEN** it is instructed to preserve the four-service boundary and run broker-backed runtime Harness scenarios before claiming completion
+#### Scenario: Agent 修改 orchestrator 运行时
+- **WHEN** Agent 读取适用的 AGENTS 文件
+- **THEN** 指令要求其保留四服务边界，并在声明完成前运行由真实 Broker 支撑的运行时 Harness 场景
 
-### Requirement: Detailed changes live in Harness records
-The platform SHALL maintain a `harness/` index, architecture evidence matrix, change ledger, verification commands, and scenario records. Detailed per-change evidence SHALL live in Harness files rather than `AGENTS.md`.
+### Requirement: 详细变更保存在 Harness 记录中
+平台 SHALL 维护 `harness/` 索引、架构证据矩阵、变更台账、验证命令和场景记录。每次变更的详细证据 SHALL 保存在 Harness 文件中，而不是写入 `AGENTS.md`。
 
-#### Scenario: Runtime wiring changes
-- **WHEN** Kafka consumer wiring is implemented or revised
-- **THEN** the change ledger records previous state, changed files, contract impact, verification evidence, environment, and remaining risks
+#### Scenario: 运行时装配发生变化
+- **WHEN** 实现或修改 Kafka Consumer 装配
+- **THEN** 变更台账记录先前状态、变更文件、契约影响、验证证据、环境和剩余风险
 
-### Requirement: Completion claims require evidence tiers
-Harness SHALL distinguish static, unit, database integration, broker integration, service runtime, and operator-contract evidence. A requirement SHALL NOT be marked end-to-end complete using only a lower evidence tier.
+### Requirement: 完成声明需要证据分级
+Harness SHALL 区分静态、单元、数据库集成、Broker 集成、服务运行时和算子契约证据。仅有较低等级证据时，SHALL NOT 将需求标记为端到端完成。
 
-#### Scenario: Repository test manually completes nodes
-- **WHEN** an acceptance test calls repository completion methods instead of a running Worker
-- **THEN** Harness classifies it as component/database integration rather than end-to-end
+#### Scenario: Repository 测试手动完成节点
+- **WHEN** 验收测试直接调用 Repository 完成方法，而不是由运行中的 Worker 完成节点
+- **THEN** Harness 将其归类为组件/数据库集成测试，而不是端到端测试
 
-### Requirement: Architecture review is reproducible
-The architecture evidence matrix SHALL map each approved design decision to current files, automated commands, current verdict, and known gaps.
+### Requirement: 架构复审可复现
+架构证据矩阵 SHALL 将每项已批准的设计决策映射到当前文件、自动化命令、当前结论和已知缺口。
 
-#### Scenario: Review after a new release
-- **WHEN** the architecture is reviewed again
-- **THEN** another engineer can rerun the listed commands and reproduce or challenge every verdict
+#### Scenario: 新版本后的复审
+- **WHEN** 再次执行架构复审
+- **THEN** 其他工程师能够重新运行列出的命令，并复现或质疑每项结论

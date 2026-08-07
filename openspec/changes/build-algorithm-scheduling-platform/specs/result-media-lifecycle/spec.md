@@ -1,44 +1,43 @@
 ## ADDED Requirements
 
-### Requirement: Temporary and durable path separation
-The platform SHALL store downloaded videos, extracted WAV files, and ordinary frames under `/data/course/{task_id}` and SHALL store durable PPT slices and selected visual evidence under `/data/result/{task_id}`. Cleanup SHALL delete only the temporary course directory after all requested pipelines reach a terminal state and durable writes complete.
+### Requirement: 临时路径与持久路径分离
+平台 SHALL 将下载的视频、提取的 WAV 文件和普通帧保存到 `/data/course/{task_id}`，并将持久化 PPT 切片和选定的视觉证据保存到 `/data/result/{task_id}`。所有已请求管道进入终态且持久化写入完成后，清理流程 SHALL 只删除临时课程目录。
 
-#### Scenario: Delete temporary media after completion
-- **WHEN** requested pipelines and durable result writes complete
-- **THEN** `/data/course/{task_id}` is removed and `/data/result/{task_id}` remains available
+#### Scenario: 完成后删除临时媒体
+- **WHEN** 已请求管道和持久化结果写入全部完成
+- **THEN** 删除 `/data/course/{task_id}`，并保留可用的 `/data/result/{task_id}`
 
-### Requirement: File and structured result distinction
-Node responses SHALL use `path` and `count` only for files that actually exist on the shared filesystem. OCR text, keywords, ASR, course overview, behavior intervals, and student statistics SHALL be stored as structured database results and returned under the node's `result` field.
+### Requirement: 区分文件结果与结构化结果
+节点响应 SHALL 只对共享文件系统中确实存在的文件使用 `path` 和 `count`。OCR 文本、关键词、ASR、课程脑图、行为区间和学生统计 SHALL 作为结构化数据库结果保存，并通过节点的 `result` 字段返回。
 
-#### Scenario: PPT pipeline completes
-- **WHEN** slices, OCR, and keywords all complete
-- **THEN** `PPT_SLICE` returns its directory path and count while `PPT_OCR` and `PPT_KEYWORDS` return per-`ppt_image_id` structured results without JSON file paths
+#### Scenario: PPT 管道完成
+- **WHEN** 切片、OCR 和关键词全部完成
+- **THEN** `PPT_SLICE` 返回目录路径和数量，`PPT_OCR` 与 `PPT_KEYWORDS` 返回按 `ppt_image_id` 组织的结构化结果，不返回 JSON 文件路径
 
-### Requirement: Preserve offline ASR response
-`ASR_TRANSCRIPTION.result` SHALL preserve the successful v1.1.8 response fields `language`, `segments`, `text`, `speed_info`, `load_audio_time_ms`, and `gpu_time_ms`, including conditional segment fields produced by the effective ASR options. The adapter SHALL treat ASR response bodies containing an error `code` and `msg` as failures even if HTTP status is 200.
+### Requirement: 保留离线 ASR 响应
+`ASR_TRANSCRIPTION.result` SHALL 保留 v1.1.8 成功响应中的 `language`、`segments`、`text`、`speed_info`、`load_audio_time_ms` 和 `gpu_time_ms` 字段，包括由实际 ASR 选项产生的条件性 segment 字段。即使 HTTP 状态为 200，只要 ASR 响应体包含错误 `code` 和 `msg`，适配器 SHALL 将其视为失败。
 
-#### Scenario: Successful full ASR response
-- **WHEN** v1.1.8 returns transcription data
-- **THEN** the complete successful response is persisted and returned without replacing it with a platform-defined transcript schema
+#### Scenario: 返回完整的 ASR 成功响应
+- **WHEN** v1.1.8 返回转写数据
+- **THEN** 持久化并返回完整成功响应，不使用平台自定义的转写结构替换它
 
-### Requirement: Preserve course overview response
-`COURSE_OVERVIEW.result` SHALL preserve the existing `/v1/course_overviews` success response including `model`, `id`, nested `result.overview`, completion metadata, and token `usage`. Nested result naming SHALL be retained rather than discarded or renamed.
+### Requirement: 保留课程脑图响应
+`COURSE_OVERVIEW.result` SHALL 保留现有 `/v1/course_overviews` 成功响应，包括 `model`、`id`、嵌套的 `result.overview`、完成元数据和 token `usage`。嵌套结果的命名 SHALL 保留，不丢弃也不重命名。
 
-#### Scenario: Course overview succeeds
-- **WHEN** text analysis returns a `GenericResponse`
-- **THEN** the complete response is persisted under the node's platform-level `result`
+#### Scenario: 课程脑图处理成功
+- **WHEN** 文本分析返回 `GenericResponse`
+- **THEN** 完整响应持久化到节点的平台级 `result` 中
 
-### Requirement: Per-slide structured identity
-PPT OCR and keyword results SHALL be returned as structured item collections keyed by `ppt_image_id`, and progress SHALL expose `completed_count` and `total_count`.
+### Requirement: 单张切片的结构化身份
+PPT OCR 和关键词结果 SHALL 以 `ppt_image_id` 为键返回结构化项目集合，进度 SHALL 提供 `completed_count` 和 `total_count`。
 
-#### Scenario: Keywords are missing for some slides
-- **WHEN** slicing and OCR complete but keyword processing remains incomplete
-- **THEN** slice files and completed OCR data remain queryable while the keyword node shows its non-completed state and item progress
+#### Scenario: 部分切片缺少关键词
+- **WHEN** 切片和 OCR 已完成，但关键词处理尚未完成
+- **THEN** 切片文件和已完成的 OCR 数据仍可查询，同时关键词节点显示未完成状态和项目进度
 
-### Requirement: Local path semantics
-Every `path` returned by the platform SHALL mean an absolute server-local or shared-mount filesystem path, not an HTTP URL. The platform SHALL not imply that A can dereference a path unless A shares or is granted access to that filesystem.
+### Requirement: 本地路径语义
+平台返回的每个 `path` SHALL 表示服务器本地或共享挂载中的绝对文件系统路径，而不是 HTTP URL。除非 A 服务共享或被授予访问该文件系统的权限，否则平台 SHALL 不暗示 A 服务能够直接读取该路径。
 
-#### Scenario: Return PPT slice location
-- **WHEN** A queries a completed slice node
-- **THEN** the node returns a path such as `/data/result/course-001/ppt/slices` and does not label it as a URL
-
+#### Scenario: 返回 PPT 切片位置
+- **WHEN** A 服务查询已经完成的切片节点
+- **THEN** 节点返回类似 `/data/result/course-001/ppt/slices` 的路径，且不将其标记为 URL

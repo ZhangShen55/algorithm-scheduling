@@ -1,59 +1,59 @@
 ## ADDED Requirements
 
-### Requirement: Orchestrator runtime starts real background loops
-`orchestrator-service` SHALL start a real Kafka producer, course-command consumer, Outbox publisher, node dispatcher, node executors, task-state aggregator, and terminal cleanup loop during application lifespan, and SHALL close all resources gracefully.
+### Requirement: Orchestrator 运行时启动真实后台循环
+`orchestrator-service` SHALL 在应用 lifespan 期间启动真实的 Kafka Producer、课程命令 Consumer、Outbox Publisher、节点 Dispatcher、节点 Executor、任务状态 Aggregator 和终态清理循环，并 SHALL 优雅关闭全部资源。
 
-#### Scenario: Service starts with healthy dependencies
-- **WHEN** PostgreSQL, Redis, and Kafka are reachable and orchestrator starts
-- **THEN** readiness becomes healthy only after the Publisher, Consumer, and executor loops are running
+#### Scenario: 服务在依赖健康时启动
+- **WHEN** PostgreSQL、Redis 和 Kafka 可访问，并启动 orchestrator
+- **THEN** 只有 Publisher、Consumer 和 Executor 循环全部运行后，就绪状态才变为健康
 
-#### Scenario: Kafka consumer loop exits unexpectedly
-- **WHEN** a required background loop terminates unexpectedly
-- **THEN** readiness becomes unhealthy and the service exits or is restarted instead of continuing as a health-only process
+#### Scenario: Kafka Consumer 循环意外退出
+- **WHEN** 必需的后台循环意外终止
+- **THEN** 就绪状态变为不健康，服务退出或被重启，而不是继续作为只有健康接口的空进程运行
 
-### Requirement: Course commands use a real Kafka broker
-The platform SHALL publish Outbox events to a real Kafka topic and SHALL consume them through a committed consumer group. Offsets SHALL be committed only after idempotent pipeline initialization succeeds.
+### Requirement: 课程命令使用真实 Kafka Broker
+平台 SHALL 将 Outbox 事件发布到真实 Kafka topic，并通过具有提交语义的 Consumer Group 消费。只有幂等管道初始化成功后，SHALL 提交 offset。
 
-#### Scenario: API commits while Kafka is unavailable
-- **WHEN** control-service commits a task and Outbox event while Kafka is unavailable
-- **THEN** the event remains pending and is published and consumed after Kafka recovers
+#### Scenario: Kafka 不可用时 API 完成提交
+- **WHEN** Kafka 不可用期间 control-service 提交任务和 Outbox 事件
+- **THEN** 事件保持待发布，并在 Kafka 恢复后发布和消费
 
-### Requirement: Node execution produces state and results
-The orchestrator SHALL claim ready nodes by priority and capability, acquire an operator lease, perform required media preparation and adapter calls, persist actual node results, release prerequisites, derive task-type terminal state, and release the lease.
+### Requirement: 节点执行产生状态和结果
+orchestrator SHALL 按优先级和能力领取就绪节点、申请算子租约、执行必要的媒体准备和适配器调用、持久化真实节点结果、释放后续节点、推导任务类型终态并释放租约。
 
-#### Scenario: PPT pipeline completes
-- **WHEN** A submits a PPT task and the required contract-compatible operators are ready
-- **THEN** Worker-produced results progress from slice through OCR and keywords without a test or operator directly updating repository state
+#### Scenario: PPT 管道完成
+- **WHEN** A 服务提交 PPT 任务，并且所需的契约兼容算子已经就绪
+- **THEN** Worker 产生的结果从切片依次推进到 OCR 和关键词，不由测试或算子直接更新 Repository 状态
 
-#### Scenario: PPT operator publishes durable shared-path results
-- **WHEN** the PPT operator finishes a platform-internal asynchronous slice task
-- **THEN** it atomically publishes `/data/result/{task_id}/ppt/manifest.json`, sends one terminal metadata callback without Base64 image bytes, and the orchestrator marks `PPT_SLICE` complete only after validating the manifest and files
+#### Scenario: PPT 算子发布持久化共享路径结果
+- **WHEN** PPT 算子完成平台内部异步切片任务
+- **THEN** 它原子发布 `/data/result/{task_id}/ppt/manifest.json`，发送一次不含 Base64 图片字节的终态元数据回调；orchestrator 只有校验 manifest 和文件后才将 `PPT_SLICE` 标记为完成
 
-#### Scenario: PPT asynchronous capacity remains reserved
-- **WHEN** a PPT submission has been accepted but its terminal callback has not committed completion
-- **THEN** the orchestrator renews the selected operator lease and releases it only after terminal persistence or a terminal error
+#### Scenario: PPT 异步容量保持预留
+- **WHEN** PPT 提交已受理，但终态回调尚未完成提交
+- **THEN** orchestrator 续约选中的算子租约，直到终态持久化或发生终态错误后才释放
 
-#### Scenario: Operator is unavailable
-- **WHEN** a ready node has no ready operator capacity
-- **THEN** it remains in status 30 while unrelated capabilities continue executing
+#### Scenario: 算子不可用
+- **WHEN** 就绪节点没有可用的就绪算子容量
+- **THEN** 节点保持状态 30，同时无关能力继续执行
 
-### Requirement: Visual runtime composes adaptive analysis
-`vision-orchestrator-service` SHALL consume course-level visual commands and use a concrete analyzer that performs local frame extraction, caching, adaptive planning, capacity-routed VBas calls, aggregation, evidence publication, progress events, and structured result persistence.
+### Requirement: 视觉运行时组合自适应分析
+`vision-orchestrator-service` SHALL 消费课程级视觉命令，并使用具体 Analyzer 执行本地抽帧、缓存、自适应规划、容量路由的 VBas 调用、聚合、证据发布、进度事件和结构化结果持久化。
 
-#### Scenario: Teacher writing requires refinement
-- **WHEN** coarse scanning finds a writing candidate
-- **THEN** the visual runtime performs denser synchronous VBas rounds and persists the refined interval and selected evidence before publishing completion
+#### Scenario: 教师板书需要细化
+- **WHEN** 粗扫发现板书候选
+- **THEN** 视觉运行时执行更密集的同步 VBas 检测轮次，在发布完成事件前持久化细化后的区间和选定证据
 
-### Requirement: Runtime-owned cleanup, audit, and metrics
-Actual Worker execution SHALL invoke terminal workspace cleanup, node audit logging, task/node/Outbox/Kafka/operator/lease metrics, and task-state aggregation at the corresponding lifecycle boundaries.
+### Requirement: 运行时负责清理、审计和指标
+真实 Worker 执行 SHALL 在对应生命周期边界触发终态工作区清理、节点审计日志、任务/节点/Outbox/Kafka/算子/租约指标和任务状态聚合。
 
-#### Scenario: All requested pipelines are terminal
-- **WHEN** durable result files exist and all requested nodes are terminal
-- **THEN** the Worker removes only `/data/course/{task_id}`, keeps `/data/result/{task_id}`, and records the cleanup outcome
+#### Scenario: 所有已请求管道进入终态
+- **WHEN** 持久化结果文件存在，并且所有已请求节点均进入终态
+- **THEN** Worker 只删除 `/data/course/{task_id}`，保留 `/data/result/{task_id}`，并记录清理结果
 
-### Requirement: Online HTTP resources close gracefully
-`online-gateway-service` SHALL close its shared HTTP client and WebSocket-related resources during application shutdown.
+### Requirement: 在线 HTTP 资源优雅关闭
+`online-gateway-service` SHALL 在应用关闭期间关闭共享 HTTP Client 和 WebSocket 相关资源。
 
-#### Scenario: Gateway stops
-- **WHEN** online-gateway receives graceful shutdown
-- **THEN** its shared HTTP connection pool is closed without leaking resources
+#### Scenario: 网关停止
+- **WHEN** online-gateway 收到优雅关闭信号
+- **THEN** 共享 HTTP 连接池关闭且不泄漏资源

@@ -1,4 +1,4 @@
-## Context
+## 背景
 
 原设计确定四个可部署服务：`control-service`、`orchestrator-service`、`vision-orchestrator-service`、`online-gateway-service`；PostgreSQL 保存业务事实和 Outbox，Kafka 传课程级命令，Redis 保存算子 TTL 运行态和容量租约，算法实例继续使用现有 HTTP/WebSocket 协议。
 
@@ -22,7 +22,7 @@
 
 因此原架构方向继续采用，但旧 change 的 `70/70` 只能解释为“计划组件已生成”，不能解释为“平台可以按设计运行”。在本变更完成前，不归档为生产完成状态。
 
-## Goals / Non-Goals
+## 目标 / 非目标
 
 **Goals:**
 
@@ -41,7 +41,7 @@
 - 不在本变更增加失败重试、人工补跑、取消和强制重算产品规则。
 - 不把逐次改动流水账写进 `AGENTS.md`。
 
-## Decisions
+## 设计决策
 
 ### 1. 保留四服务边界，补运行时装配而不是再次合并
 
@@ -149,7 +149,7 @@ harness/scenarios/*.md
 - 查询结果由 Worker 产生，测试不得人工调用 `complete_node` 或 `update_task_type_state`。
 - 验证重启、重复消息、URGENT、等待算子、清理和指标。
 
-## Risks / Trade-offs
+## 风险与权衡
 
 - [真实 E2E 变慢且更容易受环境影响] → 单元测试继续覆盖算法细节，Harness 将 broker E2E 独立分层并输出诊断。
 - [后台循环异常导致进程存活但不工作] → readiness 跟踪每个循环状态，TaskGroup 异常触发服务退出，由 Docker 重启。
@@ -158,7 +158,7 @@ harness/scenarios/*.md
 - [算子 wheel 与算法环境冲突] → wheel 只包含轻量共享客户端依赖，构建阶段执行导入和 ops contract 测试。
 - [PostgreSQL 心跳写放大] → 只按配置周期写摘要或状态变化事件，Redis 保持高频 TTL。
 
-## Migration Plan
+## 迁移计划
 
 1. 建立平台 `AGENTS.md` 和 Harness 基线，先记录当前不符合项。
 2. 引入 Kafka adapter、配置和 runtime lifecycle，接通课程命令初始化。
@@ -171,7 +171,7 @@ harness/scenarios/*.md
 
 回滚以服务为单位：A 未切流前保留现有旧链路；数据库变更只增加审计数据；关闭新 Worker 不删除 Outbox 和任务事实；不在回滚时删除 `/data/result`。
 
-## Open Questions
+## 待确认问题
 
 - Kafka 客户端最终选用 `aiokafka` 还是 `confluent-kafka`，需结合目标 Python/GPU 镜像的 wheel 可用性验证。
 - PPT 终态回调由 `orchestrator-service` 的既有 FastAPI 端口暴露内部入口，不新增独立回调服务；共享 manifest 是耐久完成证据，回调是低延迟通知。

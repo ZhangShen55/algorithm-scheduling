@@ -1,48 +1,47 @@
 ## ADDED Requirements
 
-### Requirement: Active operator registration
-Every routable operator endpoint SHALL register with `control-service` using an `instance_id`, `operator_code`, capabilities, service URL, model/API versions, GPU/CPU labels, and declared capacity. Operator instances SHALL register with the platform, not with individual adapters.
+### Requirement: 算子主动注册
+每个可路由的算子端点 SHALL 使用 `instance_id`、`operator_code`、能力列表、服务 URL、模型/API 版本、GPU/CPU 标签和声明容量向 `control-service` 注册。算子实例 SHALL 向平台注册，而不是向单个适配器注册。
 
-#### Scenario: Register a VBas instance
-- **WHEN** a VBas container starts successfully
-- **THEN** it registers `operator_code=vbas`, its supported teacher/student capabilities, endpoint, version, and capacity
+#### Scenario: 注册 VBas 实例
+- **WHEN** VBas 容器成功启动
+- **THEN** 它注册 `operator_code=vbas`、支持的教师/学生能力、端点、版本和容量
 
-### Requirement: Heartbeat and lifecycle state
-Registered instances SHALL send periodic heartbeats and SHALL expose `ONLINE`, `DRAINING`, and `OFFLINE` lifecycle states. Expired instances SHALL be excluded from routing.
+### Requirement: 心跳与生命周期状态
+已注册实例 SHALL 定期发送心跳，并提供 `ONLINE`、`DRAINING` 和 `OFFLINE` 生命周期状态。过期实例 SHALL 从路由候选中排除。
 
-#### Scenario: Heartbeat expires
-- **WHEN** an instance does not heartbeat before its TTL expires
-- **THEN** new leases are denied and the instance is shown as offline
+#### Scenario: 心跳过期
+- **WHEN** 实例未在 TTL 到期前发送心跳
+- **THEN** 平台拒绝为其创建新租约，并将该实例显示为离线
 
-#### Scenario: Drain an instance
-- **WHEN** operations sets an instance to DRAINING
-- **THEN** the instance receives no new work while existing work may complete
+#### Scenario: 排空实例
+- **WHEN** 运维人员将实例设置为 DRAINING
+- **THEN** 实例不再接收新任务，但允许已有任务完成
 
-### Requirement: Health and status endpoints
-Operators SHALL expose `/ops/health`, `/ops/status`, and `/ops/drain` semantics sufficient to distinguish process liveness, model readiness, current capacity, and graceful draining.
+### Requirement: 健康与状态接口
+算子 SHALL 提供 `/ops/health`、`/ops/status` 和 `/ops/drain` 语义，足以区分进程存活、模型就绪、当前容量和优雅排空状态。
 
-#### Scenario: Process is alive but model failed to load
-- **WHEN** `/ops/health` confirms the process but `/ops/status` reports the model unavailable
-- **THEN** the platform does not route inference to the instance
+#### Scenario: 进程存活但模型加载失败
+- **WHEN** `/ops/health` 确认进程存活，但 `/ops/status` 报告模型不可用
+- **THEN** 平台不向该实例路由推理请求
 
-### Requirement: Atomic capacity lease
-The platform SHALL use Redis-backed atomic leases with TTL before routing requests and SHALL release leases after completion or expiry. An operator that has no available capacity SHALL not be selected.
+### Requirement: 原子容量租约
+平台 SHALL 在路由请求前使用带 TTL 的 Redis 原子租约，并在任务完成或租约过期后释放租约。没有可用容量的算子 SHALL 不被选择。
 
-#### Scenario: Concurrent lease attempts for one slot
-- **WHEN** two schedulers attempt to reserve the final slot concurrently
-- **THEN** exactly one lease succeeds
+#### Scenario: 并发争抢最后一个槽位
+- **WHEN** 两个调度器同时尝试预留最后一个槽位
+- **THEN** 只有一个租约成功
 
-### Requirement: Deployment endpoint equals registration instance
-One independently reachable process/port SHALL be one registered instance. Offline and online ASR SHALL run with one Uvicorn worker per container endpoint and may be deployed on each GPU with distinct ports.
+### Requirement: 部署端点等同于注册实例
+一个可独立访问的进程/端口 SHALL 对应一个注册实例。离线和在线 ASR 的每个容器端点 SHALL 使用一个 Uvicorn worker，并可在每张 GPU 上通过不同端口分别部署。
 
-#### Scenario: ASR on two GPUs
-- **WHEN** GPU0 and GPU1 each run offline and online ASR on different ports
-- **THEN** four independently selectable instances register with the corresponding capability and GPU label
+#### Scenario: 两张 GPU 上运行 ASR
+- **WHEN** GPU0 和 GPU1 分别在不同端口运行离线和在线 ASR
+- **THEN** 四个可独立选择的实例使用对应能力和 GPU 标签完成注册
 
-### Requirement: VBas-only platform identity
-All new platform contracts SHALL use `vbas`. The platform SHALL NOT expose or persist legacy `tias` aliases, route names, service codes, environment names, or container identities.
+### Requirement: 平台只使用 VBas 标识
+所有新平台契约 SHALL 使用 `vbas`。平台 SHALL NOT 暴露或持久化旧的 `tias` 别名、路由名、服务码、环境名或容器标识。
 
-#### Scenario: Register with a legacy code
-- **WHEN** an instance attempts to register `operator_code=tias`
-- **THEN** the platform rejects the registration as an unsupported operator code
-
+#### Scenario: 使用旧代码注册
+- **WHEN** 实例尝试注册 `operator_code=tias`
+- **THEN** 平台以不支持的算子代码为由拒绝注册

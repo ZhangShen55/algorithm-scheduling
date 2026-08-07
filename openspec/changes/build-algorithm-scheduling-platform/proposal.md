@@ -1,8 +1,8 @@
-## Why
+## 为什么
 
 现有 A 服务承担三路课程视频的媒体处理与算法串联，而现有 ASR、PPT 切片、OCR、文本分析、VBas、人脸识别和图像质量检测均以独立同步服务运行，缺少统一的异步任务状态、节点编排、多实例容量路由、文件生命周期和运维视图。现在需要建设一套不依赖 Kubernetes、可在单机 Docker 环境运行的算法调度平台，接管课后离线处理，并为在线图片与实时语音提供统一实例分发能力。
 
-## What Changes
+## 变更内容
 
 - 新建包含 `control-service`、`orchestrator-service`、`vision-orchestrator-service`、`online-gateway-service` 的算法调度平台。
 - 提供按唯一 `task_id` 提交和查询课程任务的北向接口，允许同一课程分多次追加 `PPT`、`ASR`、`TEACHER_BEHAVIOR`、`STUDENT_BEHAVIOR` 任务。
@@ -15,9 +15,9 @@
 - 保持现有算子接口协议，由平台适配器调用真实接口；ASR v1.1.8、课程脑图、OCR、关键词等结果不由平台重新发明格式。
 - **BREAKING**：平台层彻底使用 `vbas` 命名，不保留旧 `tias` 标识、路径或注册代码；平台北向接口统一使用 `/api` 前缀，不使用 `/v1` 前缀。
 
-## Capabilities
+## 能力范围
 
-### New Capabilities
+### 新增能力
 
 - `course-job-lifecycle`: 课程任务提交、按任务类型幂等追加、整数状态机、全任务与节点结果查询。
 - `offline-pipeline-orchestration`: Outbox、Kafka、DAG、节点执行、两级优先级和四类离线业务管道。
@@ -26,11 +26,11 @@
 - `adaptive-vision-analysis`: T/S 视频抽帧、VBas 多轮检测、行为区间细化、人数/行为聚合与证据快照。
 - `result-media-lifecycle`: 结构化结果持久化、节点结果映射、长期文件发布及临时工作区清理。
 
-### Modified Capabilities
+### 调整能力
 
 无。当前主规格目录为空，本次全部作为新能力建立。
 
-## Impact
+## 影响范围
 
 - 新增调度平台仓库结构及四个独立可部署服务。
 - 影响 A 服务对接的课程任务提交、查询、在线图片和实时 ASR 入口。

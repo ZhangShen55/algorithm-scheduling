@@ -1,8 +1,8 @@
-## Why
+## 为什么
 
 `build-algorithm-scheduling-platform` 已实现大量独立组件并通过单元/数据库测试，但复审发现其 70/70 状态高估了可部署完成度：两个 Worker 入口尚未装配 Kafka 和执行循环，验收测试直接伪造节点完成，部分部署、清理、审计和指标能力也未进入真实运行路径。现在需要建立可重复的 Harness 证据链，并补齐从 A 提交到真实 Worker/算子替身/结果查询的运行闭环。
 
-## What Changes
+## 变更内容
 
 - 为 `orchestrator-service` 装配真实 Kafka Producer/Consumer、Outbox Publisher、管道初始化、节点领取、容量租约、媒体准备、算子适配和任务终态汇总循环。
 - 为 `vision-orchestrator-service` 装配 Kafka 消费/发布、实际 `VisualAnalyzer` 组合实现、抽帧、缓存、自适应扫描、VBas 调用、聚合和结果写入循环。
@@ -16,19 +16,19 @@
 - 建立 `algorithm-scheduling-platform/harness/`，详细记录调整台账、设计-实现证据矩阵、验收命令、环境前提和已知限制。
 - **BREAKING（完成度口径）**：只有真实 Kafka broker、真实 PostgreSQL/Redis、平台常驻进程和契约一致算子替身贯通时，才允许标记端到端验收完成；直接调用 repository 完成节点不再算端到端。
 
-## Capabilities
+## 能力范围
 
-### New Capabilities
+### 新增能力
 
 - `platform-runtime-wiring`: 四个平台服务的常驻运行时、Kafka、节点执行、视觉执行、终态汇总和优雅停止。
 - `platform-deployment-closure`: 平台 Compose、算子 wheel 安装、依赖健康检查和单机可重复部署。
 - `architecture-harness-governance`: 分层 `AGENTS.md`、Harness 调整台账、证据矩阵和完成度门禁。
 
-### Modified Capabilities
+### 调整能力
 
 无。原能力尚未同步到主规格目录，本变更以补齐运行闭环的新能力描述为准，不重写 A 面和算子业务协议。
 
-## Impact
+## 影响范围
 
 - 影响根目录四服务的 `app/main.py`、Kafka/runtime 公共包、节点执行与视觉组合层、配置、指标、审计、清理和测试。
 - 影响 `deploy/` 的平台/基础设施/算子 Compose 与八个算子 Dockerfile。
