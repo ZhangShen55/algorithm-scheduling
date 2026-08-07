@@ -1,6 +1,7 @@
 # Algorithm Scheduling Platform
 
-Single-repository implementation of the four-service algorithm scheduling platform.
+工作区采用单仓库管理。四个可部署服务位于工作区根目录，本目录只保留公共包、
+数据库迁移、部署编排、平台契约测试和 Harness。
 
 Current maturity: the four FastAPI service projects, typed configuration, control-plane
 components, PPT shared-result components and single-machine Compose are present. The
@@ -9,10 +10,10 @@ the repository must not yet be treated as an end-to-end production runtime.
 
 ## Services
 
-- `control_service`: course task API, persistent status, Outbox and operator control plane.
-- `orchestrator_service`: offline Outbox publisher, Kafka consumers and general DAG execution.
-- `vision_orchestrator_service`: adaptive T/S frame analysis and aggregation.
-- `online_gateway_service`: request-level online image routing and realtime ASR session proxy.
+- `../control_service`: course task API, persistent status, Outbox and operator control plane.
+- `../orchestrator_service`: offline Outbox publisher, Kafka consumers and general DAG execution.
+- `../vision_orchestrator_service`: adaptive T/S frame analysis and aggregation.
+- `../online_gateway_service`: request-level online image routing and realtime ASR session proxy.
 
 ## Shared packages
 

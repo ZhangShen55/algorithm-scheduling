@@ -30,7 +30,7 @@
 
 ## Impact
 
-- 影响 `algorithm-scheduling-platform/services/*/main.py`、Kafka/runtime 公共包、节点执行与视觉组合层、配置、指标、审计、清理和测试。
+- 影响根目录四服务的 `app/main.py`、Kafka/runtime 公共包、节点执行与视觉组合层、配置、指标、审计、清理和测试。
 - 影响 `deploy/` 的平台/基础设施/算子 Compose 与八个算子 Dockerfile。
 - 新增 Kafka Python 客户端依赖和真实 broker 集成测试环境。
 - 新增平台级 `AGENTS.md` 与 `harness/`，根 `AGENTS.md` 只增加平台项目地图和跨项目边界。

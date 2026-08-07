@@ -1,5 +1,7 @@
 # Algorithm Scheduling Platform Guide
 
+This file governs the shared packages, migrations, deployment definitions, cross-service tests and Harness under `algorithm-scheduling-platform/`. The four deployable service projects are siblings at the workspace root; the service boundaries below apply to those root projects as durable architecture rules.
+
 ## Service Boundaries
 
 | Service | Owns | Must not own |

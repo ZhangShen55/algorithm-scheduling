@@ -1,6 +1,7 @@
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+WORKSPACE_ROOT = PROJECT_ROOT.parent
 COMPOSE_PATH = PROJECT_ROOT / "deploy/docker-compose.platform.yml"
 
 
@@ -40,9 +41,24 @@ def test_all_platform_dockerfiles_use_repo_root_context_and_one_worker() -> None
         "vision_orchestrator_service",
         "online_gateway_service",
     ):
-        dockerfile = (
-            PROJECT_ROOT / "services" / service / "docker" / "Dockerfile"
-        ).read_text(encoding="utf-8")
-        assert "COPY packages " in dockerfile, service
-        assert "COPY services " in dockerfile, service
+        dockerfile = (WORKSPACE_ROOT / service / "docker" / "Dockerfile").read_text(
+            encoding="utf-8"
+        )
+        assert "COPY algorithm-scheduling-platform/packages " in dockerfile, service
+        assert f"COPY {service}/app " in dockerfile, service
+        assert "COPY services " not in dockerfile, service
         assert '"--workers", "1"' in dockerfile, service
+
+
+def test_platform_compose_builds_and_mounts_root_level_services() -> None:
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+
+    assert compose.count("context: ../..") == 4
+    for service in (
+        "control_service",
+        "orchestrator_service",
+        "vision_orchestrator_service",
+        "online_gateway_service",
+    ):
+        assert f"dockerfile: {service}/docker/Dockerfile" in compose
+        assert f"../../{service}/config.toml:/config/config.toml:ro" in compose

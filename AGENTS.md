@@ -16,7 +16,11 @@ This workspace contains independently deployable algorithm operators and the alg
 | `ppt_slice` | PPT video slide slicing | `ppt_slice` | `9001` |
 | `vbas` | Teacher/student visual behavior inference | `jy-tias` | `8981` |
 | `text_analysis` | Course mind-map and PPT keyword text analysis | `ai_report` | `8000` |
-| `algorithm-scheduling-platform` | Four-service control, offline orchestration, visual orchestration and online routing platform | project `.venv` | `18100-18103` |
+| `control_service` | Course task control API, task facts, Outbox and operator registry | platform `.venv` | `18100` |
+| `orchestrator_service` | Outbox publication, offline DAG and general node execution | platform `.venv` | `18101` |
+| `vision_orchestrator_service` | Offline teacher/student adaptive visual orchestration | platform `.venv` | `8010` (`18102` through Compose) |
+| `online_gateway_service` | Online image routing and realtime ASR WebSocket gateway | platform `.venv` | `8001` (`18103` through Compose) |
+| `algorithm-scheduling-platform` | Shared packages, migrations, deployment definitions, cross-service tests and Harness | project `.venv` | N/A |
 
 The old VBas orchestration and aggregation implementation has moved to a separate project:
 
@@ -25,17 +29,19 @@ The old VBas orchestration and aggregation implementation has moved to a separat
 
 Do not reintroduce that orchestration, aggregation or database-writing logic into `vbas`.
 
-The platform selects registered VBas instances and owns all course-level visual orchestration. VBas remains frame inference only. Platform-specific service boundaries and evidence requirements are defined in `algorithm-scheduling-platform/AGENTS.md`.
+The platform selects registered VBas instances and owns all course-level visual orchestration. VBas remains frame inference only. The four deployable platform services live at the workspace root. Shared packages, migrations, deployment definitions, cross-service tests and Harness remain under `algorithm-scheduling-platform/`; its `AGENTS.md` defines their service boundaries and evidence requirements.
 
 ## Required Layout
 
-Every operator exposes a real Python package named `app` and an application object at `app.main:app`. This operator layout rule does not replace the platform-specific layout in its own `AGENTS.md`. Use this startup shape for local and container execution:
+Every operator and root-level platform service exposes a real Python package named `app` and an application object at `app.main:app`. Use this startup shape for local and container execution:
 
 ```bash
 python -m uvicorn app.main:app --host 0.0.0.0 --port PORT --workers WORKERS
 ```
 
-Use absolute imports beginning with `app.` for cross-package imports. Do not rely on symlinks, ad hoc `PYTHONPATH` values or a specific current working directory.
+Algorithm operators use absolute imports beginning with `app.` for cross-package imports. Root-level platform services use package-relative imports inside `app` so cross-service tests can import them as `control_service.app`, `orchestrator_service.app`, `vision_orchestrator_service.app` and `online_gateway_service.app` without colliding top-level `app` modules. Neither project type may rely on symlinks, ad hoc `PYTHONPATH` values or an undocumented current working directory.
+
+Each root-level platform service independently owns `app/`, `tests/`, `docker/Dockerfile`, `config.toml`, `requirements.txt` and `README.md`. Its canonical deployment entrypoint is only `app.main:app`; do not restore `services.<service_name>` compatibility imports or runtime code beneath `algorithm-scheduling-platform/services`.
 
 Keep `config.toml`, model directories, Docker files, scripts, tests and README files at the project root unless a project-specific `AGENTS.md` says otherwise. Resolve configuration and model paths from an explicit project root. `CONFIG_PATH` may override the default root `config.toml`.
 

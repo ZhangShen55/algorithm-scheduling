@@ -7,12 +7,12 @@ from pathlib import Path
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from online_gateway_service.app.api.routes import create_online_gateway_app
+from online_gateway_service.app.infrastructure.capacity import OnlineCapacityLeaseError
+from online_gateway_service.app.main import app
 
 from packages.platform_common.config import PlatformSettings
 from packages.platform_common.operator_registry import CapacityLease
-from services.online_gateway_service.api import create_online_gateway_app
-from services.online_gateway_service.capacity import OnlineCapacityLeaseError
-from services.online_gateway_service.main import app
 
 
 def test_online_gateway_exposes_vbas_request_level_proxy() -> None:

@@ -3,9 +3,8 @@ from pathlib import Path
 
 import httpx
 import pytest
-
-from services.orchestrator_service.ppt_text import KeywordAdapter, OcrAdapter
-from services.orchestrator_service.ppt_work import PptImageWork
+from orchestrator_service.app.domain.ppt_work import PptImageWork
+from orchestrator_service.app.infrastructure.ppt_text import KeywordAdapter, OcrAdapter
 
 
 @pytest.mark.asyncio

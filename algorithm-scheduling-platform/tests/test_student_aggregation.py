@@ -1,4 +1,4 @@
-from services.vision_orchestrator_service.student_aggregation import (
+from vision_orchestrator_service.app.domain.student_aggregation import (
     StudentAggregationConfig,
     StudentBehaviorAggregator,
     StudentFrameObservation,

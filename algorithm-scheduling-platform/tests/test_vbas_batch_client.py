@@ -6,14 +6,14 @@ from pathlib import Path
 
 import httpx
 import pytest
-
-from packages.platform_common.operator_registry import CapacityLease
-from services.vision_orchestrator_service.cache import VisionStream
-from services.vision_orchestrator_service.vbas import (
+from vision_orchestrator_service.app.infrastructure.cache import VisionStream
+from vision_orchestrator_service.app.infrastructure.vbas import (
     VbasBatchClient,
     VbasBatchConfig,
     VbasFrame,
 )
+
+from packages.platform_common.operator_registry import CapacityLease
 
 
 @pytest.mark.asyncio

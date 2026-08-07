@@ -1,9 +1,8 @@
 import pytest
-
-from services.control_service.main import app as control_app
-from services.online_gateway_service.main import app as online_app
-from services.orchestrator_service.main import app as orchestrator_app
-from services.vision_orchestrator_service.main import app as vision_app
+from control_service.app.main import app as control_app
+from online_gateway_service.app.main import app as online_app
+from orchestrator_service.app.main import app as orchestrator_app
+from vision_orchestrator_service.app.main import app as vision_app
 
 pytestmark = pytest.mark.contract
 
@@ -18,7 +17,7 @@ pytestmark = pytest.mark.contract
     ),
 )
 def test_service_entrypoint_exposes_health_contract(app, expected_title: str) -> None:  # type: ignore[no-untyped-def]
-    paths = {route.path for route in app.routes}
+    paths = set(app.openapi()["paths"])
 
     assert app.title == expected_title
     assert "/health" in paths

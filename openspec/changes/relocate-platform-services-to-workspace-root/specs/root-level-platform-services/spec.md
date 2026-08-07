@@ -19,7 +19,7 @@
 - **THEN** 服务在规定端口启动并通过自身健康检查
 
 ### Requirement: 服务具有完整独立项目资产
-每个服务 SHALL 自有 `app/`、`tests/`、`docker/Dockerfile`、`config.toml`、`requirements.txt` 和 `README.md`，内部跨模块导入 SHALL 以 `app.` 开始。
+每个服务 SHALL 自有 `app/`、`tests/`、`docker/Dockerfile`、`config.toml`、`requirements.txt` 和 `README.md`；`app` 内部 SHALL 使用不依赖旧父包的包相对导入，并且不得使用 `services.<service_name>`。
 
 #### Scenario: 检查项目结构
 - **WHEN** 结构测试检查任一根目录服务
@@ -62,7 +62,7 @@
 - **THEN** 所有对外网络契约保持一致，差异仅限内部路径、导入和构建方式
 
 ### Requirement: 测试适应同名 app 包
-服务测试 SHALL 在各自服务环境中独立运行；跨服务测试不得依赖在同一个 Python 解释器中同时导入四个顶级 `app` 包。
+服务测试 SHALL 在各自服务环境中独立运行；平台契约测试 SHALL 通过根目录唯一项目包、公共契约、子进程、Compose 或 HTTP 边界隔离服务，不得把多个顶级 `app` 解析为同一个模块。
 
 #### Scenario: 分服务测试
 - **WHEN** 验证脚本依次运行四个服务的测试
@@ -78,4 +78,3 @@
 #### Scenario: 旧路径门禁
 - **WHEN** 验证脚本搜索有效源码和交付文件
 - **THEN** 不存在仍用于运行、导入或构建的 `algorithm-scheduling-platform/services` 与 `services.<service_name>` 引用
-

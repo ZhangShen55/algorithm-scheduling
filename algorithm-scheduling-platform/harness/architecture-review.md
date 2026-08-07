@@ -2,7 +2,7 @@
 
 | Decision ID | Decision | Owner | Evidence command | Current verdict | Linked scenario |
 | --- | --- | --- | --- | --- | --- |
-| DEC-001 | Four deployable service boundaries | platform maintainers | `pytest -q services/*/tests tests/contract/test_service_entrypoints.py tests/test_platform_compose.py` | 部分符合 | `harness/scenarios/runtime-closure.md` |
+| DEC-001 | Four deployable service boundaries | platform maintainers | `make service-test && .venv/bin/python -m pytest -q tests/contract/test_service_entrypoints.py tests/test_platform_compose.py` | 符合 | `harness/scenarios/runtime-closure.md` |
 | DEC-002 | PostgreSQL task facts and transactional Outbox | control-service | `pytest -q tests/integration/test_course_repository.py` | 部分符合 | `harness/scenarios/runtime-closure.md` |
 | DEC-003 | Redis TTL registry and renewable leases | control-service | `pytest -q tests/integration/test_redis_operator_registry.py` | 部分符合 | `harness/scenarios/ppt-shared-result.md` |
 | DEC-004 | Real Kafka course and visual loops | orchestrator and vision | `pytest -q tests/integration` | 不符合 | `harness/scenarios/runtime-closure.md` |
@@ -14,3 +14,4 @@
 | DEC-010 | Completion requires real infrastructure evidence | platform maintainers | `pytest -q tests/test_harness_consistency.py` | 部分符合 | `harness/scenarios/runtime-closure.md` |
 | DEC-011 | One Worker with truthful PPT N-way capacity (component evidence) | ppt_slice and registry client | `pytest -q tests/test_operator_registry_client.py tests/test_operator_deployment_integration.py` | 符合 | `harness/scenarios/ppt-shared-result.md` |
 | DEC-012 | Four-service Compose uses one network and shared roots (static evidence) | deployment | `docker compose -f deploy/docker-compose.platform.yml config --quiet` | 符合 | `harness/scenarios/runtime-closure.md` |
+| DEC-013 | Four services are root-level independent projects and images exclude sibling services | platform maintainers | `pytest -q tests/test_root_service_layout.py && docker build -f ../SERVICE/docker/Dockerfile ..` | 符合 | `harness/scenarios/root-service-relocation.md` |

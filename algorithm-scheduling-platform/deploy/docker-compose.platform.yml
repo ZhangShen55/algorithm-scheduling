@@ -14,8 +14,8 @@ services:
   control-service:
     <<: *platform-common
     build:
-      context: ..
-      dockerfile: services/control_service/docker/Dockerfile
+      context: ../..
+      dockerfile: control_service/docker/Dockerfile
     ports:
       - "18100:18100"
     environment:
@@ -23,7 +23,7 @@ services:
       CONTROL_POSTGRES__DSN: postgresql+psycopg://algorithm:algorithm@postgres:5432/algorithm
       CONTROL_REDIS__URL: redis://redis:6379/0
     volumes:
-      - ../services/control_service/config.toml:/config/config.toml:ro
+      - ../../control_service/config.toml:/config/config.toml:ro
       - ${COURSE_ROOT:-/data/course}:/data/course
       - ${RESULT_ROOT:-/data/result}:/data/result
     depends_on:
@@ -46,8 +46,8 @@ services:
   orchestrator-service:
     <<: *platform-common
     build:
-      context: ..
-      dockerfile: services/orchestrator_service/docker/Dockerfile
+      context: ../..
+      dockerfile: orchestrator_service/docker/Dockerfile
     ports:
       - "18101:18101"
     environment:
@@ -57,7 +57,7 @@ services:
       ORCHESTRATOR_CONTROL__BASE_URL: http://control-service:18100
       ORCHESTRATOR_PPT__CALLBACK_BASE_URL: http://orchestrator-service:18101
     volumes:
-      - ../services/orchestrator_service/config.toml:/config/config.toml:ro
+      - ../../orchestrator_service/config.toml:/config/config.toml:ro
       - ${COURSE_ROOT:-/data/course}:/data/course
       - ${RESULT_ROOT:-/data/result}:/data/result
     depends_on:
@@ -82,8 +82,8 @@ services:
   vision-orchestrator-service:
     <<: *platform-common
     build:
-      context: ..
-      dockerfile: services/vision_orchestrator_service/docker/Dockerfile
+      context: ../..
+      dockerfile: vision_orchestrator_service/docker/Dockerfile
     ports:
       - "18102:8010"
     environment:
@@ -92,7 +92,7 @@ services:
       VISION_KAFKA__BOOTSTRAP_SERVERS: kafka:29092
       VISION_CONTROL__BASE_URL: http://control-service:18100
     volumes:
-      - ../services/vision_orchestrator_service/config.toml:/config/config.toml:ro
+      - ../../vision_orchestrator_service/config.toml:/config/config.toml:ro
       - ${COURSE_ROOT:-/data/course}:/data/course
       - ${RESULT_ROOT:-/data/result}:/data/result
     depends_on:
@@ -117,15 +117,15 @@ services:
   online-gateway-service:
     <<: *platform-common
     build:
-      context: ..
-      dockerfile: services/online_gateway_service/docker/Dockerfile
+      context: ../..
+      dockerfile: online_gateway_service/docker/Dockerfile
     ports:
       - "18103:8001"
     environment:
       CONFIG_PATH: /config/config.toml
       ONLINE_CONTROL__BASE_URL: http://control-service:18100
     volumes:
-      - ../services/online_gateway_service/config.toml:/config/config.toml:ro
+      - ../../online_gateway_service/config.toml:/config/config.toml:ro
     depends_on:
       control-service:
         condition: service_healthy

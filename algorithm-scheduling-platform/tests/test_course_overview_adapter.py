@@ -2,14 +2,14 @@ import json
 
 import httpx
 import pytest
-
-from packages.platform_common.repository import NodeResultWrite
-from services.orchestrator_service.course_overview import (
+from orchestrator_service.app.infrastructure.course_overview import (
     CourseOverviewAdapter,
     CourseOverviewAdapterError,
     CourseOverviewPipeline,
     build_course_overview_request,
 )
+
+from packages.platform_common.repository import NodeResultWrite
 
 
 def test_build_course_overview_request_maps_real_asr_segments() -> None:

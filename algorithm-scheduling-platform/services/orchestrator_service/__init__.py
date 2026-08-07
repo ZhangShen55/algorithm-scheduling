@@ -1,1 +1,0 @@
-"""Offline course orchestration service."""

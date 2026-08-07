@@ -2,6 +2,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from orchestrator_service.app.domain.ppt_work import PptImageWork, PptWorkLimits
+from orchestrator_service.app.infrastructure.ppt_text import PptTextPipeline
 
 from packages.platform_common.repository import (
     NodeResultWrite,
@@ -9,8 +11,6 @@ from packages.platform_common.repository import (
     NodeWorkItemWrite,
     WorkItemProgress,
 )
-from services.orchestrator_service.ppt_text import PptTextPipeline
-from services.orchestrator_service.ppt_work import PptImageWork, PptWorkLimits
 
 
 class FakeRepository:

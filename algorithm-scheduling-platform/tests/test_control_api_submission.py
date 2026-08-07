@@ -2,12 +2,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from control_service.app.api.control import create_control_app
 from fastapi.testclient import TestClient
 
 from packages.platform_common.config import PlatformSettings
 from packages.platform_common.repository import NodeRecord, TaskTypeRecord, TaskTypeWrite
 from packages.platform_contracts.status import NodeStatus, Priority, TaskType
-from services.control_service.api import create_control_app
 
 
 class RecordingRepository:

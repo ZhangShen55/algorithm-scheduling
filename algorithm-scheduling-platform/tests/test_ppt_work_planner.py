@@ -2,8 +2,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
-
-from services.orchestrator_service.ppt_work import (
+from orchestrator_service.app.domain.ppt_work import (
     PptImageWork,
     PptWorkLimits,
     iter_work_batches,

@@ -2,13 +2,13 @@ from pathlib import Path
 
 import httpx
 import pytest
-
-from packages.platform_common.repository import NodeResultWrite
-from services.orchestrator_service.asr import (
+from orchestrator_service.app.infrastructure.asr import (
     AsrTranscriptionPipeline,
     OfflineAsrAdapter,
     OfflineAsrAdapterError,
 )
+
+from packages.platform_common.repository import NodeResultWrite
 
 EFFECTIVE_PARAMS = {
     "language": "auto",

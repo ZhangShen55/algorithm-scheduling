@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
+from control_service.app.api.control import create_control_app
 from fastapi.testclient import TestClient
 
 from packages.platform_common.config import PlatformSettings
@@ -11,7 +12,6 @@ from packages.platform_common.operator_registry import (
     OperatorInstance,
     OperatorInstanceNotFoundError,
 )
-from services.control_service.api import create_control_app
 
 
 class FakeOperatorRegistry:

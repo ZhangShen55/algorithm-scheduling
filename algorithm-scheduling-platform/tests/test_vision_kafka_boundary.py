@@ -5,6 +5,9 @@ from uuid import UUID
 
 import httpx
 import pytest
+from orchestrator_service.app.application.vision_events import VisualCommandPublisher
+from vision_orchestrator_service.app.application.events import VisualCommandProcessor
+from vision_orchestrator_service.app.infrastructure.capacity import CapacityLeaseHttpClient
 
 from packages.platform_common.repository import NodeResultWrite
 from packages.platform_contracts.status import Priority, TaskType
@@ -13,9 +16,6 @@ from packages.platform_contracts.vision import (
     VisualAnalysisEvent,
     VisualEventType,
 )
-from services.orchestrator_service.vision_events import VisualCommandPublisher
-from services.vision_orchestrator_service.capacity import CapacityLeaseHttpClient
-from services.vision_orchestrator_service.events import VisualCommandProcessor
 
 
 class RecordingProducer:

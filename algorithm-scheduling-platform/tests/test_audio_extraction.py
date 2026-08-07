@@ -2,8 +2,7 @@ import wave
 from pathlib import Path
 
 import pytest
-
-from services.orchestrator_service.audio import AudioExtractionError, FFmpegAudioExtractor
+from orchestrator_service.app.infrastructure.audio import AudioExtractionError, FFmpegAudioExtractor
 
 
 class WavWritingRunner:

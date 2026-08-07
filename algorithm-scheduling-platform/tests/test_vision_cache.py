@@ -2,8 +2,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
-
-from services.vision_orchestrator_service.cache import (
+from vision_orchestrator_service.app.infrastructure.cache import (
     FrameCacheKey,
     InferenceCacheKey,
     VisionAnalysisCache,

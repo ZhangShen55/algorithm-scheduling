@@ -1,5 +1,6 @@
+from orchestrator_service.app.application.dispatcher import NodeDispatcher
+
 from packages.platform_common.repository import NodeRecord
-from services.orchestrator_service.dispatcher import NodeDispatcher
 
 
 class FakeDispatchRepository:

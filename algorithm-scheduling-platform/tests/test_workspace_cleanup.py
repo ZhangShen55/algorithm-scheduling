@@ -1,8 +1,9 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from orchestrator_service.app.application.lifecycle import TerminalWorkspaceCleaner
+
 from packages.platform_contracts.status import NodeStatus
-from services.orchestrator_service.lifecycle import TerminalWorkspaceCleaner
 
 
 @dataclass

@@ -1,5 +1,5 @@
-from services.vision_orchestrator_service.adaptive_scan import BehaviorInterval
-from services.vision_orchestrator_service.behavior_intervals import (
+from vision_orchestrator_service.app.domain.adaptive_scan import BehaviorInterval
+from vision_orchestrator_service.app.domain.behavior_intervals import (
     TeacherBehaviorAggregationConfig,
     build_teacher_behavior_result,
     merge_behavior_intervals,

@@ -5,14 +5,14 @@ from pathlib import Path
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from orchestrator_service.app.api.routes import create_orchestrator_api
+from orchestrator_service.app.domain.ppt_work import make_ppt_image_id
+from orchestrator_service.app.infrastructure import ppt_slice
 from pydantic import ValidationError
 
 from packages.platform_common.config import PlatformSettings
 from packages.platform_common.repository import NodeResultWrite
 from packages.platform_contracts.status import NodeStatus
-from services.orchestrator_service import ppt_slice
-from services.orchestrator_service.app.api.routes import create_orchestrator_api
-from services.orchestrator_service.ppt_work import make_ppt_image_id
 
 
 @pytest.mark.asyncio

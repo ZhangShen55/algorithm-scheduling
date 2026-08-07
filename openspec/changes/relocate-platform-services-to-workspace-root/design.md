@@ -52,15 +52,15 @@
 
 备选方案是只整理原 `services` 目录，但它仍会让独立服务依赖共同父包，不能解决逐个构建和从自身目录启动的问题。
 
-### 2. 服务内部使用 `app.*`，移除 `services.*` 兼容包
+### 2. 服务使用本地 `app` 包，移除 `services.*` 兼容包
 
-每个服务把现有根级兼容模块中的业务实现归入相应的 `app/api`、`app/application`、`app/domain` 或 `app/infrastructure`。跨包导入统一从 `app.` 开始，唯一启动入口为：
+每个服务把现有根级兼容模块中的业务实现归入相应的 `app/api`、`app/application`、`app/domain` 或 `app/infrastructure`。`app` 内部使用包相对导入，使服务既能从自身目录按顶级 `app` 运行，也能在工作区契约测试中按 `control_service.app` 等唯一项目名称导入；唯一部署启动入口为：
 
 ```bash
 python -m uvicorn app.main:app --host 0.0.0.0 --port PORT --workers 1
 ```
 
-不保留 `services.<service_name>` 导入兼容层，因为它会继续要求旧父目录存在。服务移动属于内部构建契约变更，外部网络契约保持不变。
+不保留 `services.<service_name>` 导入兼容层，因为它会继续要求旧父目录存在。根目录项目包只用于源码定位和测试隔离，不新增第二个部署入口。服务移动属于内部构建契约变更，外部网络契约保持不变。
 
 ### 3. 公共代码作为显式安装依赖
 
@@ -78,7 +78,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port PORT --workers 1
 
 ### 4. 单服务测试与跨服务测试分层执行
 
-四个项目都包含名为 `app` 的顶级包，不能在同一个 Python 解释器中同时导入。服务自身测试从该服务目录独立执行；平台跨服务测试通过安装后的公共契约、子进程、Compose 或 HTTP 边界验证，不直接在同一进程导入多个服务的 `app`。
+四个项目部署时都包含名为 `app` 的顶级包。服务自身测试从该服务目录独立执行；平台契约测试可以通过根目录唯一项目包导入服务入口，运行时集成仍优先通过子进程、Compose 或 HTTP 边界验证，不把多个服务源码合并成一个部署包。
 
 迁移验收至少包括：
 

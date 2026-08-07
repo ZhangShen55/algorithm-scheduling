@@ -7,9 +7,29 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+from control_service.app.api.control import create_control_app
 from fastapi.testclient import TestClient
+from orchestrator_service.app.application.dispatcher import NodeDispatcher
+from orchestrator_service.app.application.outbox import OutboxPublisher
+from orchestrator_service.app.application.pipeline import PipelineInitializer, pipeline_nodes
+from orchestrator_service.app.domain.ppt_work import PptImageWork, PptWorkLimits
+from orchestrator_service.app.infrastructure.ppt_text import PptTextPipeline
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import IntegrityError
+from vision_orchestrator_service.app.domain.adaptive_scan import (
+    AdaptiveScanConfig,
+    AdaptiveScanPlanner,
+    BehaviorInterval,
+)
+from vision_orchestrator_service.app.domain.behavior_intervals import (
+    TeacherBehaviorAggregationConfig,
+    build_teacher_behavior_result,
+)
+from vision_orchestrator_service.app.domain.student_aggregation import (
+    StudentAggregationConfig,
+    StudentBehaviorAggregator,
+    StudentFrameObservation,
+)
 
 from packages.platform_common.config import PlatformSettings
 from packages.platform_common.operator_registry import UnavailableOperatorRegistry
@@ -22,26 +42,6 @@ from packages.platform_common.repository import (
 )
 from packages.platform_common.state_machine import InvalidNodeTransition
 from packages.platform_contracts.status import NodeStatus, Priority, TaskType
-from services.control_service.api import create_control_app
-from services.orchestrator_service.dispatcher import NodeDispatcher
-from services.orchestrator_service.outbox import OutboxPublisher
-from services.orchestrator_service.pipeline import PipelineInitializer, pipeline_nodes
-from services.orchestrator_service.ppt_text import PptTextPipeline
-from services.orchestrator_service.ppt_work import PptImageWork, PptWorkLimits
-from services.vision_orchestrator_service.adaptive_scan import (
-    AdaptiveScanConfig,
-    AdaptiveScanPlanner,
-    BehaviorInterval,
-)
-from services.vision_orchestrator_service.behavior_intervals import (
-    TeacherBehaviorAggregationConfig,
-    build_teacher_behavior_result,
-)
-from services.vision_orchestrator_service.student_aggregation import (
-    StudentAggregationConfig,
-    StudentBehaviorAggregator,
-    StudentFrameObservation,
-)
 
 pytestmark = pytest.mark.integration
 PROJECT_ROOT = Path(__file__).resolve().parents[2]

@@ -1,6 +1,6 @@
 from collections.abc import Iterable
 
-from services.vision_orchestrator_service.adaptive_scan import (
+from vision_orchestrator_service.app.domain.adaptive_scan import (
     AdaptiveScanConfig,
     AdaptiveScanPlanner,
     BehaviorInterval,

@@ -6,7 +6,7 @@
 
 | 设计项 | 当前实现证据 | 结论 |
 |---|---|---|
-| A 面稀疏提交、四 task type、幂等追加、HTTP 200 业务码 | `services/control_service/api.py`、PostgreSQL repository 与 API 测试 | 符合 |
+| A 面稀疏提交、四 task type、幂等追加、HTTP 200 业务码 | `control_service/app/api/control.py`、PostgreSQL repository 与 API 测试 | 符合 |
 | 整数状态机、Outbox 事务、优先级领取 | repository/state machine 与 PostgreSQL 并发测试 | 符合组件层 |
 | Outbox 发布与 Kafka 消费 | 有 `OutboxPublisher`、`PipelineInitializer` 和 Producer Protocol；无 Kafka 客户端依赖、broker adapter、consumer loop | 不符合运行闭环 |
 | `orchestrator-service` 可部署执行 | `main.py` 只有通用 FastAPI `/health`，未装配 Publisher、Consumer、Dispatcher、媒体和适配器 | 不符合 |

@@ -2,9 +2,9 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
+from orchestrator_service.app.application.outbox import OutboxPublisher
 
 from packages.platform_common.repository import OutboxRecord
-from services.orchestrator_service.outbox import OutboxPublisher
 
 
 class FakeOutboxRepository:

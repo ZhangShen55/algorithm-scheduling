@@ -30,10 +30,11 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["services*", "packages*", "scripts*"]
+include = ["packages*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = [".."]
 addopts = "-ra"
 markers = [
   "contract: stable cross-service API and entrypoint contracts",
@@ -53,4 +54,4 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
-packages = ["services", "packages"]
+packages = ["packages"]

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from services.vision_orchestrator_service.evidence import (
+from vision_orchestrator_service.app.domain.evidence import (
     EvidenceCandidate,
     EvidenceCategory,
     VisionEvidenceConfig,

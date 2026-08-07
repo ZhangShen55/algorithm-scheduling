@@ -1,10 +1,10 @@
 import json
 
 import pytest
+from orchestrator_service.app.application.pipeline import PipelineInitializer
 
 from packages.platform_common.repository import NodeRecord, NodeWrite
 from packages.platform_contracts.status import TaskType
-from services.orchestrator_service.pipeline import PipelineInitializer
 
 
 class RecordingPipelineRepository:
