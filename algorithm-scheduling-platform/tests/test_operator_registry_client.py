@@ -1,4 +1,7 @@
+import asyncio
 from collections.abc import Iterator
+from contextlib import suppress
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -144,3 +147,59 @@ async def test_client_drains_then_unregisters_on_shutdown(
         "/api/operator-instances/lifecycle",
         "/api/operator-instances/unregister",
     ]
+
+
+@pytest.mark.asyncio
+async def test_client_start_waits_for_first_successful_heartbeat(
+    captured_requests: tuple[list[httpx.Request], httpx.AsyncClient],
+) -> None:
+    requests, http_client = captured_requests
+    registry_client = OperatorRegistryClient(
+        client_config(),
+        status_provider=lambda: OperatorRuntimeStatus(inflight=0, model_ready=True),
+        http_client=http_client,
+    )
+
+    try:
+        await registry_client.start()
+        assert [request.url.path for request in requests[:2]] == [
+            "/api/operator-instances/register",
+            "/api/operator-instances/heartbeat",
+        ]
+    finally:
+        await registry_client.stop()
+        await registry_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_background_heartbeat_retries_after_transient_http_failure() -> None:
+    heartbeat_attempts = 0
+    recovered = asyncio.Event()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal heartbeat_attempts
+        if request.url.path.endswith("/register"):
+            return httpx.Response(201, json={"instance_id": "ocr-gpu0"})
+        if request.url.path.endswith("/heartbeat"):
+            heartbeat_attempts += 1
+            if heartbeat_attempts == 2:
+                return httpx.Response(503, json={"detail": "temporary unavailable"})
+            if heartbeat_attempts >= 3:
+                recovered.set()
+        return httpx.Response(200, json={"status": "ok"})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    registry_client = OperatorRegistryClient(
+        replace(client_config(), heartbeat_interval_seconds=0.01),
+        status_provider=lambda: OperatorRuntimeStatus(inflight=0, model_ready=True),
+        http_client=http_client,
+    )
+
+    try:
+        await registry_client.start()
+        await asyncio.wait_for(recovered.wait(), timeout=0.5)
+        assert heartbeat_attempts >= 3
+    finally:
+        with suppress(httpx.HTTPError):
+            await registry_client.stop()
+        await registry_client.aclose()

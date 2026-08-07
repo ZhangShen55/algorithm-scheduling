@@ -44,6 +44,45 @@ delivery documentation.
 
 Integration and runtime commands must record infrastructure versions and container status. A skipped integration test is not passing evidence. Full end-to-end evidence must show Kafka offsets, Worker-produced database state, operator HTTP/WebSocket traffic and filesystem results.
 
+## 方案 C 里程碑 1 验收
+
+从平台目录执行：
+
+```bash
+docker compose -f deploy/docker-compose.infrastructure.yml ps postgres redis
+
+.venv/bin/python -m pytest -q -rs \
+  tests/integration/test_course_repository.py \
+  tests/integration/test_redis_operator_registry.py \
+  tests/integration/test_operator_audit_repository.py \
+  tests/integration/test_control_service_foundation.py
+
+PYTHONPATH="$PWD:$PWD/..:$PWD/../control_service" \
+  .venv/bin/python -m pytest -q -rs tests ../control_service/tests
+
+.venv/bin/ruff check packages tests ../control_service/app ../control_service/tests
+MYPYPATH="$PWD" .venv/bin/python -m mypy packages ../control_service/app
+.venv/bin/python -m compileall -q packages ../control_service/app
+.venv/bin/python scripts/check_migrations.py
+docker compose -f deploy/docker-compose.platform.yml config --quiet
+(cd .. && openspec validate close-platform-runtime-and-harness-gaps --strict)
+
+# 临时 PostgreSQL 测试库残留，预期返回 0。
+docker compose -f deploy/docker-compose.infrastructure.yml exec -T postgres \
+  psql -U algorithm -d postgres -X -Atc \
+  "SELECT count(*) FROM pg_database WHERE datname ~ '^algorithm_control_milestone1_(main|gw[0-9]+)_[0-9a-f]{8}_test$'"
+
+# Redis DB 14/15 测试前缀残留，两条命令均预期无输出。
+docker compose -f deploy/docker-compose.infrastructure.yml exec -T redis \
+  redis-cli -n 14 --scan --pattern 'milestone1-control-test:*'
+docker compose -f deploy/docker-compose.infrastructure.yml exec -T redis \
+  redis-cli -n 15 --scan --pattern 'algorithm-platform:test:operator-registry:*'
+```
+
+2026-08-07 证据：PostgreSQL 17.10 和 Redis 7.4.10 容器均为 healthy；四组联合集成测试
+`63 passed`，平台与 Control 完整回归 `255 passed`，没有 skipped。临时 PostgreSQL
+数据库与 Redis 测试前缀在测试后无残留。readiness 已覆盖并行依赖检查、总截止预算、DSN 原有 PostgreSQL options 保留、缺字段和未执行 `0005`；注册已覆盖首次心跳激活和短暂心跳故障重试。该证据只完成里程碑 1，不包含 Kafka 或 DAG。
+
 方案 C 的基础闭环验收单独执行 `harness/scenarios/foundation-scheduling-closure.md`。该场景只要求
 真实 PostgreSQL、Redis、Kafka、`control-service`、`orchestrator-service` 和契约 Stub；不得因为
 真实 PPT 算子尚未接入而跳过基础运行时验证，也不得把静态 DDL 测试写成 Broker 闭环已通过。

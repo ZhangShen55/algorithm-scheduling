@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import time
 from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import uuid4
@@ -18,29 +17,109 @@ from packages.platform_common.operator_registry import (
     OperatorLifecycle,
 )
 
+_REGISTER_SCRIPT = """
+local previous_capabilities = redis.call('HGET', KEYS[1], 'capabilities')
+if previous_capabilities then
+    for _, capability in ipairs(cjson.decode(previous_capabilities)) do
+        redis.call('SREM', ARGV[1] .. capability, ARGV[2])
+    end
+end
+
+local existing_leases = redis.call('ZRANGE', KEYS[4], 0, -1)
+for _, lease_id in ipairs(existing_leases) do
+    redis.call('DEL', ARGV[3] .. lease_id)
+end
+redis.call('DEL', KEYS[4])
+
+redis.call('HSET', KEYS[1],
+    'operator_code', ARGV[4],
+    'capabilities', ARGV[5],
+    'service_url', ARGV[6],
+    'model_version', ARGV[7],
+    'api_version', ARGV[8],
+    'declared_capacity', ARGV[9],
+    'labels', ARGV[10],
+    'lifecycle', ARGV[11],
+    'inflight', ARGV[12],
+    'model_ready', ARGV[13],
+    'last_heartbeat_at', ARGV[14])
+redis.call('SADD', KEYS[3], ARGV[2])
+for _, capability in ipairs(cjson.decode(ARGV[5])) do
+    redis.call('SADD', ARGV[1] .. capability, ARGV[2])
+end
+redis.call('DEL', KEYS[2])
+return 1
+"""
+
+
+_HEARTBEAT_SCRIPT = """
+if redis.call('EXISTS', KEYS[1]) == 0 then
+    return 0
+end
+redis.call('HSET', KEYS[1],
+    'inflight', ARGV[1],
+    'model_ready', ARGV[2],
+    'last_heartbeat_at', ARGV[3])
+redis.call('SET', KEYS[2], '1', 'EX', ARGV[4])
+return 1
+"""
+
+
+_UNREGISTER_SCRIPT = """
+local capabilities = redis.call('HGET', KEYS[1], 'capabilities')
+if not capabilities then
+    return 0
+end
+for _, capability in ipairs(cjson.decode(capabilities)) do
+    redis.call('SREM', ARGV[1] .. capability, ARGV[2])
+end
+local leases = redis.call('ZRANGE', KEYS[4], 0, -1)
+for _, lease_id in ipairs(leases) do
+    redis.call('DEL', ARGV[3] .. lease_id)
+end
+redis.call('DEL', KEYS[4])
+redis.call('SREM', KEYS[3], ARGV[2])
+redis.call('DEL', KEYS[1], KEYS[2])
+return 1
+"""
+
+
+_SET_LIFECYCLE_SCRIPT = """
+if redis.call('EXISTS', KEYS[1]) == 0 then
+    return 0
+end
+redis.call('HSET', KEYS[1], 'lifecycle', ARGV[1])
+return 1
+"""
+
+
 _LEASE_SCRIPT = """
+local redis_time = redis.call('TIME')
+local now_ms = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2]) / 1000)
 local instance_ids = redis.call('SMEMBERS', KEYS[1])
 table.sort(instance_ids)
 for _, instance_id in ipairs(instance_ids) do
-    local instance_key = ARGV[4] .. instance_id
-    local heartbeat_key = ARGV[5] .. instance_id
+    local instance_key = ARGV[3] .. instance_id
+    local heartbeat_key = ARGV[4] .. instance_id
     if redis.call('EXISTS', heartbeat_key) == 1
         and redis.call('HGET', instance_key, 'lifecycle') == 'ONLINE'
         and redis.call('HGET', instance_key, 'model_ready') == '1' then
-        local leases_key = ARGV[6] .. instance_id
-        redis.call('ZREMRANGEBYSCORE', leases_key, '-inf', ARGV[1])
-        local used = redis.call('ZCARD', leases_key)
+        local leases_key = ARGV[5] .. instance_id
+        redis.call('ZREMRANGEBYSCORE', leases_key, '-inf', now_ms)
+        local active_leases = redis.call('ZCARD', leases_key)
+        local reported_inflight = tonumber(redis.call('HGET', instance_key, 'inflight') or '0')
+        local used = math.max(active_leases, reported_inflight)
         local capacity = tonumber(redis.call('HGET', instance_key, 'declared_capacity') or '0')
         if used < capacity then
-            local expires_at = tonumber(ARGV[1]) + tonumber(ARGV[2])
-            redis.call('ZADD', leases_key, expires_at, ARGV[3])
-            local lease_key = ARGV[7] .. ARGV[3]
+            local expires_at = now_ms + tonumber(ARGV[1])
+            redis.call('ZADD', leases_key, expires_at, ARGV[2])
+            local lease_key = ARGV[6] .. ARGV[2]
             redis.call('HSET', lease_key,
                 'instance_id', instance_id,
-                'capability', ARGV[8],
+                'capability', ARGV[7],
                 'service_url', redis.call('HGET', instance_key, 'service_url'),
                 'expires_at', expires_at)
-            redis.call('PEXPIRE', lease_key, ARGV[2])
+            redis.call('PEXPIRE', lease_key, ARGV[1])
             return {instance_id, redis.call('HGET', instance_key, 'service_url'), expires_at}
         end
     end
@@ -65,12 +144,27 @@ local instance_id = redis.call('HGET', KEYS[1], 'instance_id')
 if not instance_id then
     return {}
 end
+local redis_time = redis.call('TIME')
+local now_ms = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2]) / 1000)
+local leases_key = ARGV[2] .. instance_id
+local current_expiry = redis.call('ZSCORE', leases_key, ARGV[3])
+local instance_key = ARGV[4] .. instance_id
+local heartbeat_key = ARGV[5] .. instance_id
+if not current_expiry
+    or tonumber(current_expiry) <= now_ms
+    or redis.call('EXISTS', instance_key) == 0
+    or redis.call('EXISTS', heartbeat_key) == 0
+    or redis.call('HGET', instance_key, 'lifecycle') == 'OFFLINE' then
+    redis.call('ZREM', leases_key, ARGV[3])
+    redis.call('DEL', KEYS[1])
+    return {}
+end
 local capability = redis.call('HGET', KEYS[1], 'capability')
 local service_url = redis.call('HGET', KEYS[1], 'service_url')
-local expires_at = tonumber(ARGV[1]) + tonumber(ARGV[2])
-redis.call('ZADD', ARGV[3] .. instance_id, expires_at, ARGV[4])
+local expires_at = now_ms + tonumber(ARGV[1])
+redis.call('ZADD', leases_key, expires_at, ARGV[3])
 redis.call('HSET', KEYS[1], 'expires_at', expires_at)
-redis.call('PEXPIRE', KEYS[1], ARGV[2])
+redis.call('PEXPIRE', KEYS[1], ARGV[1])
 return {instance_id, capability, service_url, expires_at}
 """
 
@@ -104,37 +198,29 @@ class RedisOperatorRegistry:
 
     def register(self, instance: OperatorInstance) -> OperatorInstance:
         instance_key = self._instance_key(instance.instance_id)
-        previous_capabilities = self._client.hget(instance_key, "capabilities")
-        pipeline = self._client.pipeline(transaction=True)
-        if previous_capabilities:
-            for capability in json.loads(str(previous_capabilities)):
-                pipeline.srem(self._capability_key(capability), instance.instance_id)
         heartbeat_at = datetime.now(UTC)
-        pipeline.hset(
+        self._client.eval(
+            _REGISTER_SCRIPT,
+            4,
             instance_key,
-            mapping={
-                "operator_code": instance.operator_code.value,
-                "capabilities": json.dumps(instance.capabilities, separators=(",", ":")),
-                "service_url": instance.service_url,
-                "model_version": instance.model_version or "",
-                "api_version": instance.api_version or "",
-                "declared_capacity": instance.declared_capacity,
-                "labels": json.dumps(instance.labels, separators=(",", ":")),
-                "lifecycle": instance.lifecycle.value,
-                "inflight": instance.inflight,
-                "model_ready": "1" if instance.model_ready else "0",
-                "last_heartbeat_at": heartbeat_at.isoformat(),
-            },
-        )
-        pipeline.sadd(self._instances_key, instance.instance_id)
-        for capability in instance.capabilities:
-            pipeline.sadd(self._capability_key(capability), instance.instance_id)
-        pipeline.set(
             self._heartbeat_key(instance.instance_id),
-            "1",
-            ex=self._heartbeat_ttl_seconds,
+            self._instances_key,
+            f"{self._prefix}leases:{instance.instance_id}",
+            f"{self._prefix}capability:",
+            instance.instance_id,
+            f"{self._prefix}lease:",
+            instance.operator_code.value,
+            json.dumps(instance.capabilities, separators=(",", ":")),
+            instance.service_url,
+            instance.model_version or "",
+            instance.api_version or "",
+            str(instance.declared_capacity),
+            json.dumps(instance.labels, separators=(",", ":")),
+            instance.lifecycle.value,
+            str(instance.inflight),
+            "1" if instance.model_ready else "0",
+            heartbeat_at.isoformat(),
         )
-        pipeline.execute()
         return self._get_instance(instance.instance_id)
 
     def heartbeat(
@@ -145,41 +231,47 @@ class RedisOperatorRegistry:
         model_ready: bool,
     ) -> OperatorInstance:
         instance_key = self._instance_key(instance_id)
-        if not self._client.exists(instance_key):
-            raise OperatorInstanceNotFoundError(instance_id)
         heartbeat_at = datetime.now(UTC)
-        pipeline = self._client.pipeline(transaction=True)
-        pipeline.hset(
+        updated = self._client.eval(
+            _HEARTBEAT_SCRIPT,
+            2,
             instance_key,
-            mapping={
-                "inflight": inflight,
-                "model_ready": "1" if model_ready else "0",
-                "last_heartbeat_at": heartbeat_at.isoformat(),
-            },
-        )
-        pipeline.set(
             self._heartbeat_key(instance_id),
-            "1",
-            ex=self._heartbeat_ttl_seconds,
+            str(inflight),
+            "1" if model_ready else "0",
+            heartbeat_at.isoformat(),
+            str(self._heartbeat_ttl_seconds),
         )
-        pipeline.execute()
+        if not updated:
+            raise OperatorInstanceNotFoundError(instance_id)
         return self._get_instance(instance_id)
 
     def unregister(self, instance_id: str) -> None:
         instance_key = self._instance_key(instance_id)
-        capabilities = self._client.hget(instance_key, "capabilities")
-        if capabilities is None:
+        removed = self._client.eval(
+            _UNREGISTER_SCRIPT,
+            4,
+            instance_key,
+            self._heartbeat_key(instance_id),
+            self._instances_key,
+            f"{self._prefix}leases:{instance_id}",
+            f"{self._prefix}capability:",
+            instance_id,
+            f"{self._prefix}lease:",
+        )
+        if not removed:
             raise OperatorInstanceNotFoundError(instance_id)
-        pipeline = self._client.pipeline(transaction=True)
-        for capability in json.loads(str(capabilities)):
-            pipeline.srem(self._capability_key(capability), instance_id)
-        pipeline.srem(self._instances_key, instance_id)
-        pipeline.delete(instance_key, self._heartbeat_key(instance_id))
-        pipeline.execute()
 
     def list_instances(self) -> list[OperatorInstance]:
         instance_ids = sorted(cast(set[str], self._client.smembers(self._instances_key)))
-        return [self._get_instance(instance_id) for instance_id in instance_ids]
+        instances: list[OperatorInstance] = []
+        for instance_id in instance_ids:
+            try:
+                instances.append(self._get_instance(instance_id))
+            except OperatorInstanceNotFoundError:
+                # Unregistration may remove the hash after the membership snapshot.
+                continue
+        return instances
 
     def set_lifecycle(
         self,
@@ -187,16 +279,20 @@ class RedisOperatorRegistry:
         lifecycle: OperatorLifecycle,
     ) -> OperatorInstance:
         instance_key = self._instance_key(instance_id)
-        if not self._client.exists(instance_key):
+        updated = self._client.eval(
+            _SET_LIFECYCLE_SCRIPT,
+            1,
+            instance_key,
+            lifecycle.value,
+        )
+        if not updated:
             raise OperatorInstanceNotFoundError(instance_id)
-        self._client.hset(instance_key, "lifecycle", lifecycle.value)
         return self._get_instance(instance_id)
 
     def lease(self, capability: str, ttl_seconds: int) -> CapacityLease:
         if ttl_seconds <= 0:
             raise ValueError("租约 TTL 必须大于 0")
         lease_id = str(uuid4())
-        now_ms = int(time.time() * 1000)
         ttl_ms = ttl_seconds * 1000
         result = cast(
             list[Any],
@@ -204,7 +300,6 @@ class RedisOperatorRegistry:
                 _LEASE_SCRIPT,
                 1,
                 self._capability_key(capability),
-                str(now_ms),
                 str(ttl_ms),
                 lease_id,
                 f"{self._prefix}instance:",
@@ -236,7 +331,6 @@ class RedisOperatorRegistry:
     def renew(self, lease_id: str, ttl_seconds: int) -> CapacityLease:
         if ttl_seconds <= 0:
             raise ValueError("租约 TTL 必须大于 0")
-        now_ms = int(time.time() * 1000)
         ttl_ms = ttl_seconds * 1000
         result = cast(
             list[Any],
@@ -244,10 +338,11 @@ class RedisOperatorRegistry:
                 _RENEW_SCRIPT,
                 1,
                 f"{self._prefix}lease:{lease_id}",
-                str(now_ms),
                 str(ttl_ms),
                 f"{self._prefix}leases:",
                 lease_id,
+                f"{self._prefix}instance:",
+                f"{self._prefix}heartbeat:",
             ),
         )
         if not result:

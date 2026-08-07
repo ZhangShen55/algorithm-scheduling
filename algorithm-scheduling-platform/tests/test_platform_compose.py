@@ -34,6 +34,12 @@ def test_platform_compose_uses_container_addresses_and_shared_storage() -> None:
     assert "${RESULT_ROOT:-/data/result}:/data/result" in compose
 
 
+def test_control_readiness_probe_allows_dependency_timeout_headroom() -> None:
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+
+    assert "ops/readiness', timeout=4)" in compose
+
+
 def test_all_platform_dockerfiles_use_repo_root_context_and_one_worker() -> None:
     for service in (
         "control_service",

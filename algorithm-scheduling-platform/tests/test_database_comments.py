@@ -1,8 +1,10 @@
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 COMMENT_MIGRATION = PROJECT_ROOT / "migrations/0004_schema_comments.sql"
+FOUNDATION_FORWARD_MIGRATION = (
+    PROJECT_ROOT / "migrations/0005_operator_audit_and_status_comments.sql"
+)
 
 EXPECTED_COLUMNS = {
     "course_jobs": (
@@ -134,5 +136,44 @@ def test_comment_migration_is_forward_only_and_non_destructive() -> None:
 
     assert "begin;" in sql
     assert "commit;" in sql
+    for forbidden in ("drop table", "drop column", "delete from", "truncate"):
+        assert forbidden not in sql
+
+
+def test_0005_forward_migration_corrects_queued_and_processing_status_comments() -> None:
+    assert FOUNDATION_FORWARD_MIGRATION.is_file(), (
+        "里程碑 1 必须使用新的 0005 前向迁移修正已发布的状态注释"
+    )
+    sql = FOUNDATION_FORWARD_MIGRATION.read_text(encoding="utf-8").lower()
+
+    assert (
+        "comment on column course_task_types.status is "
+        "'任务类型整数状态：10 等待、20 前置等待、30 等待算子、"
+        "40 已排队、50 处理中、60 完成、70 失败、80 取消';"
+    ) in sql
+    assert (
+        "comment on column task_nodes.status is "
+        "'节点整数状态：10 就绪、20 前置等待、30 等待算子、"
+        "40 已排队、50 处理中、60 完成、70 失败、80 取消';"
+    ) in sql
+    assert (
+        "comment on column node_work_items.status is "
+        "'子项整数状态：10 等待、20 前置等待、30 等待算子、"
+        "40 已排队、50 处理中、60 完成、70 失败、80 取消';"
+    ) in sql
+
+
+def test_0005_forward_migration_adds_operator_event_history_index() -> None:
+    assert FOUNDATION_FORWARD_MIGRATION.is_file(), (
+        "里程碑 1 必须提供算子事件历史查询索引的 0005 前向迁移"
+    )
+    sql = " ".join(
+        FOUNDATION_FORWARD_MIGRATION.read_text(encoding="utf-8").lower().split()
+    )
+
+    assert (
+        "create index idx_operator_instance_events_instance_time "
+        "on operator_instance_events (instance_id, occurred_at desc, id desc);"
+    ) in sql
     for forbidden in ("drop table", "drop column", "delete from", "truncate"):
         assert forbidden not in sql

@@ -1,8 +1,11 @@
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
+import pytest
 from control_service.app.api.control import create_control_app
 from fastapi.testclient import TestClient
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from packages.platform_common.config import PlatformSettings
 from packages.platform_common.operator_registry import (
@@ -66,6 +69,49 @@ class FakeOperatorRegistry:
             service_url="http://127.0.0.1:19001",
             expires_at=datetime.now(UTC),
         )
+
+
+class UnavailableOperatorRegistry:
+    @staticmethod
+    def _raise() -> None:
+        raise RedisConnectionError("redis unavailable")
+
+    def register(self, instance: OperatorInstance) -> OperatorInstance:
+        del instance
+        self._raise()
+
+    def heartbeat(
+        self,
+        instance_id: str,
+        *,
+        inflight: int,
+        model_ready: bool,
+    ) -> OperatorInstance:
+        del instance_id, inflight, model_ready
+        self._raise()
+
+    def unregister(self, instance_id: str) -> None:
+        del instance_id
+        self._raise()
+
+    def list_instances(self) -> list[OperatorInstance]:
+        self._raise()
+
+    def set_lifecycle(self, instance_id: str, lifecycle: Any) -> OperatorInstance:
+        del instance_id, lifecycle
+        self._raise()
+
+    def lease(self, capability: str, ttl_seconds: int) -> CapacityLease:
+        del capability, ttl_seconds
+        self._raise()
+
+    def release(self, lease_id: str) -> None:
+        del lease_id
+        self._raise()
+
+    def renew(self, lease_id: str, ttl_seconds: int) -> CapacityLease:
+        del lease_id, ttl_seconds
+        self._raise()
 
 
 def test_operator_registration_and_listing_use_real_http_status(tmp_path: Path) -> None:
@@ -172,3 +218,67 @@ def test_unknown_capacity_lease_renewal_returns_http_404(tmp_path: Path) -> None
         )
 
     assert response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        (
+            "POST",
+            "/api/operator-instances/register",
+            {
+                "instance_id": "vbas-gpu0",
+                "operator_code": "vbas",
+                "capabilities": ["teacher_behavior"],
+                "service_url": "http://127.0.0.1:19001",
+                "declared_capacity": 1,
+            },
+        ),
+        (
+            "POST",
+            "/api/operator-instances/heartbeat",
+            {"instance_id": "vbas-gpu0", "inflight": 0, "model_ready": True},
+        ),
+        ("POST", "/api/operator-instances/unregister", {"instance_id": "vbas-gpu0"}),
+        ("GET", "/api/operator-instances", None),
+        (
+            "POST",
+            "/api/operator-instances/lifecycle",
+            {"instance_id": "vbas-gpu0", "lifecycle": "DRAINING"},
+        ),
+        (
+            "POST",
+            "/internal/operator-instances/lease",
+            {"capability": "teacher_behavior", "ttl_seconds": 60},
+        ),
+        (
+            "POST",
+            "/internal/operator-instances/release",
+            {"lease_id": "lease-001"},
+        ),
+        (
+            "POST",
+            "/internal/operator-instances/lease/renew",
+            {"lease_id": "lease-001", "ttl_seconds": 60},
+        ),
+        ("GET", "/ops/operator-instances", None),
+        ("POST", "/ops/operator-instances/vbas-gpu0/drain", None),
+    ],
+)
+def test_operator_routes_return_http_503_when_registry_is_unavailable(
+    tmp_path: Path,
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None,
+) -> None:
+    settings = PlatformSettings(course_root=tmp_path / "course", result_root=tmp_path / "result")
+    app = create_control_app(
+        operator_registry=UnavailableOperatorRegistry(),
+        settings=settings,
+    )
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.request(method, path, json=payload)
+
+    assert response.status_code == 503
+    assert "暂不可用" in response.json()["detail"]

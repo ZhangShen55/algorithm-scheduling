@@ -53,6 +53,5 @@ heartbeat_audit_interval_seconds = 60
 enabled_task_types = ["PPT", "ASR", "TEACHER_BEHAVIOR", "STUDENT_BEHAVIOR"]
 
 [readiness]
-# readiness 检查 PostgreSQL、Redis 等依赖时的单项超时秒数。
+# readiness 每项依赖的总超时预算，PostgreSQL 会在连接和语句间分配；最少 2 秒。
 dependency_timeout_seconds = 3.0
-

@@ -14,7 +14,7 @@
 - 真实 PostgreSQL、Redis、Kafka 容器健康。
 - `control-service` 与 `orchestrator-service` 以各自配置真实启动。
 - 集成测试专用算子 Stub 使用稳定能力代码注册，并返回可持久化的契约结果。
-- 目标数据库已按顺序执行 `0001-0004`；10 张调度表及所有表、字段中文注释可查询。
+- 目标数据库已按顺序执行 `0001-0005`；10 张调度表及所有表、字段中文注释可查询。
 
 ## 必须验证的流程
 
@@ -37,6 +37,16 @@
 
 记录容器版本和健康状态、API 请求/响应、Outbox 行、Kafka topic/offset、节点状态变化、所选 Stub 实例、Redis 租约和最终查询结果。所有命令必须可重复执行，跳过的集成测试不算通过。
 
+## 里程碑 1 已验证边界
+
+- FastAPI lifespan 在启动期创建并在关闭期释放 Engine/Redis，应用导入不建立网络连接。
+- 任务幂等提交、后续追加 task type、URGENT/NORMAL 和中文 `reason` 已在真实 PostgreSQL 验证。
+- 课程、task type 与 Outbox 同事务；Outbox 写失败时三者一起回滚，Control 不装配 Kafka Producer。
+- 算子注册/重注册、心跳摘要、排空、注销和历史事件已写入 PostgreSQL；TTL 和租约热路径仍只访问 Redis。
+- Redis 已验证并发注册/心跳/注销、过期租约、重注册清理、DRAINING 和 `max(active_leases, reported_inflight)` 容量语义。`register` 先返回 OFFLINE，首次成功心跳后才开放租约；客户端启动等待首次心跳，后续短暂 HTTP 故障会继续重试。
+- `/health` 只表示存活；`/ops/readiness` 并行检查 PostgreSQL、Redis、10 张表、全部预期字段和中文说明、`0005` 索引/状态语义以及待补写心跳审计，不检查 Kafka。
+- A 面数据库故障保持 HTTP 200 并返回业务码 `50000`；注册、心跳、生命周期和租约基础设施故障返回 HTTP 503。
+
 ## 当前结论
 
-部分符合。DDL 注释契约和既有组件测试已有证据；真实 Kafka adapter、Publisher、Consumer、Dispatcher、Stub 调用和服务重启闭环尚未完成，因此不得宣称基础调度闭环完成。
+里程碑 1 符合；方案 C 整体仍为部分符合。真实 Kafka adapter、Publisher、Consumer、Dispatcher、Stub 调用和服务重启闭环尚未完成，因此不得宣称基础调度闭环完成。

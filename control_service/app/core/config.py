@@ -75,7 +75,7 @@ class FeatureConfig(BaseModel):
 
 
 class ReadinessConfig(BaseModel):
-    dependency_timeout_seconds: float = Field(default=3.0, gt=0)
+    dependency_timeout_seconds: float = Field(default=3.0, ge=2.0)
 
 
 class ControlSettings(BaseSettings):
