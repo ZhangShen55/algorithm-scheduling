@@ -32,6 +32,7 @@ Thumbs.db
 *.sock
 *.lock
 /.superpowers/
+/.worktrees/
 /output/
 /tmp/
 **/logs/
