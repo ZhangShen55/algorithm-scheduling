@@ -27,3 +27,10 @@ Harness SHALL 区分静态、单元、数据库集成、Broker 集成、服务�
 #### Scenario: 新版本后的复审
 - **WHEN** 再次执行架构复审
 - **THEN** 其他工程师能够重新运行列出的命令，并复现或质疑每项结论
+
+### Requirement: 基础闭环与完整产品闭环分别取证
+Harness SHALL 为方案 C 的 control/orchestrator 基础闭环维护独立场景，不得要求真实 PPT 才能执行，也不得用基础闭环证据宣称 PPT、ASR、视觉或在线功能完成。
+
+#### Scenario: 基础闭环使用契约 Stub 通过
+- **WHEN** 真实基础设施、control、orchestrator 和契约 Stub 贯通，但真实算法尚未接入
+- **THEN** Harness 只将方案 C 基础闭环标记为通过，完整产品运行闭环继续保持未完成

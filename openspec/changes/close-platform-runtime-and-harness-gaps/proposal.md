@@ -4,6 +4,8 @@
 
 ## 变更内容
 
+- 采用方案 C：当前基础阶段先完成 `control-service` 的 PostgreSQL/Outbox/注册容量事实闭环，再连续完成 `orchestrator-service` 的 Publisher、Kafka Consumer、DAG 与通用执行运行时；两者分别验收，阶段完成必须同时满足两个里程碑。
+- 当前基础闭环使用契约一致的通用算子 Stub，不依赖正在独立优化的真实 `ppt_slice`；PPT 在内部契约冻结后作为下一阶段接入。
 - 为 `orchestrator-service` 装配真实 Kafka Producer/Consumer、Outbox Publisher、管道初始化、节点领取、容量租约、媒体准备、算子适配和任务终态汇总循环。
 - 为 `vision-orchestrator-service` 装配 Kafka 消费/发布、实际 `VisualAnalyzer` 组合实现、抽帧、缓存、自适应扫描、VBas 调用、聚合和结果写入循环。
 - 增加四个平台服务的可部署 Compose、Kafka topic/bootstrap 配置、优雅启动/停止和依赖健康检查。
@@ -14,6 +16,7 @@
 - **BREAKING（PPT 内部算子协议）**：`ppt_slice` 不再逐张通过 Base64 回调图片；算子将切片直接写入 `/data/result/{task_id}/ppt`，原子发布 `manifest.json`，并仅向 `orchestrator-service` 发送一次终态回调。该接口只供调度平台内部调用，不保留旧调用方式。
 - 建立 `algorithm-scheduling-platform/AGENTS.md`，只记录长期架构边界、入口、依赖、禁止事项和强制验证门槛。
 - 建立 `algorithm-scheduling-platform/harness/`，详细记录调整台账、设计-实现证据矩阵、验收命令、环境前提和已知限制。
+- 为 10 张正式调度表及其全部物理字段增加 PostgreSQL 中文注释前向迁移，并记录本机数据库的只读审计结果；不删除或修改现有测试表和数据。
 - **BREAKING（完成度口径）**：只有真实 Kafka broker、真实 PostgreSQL/Redis、平台常驻进程和契约一致算子替身贯通时，才允许标记端到端验收完成；直接调用 repository 完成节点不再算端到端。
 
 ## 能力范围
@@ -31,6 +34,7 @@
 ## 影响范围
 
 - 影响根目录四服务的 `app/main.py`、Kafka/runtime 公共包、节点执行与视觉组合层、配置、指标、审计、清理和测试。
+- 影响平台数据库迁移、数据库逻辑模型和基础闭环 Harness；当前不向本机空的 `algorithm` 业务库自动执行 DDL。
 - 影响 `deploy/` 的平台/基础设施/算子 Compose 与八个算子 Dockerfile。
 - 新增 Kafka Python 客户端依赖和真实 broker 集成测试环境。
 - 新增平台级 `AGENTS.md` 与 `harness/`，根 `AGENTS.md` 只增加平台项目地图和跨项目边界。

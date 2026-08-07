@@ -5,6 +5,8 @@ Use the project `.venv` from the platform root.
 ```bash
 .venv/bin/python -m compileall -q packages ../control_service/app ../orchestrator_service/app ../vision_orchestrator_service/app ../online_gateway_service/app
 .venv/bin/pytest -q tests/test_harness_consistency.py
+.venv/bin/python scripts/check_migrations.py
+.venv/bin/pytest -q tests/test_database_comments.py
 .venv/bin/pytest -q tests/test_infrastructure_config.py
 .venv/bin/pytest -q tests/contract
 .venv/bin/pytest -q tests
@@ -41,3 +43,19 @@ and the old-path gate covered runtime source, Dockerfiles, Compose, Makefile, sc
 delivery documentation.
 
 Integration and runtime commands must record infrastructure versions and container status. A skipped integration test is not passing evidence. Full end-to-end evidence must show Kafka offsets, Worker-produced database state, operator HTTP/WebSocket traffic and filesystem results.
+
+方案 C 的基础闭环验收单独执行 `harness/scenarios/foundation-scheduling-closure.md`。该场景只要求
+真实 PostgreSQL、Redis、Kafka、`control-service`、`orchestrator-service` 和契约 Stub；不得因为
+真实 PPT 算子尚未接入而跳过基础运行时验证，也不得把静态 DDL 测试写成 Broker 闭环已通过。
+
+本机 PostgreSQL 现状使用以下只读查询复核；未经用户明确要求，不在审计步骤执行 DDL：
+
+```bash
+docker exec algorithm-scheduling-platform-postgres-1 \
+  psql -U algorithm -d postgres -X -c \
+  "SELECT datname FROM pg_database WHERE datallowconn ORDER BY datname"
+
+docker exec algorithm-scheduling-platform-postgres-1 \
+  psql -U algorithm -d algorithm -X -c \
+  "SELECT schemaname, tablename FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY 1, 2"
+```

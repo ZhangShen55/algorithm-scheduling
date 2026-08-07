@@ -22,6 +22,11 @@
 
 因此原架构方向继续采用，但旧 change 的 `70/70` 只能解释为“计划组件已生成”，不能解释为“平台可以按设计运行”。在本变更完成前，不归档为生产完成状态。
 
+当前实施采用方案 C：一个基础调度阶段包含两个连续里程碑。里程碑 1 先验证 `control-service`
+的 PostgreSQL 任务事实、事务 Outbox、注册审计和 Redis 容量；里程碑 2 再验证
+`orchestrator-service` 的 Publisher、真实 Kafka Consumer、DAG、节点执行和通用算子调用框架。
+真实 PPT 正在独立优化，不是这两个里程碑的完成前提。
+
 ## 目标 / 非目标
 
 **Goals:**
@@ -31,6 +36,7 @@
 - 视觉服务真正组合抽帧、自适应检测、VBas 租约、聚合和结果持久化。
 - 平台和八个算子可通过明确 Compose/镜像步骤重复部署。
 - PostgreSQL、Redis、Kafka、临时文件和长期结果的所有权与原设计一致。
+- 10 张正式调度表及全部物理字段在 PostgreSQL 中具有可查询的中文说明。
 - 用 Harness 记录变更证据与可重复验收，用 `AGENTS.md` 约束未来代理不再误报完成度。
 
 **Non-Goals:**
@@ -72,7 +78,20 @@ algorithm.visual.events
 
 Consumer 只有在处理成功后提交 offset；业务幂等由数据库唯一键保证。消息只携带 ID、本地路径和元数据，不携带媒体字节。
 
-### 4. 通用节点执行器是 orchestrator 的核心闭环
+### 4. 当前基础阶段采用方案 C
+
+当前阶段必须完成两个连续、可独立验收的里程碑：
+
+1. `control-service`：真实 PostgreSQL Repository、幂等提交/查询、整数状态、同事务 Outbox、
+   算子注册审计以及 Redis TTL/容量租约。
+2. `orchestrator-service`：独立 Outbox Publisher、真实 Kafka Producer/Consumer、DAG 幂等初始化、
+   节点领取/推进、状态汇总、租约申请和通用算子调用框架。
+
+基础验收使用真实 PostgreSQL、Redis、Kafka 和实际服务进程；算法端使用集成测试专用契约 Stub。
+它必须证明 `POST -> PostgreSQL/Outbox -> Kafka -> DAG -> Stub -> GET`，并覆盖等待算子状态 30、
+URGENT/NORMAL、重复消息和重启。测试不得直接调用 Repository 完成节点。
+
+### 5. 通用节点执行器是 orchestrator 的核心闭环
 
 执行器按 capability 读取 URGENT/NORMAL 节点，申请实例租约，并按 node code 调用既有组件：
 
@@ -91,7 +110,10 @@ PPT 内部协议不保留旧 Base64 逐图回调。`ppt_slice` 在单个 Uvicorn
 
 由于 PPT 提交接口异步返回，容量租约不能在“已受理”响应后释放。`orchestrator-service` 在节点 RUNNING 期间续约所选实例，完成事务提交后释放；`ppt_slice` 心跳同时报告真实 `inflight`。单容器一个 Uvicorn Worker 与进程内 N 路视频处理并发不冲突。
 
-### 5. 视觉组合器实现 VisualAnalyzer
+真实 PPT、OCR、ASR 和视觉算子不是基础阶段的验收依赖。`ppt_slice` 内部协议冻结后，才按上述
+执行器契约接入真实 PPT 管道。
+
+### 6. 视觉组合器实现 VisualAnalyzer
 
 新增组合类负责：
 
@@ -105,17 +127,17 @@ PPT 内部协议不保留旧 Base64 逐图回调。`ppt_slice` 在单个 Uvicorn
 
 Kafka 仍只在课程级边界使用，不把单帧循环拆到 Kafka。
 
-### 6. Redis 负责实时态，PostgreSQL 负责审计事实
+### 7. Redis 负责实时态，PostgreSQL 负责审计事实
 
 在现有 Redis registry 外增加审计 repository/decorator：注册、心跳摘要、desired lifecycle、unregister 和运维排空写入 PostgreSQL。Redis TTL 到期决定实时 OFFLINE；PostgreSQL 用于运维历史，不参与每次原子 lease 的热路径。
 
-### 7. 平台和算子部署一起闭环
+### 8. 平台和算子部署一起闭环
 
 新增四个平台服务 Compose，与基础设施/算子使用同一 network 和共享挂载。八个算子镜像必须安装版本化 `algorithm-scheduling-platform` wheel；构建验证直接在镜像内执行 `import packages.operator_registry_client`。
 
 主机模式 Kafka 使用 `127.0.0.1:9092`；容器模式提供独立 internal listener 和 service-name advertised address，不能混用。
 
-### 8. Harness 和 AGENTS 分工
+### 9. Harness 和 AGENTS 分工
 
 根 `AGENTS.md` 只增加平台项目地图和跨项目边界。平台级 `AGENTS.md` 固定以下 durable rules：
 
@@ -138,7 +160,7 @@ harness/scenarios/*.md
 
 每项调整记录“原状态、目标、文件、契约影响、测试、环境证据、剩余风险”，不把这些流水信息复制到 `AGENTS.md`。
 
-### 9. 重新定义端到端完成门槛
+### 10. 重新定义端到端完成门槛
 
 真实调度端到端必须同时满足：
 
@@ -148,6 +170,15 @@ harness/scenarios/*.md
 - 算法可以是契约替身，但必须通过 HTTP/WebSocket 和 control-service lease 调用。
 - 查询结果由 Worker 产生，测试不得人工调用 `complete_node` 或 `update_task_type_state`。
 - 验证重启、重复消息、URGENT、等待算子、清理和指标。
+
+### 11. 数据库 DDL 通过前向迁移维护中文说明
+
+正式结构由 `0001-0003` 定义 10 张调度表、依赖关系和调度索引；
+`0004_schema_comments.sql` 对每张表和每个物理字段执行 `COMMENT ON TABLE/COLUMN`。以后新增字段
+必须在新的前向迁移中同时增加注释，不回改已经执行过的旧迁移作为唯一交付方式。
+
+2026-08-07 只读审计确认：本机 `algorithm` 业务库没有用户表；两个测试库只包含调度测试表，
+其中 repository 测试库具有全部 10 张表。审计不授权自动执行迁移、删除表或清理数据。
 
 ## 风险与权衡
 
@@ -160,20 +191,20 @@ harness/scenarios/*.md
 
 ## 迁移计划
 
-1. 建立平台 `AGENTS.md` 和 Harness 基线，先记录当前不符合项。
-2. 引入 Kafka adapter、配置和 runtime lifecycle，接通课程命令初始化。
-3. 接通通用节点执行器和 task type 状态汇总，先跑 PPT/ASR。
-4. 实现视觉组合器并接通 visual commands/events。
-5. 接入清理、审计和全部指标。
-6. 增加平台 Compose、Kafka internal listener 和算子 wheel 构建。
-7. 使用真实 PostgreSQL/Redis/Kafka 和契约算子替身跑五类场景、重启和优先级验收。
-8. Harness 证据全部通过后，更新旧完成度说明并决定是否同步/归档两个 change。
+1. 建立平台 `AGENTS.md`、Harness 和四服务部署骨架，记录当前不符合项。
+2. 完成方案 C 里程碑 1：control 的真实 Repository、状态、事务 Outbox、注册审计和 Redis 容量。
+3. 完成方案 C 里程碑 2：Kafka adapter、Publisher、Consumer、DAG、Dispatcher 和契约 Stub 调用。
+4. 使用真实 PostgreSQL/Redis/Kafka 验证基础闭环、重启、重复消息、URGENT 和等待算子。
+5. 等 PPT 契约冻结后接入 PPT/OCR/关键词，再接 ASR 管道。
+6. 实现视觉组合器并接通 visual commands/events。
+7. 接入清理、审计、全部指标、算子 wheel 和完整部署闭环。
+8. 使用真实基础设施和契约算子替身跑五类完整场景，Harness 全部通过后再决定同步/归档。
 
 回滚以服务为单位：A 未切流前保留现有旧链路；数据库变更只增加审计数据；关闭新 Worker 不删除 Outbox 和任务事实；不在回滚时删除 `/data/result`。
 
 ## 待确认问题
 
 - Kafka 客户端最终选用 `aiokafka` 还是 `confluent-kafka`，需结合目标 Python/GPU 镜像的 wheel 可用性验证。
-- PPT 终态回调由 `orchestrator-service` 的既有 FastAPI 端口暴露内部入口，不新增独立回调服务；共享 manifest 是耐久完成证据，回调是低延迟通知。
+- PPT 终态回调设计暂按 `orchestrator-service` 既有 FastAPI 端口、不新增独立回调服务；该项等待正在独立优化的 PPT 契约冻结后再实施，不阻塞方案 C 基础闭环。
 - 长视觉任务的 Kafka offset/任务并发策略采用短消息转内部数据库队列，还是延长处理模型。
 - 八个算子镜像由统一父镜像安装 wheel，还是各 Dockerfile 显式 COPY/install。

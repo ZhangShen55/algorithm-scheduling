@@ -1,5 +1,8 @@
 # Scenario: Platform Runtime Closure
 
+该场景是完整第一版运行闭环。当前方案 C 的较小基础门槛见
+`harness/scenarios/foundation-scheduling-closure.md`；基础闭环不依赖真实 PPT、ASR、视觉或在线算子。
+
 ## Preconditions
 
 - Real PostgreSQL, Redis and Kafka containers are healthy.

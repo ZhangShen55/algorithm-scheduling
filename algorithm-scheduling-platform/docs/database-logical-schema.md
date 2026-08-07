@@ -21,6 +21,8 @@ erDiagram
     course_task_types ||--o{ task_nodes : expands
     task_nodes ||--o| node_results : produces
     task_nodes ||--o{ node_work_items : contains
+    task_nodes ||--o{ task_node_dependencies : depends
+    task_nodes ||--o{ task_node_dependencies : prerequisite
     course_task_types ||--o{ visual_fallback_values : owns
     course_task_types ||--o{ outbox_events : emits
     operator_instances ||--o{ operator_instance_events : audits
@@ -95,6 +97,10 @@ erDiagram
         bigint course_task_type_id FK
         text metric_code
         numeric value
+    }
+    task_node_dependencies {
+        bigint node_id PK_FK
+        bigint prerequisite_node_id PK_FK
     }
 ```
 
@@ -195,6 +201,12 @@ erDiagram
 - `front_region_provided`、`back_region_provided` 保存到学生任务的结构化结果中，明确区域是否
   由 A 提供；不增加 `is_estimated` 或 `source` 字段。
 
+### 3.10 `task_node_dependencies`
+
+保存 DAG 节点与直接前置节点的多对多关系。`(node_id, prerequisite_node_id)` 是联合主键，
+两列均关联 `task_nodes.id`，并禁止节点依赖自身。重复 Kafka 消息初始化同一 DAG 时，该主键保证
+依赖关系幂等。
+
 ## 4. 状态与结果所有权
 
 `control-service` 创建课程、任务类型与 Outbox，并提供一致性查询。`orchestrator-service`
@@ -213,3 +225,23 @@ erDiagram
 - 只有所有已请求任务进入终态、长期文件确认成功后，才删除 `/data/course/{task_id}`；
   `/data/result/{task_id}` 不随临时目录清理。
 - Redis 数据过期只影响路由资格，不得改变 PostgreSQL 中已经完成的业务状态。
+
+## 6. 物理 DDL 与中文说明
+
+正式调度结构由以下前向迁移组成：
+
+| 迁移 | 内容 |
+|---|---|
+| `0001_initial.sql` | 课程、任务类型、节点、结果、子项、Outbox、算子审计和视觉兜底基础表 |
+| `0002_scheduling_indexes.sql` | Outbox 并发领取字段和调度热路径索引 |
+| `0003_node_dependencies.sql` | DAG 节点直接依赖表和反向查询索引 |
+| `0004_schema_comments.sql` | 10 张调度表及全部物理字段的 PostgreSQL 中文注释 |
+
+表和字段说明直接写入 PostgreSQL catalog，运维人员可以通过 `obj_description`、
+`col_description` 或数据库客户端查看。新增字段必须通过新的前向迁移同时补充字段注释，不能仅修改
+已经在环境中执行过的迁移。
+
+2026-08-07 对本机 PostgreSQL 容器做了只读审计：`algorithm` 业务库没有用户表；
+`algorithm_migration_test` 有 9 张调度测试表；`algorithm_repository_test` 有全部 10 张调度测试表。
+未发现非调度业务表，也未删除、改名或修改任何现有表和数据。正式业务库后续应通过迁移工具执行
+`0001-0004`，测试库只作为测试证据保留。

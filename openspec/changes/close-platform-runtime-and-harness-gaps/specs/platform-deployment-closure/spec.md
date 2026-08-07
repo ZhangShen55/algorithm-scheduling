@@ -27,3 +27,10 @@ Control-service SHALL 将注册、生命周期变化、心跳摘要和注销事�
 #### Scenario: 重建 Redis
 - **WHEN** Redis 状态丢失且算子重新注册
 - **THEN** 当前路由状态得到重建，此前的注册和生命周期事实仍可从 PostgreSQL 查询
+
+### Requirement: 调度表和字段具有中文数据库说明
+平台 SHALL 通过前向迁移为 10 张正式调度表和每个物理字段写入 PostgreSQL 中文注释。新增字段 SHALL 在新的迁移中同步增加注释，且数据库审计 SHALL NOT 自动删除或修改现有表和数据。
+
+#### Scenario: 运维人员查看数据库结构
+- **WHEN** 在已执行全部迁移的目标业务库查询 PostgreSQL catalog
+- **THEN** 每张正式调度表及其每个字段都返回非空中文说明

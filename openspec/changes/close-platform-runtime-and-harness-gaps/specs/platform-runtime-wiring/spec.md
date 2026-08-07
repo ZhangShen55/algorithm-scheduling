@@ -1,5 +1,19 @@
 ## ADDED Requirements
 
+### Requirement: Control 只在事务内写入 Outbox
+`control-service` SHALL 在同一个 PostgreSQL 事务中持久化课程任务事实和 Outbox 事件，且 SHALL NOT 在 API 请求进程中直接发布 Kafka。Outbox Publisher SHALL 属于 `orchestrator-service` 的独立后台循环。
+
+#### Scenario: API 提交时 Kafka 不可用
+- **WHEN** A 服务提交有效任务但 Kafka 暂时不可访问
+- **THEN** 任务事实与 Outbox 仍原子提交，API 可查询已接纳状态，事件等待 orchestrator Publisher 在 Kafka 恢复后发布
+
+### Requirement: 基础调度闭环不依赖真实 PPT
+平台 SHALL 使用集成测试专用契约 Stub 验证 control 与 orchestrator 的基础运行时，真实 PPT、OCR、ASR、视觉和在线算子 SHALL NOT 成为该里程碑的启动或完成前提。
+
+#### Scenario: PPT 算子仍在独立优化
+- **WHEN** PostgreSQL、Redis、Kafka、control、orchestrator 和契约 Stub 已就绪，但真实 PPT 未部署
+- **THEN** 基础闭环仍能验证 Outbox 发布、Kafka 消费、DAG、状态 30、租约、节点完成和查询结果
+
 ### Requirement: Orchestrator 运行时启动真实后台循环
 `orchestrator-service` SHALL 在应用 lifespan 期间启动真实的 Kafka Producer、课程命令 Consumer、Outbox Publisher、节点 Dispatcher、节点 Executor、任务状态 Aggregator 和终态清理循环，并 SHALL 优雅关闭全部资源。
 
