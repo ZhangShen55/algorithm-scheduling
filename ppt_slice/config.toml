@@ -1,0 +1,44 @@
+# Video PPT Slice Service Configuration
+# 视频PPT切片服务配置文件
+
+[app]
+# 应用基础配置
+name = "Video PPT Slice Service"
+version = "V1.0.0_20260806"
+debug = false
+host = "0.0.0.0"
+port = 9001
+
+[task]
+# 任务配置
+max_concurrent_tasks = 15  # 最大并发任务数
+max_queue_size = 25        # 帧队列最大缓冲大小
+min_frames_ok = 5          # 最小有效帧数
+
+[similarity]
+# 相似度阈值配置
+default_contiguous_similarity = 0.99  # 连续帧相似度阈值
+default_saved_similarity = 0.98       # 保存帧相似度阈值
+
+[video]
+# 视频处理配置
+default_frame_width = 1920
+default_frame_height = 1080
+default_fps = 30
+stream_timeout_ms = 100000  # 流超时时间（毫秒）
+frame_queue_timeout = 7     # 帧队列超时时间（秒）
+
+[paths]
+# 平台内部共享结果根目录；请求不能覆盖该路径
+# 每个任务固定写入 {result_root}/{task_id}/ppt/slices，manifest 位于 ppt/manifest.json
+result_root = "./shared_results"
+
+[logging]
+# 日志配置
+level = "INFO"
+dir = "./logs"
+file = "app.log"
+max_bytes = 10485760  # 10MB
+backup_count = 5
+format = "%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
+date_format = "%Y-%m-%d %H:%M:%S"

@@ -1,0 +1,72 @@
+services:
+  tias-gpu-8981:
+    networks:
+      default:
+        aliases:
+          - tias-8981
+
+    # build:
+    #   context: ..
+    #   dockerfile: docker/Dockerfile
+    image: tias:6.0-protected
+    container_name: tias-gpu-8981
+    shm_size: "2g"
+    command: python -m uvicorn app.main:app --host 0.0.0.0 --port 8981
+    env_file:
+      - ./env.example
+    environment:
+      CONFIG_PATH: /workspace/config.toml
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    ports:
+      - "8981:8981"
+    volumes:
+      - ./examples/tias-8981.toml:/workspace/config.toml:ro
+      - ../models:/workspace/models:ro
+      - ../models-encrypted:/workspace/models-encrypted:ro
+      - ./secrets/tias_model_key:/run/secrets/tias_model_key:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  tias-gpu-8982:
+    networks:
+      default:
+        aliases:
+          - tias-8982
+    # build:
+    #   context: ..
+    #   dockerfile: docker/Dockerfile
+    image: tias:6.0-protected
+    container_name: tias-gpu-8982
+    shm_size: "2g"
+    command: python -m uvicorn app.main:app --host 0.0.0.0 --port 8982
+    env_file:
+      - ./env.example
+    environment:
+      CONFIG_PATH: /workspace/config.toml
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    ports:
+      - "8982:8982"
+    volumes:
+      - ./examples/tias-8982.toml:/workspace/config.toml:ro
+      - ../models:/workspace/models:ro
+      - ../models-encrypted:/workspace/models-encrypted:ro
+      - ./secrets/tias_model_key:/run/secrets/tias_model_key:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+networks:
+  default:
+    external: true
+    name: ai-quality-net

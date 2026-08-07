@@ -1,0 +1,9 @@
+{
+    "task_id": "a0000007-bbbbbb",
+    "teacher_video_path": "http://10.67.65.8:8888/空中交通管理与签派/教师2.mp4",
+    "student_video_path": "http://10.67.65.8:8888/空中交通管理与签派/学生1.mp4",
+    "slides_video_path": "http://10.67.65.8:8888/空中交通管理与签派/PPT.mp4",
+    "evaluation_mode": "1",
+    "course_id": "",
+    "student_count":38
+}

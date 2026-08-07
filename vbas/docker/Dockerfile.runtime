@@ -1,0 +1,93 @@
+FROM pytorch/pytorch:2.6.0-cuda11.8-cudnn9-runtime AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        git \
+        libgl1-mesa-glx \
+        libglib2.0-0 \
+        libsm6 \
+        libxrender1 \
+        libxext6 && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get clean
+
+WORKDIR /workspace
+
+COPY ./requirements.txt ./requirements.txt
+RUN pip3 install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ \
+    --timeout 300 \
+    --retries 5 \
+    --trusted-host mirrors.aliyun.com \
+    -r requirements.txt && \
+    pip3 install --no-cache-dir Cython setuptools wheel
+
+COPY ./app ./app
+COPY ./scripts/build_cython_modules.py ./scripts/build_cython_modules.py
+
+RUN python scripts/build_cython_modules.py \
+      --root /workspace \
+      --package app/api \
+      --package app/core \
+      --package app/services \
+      --package app/schemas \
+      --keep-source app/__init__.py \
+      --keep-source app/main.py \
+      --keep-source app/core/__init__.py \
+      --keep-source app/api/__init__.py \
+      --keep-source app/services/__init__.py \
+      --keep-source app/schemas/__init__.py \
+      --exclude-glob 'app/vendor/**' \
+      --exclude-glob 'models/**' \
+      --remove-sources && \
+    rm -rf build /workspace/models /workspace/models-encrypted && \
+    find /workspace/app/api /workspace/app/core /workspace/app/services /workspace/app/schemas \
+      -type f -name '*.py' ! -name '__init__.py' -delete && \
+    find /workspace -type d -name '__pycache__' -prune -exec rm -rf {} + && \
+    find /workspace/app -type f \( -name '*.c' -o -name '*.cpp' \) -delete
+
+FROM pytorch/pytorch:2.6.0-cuda11.8-cudnn9-runtime AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl \
+        libgl1-mesa-glx \
+        libglib2.0-0 \
+        libsm6 \
+        libxrender1 \
+        libxext6 \
+        libfontconfig1 \
+        libice6 && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get clean
+
+WORKDIR /workspace
+
+COPY --from=builder /opt/conda /opt/conda
+COPY --from=builder /workspace/app/__init__.py ./app/__init__.py
+COPY --from=builder /workspace/app/main.py ./app/main.py
+COPY --from=builder /workspace/app/api ./app/api
+COPY --from=builder /workspace/app/core ./app/core
+COPY --from=builder /workspace/app/services ./app/services
+COPY --from=builder /workspace/app/schemas ./app/schemas
+COPY --from=builder /workspace/app/vendor/DirectMHP ./app/vendor/DirectMHP
+COPY ./docker/secure-entrypoint.sh /usr/local/bin/tias-secure-entrypoint
+
+RUN chmod 0755 /usr/local/bin/tias-secure-entrypoint && \
+    mkdir -p /workspace/model-assets /workspace/models-encrypted && \
+    find /workspace/app -type d -name '__pycache__' -prune -exec rm -rf {} + && \
+    find /workspace/app -type f \( -name '*.pt' -o -name '*.pth' -o -name '*.onnx' -o -name '*.engine' -o -name '*.key' -o -name '*.pem' -o -name '*.crt' \) -delete
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    YOLO_CONFIG_DIR=/tmp/Ultralytics \
+    CONFIG_PATH=/workspace/config.toml
+
+EXPOSE 8881 8981 8982
+
+ENTRYPOINT ["/usr/local/bin/tias-secure-entrypoint"]
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8881"]

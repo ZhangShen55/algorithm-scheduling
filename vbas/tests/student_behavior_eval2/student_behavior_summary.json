@@ -1,0 +1,79 @@
+{
+  "image_dir": "/Users/zhangshen/Documents/workspace/jy-algorithm-tias-server/tests/tests_data/学生行为",
+  "output_dir": "/Users/zhangshen/Documents/workspace/jy-algorithm-tias-server/tests/student_behavior_eval2",
+  "image_count": 110,
+  "raw_conf_floor": 0.1,
+  "thresholds": {
+    "Using_phone": 0.5,
+    "Hand_raising": 0.99,
+    "Sleep": 0.45,
+    "standing": 0.99,
+    "Read_W": 0.5
+  },
+  "raw_counts": {
+    "Using_phone": 890,
+    "standing": 219,
+    "Read_W": 381,
+    "Hand_raising": 204,
+    "Sleep": 86
+  },
+  "filtered_counts": {
+    "Using_phone": 530,
+    "Read_W": 181,
+    "Sleep": 70
+  },
+  "raw_images_with_class": {
+    "Using_phone": 110,
+    "Read_W": 101,
+    "Hand_raising": 95,
+    "standing": 108,
+    "Sleep": 71
+  },
+  "filtered_images_with_class": {
+    "Using_phone": 108,
+    "Read_W": 91,
+    "Sleep": 61
+  },
+  "raw_confidence_distribution": {
+    "Using_phone": {
+      "count": 890,
+      "min": 0.1001,
+      "p25": 0.312,
+      "p50": 0.6378,
+      "p75": 0.8061,
+      "max": 0.889
+    },
+    "standing": {
+      "count": 219,
+      "min": 0.1013,
+      "p25": 0.162,
+      "p50": 0.3182,
+      "p75": 0.7444,
+      "max": 0.8436
+    },
+    "Read_W": {
+      "count": 381,
+      "min": 0.1012,
+      "p25": 0.2124,
+      "p50": 0.448,
+      "p75": 0.7335,
+      "max": 0.8981
+    },
+    "Hand_raising": {
+      "count": 204,
+      "min": 0.1,
+      "p25": 0.1464,
+      "p50": 0.2408,
+      "p75": 0.3866,
+      "max": 0.8116
+    },
+    "Sleep": {
+      "count": 86,
+      "min": 0.1128,
+      "p25": 0.4879,
+      "p50": 0.5971,
+      "p75": 0.6557,
+      "max": 0.7458
+    }
+  }
+}

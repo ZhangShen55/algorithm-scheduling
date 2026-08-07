@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.DS_Store
+.idea/
+.vscode/
+.venv/
+venv/
+env/
+config.toml
+logs/
+output/
+*.log
+
+# 模型运行文件单独交付，只提交说明和摘要清单。
+models/*/

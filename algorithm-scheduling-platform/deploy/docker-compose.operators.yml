@@ -1,0 +1,192 @@
+name: algorithm-operators
+
+x-operator-environment: &operator-environment
+  PLATFORM_REGISTRATION_ENABLED: "true"
+  PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+  PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+
+x-operator-common: &operator-common
+  restart: unless-stopped
+  networks:
+    - algorithm-platform
+  healthcheck:
+    test:
+      - CMD-SHELL
+      - >-
+        python -c "import os,urllib.request;
+        urllib.request.urlopen('http://127.0.0.1:' + os.environ['OPERATOR_PORT'] +
+        '/ops/health', timeout=3)"
+    interval: 15s
+    timeout: 5s
+    retries: 10
+    start_period: 120s
+
+services:
+  asr-offline-gpu0:
+    <<: *operator-common
+    image: ${ASR_OFFLINE_IMAGE:-seacraft-asr-offline:latest}
+    ports: ["18083:8083"]
+    environment:
+      <<: *operator-environment
+      OPERATOR_PORT: "8083"
+      PORT: "8083"
+      PLATFORM_INSTANCE_ID: asr-offline-gpu0
+      PLATFORM_SERVICE_URL: http://asr-offline-gpu0:8083
+      PLATFORM_DECLARED_CAPACITY: "1"
+      PLATFORM_GPU_ID: "0"
+      NVIDIA_VISIBLE_DEVICES: "0"
+    volumes:
+      - ${COURSE_ROOT:-/data/course}:/data/course
+      - ${RESULT_ROOT:-/data/result}:/data/result
+      - ../../asr_offline/config.toml:/config.toml:ro
+
+  asr-online-gpu0:
+    <<: *operator-common
+    image: ${ASR_ONLINE_IMAGE:-seacraft-asr-online:latest}
+    ports: ["18084:8084"]
+    environment:
+      <<: *operator-environment
+      OPERATOR_PORT: "8084"
+      PORT: "8084"
+      PLATFORM_INSTANCE_ID: asr-online-gpu0
+      PLATFORM_SERVICE_URL: http://asr-online-gpu0:8084
+      PLATFORM_DECLARED_CAPACITY: "1"
+      PLATFORM_GPU_ID: "0"
+      NVIDIA_VISIBLE_DEVICES: "0"
+    volumes:
+      - ${COURSE_ROOT:-/data/course}:/data/course
+      - ${RESULT_ROOT:-/data/result}:/data/result
+      - ../../asr_online/config.toml:/config.toml:ro
+
+  asr-offline-gpu1:
+    <<: *operator-common
+    image: ${ASR_OFFLINE_IMAGE:-seacraft-asr-offline:latest}
+    ports: ["28083:8083"]
+    environment:
+      <<: *operator-environment
+      OPERATOR_PORT: "8083"
+      PORT: "8083"
+      PLATFORM_INSTANCE_ID: asr-offline-gpu1
+      PLATFORM_SERVICE_URL: http://asr-offline-gpu1:8083
+      PLATFORM_DECLARED_CAPACITY: "1"
+      PLATFORM_GPU_ID: "1"
+      NVIDIA_VISIBLE_DEVICES: "1"
+    volumes:
+      - ${COURSE_ROOT:-/data/course}:/data/course
+      - ${RESULT_ROOT:-/data/result}:/data/result
+      - ../../asr_offline/config.toml:/config.toml:ro
+
+  asr-online-gpu1:
+    <<: *operator-common
+    image: ${ASR_ONLINE_IMAGE:-seacraft-asr-online:latest}
+    ports: ["28084:8084"]
+    environment:
+      <<: *operator-environment
+      OPERATOR_PORT: "8084"
+      PORT: "8084"
+      PLATFORM_INSTANCE_ID: asr-online-gpu1
+      PLATFORM_SERVICE_URL: http://asr-online-gpu1:8084
+      PLATFORM_DECLARED_CAPACITY: "1"
+      PLATFORM_GPU_ID: "1"
+      NVIDIA_VISIBLE_DEVICES: "1"
+    volumes:
+      - ${COURSE_ROOT:-/data/course}:/data/course
+      - ${RESULT_ROOT:-/data/result}:/data/result
+      - ../../asr_online/config.toml:/config.toml:ro
+
+  ppt-slice:
+    <<: *operator-common
+    image: ${PPT_SLICE_IMAGE:-algorithm-ppt-slice:latest}
+    ports: ["19001:9001"]
+    environment:
+      <<: *operator-environment
+      OPERATOR_PORT: "9001"
+      PLATFORM_INSTANCE_ID: ppt-slice
+      PLATFORM_SERVICE_URL: http://ppt-slice:9001
+      PLATFORM_DECLARED_CAPACITY: ${PPT_SLICE_CAPACITY:-15}
+    volumes:
+      - ${COURSE_ROOT:-/data/course}:/data/course
+      - ${RESULT_ROOT:-/data/result}:/data/result
+
+  ocr:
+    <<: *operator-common
+    image: ${OCR_IMAGE:-algorithm-ocr:latest}
+    ports: ["18866:8866"]
+    environment:
+      <<: *operator-environment
+      OPERATOR_PORT: "8866"
+      PLATFORM_INSTANCE_ID: ocr
+      PLATFORM_SERVICE_URL: http://ocr:8866
+      PLATFORM_DECLARED_CAPACITY: ${OCR_CAPACITY:-1}
+      PLATFORM_GPU_ID: ${OCR_GPU_ID:-0}
+      NVIDIA_VISIBLE_DEVICES: ${OCR_GPU_ID:-0}
+    volumes:
+      - ${COURSE_ROOT:-/data/course}:/data/course
+      - ${RESULT_ROOT:-/data/result}:/data/result
+
+  text-analysis:
+    <<: *operator-common
+    image: ${TEXT_ANALYSIS_IMAGE:-algorithm-text-analysis:latest}
+    ports: ["18000:8000"]
+    environment:
+      <<: *operator-environment
+      OPERATOR_PORT: "8000"
+      PLATFORM_INSTANCE_ID: text-analysis
+      PLATFORM_SERVICE_URL: http://text-analysis:8000
+      PLATFORM_DECLARED_CAPACITY: ${TEXT_ANALYSIS_CAPACITY:-4}
+    volumes:
+      - ${COURSE_ROOT:-/data/course}:/data/course
+      - ${RESULT_ROOT:-/data/result}:/data/result
+
+  vbas:
+    <<: *operator-common
+    image: ${VBAS_IMAGE:-algorithm-vbas:latest}
+    ports: ["18981:8981"]
+    environment:
+      <<: *operator-environment
+      OPERATOR_PORT: "8981"
+      PLATFORM_INSTANCE_ID: vbas
+      PLATFORM_SERVICE_URL: http://vbas:8981
+      PLATFORM_DECLARED_CAPACITY: ${VBAS_CAPACITY:-1}
+      PLATFORM_GPU_ID: ${VBAS_GPU_ID:-0}
+      NVIDIA_VISIBLE_DEVICES: ${VBAS_GPU_ID:-0}
+    volumes:
+      - ${COURSE_ROOT:-/data/course}:/data/course
+      - ${RESULT_ROOT:-/data/result}:/data/result
+
+  facerec:
+    <<: *operator-common
+    image: ${FACEREC_IMAGE:-algorithm-facerec:latest}
+    ports: ["18003:8000"]
+    environment:
+      <<: *operator-environment
+      OPERATOR_PORT: "8000"
+      PLATFORM_INSTANCE_ID: facerec
+      PLATFORM_SERVICE_URL: http://facerec:8000
+      PLATFORM_DECLARED_CAPACITY: ${FACEREC_CAPACITY:-1}
+      PLATFORM_GPU_ID: ${FACEREC_GPU_ID:-0}
+      NVIDIA_VISIBLE_DEVICES: ${FACEREC_GPU_ID:-0}
+    volumes:
+      - ${COURSE_ROOT:-/data/course}:/data/course
+      - ${RESULT_ROOT:-/data/result}:/data/result
+
+  screen-det:
+    <<: *operator-common
+    image: ${SCREEN_DET_IMAGE:-algorithm-screen-det:latest}
+    ports: ["18880:8880"]
+    environment:
+      <<: *operator-environment
+      OPERATOR_PORT: "8880"
+      PLATFORM_INSTANCE_ID: screen-det
+      PLATFORM_SERVICE_URL: http://screen-det:8880
+      PLATFORM_DECLARED_CAPACITY: ${SCREEN_DET_CAPACITY:-1}
+      PLATFORM_GPU_ID: ${SCREEN_DET_GPU_ID:-0}
+      NVIDIA_VISIBLE_DEVICES: ${SCREEN_DET_GPU_ID:-0}
+    volumes:
+      - ${COURSE_ROOT:-/data/course}:/data/course
+      - ${RESULT_ROOT:-/data/result}:/data/result
+
+networks:
+  algorithm-platform:
+    external: true
+    name: ${PLATFORM_DOCKER_NETWORK:-algorithm-platform}

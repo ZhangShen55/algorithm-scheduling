@@ -1,0 +1,7 @@
+*.pcm
+*.wav
+*.safetensors
+*.bin
+*.whl
+*.pyc
+/.codex/

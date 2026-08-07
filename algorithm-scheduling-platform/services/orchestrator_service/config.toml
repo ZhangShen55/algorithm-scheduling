@@ -1,0 +1,133 @@
+[service]
+# FastAPI/OpenAPI 中显示的服务名，同时用于日志和 Kafka client_id 等运维标识。
+name = "orchestrator-service"
+# Uvicorn 监听地址；容器内使用 0.0.0.0。
+host = "0.0.0.0"
+# 离线编排服务默认监听端口。
+port = 18101
+# 必须保持为 1，否则每个 Uvicorn 进程都会重复启动 Kafka 和 Outbox 循环。
+workers = 1
+# 运行环境名，建议使用 development、test 或 production。
+environment = "development"
+# 服务日志级别。
+log_level = "INFO"
+# 跨服务链路跟踪请求头名。
+trace_header = "X-Trace-ID"
+
+[postgres]
+# 平台任务库 DSN；生产用户名和密码通过 ORCHESTRATOR_POSTGRES__DSN 覆盖。
+dsn = "postgresql+psycopg://algorithm:algorithm@127.0.0.1:5432/algorithm"
+# 常驻数据库连接数。
+pool_size = 10
+# 连接池耗尽时允许额外创建的连接数。
+max_overflow = 20
+# 从连接池取得连接的最长等待秒数。
+pool_timeout_seconds = 30.0
+# 借出连接前检查连接是否有效。
+pool_pre_ping = true
+
+[kafka]
+# 主机运行使用 127.0.0.1:9092；进入 Docker network 后改为 kafka:29092。
+bootstrap_servers = ["127.0.0.1:9092"]
+# Kafka 中可观测的客户端名称。
+client_id = "orchestrator-service"
+# control-service Outbox 生成的课程任务命令 Topic。
+course_command_topic = "algorithm.course.commands"
+# 课程命令消费组，用于多实例间分配离线任务。
+course_consumer_group = "algorithm-orchestrator"
+# 发往视觉编排服务的命令 Topic。
+visual_command_topic = "algorithm.visual.commands"
+# 视觉编排服务回传节点结果事件的 Topic。
+visual_event_topic = "algorithm.visual.events"
+# 视觉结果事件消费组。
+visual_event_consumer_group = "algorithm-orchestrator-visual-events"
+# 禁止自动提交，只在任务状态成功持久化后提交 offset。
+enable_auto_commit = false
+# 新消费组没有 offset 时从最早消息开始。
+auto_offset_reset = "earliest"
+# 单次 poll 最多取回的消息数，应与 Worker 并发上限协调。
+max_poll_records = 10
+# Producer 要求所有同步副本确认消息。
+acks = "all"
+
+[outbox]
+# 每批从 PostgreSQL Outbox 读取并发布的消息数。
+batch_size = 20
+# Outbox 无可发布数据时的轮询间隔秒数。
+poll_interval_seconds = 1.0
+
+[worker]
+# 执行器实例标识；留空时由启动逻辑生成。
+worker_id = ""
+# 单个 orchestrator 进程允许并发执行的普通节点数。
+node_concurrency = 4
+# 未领取到节点时再次扫描的间隔秒数。
+claim_poll_interval_seconds = 1.0
+# 服务停止时等待正在执行节点收尾的最长秒数。
+shutdown_timeout_seconds = 60.0
+
+[control]
+# 申请算子容量、查询平台能力时访问的 control-service 根地址。
+base_url = "http://127.0.0.1:18100"
+# 调用 control-service 内部接口的超时秒数。
+request_timeout_seconds = 10.0
+# 申请算子实例时默认的租约 TTL。
+default_lease_ttl_seconds = 60
+
+[storage]
+# 下载的 T/S/P 视频和中间文件根目录。
+course_root = "/data/course"
+# PPT 切片和视觉证据图片等需长期保留文件的根目录。
+result_root = "/data/result"
+# 单个下载视频允许的最大字节数，默认 10 GiB。
+max_video_bytes = 10737418240
+# 任务到达终态后是否清理 /data/course 下的中间文件。
+cleanup_terminal_workspace = true
+
+[media]
+# 建立视频下载连接的超时秒数。
+download_connect_timeout_seconds = 10.0
+# 连续读取视频下载响应允许的最长超时秒数。
+download_read_timeout_seconds = 3600.0
+# FFmpeg 可执行文件名或绝对路径。
+ffmpeg_path = "ffmpeg"
+# FFprobe 可执行文件名或绝对路径。
+ffprobe_path = "ffprobe"
+
+[ppt]
+# PPT 画面像素相似度切片阈值。
+slice_threshold = 0.98
+# PPT 算子发送一次终态通知时可访问的 orchestrator-service 地址。
+callback_base_url = "http://127.0.0.1:18101"
+# PPT 算子一次性终态通知使用的内部路由前缀，实际请求追加节点 ID。
+terminal_callback_path = "/internal/ppt-slice/callback"
+# 一个 PPT 切片节点允许占用容量租约并处理的最长秒数。
+processing_timeout_seconds = 7200.0
+# 终态通知中 manifest 元数据允许的最大字节数，不包含切片图片本身。
+max_manifest_bytes = 2097152
+# PPT 异步任务占用算子容量时使用的租约 TTL 秒数。
+lease_ttl_seconds = 60
+# PPT 任务终态持久化前续约容量租约的间隔秒数，必须小于 TTL。
+lease_renew_interval_seconds = 20.0
+# 回调丢失时扫描运行中 PPT 节点并核对 manifest 的间隔秒数。
+reconcile_interval_seconds = 30.0
+# OCR 单批处理的 PPT 图片数。
+ocr_batch_size = 8
+# 单个 PPT OCR 节点同时发起的请求数。
+ocr_max_concurrency = 2
+# LLM 关键词单批处理的 PPT 图片数。
+keyword_batch_size = 8
+# 单个关键词节点同时发起的请求数。
+keyword_max_concurrency = 2
+
+[asr]
+# 离线 ASR 转写请求的最长超时秒数。
+request_timeout_seconds = 7200.0
+
+[text_analysis]
+# 课程脑图和 PPT 关键词请求的最长超时秒数。
+request_timeout_seconds = 600.0
+
+[readiness]
+# readiness 检查 PostgreSQL、Kafka 和 control-service 时的单项超时秒数。
+dependency_timeout_seconds = 3.0

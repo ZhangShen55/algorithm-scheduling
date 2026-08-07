@@ -1,0 +1,180 @@
+from __future__ import annotations
+
+import os
+from contextvars import ContextVar
+from pathlib import Path
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field, field_validator
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+    TomlConfigSettingsSource,
+)
+
+SERVICE_ROOT = Path(__file__).resolve().parents[2]
+_config_path_override: ContextVar[Path | None] = ContextVar(
+    "orchestrator_config_path_override",
+    default=None,
+)
+
+
+class ServiceConfig(BaseModel):
+    name: str = "orchestrator-service"
+    host: str = "0.0.0.0"
+    port: int = Field(default=18101, ge=1, le=65535)
+    workers: Literal[1] = 1
+    environment: str = "development"
+    log_level: str = "INFO"
+    trace_header: str = "X-Trace-ID"
+
+    @field_validator("log_level")
+    @classmethod
+    def normalize_log_level(cls, value: str) -> str:
+        return value.upper()
+
+
+class PostgresConfig(BaseModel):
+    dsn: str = "postgresql+psycopg://algorithm:algorithm@127.0.0.1:5432/algorithm"
+    pool_size: int = Field(default=10, ge=1)
+    max_overflow: int = Field(default=20, ge=0)
+    pool_timeout_seconds: float = Field(default=30.0, gt=0)
+    pool_pre_ping: bool = True
+
+
+class KafkaConfig(BaseModel):
+    bootstrap_servers: list[str] = Field(default_factory=lambda: ["127.0.0.1:9092"])
+    client_id: str = "orchestrator-service"
+    course_command_topic: str = "algorithm.course.commands"
+    course_consumer_group: str = "algorithm-orchestrator"
+    visual_command_topic: str = "algorithm.visual.commands"
+    visual_event_topic: str = "algorithm.visual.events"
+    visual_event_consumer_group: str = "algorithm-orchestrator-visual-events"
+    enable_auto_commit: bool = False
+    auto_offset_reset: str = "earliest"
+    max_poll_records: int = Field(default=10, ge=1)
+    acks: str = "all"
+
+
+class OutboxConfig(BaseModel):
+    batch_size: int = Field(default=20, ge=1)
+    poll_interval_seconds: float = Field(default=1.0, gt=0)
+
+
+class WorkerConfig(BaseModel):
+    worker_id: str = ""
+    node_concurrency: int = Field(default=4, ge=1)
+    claim_poll_interval_seconds: float = Field(default=1.0, gt=0)
+    shutdown_timeout_seconds: float = Field(default=60.0, gt=0)
+
+
+class ControlClientConfig(BaseModel):
+    base_url: str = "http://127.0.0.1:18100"
+    request_timeout_seconds: float = Field(default=10.0, gt=0)
+    default_lease_ttl_seconds: int = Field(default=60, gt=0)
+
+
+class StorageConfig(BaseModel):
+    course_root: Path = Path("/data/course")
+    result_root: Path = Path("/data/result")
+    max_video_bytes: int = Field(default=10_737_418_240, gt=0)
+    cleanup_terminal_workspace: bool = True
+
+
+class MediaConfig(BaseModel):
+    download_connect_timeout_seconds: float = Field(default=10.0, gt=0)
+    download_read_timeout_seconds: float = Field(default=3600.0, gt=0)
+    ffmpeg_path: str = "ffmpeg"
+    ffprobe_path: str = "ffprobe"
+
+
+class PptConfig(BaseModel):
+    slice_threshold: float = Field(default=0.98, ge=0, le=1)
+    callback_base_url: str = "http://127.0.0.1:18101"
+    terminal_callback_path: str = "/internal/ppt-slice/callback"
+    processing_timeout_seconds: float = Field(default=7200.0, gt=0)
+    max_manifest_bytes: int = Field(default=2_097_152, gt=0)
+    lease_ttl_seconds: int = Field(default=60, gt=0)
+    lease_renew_interval_seconds: float = Field(default=20.0, gt=0)
+    reconcile_interval_seconds: float = Field(default=30.0, gt=0)
+    ocr_batch_size: int = Field(default=8, ge=1)
+    ocr_max_concurrency: int = Field(default=2, ge=1)
+    keyword_batch_size: int = Field(default=8, ge=1)
+    keyword_max_concurrency: int = Field(default=2, ge=1)
+
+    @field_validator("lease_renew_interval_seconds")
+    @classmethod
+    def validate_lease_renewal_interval(cls, value: float, info: Any) -> float:
+        ttl = info.data.get("lease_ttl_seconds", 60)
+        if value >= ttl:
+            raise ValueError("PPT 容量续约间隔必须小于租约 TTL")
+        return value
+
+
+class AsrConfig(BaseModel):
+    request_timeout_seconds: float = Field(default=7200.0, gt=0)
+
+
+class TextAnalysisConfig(BaseModel):
+    request_timeout_seconds: float = Field(default=600.0, gt=0)
+
+
+class ReadinessConfig(BaseModel):
+    dependency_timeout_seconds: float = Field(default=3.0, gt=0)
+
+
+class OrchestratorSettings(BaseSettings):
+    """Orchestrator settings loaded as defaults < TOML < environment < explicit values."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ORCHESTRATOR_",
+        env_nested_delimiter="__",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    service: ServiceConfig = Field(default_factory=ServiceConfig)
+    postgres: PostgresConfig = Field(default_factory=PostgresConfig)
+    kafka: KafkaConfig = Field(default_factory=KafkaConfig)
+    outbox: OutboxConfig = Field(default_factory=OutboxConfig)
+    worker: WorkerConfig = Field(default_factory=WorkerConfig)
+    control: ControlClientConfig = Field(default_factory=ControlClientConfig)
+    storage: StorageConfig = Field(default_factory=StorageConfig)
+    media: MediaConfig = Field(default_factory=MediaConfig)
+    ppt: PptConfig = Field(default_factory=PptConfig)
+    asr: AsrConfig = Field(default_factory=AsrConfig)
+    text_analysis: TextAnalysisConfig = Field(default_factory=TextAnalysisConfig)
+    readiness: ReadinessConfig = Field(default_factory=ReadinessConfig)
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        config_path = _config_path_override.get()
+        if config_path is None:
+            config_path = Path(os.environ.get("CONFIG_PATH", SERVICE_ROOT / "config.toml"))
+        return (
+            init_settings,
+            env_settings,
+            TomlConfigSettingsSource(settings_cls, toml_file=config_path),
+            dotenv_settings,
+            file_secret_settings,
+        )
+
+    @classmethod
+    def load(
+        cls,
+        config_path: str | Path | None = None,
+        **values: Any,
+    ) -> OrchestratorSettings:
+        token = _config_path_override.set(Path(config_path) if config_path is not None else None)
+        try:
+            return cls(**values)
+        finally:
+            _config_path_override.reset(token)

@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  facerecapi:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: facerecapi
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../config.toml:/app/config.toml:ro
+      - ../logs:/app/logs
+      - ../uploaded_faces:/app/uploaded_faces
+      - ../ai_models:/app/ai_models:ro
+    environment:
+      - WORKERS=4
+      - HOST=0.0.0.0
+      - PORT=8000
+      - LOG_LEVEL=info
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - facerecapi-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/ops/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  facerecapi-network:
+    driver: bridge
+
+# docker-compose up --scale api=N

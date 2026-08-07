@@ -1,0 +1,21 @@
+ARG NPU_BASE_IMAGE
+FROM ${NPU_BASE_IMAGE}
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
+
+WORKDIR /app
+
+COPY requirements.txt requirements.npu.txt ./
+RUN python -m pip install --no-cache-dir -r requirements.npu.txt
+
+COPY app ./app
+COPY models ./models
+COPY scripts/verify_models.py ./scripts/verify_models.py
+
+RUN python scripts/verify_models.py
+
+EXPOSE 8866
+
+CMD ["python", "-m", "app.main"]

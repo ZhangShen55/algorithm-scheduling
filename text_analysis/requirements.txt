@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+openai
+requests
+python-dotenv
+pydantic
+tenacity
+json_repair==0.30.0
+tomli

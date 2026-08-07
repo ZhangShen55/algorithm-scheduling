@@ -1,0 +1,20 @@
+{
+  "request": {
+    "key": ["图片ID-001", "图片ID-002"],
+    "value": ["<base64>", "data:image/png;base64,<base64>"]
+  },
+  "success_response": {
+    "err_no": 0,
+    "err_msg": "",
+    "key": ["图片ID-001", "图片ID-002"],
+    "value": ["[{\"text\":\"示例\",\"confidence\":0.99,\"text_region\":[[0,0],[100,0],[100,30],[0,30]]}]", "[]"],
+    "formula_results": []
+  },
+  "empty_response": {
+    "err_no": 0,
+    "err_msg": "",
+    "key": ["图片ID-001"],
+    "value": ["[]"],
+    "formula_results": []
+  }
+}

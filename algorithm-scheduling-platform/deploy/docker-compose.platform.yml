@@ -1,0 +1,146 @@
+name: algorithm-platform
+
+include:
+  - path: docker-compose.infrastructure.yml
+
+x-platform-common: &platform-common
+  restart: unless-stopped
+  networks:
+    - algorithm-platform
+  environment:
+    CONFIG_PATH: /config/config.toml
+
+services:
+  control-service:
+    <<: *platform-common
+    build:
+      context: ..
+      dockerfile: services/control_service/docker/Dockerfile
+    ports:
+      - "18100:18100"
+    environment:
+      CONFIG_PATH: /config/config.toml
+      CONTROL_POSTGRES__DSN: postgresql+psycopg://algorithm:algorithm@postgres:5432/algorithm
+      CONTROL_REDIS__URL: redis://redis:6379/0
+    volumes:
+      - ../services/control_service/config.toml:/config/config.toml:ro
+      - ${COURSE_ROOT:-/data/course}:/data/course
+      - ${RESULT_ROOT:-/data/result}:/data/result
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18100/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: ${CONTROL_CPU_LIMIT:-2}
+          memory: ${CONTROL_MEMORY_LIMIT:-2G}
+
+  orchestrator-service:
+    <<: *platform-common
+    build:
+      context: ..
+      dockerfile: services/orchestrator_service/docker/Dockerfile
+    ports:
+      - "18101:18101"
+    environment:
+      CONFIG_PATH: /config/config.toml
+      ORCHESTRATOR_POSTGRES__DSN: postgresql+psycopg://algorithm:algorithm@postgres:5432/algorithm
+      ORCHESTRATOR_KAFKA__BOOTSTRAP_SERVERS: '["kafka:29092"]'
+      ORCHESTRATOR_CONTROL__BASE_URL: http://control-service:18100
+      ORCHESTRATOR_PPT__CALLBACK_BASE_URL: http://orchestrator-service:18101
+    volumes:
+      - ../services/orchestrator_service/config.toml:/config/config.toml:ro
+      - ${COURSE_ROOT:-/data/course}:/data/course
+      - ${RESULT_ROOT:-/data/result}:/data/result
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      control-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18101/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: ${ORCHESTRATOR_CPU_LIMIT:-4}
+          memory: ${ORCHESTRATOR_MEMORY_LIMIT:-4G}
+
+  vision-orchestrator-service:
+    <<: *platform-common
+    build:
+      context: ..
+      dockerfile: services/vision_orchestrator_service/docker/Dockerfile
+    ports:
+      - "18102:8010"
+    environment:
+      CONFIG_PATH: /config/config.toml
+      VISION_POSTGRES__DSN: postgresql+psycopg://algorithm:algorithm@postgres:5432/algorithm
+      VISION_KAFKA__BOOTSTRAP_SERVERS: kafka:29092
+      VISION_CONTROL__BASE_URL: http://control-service:18100
+    volumes:
+      - ../services/vision_orchestrator_service/config.toml:/config/config.toml:ro
+      - ${COURSE_ROOT:-/data/course}:/data/course
+      - ${RESULT_ROOT:-/data/result}:/data/result
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      control-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: ${VISION_CPU_LIMIT:-4}
+          memory: ${VISION_MEMORY_LIMIT:-4G}
+
+  online-gateway-service:
+    <<: *platform-common
+    build:
+      context: ..
+      dockerfile: services/online_gateway_service/docker/Dockerfile
+    ports:
+      - "18103:8001"
+    environment:
+      CONFIG_PATH: /config/config.toml
+      ONLINE_CONTROL__BASE_URL: http://control-service:18100
+    volumes:
+      - ../services/online_gateway_service/config.toml:/config/config.toml:ro
+    depends_on:
+      control-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: ${ONLINE_CPU_LIMIT:-2}
+          memory: ${ONLINE_MEMORY_LIMIT:-2G}
+
+networks:
+  algorithm-platform:
+    name: algorithm-platform

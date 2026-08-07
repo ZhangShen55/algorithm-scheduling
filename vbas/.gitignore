@@ -1,0 +1,40 @@
+# Python 字节码 / 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 常见工具缓存
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
+
+# IDE（按需）
+.vscode/
+.idea/
+
+# 大型测试资产
+tests_data/
+*.jpg
+
+# 老师面部方向离线测试资产
+tests2/images/*
+!tests2/images/.gitkeep
+tests2/models/*
+!tests2/models/.gitkeep
+tests2/vendor/*
+!tests2/vendor/.gitkeep
+tests2/head_pose_outputs/*
+!tests2/head_pose_outputs/.gitkeep
+
+tmp/
+mnt/
+models-encrypted/
+docker/secrets/

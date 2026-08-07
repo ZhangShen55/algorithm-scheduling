@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 日志
+*.log
+
+# 统计文件（运行时生成）
+asr_stats.json
+asr_online_service.log
+
+# 测试 / 临时文件
+test/
+*.wav
+*.mp3
+*.m4a
+*.tmp
+
+# 环境
+.env
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# 本地模型文件
+model/

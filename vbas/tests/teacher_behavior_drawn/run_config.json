@@ -1,0 +1,24 @@
+{
+  "image_dir": "/Users/zhangshen/Documents/workspace/jy-algorithm-tias-server/tests/images",
+  "output_dir": "/Users/zhangshen/Documents/workspace/jy-algorithm-tias-server/tests/teacher_behavior_drawn/images",
+  "image_count": 692,
+  "model": "/Users/zhangshen/Documents/workspace/jy-algorithm-tias-server/tias/models/teacher_behavior.pt",
+  "names": {
+    "0": "sit",
+    "1": "stand",
+    "2": "bbwriting",
+    "3": "teach"
+  },
+  "image_size": 640,
+  "predict_conf": 0.25,
+  "merge_iou": 0.8,
+  "keep_only_main_subject": true,
+  "main_subject_strategy": "multi_label_topmost",
+  "labels": {
+    "100": "主体",
+    "201": "站立",
+    "202": "坐着",
+    "203": "板书",
+    "204": "讲授"
+  }
+}

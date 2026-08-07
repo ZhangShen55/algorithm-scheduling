@@ -1,0 +1,63 @@
+# =============================================================================
+# VBas — macOS Apple Silicon (M1/M2/M3/M4/M5) 依赖
+# =============================================================================
+#
+# 项目说明：
+#   - 基于 Ultralytics YOLO（ultralytics==8.3.156，支持 YOLO11/YOLO12 等模型）
+#   - FastAPI 推理服务，依赖 PyTorch + OpenCV + NumPy
+#   - 生产 Docker 使用 PyTorch 2.6.0；Mac 本地推理建议对齐该版本
+#
+# 推荐 Conda 环境创建步骤：
+#
+#   conda create -n jy-tias python=3.11 -y
+#   conda activate jy-tias
+#
+#   # 1) 先装 PyTorch（Apple Silicon 自带 MPS，无需 CUDA）
+#   pip install torch==2.6.0 torchvision==0.21.0
+#
+#   # 2) 再装本项目其余依赖
+#   pip install -r requirements_mac.txt
+#
+# 启动服务（在仓库根目录执行）：
+#
+#   export CONFIG_PATH="/绝对路径/vbas/config.toml"
+#   # Mac 无 NVIDIA GPU，config.toml 中请设置 "GPU_ID": "cpu"
+#   python -m uvicorn app.main:app --host 0.0.0.0 --port 8881 --reload
+#
+# 设备说明：
+#   - 当前 settings.py 仅识别 cuda / cpu，Mac 上默认会走 CPU
+#   - 若需 MPS 加速，需将 settings.py 中 device 逻辑改为支持 mps
+#   - YOLO12 在 MPS 上训练可能不稳定；本服务为推理场景，CPU/MPS 均可
+#
+# =============================================================================
+
+# --- PyTorch（Apple Silicon；建议先单独 pip install，再装本文件其余项）---
+torch==2.6.0
+torchvision==0.21.0
+
+# --- YOLO / 视觉推理（与生产环境一致）---
+ultralytics==8.3.156
+
+# --- Web 服务 ---
+fastapi==0.115.13
+uvicorn==0.34.3
+pydantic-settings==2.10.0
+
+# --- 性能组件（macOS arm64 可用）---
+httptools
+uvloop
+
+# --- 业务代码显式依赖 ---
+requests>=2.31.0
+PyMySQL>=1.1.1
+kafka-python>=2.0.2
+redis>=5.0.0
+httpx>=0.27.0
+
+# --- 配置文件解析依赖 ---
+tomli>=2.0.1; python_version < "3.11"
+
+# --- DirectMHP 头部姿态 v2 接口依赖 ---
+PyYAML>=5.3.1
+setuptools<81
+seaborn>=0.11.0

@@ -1,0 +1,16 @@
+# Architecture Evidence Matrix
+
+| Decision ID | Decision | Owner | Evidence command | Current verdict | Linked scenario |
+| --- | --- | --- | --- | --- | --- |
+| DEC-001 | Four deployable service boundaries | platform maintainers | `pytest -q services/*/tests tests/contract/test_service_entrypoints.py tests/test_platform_compose.py` | 部分符合 | `harness/scenarios/runtime-closure.md` |
+| DEC-002 | PostgreSQL task facts and transactional Outbox | control-service | `pytest -q tests/integration/test_course_repository.py` | 部分符合 | `harness/scenarios/runtime-closure.md` |
+| DEC-003 | Redis TTL registry and renewable leases | control-service | `pytest -q tests/integration/test_redis_operator_registry.py` | 部分符合 | `harness/scenarios/ppt-shared-result.md` |
+| DEC-004 | Real Kafka course and visual loops | orchestrator and vision | `pytest -q tests/integration` | 不符合 | `harness/scenarios/runtime-closure.md` |
+| DEC-005 | PPT shared files and one terminal callback | ppt_slice and orchestrator | `pytest -q tests/test_ppt_slice_adapter.py && conda run -n ppt_slice python -m unittest discover -s ../ppt_slice/tests -v` | 部分符合 | `harness/scenarios/ppt-shared-result.md` |
+| DEC-006 | Offline adaptive visual aggregation | vision-orchestrator-service | `pytest -q tests/test_adaptive_vision_scan.py` | 部分符合 | `harness/scenarios/runtime-closure.md` |
+| DEC-007 | Online traffic bypasses Kafka | online-gateway-service | `pytest -q tests/test_online_gateway.py` | 部分符合 | `harness/scenarios/runtime-closure.md` |
+| DEC-008 | Temporary course cleanup preserves results | orchestrator-service | `pytest -q tests/test_workspace_cleanup.py` | 部分符合 | `harness/scenarios/runtime-closure.md` |
+| DEC-009 | Host and container Kafka listeners differ | deployment | `pytest -q tests/test_infrastructure_config.py` | 符合 | `harness/scenarios/runtime-closure.md` |
+| DEC-010 | Completion requires real infrastructure evidence | platform maintainers | `pytest -q tests/test_harness_consistency.py` | 部分符合 | `harness/scenarios/runtime-closure.md` |
+| DEC-011 | One Worker with truthful PPT N-way capacity (component evidence) | ppt_slice and registry client | `pytest -q tests/test_operator_registry_client.py tests/test_operator_deployment_integration.py` | 符合 | `harness/scenarios/ppt-shared-result.md` |
+| DEC-012 | Four-service Compose uses one network and shared roots (static evidence) | deployment | `docker compose -f deploy/docker-compose.platform.yml config --quiet` | 符合 | `harness/scenarios/runtime-closure.md` |

@@ -1,0 +1,25 @@
+# Web框架和服务器
+fastapi
+uvicorn[standard]
+gunicorn
+python-multipart
+jinja2
+httpx
+tomli
+
+# 数据库ORM
+sqlmodel
+# MongoDB驱动
+motor
+pymongo
+# 深度学习与图像处理
+numpy==1.23
+opencv-python
+dlib
+
+# GPU版FastDeploy（如要CPU版可改成 fastdeploy-python==1.0.7）
+fastdeploy-gpu-python==1.0.7
+# -f https://www.paddlepaddle.org.cn/whl/fastdeploy.html
+
+# 统计
+psutil

@@ -1,0 +1,71 @@
+IMAGE_ROOT = "/mnt/ias-images"
+RESULT_IMAGE_ROOT = "/data/result_images"
+SAVE_RESULT_IMAGE = 0
+INSTANCE_COUNT = 1
+WORKERS_PER_INSTANCE = 1
+GPU_ID = "cpu"
+
+[TIAS]
+InstanceId = "tias-8981"
+BaseUrl = "http://tias-8981:8981"
+AiQualityBaseUrl = "http://ai-quality-api:9000"
+TiasExposeLegacySyncTasks = false
+MaxConcurrentBatches = 1
+MaxQueueSize = 0
+HeartbeatIntervalSeconds = 5
+HeartbeatTimeoutSeconds = 15
+RegisterRetryIntervalSeconds = 5
+Host = "0.0.0.0"
+Port = 8981
+
+[Person_Thresd]
+Head = 0.25
+Top_Head = 0.1
+Hat = 0.1
+Headphones = 0.1
+Shoulder = 0.1
+
+[Face_Thresd]
+face = 0.1
+
+[Student_Thresd]
+phone = 0.7
+hand = 0.99
+sleep = 0.5
+stand = 0.99
+read = 0.5
+
+[Teacher_Behavior_Thresd]
+MergeIoU = 0.8
+SubjectClusterIoU = 0.45
+ImageSize = 640
+sit = 0.4
+stand = 0.4
+bbwriting = 0.25
+teach = 0.25
+KeepOnlyMainSubject = true
+MainSubjectStrategy = "posture_confidence"
+PostureConflictRatio = 0.10
+PostureConflictDefault = "stand"
+ForcePostureWhenMissing = true
+
+[Teacher_Head_Pose]
+Enabled = false
+DirectMHPRoot = "app/vendor/DirectMHP"
+DirectMHPWeights = "models/cmu_m_1280_e200_t40_lw010_best.pt"
+DirectMHPData = "models/cmu_panoptic_coco.yaml"
+Device = "cpu"
+ImageSize = 1280
+ConfThres = 0.35
+IouThres = 0.45
+CropScale = 1.35
+SideYawThreshold = 20.0
+DownPitchThreshold = 20.0
+
+[ModelProtection]
+# 模型保护开关。生产可改为 true，并挂载加密模型目录和密钥文件。
+Enabled = false
+EncryptedModelRoot = "/workspace/models-encrypted"
+DecryptedTempRoot = "/dev/shm/tias-models"
+KeyFile = "/run/secrets/tias_model_key"
+CleanupAfterLoad = true

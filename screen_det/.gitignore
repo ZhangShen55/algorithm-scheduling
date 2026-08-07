@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# Secrets & local env
+.env
+.env.*
+!.env.example
+
+# Logs & runtime
+logs/
+*.log
+*.log.*
+
+# Ultralytics / matplotlib cache (redirected under logs/ in Docker)
+.ultralytics/
+.matplotlib/
+
+# Dev scripts output
+runs/
+benchmark_reports/
+test/reports/
+test/图像检测/
+test/正常图像/
+
+# Offline wheels (optional, build fallback only)
+wheels/
+!wheels/.gitkeep
+
+# PyArmor local build artifacts
+.pyarmor/
+pyarmor_runtime_*/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Docker export
+*.tar
+*.tar.gz
+docker/models-encrypted/*
+!docker/models-encrypted/.gitignore
+
+# Large model backups (keep model/screen.pt tracked if required by repo policy)
+*.pt.bak
+*.onnx

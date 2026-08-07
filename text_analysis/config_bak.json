@@ -1,0 +1,15 @@
+
+
+
+{
+  "api_key": "vllm",
+  "base_url": "http://10.80.5.25:8001/v1",
+  "model": "qwen3-8b"
+}
+
+
+{
+  "api_key": "sk-grvrkqeommrueqrcbddawvkqujbzyhkpvslyunxpetpedwlm",
+  "base_url": "https://api.siliconflow.cn/v1",
+  "model": "Qwen/Qwen3-32B"
+}

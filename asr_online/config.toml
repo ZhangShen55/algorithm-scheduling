@@ -1,0 +1,13 @@
+# SeaCraftASR 在线识别服务配置
+
+id_engine = "online-1"
+version = "seacraft-asr-online-v1.0.0"
+
+# 设备配置（建议与主服务使用不同 GPU 以避免显存竞争）
+device = "cpu"
+ngpu = 0
+
+# 日志
+log_path = "./asr_online_service.log"
+
+# 模型默认使用镜像内 ./model，可按需添加 [model_paths] 覆盖。

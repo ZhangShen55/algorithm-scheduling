@@ -1,0 +1,125 @@
+# SeaCraftASR-Online — 在标准镜像基础上对业务代码做 Cython 编译
+#
+# 构建:
+#   docker build -f docker/Dockerfile.cython -t seacraft-asr-online:cython .
+#
+# 说明:
+#   - 依赖层与 Dockerfile 一致
+#   - 编译 app/ 下业务 .py 为 .so
+#   - 编译后删除对应 .py 与 Cython 生成的 .c，降低源码暴露
+
+# ================== 依赖层 ==================
+FROM nvcr.io/nvidia/cuda:12.1.1-cudnn8-runtime-centos7 AS deps
+
+RUN mv /etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo.bak && \
+    curl -o /etc/yum.repos.d/CentOS-Base.repo http://mirrors.aliyun.com/repo/Centos-7.repo && \
+    yum clean all && yum makecache && \
+    yum -y install epel-release git wget bzip2 ca-certificates vim && \
+    yum -y groupinstall "Development Tools" && \
+    yum clean all
+
+ARG MINICONDA_INSTALLER=Miniconda3-py310_23.11.0-2-Linux-x86_64.sh
+RUN wget -q "https://repo.anaconda.com/miniconda/${MINICONDA_INSTALLER}" -O /tmp/miniconda.sh && \
+    bash /tmp/miniconda.sh -b -p /opt/conda && rm -f /tmp/miniconda.sh
+ENV PATH="/opt/conda/bin:$PATH"
+
+RUN conda config --system --set show_channel_urls true && \
+    conda config --system --set channel_priority strict && \
+    conda config --system --remove channels defaults || true && \
+    conda config --system --add channels conda-forge && \
+    conda config --system --remove-key default_channels || true && \
+    conda config --system --add default_channels https://conda.anaconda.org/conda-forge && \
+    conda info
+
+RUN conda create -n seacraftasr_online -y -c conda-forge python=3.10 && conda clean -afy
+SHELL ["bash", "-lc"]
+ENV PATH="/opt/conda/envs/seacraftasr_online/bin:$PATH"
+
+RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
+
+COPY requirements.txt /tmp/requirements.txt
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN pip install --no-cache-dir --retries 10 --timeout 60 --prefer-binary \
+    -r /tmp/requirements.txt
+
+# modelscope imports these at runtime, but the cached base requirements layer may not install them.
+RUN pip install --no-cache-dir setuptools==69.5.1 modelscope==1.16.0 addict datasets==2.18.0 pyarrow==15.0.2 pandas==2.2.2 Pillow torchaudio==2.6.0 sortedcontainers==2.4.0
+
+# datasets imports soundfile during modelscope import; soundfile needs libsndfile.so.
+RUN conda install -n seacraftasr_online -y libsndfile && conda clean -afy
+
+
+# ================== Cython 编译层 ==================
+FROM deps AS cython-builder
+
+WORKDIR /build
+
+# 编译工具链（与运行时 Python 版本一致）
+RUN pip install --no-cache-dir "cython>=3.0,<4" "setuptools==69.5.1" wheel
+
+COPY setup_cython.py requirements.txt config.toml ./
+COPY docker/start.sh ./
+COPY app ./app
+COPY model ./model
+
+RUN python setup_cython.py build_ext --inplace && \
+    python - <<'PY'
+from pathlib import Path
+root = Path(".")
+keep_py = {"setup_cython.py"}
+for py in root.rglob("*.py"):
+    rel = py.as_posix()
+    if rel in keep_py or rel.startswith("scripts/") or rel.startswith("test/"):
+        continue
+    print("remove source:", rel)
+    py.unlink()
+for c_file in root.rglob("*.c"):
+    print("remove generated:", c_file)
+    c_file.unlink()
+for cache_dir in root.rglob("__pycache__"):
+    for cached in cache_dir.rglob("*"):
+        if cached.is_file():
+            print("remove bytecode:", cached)
+            cached.unlink()
+    print("remove cache dir:", cache_dir)
+    cache_dir.rmdir()
+for bytecode in list(root.rglob("*.pyc")) + list(root.rglob("*.pyo")):
+    print("remove bytecode:", bytecode)
+    bytecode.unlink()
+PY
+
+# 校验：业务模块应以 .so 存在且可导入
+RUN python - <<'PY'
+import importlib
+for mod in (
+    "app.main",
+    "app.core.config",
+    "app.core.models",
+    "app.core.model_assets",
+    "app.core.logging",
+    "app.api.routes.status",
+    "app.api.routes.ws_online",
+    "app.utils.asr_stats",
+    "app.utils.character_utils",
+):
+    importlib.import_module(mod)
+    print("import ok:", mod)
+PY
+
+
+# ================== 运行层 ==================
+FROM deps AS runtime
+
+WORKDIR /app
+
+COPY --from=cython-builder /build/start.sh /build/config.toml ./
+COPY --from=cython-builder /build/app ./app
+COPY --from=cython-builder /build/model ./model
+
+COPY config.toml /config.toml
+
+RUN chmod +x ./start.sh
+
+EXPOSE 8084
+
+CMD ["/bin/bash", "-c", "./start.sh"]

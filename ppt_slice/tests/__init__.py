@@ -1,0 +1,1 @@
+"""PPT slice operator tests."""

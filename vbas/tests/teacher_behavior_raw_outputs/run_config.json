@@ -1,0 +1,12 @@
+{
+  "image_size": 640,
+  "predict_conf": 0.25,
+  "model": "/Users/zhangshen/Documents/workspace/jy-algorithm-tias-server/tias/models/teacher_behavior.pt",
+  "names": {
+    "0": "sit",
+    "1": "stand",
+    "2": "bbwriting",
+    "3": "teach"
+  },
+  "note": "Raw YOLO predict boxes only; no IoU merge, no main-subject filtering, no post-processing."
+}

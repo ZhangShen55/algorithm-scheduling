@@ -1,0 +1,1775 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>算法调度平台架构评审</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #5c6773;
+      --line: #263238;
+      --paper: #f6f8f9;
+      --panel: #ffffff;
+      --border: #d6dfe5;
+      --control: #38a9da;
+      --control-soft: #e6f6fc;
+      --adapter: #d93686;
+      --adapter-soft: #fce7f1;
+      --data: #35b99a;
+      --data-soft: #e6f7f2;
+      --compute: #ef9b13;
+      --compute-soft: #fff3d6;
+      --business: #7046c8;
+      --business-soft: #f0ebfb;
+      --realtime: #2e68c7;
+      --realtime-soft: #eaf1fd;
+      --risk: #dc4b3f;
+      --risk-soft: #feeeec;
+      --shadow: 0 12px 28px rgba(23, 32, 42, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    button {
+      color: inherit;
+      font: inherit;
+      letter-spacing: 0;
+    }
+
+    h1, h2, h3, p {
+      margin-top: 0;
+      letter-spacing: 0;
+    }
+
+    code, pre {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    code {
+      color: #6330a8;
+      font-size: 0.92em;
+    }
+
+    .page-header {
+      border-bottom: 1px solid var(--border);
+      background: #fff;
+    }
+
+    .page-header__inner,
+    main,
+    footer {
+      width: min(1560px, 100%);
+      margin: 0 auto;
+      padding-inline: 32px;
+    }
+
+    .page-header__inner {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 28px;
+      padding-block: 24px 22px;
+    }
+
+    .eyebrow {
+      margin-bottom: 5px;
+      color: #087ca8;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin-bottom: 7px;
+      font-size: 28px;
+      line-height: 1.25;
+    }
+
+    .page-header__summary {
+      max-width: 860px;
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .version-block {
+      flex: 0 0 auto;
+      min-width: 190px;
+      padding-left: 20px;
+      border-left: 2px solid var(--control);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .version-block strong {
+      display: block;
+      color: var(--ink);
+      font-size: 15px;
+    }
+
+    main { padding-block: 26px 54px; }
+    section + section { margin-top: 34px; }
+
+    .section-heading {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 14px;
+    }
+
+    .section-heading h2 {
+      margin-bottom: 2px;
+      font-size: 20px;
+      line-height: 1.35;
+    }
+
+    .section-heading p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .review-band {
+      border-block: 1px solid var(--border);
+      background: #fff;
+    }
+
+    .review-summary {
+      display: grid;
+      grid-template-columns: minmax(260px, 0.7fr) minmax(0, 1.8fr);
+      min-height: 320px;
+    }
+
+    .review-verdict {
+      padding: 28px;
+      border-right: 1px solid var(--border);
+      background: #f1f7f9;
+    }
+
+    .verdict-mark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 44px;
+      height: 44px;
+      margin-bottom: 18px;
+      border: 2px solid var(--risk);
+      border-radius: 50%;
+      color: var(--risk);
+      font-size: 13px;
+      font-weight: 850;
+    }
+
+    .review-verdict h2 {
+      margin-bottom: 10px;
+      font-size: 19px;
+      line-height: 1.4;
+    }
+
+    .review-verdict p {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .verdict-rule {
+      margin: 22px 0 0;
+      padding-top: 18px;
+      border-top: 1px solid var(--border);
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .finding-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      counter-reset: finding;
+    }
+
+    .finding-list li {
+      position: relative;
+      min-height: 90px;
+      padding: 20px 22px 18px 58px;
+      border-bottom: 1px solid var(--border);
+      counter-increment: finding;
+    }
+
+    .finding-list li:nth-child(odd) { border-right: 1px solid var(--border); }
+    .finding-list li:nth-last-child(-n + 2) { border-bottom: 0; }
+
+    .finding-list li::before {
+      content: counter(finding, decimal-leading-zero);
+      position: absolute;
+      left: 20px;
+      top: 21px;
+      color: var(--risk);
+      font-size: 12px;
+      font-weight: 850;
+    }
+
+    .finding-list strong,
+    .finding-list span { display: block; }
+
+    .finding-list strong {
+      margin-bottom: 3px;
+      font-size: 14px;
+    }
+
+    .finding-list span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      margin: 0 0 12px;
+      padding: 0;
+      color: var(--muted);
+      font-size: 12px;
+      list-style: none;
+    }
+
+    .legend li {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border: 1px solid rgba(23, 32, 42, 0.18);
+      border-radius: 2px;
+    }
+
+    .overview-viewport,
+    .detail-viewport {
+      min-width: 0;
+      overflow: auto;
+      overscroll-behavior: contain;
+    }
+
+    .overview-surface,
+    .detail-stage {
+      background-color: #fbfcfd;
+      background-image: radial-gradient(circle, #d5dde2 1.1px, transparent 1.2px);
+      background-size: 20px 20px;
+    }
+
+    .overview-surface {
+      min-width: 1180px;
+      padding: 30px;
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+    }
+
+    .overview-layout {
+      display: grid;
+      grid-template-columns: 180px minmax(0, 1fr);
+      gap: 28px;
+      align-items: stretch;
+    }
+
+    .overview-origin {
+      display: flex;
+      min-height: 252px;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      border: 1px solid #7ccce9;
+      border-radius: 6px;
+      background: var(--control);
+      color: #fff;
+      font-size: 17px;
+      font-weight: 850;
+      text-align: center;
+    }
+
+    .overview-flows {
+      display: grid;
+      gap: 14px;
+    }
+
+    .overview-flow {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 44px minmax(0, 1fr) 44px minmax(0, 1fr);
+      align-items: center;
+      min-height: 74px;
+      padding: 10px 18px;
+      border-left: 4px solid var(--flow-color);
+      background: rgba(255, 255, 255, 0.88);
+    }
+
+    .overview-flow > span:not(.flow-arrow) {
+      display: flex;
+      min-height: 46px;
+      align-items: center;
+      justify-content: center;
+      padding: 7px 10px;
+      border: 1px solid var(--flow-color);
+      border-radius: 5px;
+      background: var(--flow-soft);
+      font-size: 13px;
+      font-weight: 750;
+      text-align: center;
+    }
+
+    .flow-arrow {
+      color: var(--flow-color);
+      font-size: 20px;
+      font-weight: 850;
+      text-align: center;
+    }
+
+    .overview-flow--offline {
+      --flow-color: var(--adapter);
+      --flow-soft: var(--adapter-soft);
+    }
+
+    .overview-flow--online {
+      --flow-color: var(--data);
+      --flow-soft: var(--data-soft);
+    }
+
+    .overview-flow--realtime {
+      --flow-color: var(--realtime);
+      --flow-soft: var(--realtime-soft);
+    }
+
+    .overview-support {
+      margin-top: 18px;
+      padding: 12px 18px;
+      border: 1px solid #dfac55;
+      border-radius: 5px;
+      background: var(--compute-soft);
+      color: #815200;
+      font-size: 13px;
+      font-weight: 750;
+      text-align: center;
+    }
+
+    .architecture-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      margin: 22px 0 12px;
+    }
+
+    .segmented,
+    .tool-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .segmented {
+      padding: 4px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #eaf0f3;
+    }
+
+    .segmented button,
+    .tool-actions button {
+      min-height: 34px;
+      border: 0;
+      border-radius: 4px;
+      background: transparent;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .segmented button {
+      padding: 6px 14px;
+      white-space: nowrap;
+    }
+
+    .segmented button[aria-selected="true"] {
+      background: #fff;
+      box-shadow: 0 1px 5px rgba(23, 32, 42, 0.12);
+    }
+
+    .tool-actions { gap: 6px; }
+
+    .tool-actions button {
+      min-width: 36px;
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      background: #fff;
+    }
+
+    .segmented button:hover,
+    .tool-actions button:hover { background: #f7f9fa; }
+
+    .segmented button:focus-visible,
+    .tool-actions button:focus-visible,
+    .flow-node:focus-visible {
+      outline: 3px solid rgba(46, 104, 199, 0.3);
+      outline-offset: 2px;
+    }
+
+    .zoom-value {
+      width: 48px;
+      color: var(--muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      text-align: center;
+    }
+
+    .diagram-shell {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 300px;
+      min-height: 620px;
+      border: 1px solid var(--border);
+      background: #fff;
+      box-shadow: var(--shadow);
+    }
+
+    .detail-area {
+      min-width: 0;
+      background: #f8fafb;
+    }
+
+    .detail-view { margin-top: 0; }
+    .detail-view[hidden] { display: none; }
+
+    .detail-view__header {
+      display: flex;
+      min-height: 58px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 13px 18px;
+      border-bottom: 1px solid var(--border);
+      background: #fff;
+    }
+
+    .detail-view__header h3 {
+      margin-bottom: 1px;
+      font-size: 15px;
+    }
+
+    .detail-view__header p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .boundary-row {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 6px;
+    }
+
+    .boundary-chip {
+      display: inline-flex;
+      min-height: 27px;
+      align-items: center;
+      padding: 3px 8px;
+      border: 1px solid #9cc9ba;
+      border-radius: 4px;
+      background: var(--data-soft);
+      color: #126b58;
+      font-size: 10px;
+      font-weight: 750;
+      white-space: nowrap;
+    }
+
+    .detail-viewport {
+      min-height: 540px;
+      background: #fbfcfd;
+    }
+
+    .detail-stage-shell {
+      position: relative;
+      width: 1420px;
+      height: 720px;
+    }
+
+    .detail-stage {
+      position: absolute;
+      inset: 0 auto auto 0;
+      width: 1420px;
+      min-height: var(--stage-height, 700px);
+      padding: 24px;
+      transform: scale(var(--view-scale, 1));
+      transform-origin: top left;
+    }
+
+    .flow-lane {
+      --flow-color: var(--line);
+      display: grid;
+      grid-template-columns: 126px minmax(0, 1fr);
+      gap: 18px;
+      align-items: center;
+      padding: 16px 18px;
+      border-top: 1px solid var(--lane-border, var(--border));
+      border-bottom: 1px solid var(--lane-border, var(--border));
+      background: var(--lane-bg, rgba(255, 255, 255, 0.84));
+    }
+
+    .flow-lane + .flow-lane { margin-top: 14px; }
+
+    .flow-lane--control {
+      --flow-color: #218dbb;
+      --lane-border: #a8dced;
+      --lane-bg: rgba(230, 246, 252, 0.78);
+    }
+
+    .flow-lane--asr,
+    .flow-lane--ppt,
+    .flow-lane--visual,
+    .flow-lane--online {
+      --flow-color: #bf2d72;
+      --lane-border: #efb6d1;
+      --lane-bg: rgba(252, 231, 241, 0.66);
+    }
+
+    .flow-lane--realtime {
+      --flow-color: var(--realtime);
+      --lane-border: #afc6ef;
+      --lane-bg: rgba(234, 241, 253, 0.76);
+    }
+
+    .flow-lane--deployment {
+      --flow-color: #167a65;
+      --lane-border: #a9d8cc;
+      --lane-bg: rgba(230, 247, 242, 0.76);
+    }
+
+    .flow-lane--complete {
+      --flow-color: #805500;
+      --lane-border: #eccb8e;
+      --lane-bg: rgba(255, 243, 214, 0.74);
+    }
+
+    .flow-lane__label {
+      color: var(--flow-color);
+      font-size: 12px;
+      font-weight: 850;
+    }
+
+    .flow-lane__label span {
+      display: block;
+      margin-bottom: 3px;
+      font-size: 9px;
+      opacity: 0.72;
+      text-transform: uppercase;
+    }
+
+    .flow-row {
+      display: grid;
+      grid-template-columns: repeat(var(--steps), minmax(0, 1fr));
+      gap: 26px;
+      align-items: stretch;
+      min-width: 0;
+    }
+
+    .flow-node {
+      position: relative;
+      display: block;
+      min-width: 0;
+      min-height: 78px;
+      padding: 10px 11px;
+      border: 1px solid rgba(23, 32, 42, 0.25);
+      border-radius: 6px;
+      background: #fff;
+      box-shadow: 0 4px 12px rgba(23, 32, 42, 0.08);
+      cursor: pointer;
+      overflow-wrap: anywhere;
+      text-align: left;
+    }
+
+    .flow-node[data-next]::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: calc(100% + 1px);
+      width: 26px;
+      border-top: 2px solid var(--flow-color);
+    }
+
+    .flow-node[data-next]::before {
+      content: "";
+      position: absolute;
+      z-index: 2;
+      top: calc(50% - 4px);
+      left: calc(100% + 21px);
+      border-width: 4px 0 4px 6px;
+      border-style: solid;
+      border-color: transparent transparent transparent var(--flow-color);
+    }
+
+    .flow-node:hover {
+      box-shadow: 0 7px 16px rgba(23, 32, 42, 0.14);
+      transform: translateY(-1px);
+    }
+
+    .flow-node.is-selected {
+      outline: 3px solid rgba(23, 32, 42, 0.23);
+      outline-offset: 2px;
+    }
+
+    .flow-node--control {
+      border-color: #78c7e5;
+      background: var(--control-soft);
+    }
+
+    .flow-node--adapter {
+      border-color: #dc6ba1;
+      background: var(--adapter);
+      color: #fff;
+    }
+
+    .flow-node--data {
+      border-color: #6dcbb5;
+      background: var(--data-soft);
+    }
+
+    .flow-node--business {
+      border-color: #8565cf;
+      background: var(--business);
+      color: #fff;
+    }
+
+    .flow-node--resource {
+      border-color: #da921e;
+      background: var(--compute-soft);
+    }
+
+    .flow-node--realtime {
+      border-color: #7299df;
+      background: var(--realtime);
+      color: #fff;
+    }
+
+    .node-kicker,
+    .node-title,
+    .node-meta { display: block; }
+
+    .node-kicker {
+      margin-bottom: 2px;
+      font-size: 8px;
+      font-weight: 850;
+      opacity: 0.72;
+      text-transform: uppercase;
+    }
+
+    .node-title {
+      font-size: 12px;
+      font-weight: 850;
+      line-height: 1.35;
+    }
+
+    .node-meta {
+      margin-top: 4px;
+      font-size: 9px;
+      line-height: 1.4;
+      opacity: 0.8;
+    }
+
+    .workspace-note {
+      margin-bottom: 14px;
+      padding: 10px 14px;
+      border-left: 4px solid var(--compute);
+      background: rgba(255, 243, 214, 0.8);
+      color: #735000;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .compound-sequence {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 3px;
+      margin-top: 6px;
+      font-size: 8px;
+      opacity: 0.92;
+    }
+
+    .compound-sequence span {
+      padding: 2px 4px;
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      border-radius: 3px;
+    }
+
+    .server-band {
+      margin-top: 18px;
+      padding: 18px;
+      border: 1px solid #dfac55;
+      background: rgba(255, 243, 214, 0.72);
+    }
+
+    .server-band__title {
+      margin-bottom: 12px;
+      color: #815200;
+      font-size: 12px;
+      font-weight: 850;
+    }
+
+    .server-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .server-grid .flow-node { min-height: 88px; }
+    .detail-panel {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      border-left: 1px solid var(--border);
+      background: #f8fafb;
+    }
+
+    .detail-panel__header {
+      padding: 18px 20px 14px;
+      border-bottom: 1px solid var(--border);
+      background: #fff;
+    }
+
+    .detail-panel__header span {
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 850;
+    }
+
+    .detail-panel__header h3 {
+      margin: 4px 0 0;
+      font-size: 16px;
+      line-height: 1.4;
+    }
+
+    .detail-panel__body {
+      display: grid;
+      gap: 16px;
+      margin: 0;
+      padding: 18px 20px;
+    }
+
+    .detail-item + .detail-item {
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+
+    .detail-item dt {
+      margin-bottom: 4px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 850;
+      text-transform: uppercase;
+    }
+
+    .detail-item dd {
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .detail-item--boundary dd { color: #a62b22; }
+
+    .detail-panel__hint {
+      margin: auto 20px 20px;
+      padding: 12px;
+      border-left: 3px solid var(--control);
+      background: #fff;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .contract-grid,
+    .state-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      border-block: 1px solid var(--border);
+      background: #fff;
+    }
+
+    .contract-column,
+    .state-column {
+      min-width: 0;
+      padding: 24px;
+    }
+
+    .contract-column + .contract-column,
+    .state-column + .state-column {
+      border-left: 1px solid var(--border);
+    }
+
+    .contract-column h3,
+    .state-column h3 {
+      margin-bottom: 12px;
+      font-size: 15px;
+    }
+
+    .route-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 12px;
+    }
+
+    .route-table th,
+    .route-table td {
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      overflow-wrap: anywhere;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .route-table th {
+      background: #eef3f5;
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    pre {
+      margin: 0;
+      padding: 16px;
+      overflow: auto;
+      border: 1px solid #263238;
+      border-radius: 6px;
+      background: #202a31;
+      color: #eff5f7;
+      font-size: 12px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+
+    .error-row,
+    .status-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 14px;
+    }
+
+    .error-chip,
+    .status-chip {
+      display: inline-flex;
+      min-height: 28px;
+      align-items: center;
+      padding: 4px 8px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: #fff;
+      font-size: 10px;
+      font-weight: 750;
+    }
+
+    .error-chip {
+      border-color: #efaea8;
+      background: var(--risk-soft);
+      color: #a52f25;
+    }
+
+    .flow-list {
+      display: grid;
+      gap: 10px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .flow-list li {
+      display: grid;
+      grid-template-columns: 112px minmax(0, 1fr);
+      gap: 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+    }
+
+    .flow-list strong {
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .state-tree {
+      margin: 0;
+      padding: 16px;
+      border-left: 4px solid var(--control);
+      background: #f1f7f9;
+      font-size: 12px;
+      white-space: pre;
+    }
+
+    .state-label {
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .state-label + .status-row { margin-top: 7px; }
+
+    .state-arrow {
+      color: #87939c;
+      font-size: 11px;
+    }
+
+    footer {
+      padding-block: 20px 32px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    @media (max-width: 1100px) {
+      .review-summary,
+      .diagram-shell,
+      .contract-grid,
+      .state-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .review-verdict {
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .detail-panel {
+        border-top: 1px solid var(--border);
+        border-left: 0;
+      }
+
+      .detail-panel__body {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .detail-panel__hint { margin-top: 0; }
+
+      .contract-column + .contract-column,
+      .state-column + .state-column {
+        border-top: 1px solid var(--border);
+        border-left: 0;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .page-header__inner,
+      .architecture-toolbar,
+      .section-heading,
+      .detail-view__header {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .page-header__inner,
+      main,
+      footer {
+        padding-inline: 18px;
+      }
+
+      h1 { font-size: 24px; }
+
+      .version-block {
+        padding: 10px 0 0;
+        border-top: 2px solid var(--control);
+        border-left: 0;
+      }
+
+      .finding-list { grid-template-columns: 1fr; }
+
+      .finding-list li,
+      .finding-list li:nth-child(odd),
+      .finding-list li:nth-last-child(-n + 2) {
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .finding-list li:last-child { border-bottom: 0; }
+      .segmented { overflow-x: auto; }
+      .tool-actions { justify-content: flex-end; }
+
+      .overview-viewport,
+      .detail-viewport {
+        margin-inline: -18px;
+        padding-inline: 18px;
+      }
+
+      .detail-panel__body { grid-template-columns: 1fr; }
+      .boundary-row { justify-content: flex-start; }
+
+      .flow-list li {
+        grid-template-columns: 1fr;
+        gap: 3px;
+      }
+    }
+
+    @media print {
+      @page {
+        size: A3 landscape;
+        margin: 12mm;
+      }
+
+      body { background: #fff; }
+
+      .page-header__inner,
+      main,
+      footer {
+        width: 100%;
+        padding-inline: 0;
+      }
+
+      .architecture-toolbar { display: none; }
+
+      .overview-surface,
+      .diagram-shell { box-shadow: none; }
+
+      .detail-view[hidden] { display: block !important; }
+
+      .detail-view {
+        margin-top: 0;
+        break-before: page;
+      }
+
+      .detail-viewport {
+        min-height: 0;
+        overflow: visible;
+      }
+
+      .detail-stage-shell {
+        width: 100% !important;
+        height: auto !important;
+      }
+
+      .detail-stage {
+        position: static;
+        width: 100%;
+        min-height: 0;
+        transform: none !important;
+      }
+
+      .diagram-shell { display: block; }
+
+      .detail-panel {
+        break-before: page;
+        border: 1px solid var(--border);
+      }
+
+      .contract-section,
+      .state-section { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <header class="page-header">
+    <div class="page-header__inner">
+      <div>
+        <p class="eyebrow">Architecture Review · Docker First</p>
+        <h1>算法调度平台架构评审</h1>
+        <p class="page-header__summary">
+          面向教育场景的离线课程处理、在线图片推理与实时语音三条链路。
+          总览用于识别平台边界，详图用于核对每条链路的执行顺序。
+        </p>
+      </div>
+      <div class="version-block">
+        <strong>评审版 V3</strong>
+        单机 Docker 部署<br>
+        总览 + 四张独立详图
+      </div>
+    </div>
+  </header>
+
+  <div class="review-band">
+    <div class="page-header__inner review-summary">
+      <div class="review-verdict">
+        <div class="verdict-mark">结论</div>
+        <h2>平台边界合理，但必须拆开表达控制关系与业务流程</h2>
+        <p>
+          一张图同时承载 30 余组关系线会掩盖真实调用顺序。新版按业务用途拆图，
+          并补齐课程媒体目录、在线 Base64 边界和现有 ai_quality 聚合能力。
+        </p>
+        <p class="verdict-rule">第一版不引入 Kubernetes，不把上游流媒体处理纳入平台。</p>
+      </div>
+      <ol class="finding-list">
+        <li><strong>总图连线过载</strong><span>总览只保留三条业务主链路，详细关系下沉到独立视图。</span></li>
+        <li><strong>课程媒体缺少统一所有权</strong><span>平台下载 T/S/P 一次，并共享 <code>/data/course/{course_job_id}</code>。</span></li>
+        <li><strong>在线输入边界需固定</strong><span>在线接口直接接收 Base64 图片，不承担持续视频流处理。</span></li>
+        <li><strong>复合视觉能力不可遗漏</strong><span>ai_quality 已包含抽帧、TIAS 调度、帧结果聚合与结果写入。</span></li>
+        <li><strong>实例选择应集中</strong><span>在线网关按完整 HTTP 请求查询容量并选择一个实例。</span></li>
+        <li><strong>离线发布需要一致性</strong><span>任务库与 Outbox 同事务，Kafka 发布失败不丢任务。</span></li>
+        <li><strong>资源图必须贴近现实</strong><span>PostgreSQL、Kafka、Redis 独立容器，算法按 GPU 能力稀疏部署。</span></li>
+      </ol>
+    </div>
+  </div>
+
+  <main>
+    <section class="architecture-section" aria-labelledby="architecture-title">
+      <div class="section-heading">
+        <div>
+          <h2 id="architecture-title">改进后的平台架构</h2>
+          <p>先看三条主链路，再进入单一业务视图核对节点；不同视图之间不共享连线。</p>
+        </div>
+      </div>
+
+      <ul class="legend" aria-label="颜色图例">
+        <li><span class="legend-dot" style="background: var(--control)"></span>控制与接入</li>
+        <li><span class="legend-dot" style="background: var(--adapter)"></span>算法与适配器</li>
+        <li><span class="legend-dot" style="background: var(--data)"></span>状态与注册</li>
+        <li><span class="legend-dot" style="background: var(--realtime)"></span>实时会话</li>
+        <li><span class="legend-dot" style="background: var(--compute)"></span>计算与本地资源</li>
+        <li><span class="legend-dot" style="background: var(--business)"></span>业务结果</li>
+      </ul>
+
+      <div class="overview-viewport">
+        <div class="overview-surface" id="platform-overview" aria-label="算法调度平台总览">
+          <div class="overview-layout">
+            <div class="overview-origin">A 上游<br>任务提交与查询</div>
+            <div class="overview-flows">
+              <div class="overview-flow overview-flow--offline">
+                <span>离线任务接入</span><span class="flow-arrow" aria-hidden="true">→</span>
+                <span>离线编排与执行</span><span class="flow-arrow" aria-hidden="true">→</span>
+                <span>业务结果库</span>
+              </div>
+              <div class="overview-flow overview-flow--online">
+                <span>在线图片网关</span><span class="flow-arrow" aria-hidden="true">→</span>
+                <span>请求级实例路由</span><span class="flow-arrow" aria-hidden="true">→</span>
+                <span>同步响应</span>
+              </div>
+              <div class="overview-flow overview-flow--realtime">
+                <span>实时 ASR 网关</span><span class="flow-arrow" aria-hidden="true">→</span>
+                <span>会话实例路由</span><span class="flow-arrow" aria-hidden="true">→</span>
+                <span>实时字幕</span>
+              </div>
+            </div>
+          </div>
+          <div class="overview-support">支撑层：算子注册中心 · PostgreSQL · Kafka · Redis · 宿主机 /data/course</div>
+        </div>
+      </div>
+
+      <div class="architecture-toolbar">
+        <div class="segmented" role="tablist" aria-label="详细流程视图">
+          <button id="tab-offline" type="button" role="tab" data-view-tab="offline" aria-selected="true" aria-controls="view-offline">离线任务</button>
+          <button id="tab-online" type="button" role="tab" data-view-tab="online" aria-selected="false" aria-controls="view-online" tabindex="-1">在线图片</button>
+          <button id="tab-realtime" type="button" role="tab" data-view-tab="realtime" aria-selected="false" aria-controls="view-realtime" tabindex="-1">实时语音</button>
+          <button id="tab-deployment" type="button" role="tab" data-view-tab="deployment" aria-selected="false" aria-controls="view-deployment" tabindex="-1">注册部署</button>
+        </div>
+        <div class="tool-actions" aria-label="详图工具">
+          <button type="button" data-action="zoom-out" aria-label="缩小当前详图" title="缩小">−</button>
+          <span class="zoom-value" id="zoom-value">100%</span>
+          <button type="button" data-action="reset" aria-label="复位当前详图" title="复位">1:1</button>
+          <button type="button" data-action="zoom-in" aria-label="放大当前详图" title="放大">+</button>
+          <button type="button" data-action="print" aria-label="打印架构评审" title="打印">打印</button>
+        </div>
+      </div>
+
+      <div class="diagram-shell">
+        <div class="detail-area">
+          <section class="detail-view" id="view-offline" data-view="offline" role="tabpanel" aria-labelledby="tab-offline">
+            <div class="detail-view__header">
+              <div>
+                <h3>离线课程任务</h3>
+                <p>三路视频统一下载一次，三条处理泳道共享同一个课程工作目录。</p>
+              </div>
+              <div class="boundary-row">
+                <span class="boundary-chip">异步 Kafka</span>
+                <span class="boundary-chip">T / S / P 本地共享</span>
+                <span class="boundary-chip">结果落库后清理</span>
+              </div>
+            </div>
+            <div class="detail-viewport">
+              <div class="detail-stage-shell" style="height: 820px;">
+                <div class="detail-stage" style="--stage-height: 820px; --view-scale: 1;">
+                  <div class="flow-lane flow-lane--control">
+                    <div class="flow-lane__label"><span>01 · Ingress</span>接入与媒体准备</div>
+                    <div class="flow-row" style="--steps: 8;">
+                      <button class="flow-node flow-node--control" data-node="upstream-a" data-next>
+                        <span class="node-kicker">A Service</span><span class="node-title">A 提交任务</span><span class="node-meta">T / S / P 下载 URL</span>
+                      </button>
+                      <button class="flow-node flow-node--control" data-node="task-ingress" data-next>
+                        <span class="node-kicker">HTTP API</span><span class="node-title">任务接入</span><span class="node-meta">生成 course_job_id</span>
+                      </button>
+                      <button class="flow-node flow-node--data" data-node="task-db" data-next>
+                        <span class="node-kicker">PostgreSQL</span><span class="node-title">任务库</span><span class="node-meta">course_job + outbox_event</span>
+                      </button>
+                      <button class="flow-node flow-node--control" data-node="outbox" data-next>
+                        <span class="node-kicker">Publisher</span><span class="node-title">Outbox</span><span class="node-meta">可靠发布</span>
+                      </button>
+                      <button class="flow-node flow-node--resource" data-node="kafka" data-next>
+                        <span class="node-kicker">Queue</span><span class="node-title">Kafka</span><span class="node-meta">离线课程事件</span>
+                      </button>
+                      <button class="flow-node flow-node--control" data-node="orchestrator" data-next>
+                        <span class="node-kicker">Control</span><span class="node-title">课程 DAG</span><span class="node-meta">创建并释放节点</span>
+                      </button>
+                      <button class="flow-node flow-node--control" data-node="media-ready" data-next>
+                        <span class="node-kicker">Media Worker</span><span class="node-title">统一下载 T/S/P</span><span class="node-meta">异步准备本地媒体</span>
+                      </button>
+                      <button class="flow-node flow-node--resource" data-node="workspace">
+                        <span class="node-kicker">Shared Workspace</span><span class="node-title">课程工作目录</span><span class="node-meta">/data/course/{course_job_id}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="workspace-note">文件就绪后并行释放三条泳道：source/T.mp4 · source/S.mp4 · source/P.mp4</div>
+
+                  <div class="flow-lane flow-lane--asr">
+                    <div class="flow-lane__label"><span>02 · Audio</span>ASR 泳道</div>
+                    <div class="flow-row" style="--steps: 5;">
+                      <button class="flow-node flow-node--resource" data-node="workspace" data-next>
+                        <span class="node-kicker">Local File</span><span class="node-title">T.mp4</span><span class="node-meta">或配置的主音轨</span>
+                      </button>
+                      <button class="flow-node flow-node--control" data-node="wav-extract" data-next>
+                        <span class="node-kicker">Preprocess</span><span class="node-title">提取 teacher.wav</span><span class="node-meta">audio/teacher.wav</span>
+                      </button>
+                      <button class="flow-node flow-node--adapter" data-node="offline-asr" data-next>
+                        <span class="node-kicker">ASR</span><span class="node-title">离线语音转写</span><span class="node-meta">Paraformer HTTP</span>
+                      </button>
+                      <button class="flow-node flow-node--adapter" data-node="course-overview" data-next>
+                        <span class="node-kicker">Text Analysis</span><span class="node-title">课程脑图</span><span class="node-meta">/v1/course_overviews</span>
+                      </button>
+                      <button class="flow-node flow-node--business" data-node="result-writer">
+                        <span class="node-kicker">Persist</span><span class="node-title">ASR 与知识点结果</span><span class="node-meta">业务结果落库</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="flow-lane flow-lane--ppt">
+                    <div class="flow-lane__label"><span>03 · Slides</span>PPT 泳道</div>
+                    <div class="flow-row" style="--steps: 6;">
+                      <button class="flow-node flow-node--resource" data-node="workspace" data-next>
+                        <span class="node-kicker">Local File</span><span class="node-title">P.mp4</span><span class="node-meta">课件录屏</span>
+                      </button>
+                      <button class="flow-node flow-node--adapter" data-node="ppt-callback" data-next>
+                        <span class="node-kicker">Async Callback</span><span class="node-title">PPT 切片</span><span class="node-meta">像素相似度判断</span>
+                      </button>
+                      <button class="flow-node flow-node--data" data-node="ppt-image" data-next>
+                        <span class="node-kicker">Fan Out</span><span class="node-title">ppt_image_id × N</span><span class="node-meta">每张切片独立标识</span>
+                      </button>
+                      <button class="flow-node flow-node--adapter" data-node="ocr-adapter" data-next>
+                        <span class="node-kicker">Per Image</span><span class="node-title">OCR × N</span><span class="node-meta">一张切片一次识别</span>
+                      </button>
+                      <button class="flow-node flow-node--adapter" data-node="keyword-adapter" data-next>
+                        <span class="node-kicker">Per Image</span><span class="node-title">关键词 × N</span><span class="node-meta">/v1/extract_keywords</span>
+                      </button>
+                      <button class="flow-node flow-node--business" data-node="result-writer">
+                        <span class="node-kicker">Persist</span><span class="node-title">PPT/OCR/关键词</span><span class="node-meta">按 ppt_image_id 落库</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="flow-lane flow-lane--visual">
+                    <div class="flow-lane__label"><span>04 · Vision</span>视觉分析泳道</div>
+                    <div class="flow-row" style="--steps: 4;">
+                      <button class="flow-node flow-node--resource" data-node="workspace" data-next>
+                        <span class="node-kicker">Local Files</span><span class="node-title">T.mp4 + S.mp4</span><span class="node-meta">教师与学生视角</span>
+                      </button>
+                      <button class="flow-node flow-node--adapter" data-node="ai-quality-worker" data-next>
+                        <span class="node-kicker">Composite Worker</span><span class="node-title">ai_quality 复合 Worker</span>
+                        <span class="compound-sequence"><span>抽帧</span><span>TIAS 批量推理</span><span>帧结果聚合</span></span>
+                      </button>
+                      <button class="flow-node flow-node--data" data-node="visual-results" data-next>
+                        <span class="node-kicker">Aggregation</span><span class="node-title">视觉分析结果</span><span class="node-meta">时间线 · 快照 · 行为统计 · 指标</span>
+                      </button>
+                      <button class="flow-node flow-node--business" data-node="result-writer">
+                        <span class="node-kicker">Persist</span><span class="node-title">视觉业务表</span><span class="node-meta">ai_quality 幂等写入</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="flow-lane flow-lane--complete">
+                    <div class="flow-lane__label"><span>05 · Finalize</span>课程完成</div>
+                    <div class="flow-row" style="--steps: 3;">
+                      <button class="flow-node flow-node--business" data-node="result-writer" data-next>
+                        <span class="node-kicker">Join</span><span class="node-title">必需结果已落库</span><span class="node-meta">三条泳道完成</span>
+                      </button>
+                      <button class="flow-node flow-node--resource" data-node="cleanup-workspace" data-next>
+                        <span class="node-kicker">Cleanup</span><span class="node-title">CLEANUP_WORKSPACE</span><span class="node-meta">删除临时媒体与中间产物</span>
+                      </button>
+                      <button class="flow-node flow-node--data" data-node="course-completed">
+                        <span class="node-kicker">Terminal</span><span class="node-title">COMPLETED</span><span class="node-meta">任务状态可查询</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+          <section class="detail-view" id="view-online" data-view="online" role="tabpanel" aria-labelledby="tab-online" hidden>
+            <div class="detail-view__header">
+              <div>
+                <h3>在线同步图片</h3>
+                <p>Base64 输入；完整请求只选择一个实例；多图请求不跨实例拆分。</p>
+              </div>
+              <div class="boundary-row">
+                <span class="boundary-chip">单图单请求优先</span>
+                <span class="boundary-chip">请求级容量路由</span>
+                <span class="boundary-chip">不进离线 Kafka</span>
+              </div>
+            </div>
+            <div class="detail-viewport">
+              <div class="detail-stage-shell" style="height: 520px;">
+                <div class="detail-stage" style="--stage-height: 520px; --view-scale: 1;">
+                  <div class="workspace-note">上游 HTTP 请求直接携带 Base64 图片；网关按 operator_code 查询 Redis 并原子占用 inflight。</div>
+
+                  <div class="flow-lane flow-lane--online">
+                    <div class="flow-lane__label"><span>TIAS</span>人数与行为</div>
+                    <div class="flow-row" style="--steps: 5;">
+                      <button class="flow-node flow-node--control" data-node="sync-gateway" data-next>
+                        <span class="node-kicker">Northbound</span><span class="node-title">/v1/online/tias/analyze</span><span class="node-meta">Base64 图片请求</span>
+                      </button>
+                      <button class="flow-node flow-node--data" data-node="request-router" data-next>
+                        <span class="node-kicker">Redis Reservation</span><span class="node-title">选择 TIAS 实例</span><span class="node-meta">status + inflight / max</span>
+                      </button>
+                      <button class="flow-node flow-node--adapter" data-node="tias-adapter" data-next>
+                        <span class="node-kicker">Adapter</span><span class="node-title">TIAS 适配器</span><span class="node-meta">完整请求原样绑定</span>
+                      </button>
+                      <button class="flow-node flow-node--resource" data-node="tias-instance" data-next>
+                        <span class="node-kicker">Selected Instance</span><span class="node-title">/AE/SyncTasks2</span><span class="node-meta">一个实例处理完整请求</span>
+                      </button>
+                      <button class="flow-node flow-node--business" data-node="online-response">
+                        <span class="node-kicker">Response</span><span class="node-title">同步响应</span><span class="node-meta">释放 inflight</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="flow-lane flow-lane--online">
+                    <div class="flow-lane__label"><span>Face</span>人脸对比</div>
+                    <div class="flow-row" style="--steps: 5;">
+                      <button class="flow-node flow-node--control" data-node="sync-gateway" data-next>
+                        <span class="node-kicker">Northbound</span><span class="node-title">/v1/online/face/recognize</span><span class="node-meta">Base64 图片请求</span>
+                      </button>
+                      <button class="flow-node flow-node--data" data-node="request-router" data-next>
+                        <span class="node-kicker">Redis Reservation</span><span class="node-title">选择人脸实例</span><span class="node-meta">请求级容量占位</span>
+                      </button>
+                      <button class="flow-node flow-node--adapter" data-node="face-adapter" data-next>
+                        <span class="node-kicker">Adapter</span><span class="node-title">人脸适配器</span><span class="node-meta">业务码转换</span>
+                      </button>
+                      <button class="flow-node flow-node--resource" data-node="face-instance" data-next>
+                        <span class="node-kicker">Selected Instance</span><span class="node-title">/recognize · /recognize/batch</span><span class="node-meta">多图也不跨实例</span>
+                      </button>
+                      <button class="flow-node flow-node--business" data-node="online-response">
+                        <span class="node-kicker">Response</span><span class="node-title">同步响应</span><span class="node-meta">保留算子 data</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="flow-lane flow-lane--online">
+                    <div class="flow-lane__label"><span>Quality</span>图像质量</div>
+                    <div class="flow-row" style="--steps: 5;">
+                      <button class="flow-node flow-node--control" data-node="sync-gateway" data-next>
+                        <span class="node-kicker">Northbound</span><span class="node-title">/v1/online/image-quality/detect</span><span class="node-meta">Base64 图片请求</span>
+                      </button>
+                      <button class="flow-node flow-node--data" data-node="request-router" data-next>
+                        <span class="node-kicker">Redis Reservation</span><span class="node-title">选择质量实例</span><span class="node-meta">请求级容量占位</span>
+                      </button>
+                      <button class="flow-node flow-node--adapter" data-node="quality-adapter" data-next>
+                        <span class="node-kicker">Adapter</span><span class="node-title">图像质量适配器</span><span class="node-meta">解析局部模块结果</span>
+                      </button>
+                      <button class="flow-node flow-node--resource" data-node="quality-instance" data-next>
+                        <span class="node-kicker">Selected Instance</span><span class="node-title">/detect_all</span><span class="node-meta">一个实例处理完整请求</span>
+                      </button>
+                      <button class="flow-node flow-node--business" data-node="online-response">
+                        <span class="node-kicker">Response</span><span class="node-title">同步响应</span><span class="node-meta">释放 inflight</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+          <section class="detail-view" id="view-realtime" data-view="realtime" role="tabpanel" aria-labelledby="tab-realtime" hidden>
+            <div class="detail-view__header">
+              <div>
+                <h3>实时语音转写</h3>
+                <p>会话开始时选择实例，连接期间保持绑定，字幕直接返回播放器。</p>
+              </div>
+              <div class="boundary-row">
+                <span class="boundary-chip">不进离线 Kafka</span>
+                <span class="boundary-chip">默认不入库</span>
+                <span class="boundary-chip">断线后重新选实例</span>
+              </div>
+            </div>
+            <div class="detail-viewport">
+              <div class="detail-stage-shell" style="height: 300px;">
+                <div class="detail-stage" style="--stage-height: 300px; --view-scale: 1;">
+                  <div class="flow-lane flow-lane--realtime">
+                    <div class="flow-lane__label"><span>WebSocket</span>直播字幕链路</div>
+                    <div class="flow-row" style="--steps: 6;">
+                      <button class="flow-node flow-node--control" data-node="live-audio" data-next>
+                        <span class="node-kicker">Input</span><span class="node-title">直播音频</span><span class="node-meta">连续音频帧</span>
+                      </button>
+                      <button class="flow-node flow-node--realtime" data-node="realtime-gateway" data-next>
+                        <span class="node-kicker">Gateway</span><span class="node-title">WebSocket 网关</span><span class="node-meta">建立直播会话</span>
+                      </button>
+                      <button class="flow-node flow-node--data" data-node="registry" data-next>
+                        <span class="node-kicker">Registry</span><span class="node-title">选择实时 ASR 实例</span><span class="node-meta">会话开始时占位</span>
+                      </button>
+                      <button class="flow-node flow-node--realtime" data-node="ws-session" data-next>
+                        <span class="node-kicker">Sticky Session</span><span class="node-title">会话固定绑定</span><span class="node-meta">不逐帧重新路由</span>
+                      </button>
+                      <button class="flow-node flow-node--data" data-node="subtitle-stream" data-next>
+                        <span class="node-kicker">Streaming</span><span class="node-title">增量字幕</span><span class="node-meta">实时转写消息</span>
+                      </button>
+                      <button class="flow-node flow-node--business" data-node="subtitle-response">
+                        <span class="node-kicker">Output</span><span class="node-title">播放器</span><span class="node-meta">仅用于直播展示</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+          <section class="detail-view" id="view-deployment" data-view="deployment" role="tabpanel" aria-labelledby="tab-deployment" hidden>
+            <div class="detail-view__header">
+              <div>
+                <h3>实例注册与单机 Docker 部署</h3>
+                <p>注册状态和请求路由只画一次；基础设施容器与课程文件目录分开管理。</p>
+              </div>
+              <div class="boundary-row">
+                <span class="boundary-chip">同一台服务器</span>
+                <span class="boundary-chip">容器端点 = 注册实例</span>
+                <span class="boundary-chip">Uvicorn worker 不单独注册</span>
+              </div>
+            </div>
+            <div class="detail-viewport">
+              <div class="detail-stage-shell" style="height: 520px;">
+                <div class="detail-stage" style="--stage-height: 520px; --view-scale: 1;">
+                  <div class="flow-lane flow-lane--deployment">
+                    <div class="flow-lane__label"><span>Control Path</span>注册与心跳</div>
+                    <div class="flow-row" style="--steps: 3;">
+                      <button class="flow-node flow-node--resource" data-node="algorithm-containers" data-next>
+                        <span class="node-kicker">Docker</span><span class="node-title">算法容器实例</span><span class="node-meta">instance_id + operator_code</span>
+                      </button>
+                      <button class="flow-node flow-node--control" data-node="registration-api" data-next>
+                        <span class="node-kicker">Control API</span><span class="node-title">注册 / 心跳 API</span><span class="node-meta">ONLINE · DRAINING · OFFLINE</span>
+                      </button>
+                      <button class="flow-node flow-node--data" data-node="registry">
+                        <span class="node-kicker">Redis TTL</span><span class="node-title">算子注册中心</span><span class="node-meta">状态 · 地址 · 容量 · 过期时间</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="flow-lane flow-lane--deployment">
+                    <div class="flow-lane__label"><span>Data Path</span>查询与调用</div>
+                    <div class="flow-row" style="--steps: 3;">
+                      <button class="flow-node flow-node--control" data-node="platform-containers" data-next>
+                        <span class="node-kicker">Platform</span><span class="node-title">执行器 / 网关</span><span class="node-meta">离线 · 在线 · 实时</span>
+                      </button>
+                      <button class="flow-node flow-node--data" data-node="request-router" data-next>
+                        <span class="node-kicker">Reservation</span><span class="node-title">查询与容量占位</span><span class="node-meta">原子维护 inflight</span>
+                      </button>
+                      <button class="flow-node flow-node--resource" data-node="algorithm-containers">
+                        <span class="node-kicker">Selected Endpoint</span><span class="node-title">目标算法实例</span><span class="node-meta">调用后释放容量</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="server-band">
+                    <div class="server-band__title">同一台服务器 · 独立 Docker 容器与宿主机持久化目录</div>
+                    <div class="server-grid">
+                      <button class="flow-node flow-node--data" data-node="postgres-container">
+                        <span class="node-kicker">Docker</span><span class="node-title">PostgreSQL 容器</span><span class="node-meta">平台任务库与 Outbox</span>
+                      </button>
+                      <button class="flow-node flow-node--resource" data-node="kafka-container">
+                        <span class="node-kicker">Docker</span><span class="node-title">Kafka 容器</span><span class="node-meta">离线课程任务事件</span>
+                      </button>
+                      <button class="flow-node flow-node--data" data-node="redis-container">
+                        <span class="node-kicker">Docker</span><span class="node-title">Redis 容器</span><span class="node-meta">TTL 注册与容量占位</span>
+                      </button>
+                      <button class="flow-node flow-node--control" data-node="platform-containers">
+                        <span class="node-kicker">Docker Group</span><span class="node-title">平台服务容器</span><span class="node-meta">接入 · 编排 · 网关</span>
+                      </button>
+                      <button class="flow-node flow-node--adapter" data-node="algorithm-containers">
+                        <span class="node-kicker">Docker Group</span><span class="node-title">算法服务容器</span><span class="node-meta">按 GPU 能力稀疏部署</span>
+                      </button>
+                      <button class="flow-node flow-node--resource" data-node="shared-mount">
+                        <span class="node-kicker">Host Mount</span><span class="node-title">宿主机 /data/course 共享挂载</span><span class="node-meta">仅用于课程媒体与中间产物</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <aside class="detail-panel" id="component-detail" aria-live="polite">
+          <div class="detail-panel__header">
+            <span>COMPONENT DETAIL</span>
+            <h3 id="detail-title" tabindex="-1">课程 DAG 编排器</h3>
+          </div>
+          <dl class="detail-panel__body">
+            <div class="detail-item">
+              <dt>职责</dt>
+              <dd id="detail-responsibility">根据课程输入和节点依赖创建、释放并完成离线 DAG。</dd>
+            </div>
+            <div class="detail-item">
+              <dt>输入</dt>
+              <dd id="detail-input">Kafka 课程任务事件与节点完成事件。</dd>
+            </div>
+            <div class="detail-item">
+              <dt>输出</dt>
+              <dd id="detail-output">READY 节点和课程任务状态。</dd>
+            </div>
+            <div class="detail-item detail-item--boundary">
+              <dt>明确边界</dt>
+              <dd id="detail-boundary">不直接执行算法，不处理视频，不写业务结果表。</dd>
+            </div>
+          </dl>
+          <p class="detail-panel__hint">选择当前详图中的组件，查看职责、输入、输出和边界。</p>
+        </aside>
+      </div>
+    </section>
+    <section class="contract-section" aria-labelledby="contract-title">
+      <div class="section-heading">
+        <div>
+          <h2 id="contract-title">在线同步接口契约</h2>
+          <p>上游优先单图单请求；调度粒度始终是完整 HTTP 请求，代码不强制拒绝多图。</p>
+        </div>
+      </div>
+      <div class="contract-grid">
+        <div class="contract-column">
+          <h3>北向路径与内部适配</h3>
+          <table class="route-table">
+            <thead>
+              <tr><th>平台北向接口</th><th>内部算子接口</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>POST /v1/online/tias/analyze</code></td><td><code>POST /AE/SyncTasks2</code></td></tr>
+              <tr><td><code>POST /v1/online/face/recognize</code></td><td><code>POST /recognize</code> 或 <code>/recognize/batch</code></td></tr>
+              <tr><td><code>POST /v1/online/image-quality/detect</code></td><td><code>POST /detect_all</code></td></tr>
+            </tbody>
+          </table>
+          <div class="error-row" aria-label="平台错误码">
+            <span class="error-chip">HTTP 429 实例满载</span>
+            <span class="error-chip">HTTP 503 无可用实例</span>
+            <span class="error-chip">HTTP 504 算子超时</span>
+            <span class="error-chip">HTTP 502 技术故障</span>
+          </div>
+        </div>
+        <div class="contract-column">
+          <h3>统一外壳，保留算子原始结果</h3>
+          <pre aria-label="统一响应示例">{
+  "request_id": "01J...",
+  "code": 200,
+  "message": "success",
+  "data": {}
+}</pre>
+          <p style="margin: 12px 0 0; color: var(--muted); font-size: 12px;">
+            响应头：<code>X-Request-ID</code> · <code>X-Operator-Instance</code>。
+            多图请求由同一实例完整处理，部分成功信息保留在 <code>data</code> 中。
+          </p>
+        </div>
+      </div>
+    </section>
+    <section class="state-section" aria-labelledby="state-title">
+      <div class="section-heading">
+        <div>
+          <h2 id="state-title">任务状态与第一版边界</h2>
+          <p>离线任务有课程与节点两级状态；在线图片和实时语音只记录调用与会话指标。</p>
+        </div>
+      </div>
+      <div class="state-grid">
+        <div class="state-column">
+          <h3>任务层级与状态</h3>
+          <pre class="state-tree">CourseJob
+└── NodeRun
+    └── Attempt</pre>
+          <p class="state-label">课程任务状态</p>
+          <div class="status-row">
+            <span class="status-chip">RECEIVED</span><span class="state-arrow">→</span>
+            <span class="status-chip">PUBLISH_PENDING</span><span class="state-arrow">→</span>
+            <span class="status-chip">QUEUED</span><span class="state-arrow">→</span>
+            <span class="status-chip">RUNNING</span><span class="state-arrow">→</span>
+            <span class="status-chip">PARTIAL_SUCCESS / SUCCEEDED / FAILED / CANCELLED</span>
+          </div>
+          <p class="state-label">节点执行状态</p>
+          <div class="status-row">
+            <span class="status-chip">PENDING</span><span class="state-arrow">→</span>
+            <span class="status-chip">READY</span><span class="state-arrow">→</span>
+            <span class="status-chip">DISPATCHED</span><span class="state-arrow">→</span>
+            <span class="status-chip">RUNNING / WAITING_CALLBACK</span><span class="state-arrow">→</span>
+            <span class="status-chip">SUCCEEDED / FAILED / CANCELLED</span>
+          </div>
+        </div>
+        <div class="state-column">
+          <h3>四条视图的边界</h3>
+          <ul class="flow-list">
+            <li><strong>离线课程</strong><span>平台下载 T/S/P 一次，三条泳道共享课程工作目录，结果落库后清理。</span></li>
+            <li><strong>PPT 单图</strong><span>每个 <code>ppt_image_id</code> 独立执行 OCR 与 <code>/v1/extract_keywords</code>。</span></li>
+            <li><strong>在线图片</strong><span>Base64 请求按完整 HTTP 请求选择实例，不进 Kafka，不跨实例拆图。</span></li>
+            <li><strong>实时语音</strong><span>WebSocket 会话开始时选实例，字幕直接返回播放器，默认不入库。</span></li>
+            <li><strong>注册部署</strong><span>PostgreSQL、Kafka、Redis 独立容器；容器端点作为注册实例。</span></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    算法调度平台架构评审 · 第一版不引入 Kubernetes · 平台与算法继续使用 Docker 部署
+  </footer>
+
+  <script>
+    const componentDetails = {
+      "upstream-a": ["A 上游服务", "提交离线任务、在线图片请求和实时音频会话，并查询任务状态。", "业务上下文、T/S/P URL、Base64 图片或直播音频。", "course_job_id、同步结果或实时字幕。", "不管理平台本地课程目录，也不调度算法实例。"],
+      "task-ingress": ["任务接入服务", "校验课程请求，生成 course_job_id 并完成任务初始落库。", "课程标识、T/S/P 下载 URL 和业务上下文。", "PUBLISH_PENDING 状态和任务查询标识。", "不在 HTTP 请求中下载三路大视频。"],
+      "task-db": ["平台任务数据库", "保存 CourseJob、NodeRun、Attempt 和 Outbox，作为调度状态事实源。", "任务接入和执行状态变化。", "任务查询、节点释放和补跑依据。", "不存储视频、WAV、帧图片或完整业务结果。"],
+      "outbox": ["Outbox 发布器", "把数据库中的待发布事件可靠发送到 Kafka。", "PUBLISH_PENDING 的 outbox_event。", "Kafka 课程事件和 QUEUED 状态。", "不创建 DAG，也不调用算法。"],
+      "kafka": ["Kafka 离线任务队列", "传递离线课程任务和节点事件。", "Outbox 发布的任务元数据。", "供课程编排和 Worker 消费的事件。", "不传视频、WAV、图片或在线同步请求。"],
+      "orchestrator": ["课程 DAG 编排器", "根据输入与依赖创建、释放并完成离线节点。", "课程事件与节点完成事件。", "READY 节点和课程状态。", "不直接执行算法，不下载媒体，不写业务结果。"],
+      "media-ready": ["课程媒体准备", "异步下载 T/S/P 到统一课程工作目录并发布本地媒体已就绪。", "course_job_id 与三个可下载视频 URL。", "/data/course/{course_job_id} 下的 T.mp4、S.mp4、P.mp4。", "不在任务接入 HTTP 请求中下载大文件。"],
+      "workspace": ["课程共享工作目录", "为同机 Docker 算法提供一致的课程媒体和中间产物路径。", "源视频和各节点生成的中间文件。", "source、audio、frames、ppt 和 temp 目录。", "不是长期业务资源库，任务完成后会被清理。"],
+      "wav-extract": ["WAV 提取", "从本地主音轨视频提取离线 ASR 所需 WAV。", "T.mp4 或配置的主音轨。", "audio/teacher.wav。", "不执行语音识别。"],
+      "offline-asr": ["离线 ASR", "调用 Paraformer 服务生成课后最终转写文本。", "teacher.wav。", "带时间段的授课转写。", "不处理直播字幕 WebSocket。"],
+      "course-overview": ["课程脑图", "调用 /v1/course_overviews 分析离线 ASR 文本。", "ASR 文本和时间段。", "课程脑图与知识点。", "不接受 OCR 文本，不与关键词接口混用。"],
+      "ppt-callback": ["PPT 切片与回调", "处理 P 视频并通过回调返回带唯一标识的切片。", "本地 P.mp4。", "ppt_image_id 和对应切片。", "提交成功不等于后续 OCR 和关键词完成。"],
+      "ppt-image": ["PPT 单图标识", "保持每张切片独立的 ppt_image_id。", "PPT 切片回调。", "OCR × N 的独立输入。", "不把全课切片文字合并后再提取关键词。"],
+      "ocr-adapter": ["OCR 适配器", "按单张 PPT 切片调用 OCR。", "一个 ppt_image_id 对应的图片。", "该切片的 OCR 文本。", "不合并整节课 OCR 文本。"],
+      "keyword-adapter": ["单图关键词适配器", "对单张 PPT 图片的 OCR 文本调用 /v1/extract_keywords。", "一个 ppt_image_id 对应的 OCR 文本。", "该图片对应的关键词。", "不使用全课合并文本。"],
+      "ai-quality-worker": ["ai_quality 复合 Worker", "读取本地 T/S，完成抽帧、TIAS 推理、聚合和视觉结果写入。", "本地 T/S 路径、task_id 和 student_count。", "时间线、快照、行为统计和指标结果。", "第一版保留复合边界，暂不拆成多个平台 DAG 节点。"],
+      "visual-results": ["视觉聚合结果", "表达帧级检测经过课程级聚合后的业务数据。", "学生与教师帧指标。", "时间线、快照、行为统计和评分。", "普通抽帧不是长期业务资产。"],
+      "result-writer": ["业务结果落库", "按任务与业务主键幂等保存离线结果。", "ASR、PPT、OCR、关键词或视觉结果。", "可供业务查询的结果记录。", "平台任务状态仍以平台任务数据库为准。"],
+      "cleanup-workspace": ["课程工作目录清理", "在全部必需结果落库后删除课程临时媒体和中间产物。", "已完成的 course_job_id。", "释放后的本地磁盘空间。", "长期业务资产必须先迁移，不能随工作目录删除。"],
+      "course-completed": ["课程任务完成", "向上游提供最终可查询的终态。", "必需节点完成和工作目录清理结果。", "COMPLETED 任务状态。", "不代表实时字幕被持久化。"],
+      "sync-gateway": ["同步推理网关", "接收 Base64 图片请求并按接口确定 operator_code。", "TIAS、人脸或图像质量北向请求。", "交给请求路由器的完整 HTTP 请求。", "不处理持续视频流，不使用课程工作目录。"],
+      "request-router": ["请求级实例路由", "为一次完整 HTTP 请求选择并占用一个算子实例。", "operator_code、实例状态和 inflight。", "绑定的 instance_id。", "不按图片拆分多图请求，不执行跨实例聚合。"],
+      "tias-adapter": ["TIAS 在线适配器", "把平台请求转换为 /AE/SyncTasks2。", "完整 Base64 图片请求。", "TIAS 原始业务结果。", "目标实例必须暴露兼容接口。"],
+      "face-adapter": ["人脸在线适配器", "调用 /recognize 或 /recognize/batch 并解析业务状态。", "Base64 图片、targets 和阈值。", "人脸匹配候选。", "HTTP 200 不等于业务识别成功。"],
+      "quality-adapter": ["图像质量在线适配器", "调用 /detect_all 并解析局部模块结果。", "完整 Base64 图片请求。", "画质、倾斜、遮挡和屏幕异常结果。", "不在网关保存原始图片。"],
+      "online-response": ["在线统一响应", "返回统一 request_id、平台状态码与算子原始 data。", "算子响应、instance_id 和耗时。", "同步 HTTP 响应。", "不强制三个算法使用同一个业务结果模型。"],
+      "realtime-gateway": ["实时 ASR 网关", "建立 WebSocket 会话并在开始时选择实时 ASR 实例。", "直播音频和 session_id。", "绑定的 ASR 会话。", "不进入离线 Kafka，不逐句话创建 NodeRun。"],
+      "registry": ["算子注册中心", "接收注册与心跳，提供带 TTL 的实例状态和容量。", "实例元数据、状态、容量和心跳。", "可调度实例列表。", "Uvicorn worker 不分别注册。"],
+      "ws-session": ["实时 ASR 会话绑定", "在一次连接期间保持客户端与选定实例的绑定。", "WebSocket 音频帧。", "增量转写消息。", "断线后允许重新选择实例。"],
+      "subtitle-response": ["播放器字幕", "展示直播期间的实时转写。", "增量字幕事件。", "播放器可见字幕。", "不替代课后的最终离线转写。"],
+      "registration-api": ["注册与心跳 API", "统一接收算法容器实例的注册、心跳和摘流状态。", "instance_id、operator_code、service_url、status 和容量。", "Redis TTL 注册记录。", "算子不向各适配器分别注册。"],
+      "postgres-container": ["PostgreSQL 容器", "保存平台任务状态和 Outbox。", "平台控制面事务写入。", "任务事实源和待发布事件。", "持久化目录与课程媒体目录分离。"],
+      "kafka-container": ["Kafka 容器", "承载离线课程事件。", "Outbox 发布事件。", "供 DAG 与 Worker 消费的消息。", "不承载在线图片和实时音频帧。"],
+      "redis-container": ["Redis 容器", "保存注册 TTL、并发占位和 Worker 控制状态。", "实例心跳与请求容量变化。", "实时实例快照。", "不是课程任务状态事实源。"],
+      "platform-containers": ["平台服务容器组", "运行接入、Outbox、编排、执行、同步与实时网关。", "上游任务和算子状态。", "调度决策与平台响应。", "控制面服务不需要全部占用 GPU。"],
+      "algorithm-containers": ["算法服务容器组", "按 GPU 与能力部署 ASR、OCR、TIAS、人脸和图像质量实例。", "平台选定后发送的业务请求。", "算法原始结果与心跳。", "同一个容器端点注册为一个实例。"],
+      "shared-mount": ["宿主机课程共享挂载", "让同机离线容器使用一致路径读取课程媒体。", "媒体准备 Worker 写入的 T/S/P 和中间产物。", "/data/course/{course_job_id}。", "PostgreSQL、Kafka 和 Redis 数据不放在该目录。"]
+    };
+    let activeView = "offline";
+    const viewScales = {
+      offline: 1,
+      online: 1,
+      realtime: 1,
+      deployment: 1
+    };
+
+    function activePanel() {
+      return document.querySelector('.detail-view[data-view="' + activeView + '"]');
+    }
+
+    function activeStage() {
+      return activePanel().querySelector(".detail-stage");
+    }
+
+    function updateActiveScale() {
+      const scale = viewScales[activeView];
+      const stage = activeStage();
+      const shell = stage.parentElement;
+      stage.style.setProperty("--view-scale", scale.toFixed(2));
+      shell.style.width = Math.round(stage.offsetWidth * scale) + "px";
+      shell.style.height = Math.round(stage.offsetHeight * scale) + "px";
+      document.getElementById("zoom-value").textContent = Math.round(scale * 100) + "%";
+    }
+
+    function setActiveView(view) {
+      activeView = view;
+      document.querySelectorAll("[data-view-tab]").forEach((button) => {
+        const selected = button.dataset.viewTab === view;
+        button.setAttribute("aria-selected", String(selected));
+        button.tabIndex = selected ? 0 : -1;
+      });
+      document.querySelectorAll(".detail-view[data-view]").forEach((panel) => {
+        panel.hidden = panel.dataset.view !== view;
+      });
+      updateActiveScale();
+    }
+
+    function showDetail(node, keyboardActivated) {
+      const stored = componentDetails[node.dataset.node];
+      const title = node.querySelector(".node-title");
+      const detail = stored || [
+        title ? title.textContent.trim() : "流程节点",
+        "承担当前详图中标示的单一流程职责。",
+        "来自左侧相邻步骤的标准输入。",
+        "交给右侧相邻步骤的标准输出。",
+        "不承担其他详图的业务职责。"
+      ];
+
+      document.querySelectorAll(".flow-node.is-selected").forEach((item) => {
+        item.classList.remove("is-selected");
+        item.removeAttribute("aria-current");
+      });
+      node.classList.add("is-selected");
+      node.setAttribute("aria-current", "true");
+
+      document.getElementById("detail-title").textContent = detail[0];
+      document.getElementById("detail-responsibility").textContent = detail[1];
+      document.getElementById("detail-input").textContent = detail[2];
+      document.getElementById("detail-output").textContent = detail[3];
+      document.getElementById("detail-boundary").textContent = detail[4];
+
+      if (keyboardActivated) {
+        document.getElementById("detail-title").focus({ preventScroll: false });
+      }
+    }
+
+    document.querySelectorAll("[data-view-tab]").forEach((button) => {
+      button.addEventListener("click", () => setActiveView(button.dataset.viewTab));
+      button.addEventListener("keydown", (event) => {
+        if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+        const tabs = Array.from(document.querySelectorAll("[data-view-tab]"));
+        const direction = event.key === "ArrowRight" ? 1 : -1;
+        const nextIndex = (tabs.indexOf(button) + direction + tabs.length) % tabs.length;
+        event.preventDefault();
+        tabs[nextIndex].focus();
+        setActiveView(tabs[nextIndex].dataset.viewTab);
+      });
+    });
+
+    document.querySelectorAll(".flow-node[data-node]").forEach((node) => {
+      node.addEventListener("click", (event) => showDetail(node, event.detail === 0));
+    });
+
+    document.querySelector('[data-action="zoom-in"]').addEventListener("click", () => {
+      viewScales[activeView] = Math.min(1.25, Number((viewScales[activeView] + 0.1).toFixed(2)));
+      updateActiveScale();
+    });
+
+    document.querySelector('[data-action="zoom-out"]').addEventListener("click", () => {
+      viewScales[activeView] = Math.max(0.75, Number((viewScales[activeView] - 0.1).toFixed(2)));
+      updateActiveScale();
+    });
+
+    document.querySelector('[data-action="reset"]').addEventListener("click", () => {
+      viewScales[activeView] = 1;
+      updateActiveScale();
+      activePanel().querySelector(".detail-viewport").scrollTo({ left: 0, top: 0, behavior: "smooth" });
+    });
+
+    document.querySelector('[data-action="print"]').addEventListener("click", () => window.print());
+
+    setActiveView("offline");
+    const initialNode = document.querySelector('[data-node="orchestrator"]');
+    if (initialNode) showDetail(initialNode, false);
+  </script>
+</body>
+</html>

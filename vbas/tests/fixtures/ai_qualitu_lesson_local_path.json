@@ -1,0 +1,9 @@
+{
+  "task_id": "lesson-test-local-path",
+  "teacher_video_path": "/Volumes/Data55/南科职web课/Web前端应用技术_孟宪宁_2026年5月20号10时30分/教师1.mp4",
+  "student_video_path": "/Volumes/Data55/南科职web课/Web前端应用技术_孟宪宁_2026年5月20号10时30分/学生1.mp4",
+  "slides_video_path": "/Volumes/Data55/南科职web课/Web前端应用技术_孟宪宁_2026年5月20号10时30分/PPT.mp4",
+  "evaluation_mode": 1,
+  "course_id": "cv-test",
+  "student_count": 38
+}

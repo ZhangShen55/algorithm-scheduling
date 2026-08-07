@@ -1,0 +1,121 @@
+[service]
+# 服务名称，用于日志、健康检查和指标标识。
+name = "vision-orchestrator-service"
+# HTTP 监听地址。
+host = "0.0.0.0"
+# HTTP 监听端口。
+port = 8010
+# Uvicorn 工作进程数。
+workers = 1
+# 运行环境标识。
+environment = "development"
+# 日志级别。
+log_level = "INFO"
+# 请求链路标识请求头。
+trace_header = "X-Trace-ID"
+
+[postgres]
+# PostgreSQL 连接地址。
+dsn = "postgresql+psycopg://algorithm:algorithm@127.0.0.1:5432/algorithm"
+# 数据库基础连接池大小。
+pool_size = 10
+# 连接池允许的额外连接数。
+max_overflow = 20
+# 从连接池获取连接的超时秒数。
+pool_timeout_seconds = 30.0
+
+[kafka]
+# Kafka 集群引导服务器地址。
+bootstrap_servers = "127.0.0.1:9092"
+# 视觉分析命令主题。
+command_topic = "algorithm.visual.commands"
+# 视觉分析事件主题。
+event_topic = "algorithm.visual.events"
+# 视觉命令消费组。
+consumer_group = "vision-orchestrator"
+# 禁止自动提交，仅在视觉命令已持久化接收后提交 offset。
+enable_auto_commit = false
+# 新消费组没有 offset 时从最早消息开始读取。
+auto_offset_reset = "earliest"
+# 单次 poll 最多领取的课程级视觉命令数。
+max_poll_records = 2
+
+[control]
+# 控制服务基础地址。
+base_url = "http://127.0.0.1:18100"
+# 控制服务请求超时秒数。
+timeout_seconds = 10.0
+
+[worker]
+# 视觉任务处理并发数。
+concurrency = 2
+# 工作进程轮询间隔秒数。
+poll_interval_seconds = 1.0
+# 工作进程优雅停止超时秒数。
+shutdown_timeout_seconds = 30.0
+
+[storage]
+# 课程资源本地根目录。
+course_root = "/data/course"
+# 分析结果本地根目录。
+result_root = "/data/result"
+# 视觉证据文件根目录。
+evidence_root = "/data/result/evidence"
+
+[scan]
+# 单次 VBas 扫描批次大小。
+batch_size = 8
+# 默认帧扫描间隔秒数。
+default_interval_seconds = 10.0
+# 自适应扫描最小间隔秒数。
+min_interval_seconds = 2.0
+# 自适应扫描最大间隔秒数。
+max_interval_seconds = 60.0
+
+[vbas]
+# VBas 单次请求超时秒数。
+request_timeout_seconds = 60.0
+# VBas 请求允许的最大批次大小。
+max_batch_size = 8
+# VBas 请求最大并发数。
+max_concurrency = 2
+
+[cache]
+# 内存推理结果最大条目数。
+max_inference_entries = 2048
+# 帧索引缓存保留秒数。
+frame_ttl_seconds = 600
+
+[teacher_behavior]
+# 是否启用教师行为分析。
+enabled = true
+# 教师行为最低置信度。
+minimum_confidence = 0.5
+# 教师行为区间合并间隔秒数。
+interval_gap_seconds = 5.0
+
+[student_behavior]
+# 是否启用学生行为分析。
+enabled = true
+# 学生行为最低置信度。
+minimum_confidence = 0.5
+# 学生行为区间合并间隔秒数。
+interval_gap_seconds = 5.0
+
+[evidence]
+# 每个证据分类的最大文件数。
+max_per_category = 3
+# 单任务证据文件总上限。
+max_total = 20
+# 同类证据最小时间间隔秒数。
+same_category_min_interval_seconds = 30.0
+
+[readiness]
+# 就绪检查依赖超时秒数。
+dependency_timeout_seconds = 3.0
+# 就绪检查是否要求 PostgreSQL 可用。
+require_postgres = true
+# 就绪检查是否要求 Kafka 可用。
+require_kafka = true
+# 就绪检查是否要求控制服务可用。
+require_control = true

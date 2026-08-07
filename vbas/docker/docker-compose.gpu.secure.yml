@@ -1,0 +1,76 @@
+services:
+  tias-gpu-8981:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.runtime
+    image: tias:6.0-secure
+    container_name: tias-gpu-8981-secure
+    shm_size: "2g"
+    command: python -m uvicorn app.main:app --host 0.0.0.0 --port 8981
+    env_file:
+      - ./env.example
+    environment:
+      CONFIG_PATH: /workspace/config.toml
+      TIAS_BOOTSTRAP_KEY_FILE: /run/bootstrap-secrets/tias_model_key
+      TIAS_RUNTIME_KEY_FILE: /dev/shm/tias_model_key
+      TIAS_RUNTIME_KEY_ROOT: /dev/shm
+      TIAS_REQUIRE_BOOTSTRAP_KEY: "1"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    ports:
+      - "8981:8981"
+    volumes:
+      - ./examples/tias-8981.secure.toml:/workspace/config.toml:ro
+      - ../models-encrypted:/workspace/models-encrypted:ro
+      - ../models/cmu_panoptic_coco.yaml:/workspace/model-assets/cmu_panoptic_coco.yaml:ro
+      - ./secrets/tias_model_key:/run/bootstrap-secrets/tias_model_key:ro
+    networks:
+      default:
+        aliases:
+          - tias-8981
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  tias-gpu-8982:
+    image: tias:6.0-secure
+    container_name: tias-gpu-8982-secure
+    shm_size: "2g"
+    command: python -m uvicorn app.main:app --host 0.0.0.0 --port 8982
+    env_file:
+      - ./env.example
+    environment:
+      CONFIG_PATH: /workspace/config.toml
+      TIAS_BOOTSTRAP_KEY_FILE: /run/bootstrap-secrets/tias_model_key
+      TIAS_RUNTIME_KEY_FILE: /dev/shm/tias_model_key
+      TIAS_RUNTIME_KEY_ROOT: /dev/shm
+      TIAS_REQUIRE_BOOTSTRAP_KEY: "1"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    ports:
+      - "8982:8982"
+    volumes:
+      - ./examples/tias-8982.secure.toml:/workspace/config.toml:ro
+      - ../models-encrypted:/workspace/models-encrypted:ro
+      - ../models/cmu_panoptic_coco.yaml:/workspace/model-assets/cmu_panoptic_coco.yaml:ro
+      - ./secrets/tias_model_key:/run/bootstrap-secrets/tias_model_key:ro
+    networks:
+      default:
+        aliases:
+          - tias-8982
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+networks:
+  default:
+    external: true
+    name: ai-quality-net

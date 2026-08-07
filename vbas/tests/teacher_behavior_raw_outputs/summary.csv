@@ -1,0 +1,13 @@
+id,image,problem_category,raw_detection_count,status
+19,00000019-aqvj.jpg,检测结果不是人物,4,success
+181,00000181-llzv.jpg,检测结果不是人物,4,success
+205,00000205-qypu.jpg,检测结果不是人物,1,success
+62,00000062-tsvu.jpg,检测结果不是人物,4,success
+63,00000063-acct.jpg,检测结果不是人物,5,success
+64,00000064-xwip.jpg,检测结果不是人物,4,success
+66,00000066-svpz.jpg,检测结果不是人物,3,success
+647,00000647-ejvk.jpg,检测结果不是人物,2,success
+55,00000055-lmgs.jpg,讲台老师没检测到，检测到坐在下面的学生,3,success
+688,00000688-noxt.jpg,讲台老师没检测到，检测到坐在下面的学生,3,success
+125,00000125-ouay.jpg,未检测到对象,0,success
+213,00000213-pmta.jpg,未检测到对象,0,success

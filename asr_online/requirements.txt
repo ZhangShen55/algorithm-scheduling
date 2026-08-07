@@ -1,0 +1,9 @@
+modelscope
+funasr==1.2.6
+fastapi>=0.95.1
+uvicorn
+torch>=1.13
+numpy==1.26.4
+websockets==12.0
+simplejson==3.20.1
+tomli

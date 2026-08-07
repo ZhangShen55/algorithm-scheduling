@@ -1,0 +1,3 @@
+-r requirements.txt
+
+# PaddleCustomDevice 与 PaddlePaddle 版本在确认 Ascend 型号和 CANN 版本后锁定。

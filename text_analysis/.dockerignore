@@ -1,0 +1,11 @@
+.git
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+.venv/
+env/
+.ai/
+config_bak.json
+Dockerfile*

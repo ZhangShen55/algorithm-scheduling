@@ -1,0 +1,58 @@
+[service]
+# FastAPI/OpenAPI 中显示的服务名，同时用于日志和指标标识。
+name = "control-service"
+# Uvicorn 监听地址；容器内使用 0.0.0.0。
+host = "0.0.0.0"
+# 控制服务默认监听端口。
+port = 18100
+# 第一版固定为 1，避免多进程重复持有运行时资源。
+workers = 1
+# 运行环境名，建议使用 development、test 或 production。
+environment = "development"
+# 服务日志级别。
+log_level = "INFO"
+# 跨服务链路跟踪请求头名。
+trace_header = "X-Trace-ID"
+
+[postgres]
+# 平台任务库 DSN；生产用户名和密码通过 CONTROL_POSTGRES__DSN 覆盖。
+dsn = "postgresql+psycopg://algorithm:algorithm@127.0.0.1:5432/algorithm"
+# 常驻数据库连接数。
+pool_size = 10
+# 连接池耗尽时允许额外创建的连接数。
+max_overflow = 20
+# 从连接池取得连接的最长等待秒数。
+pool_timeout_seconds = 30.0
+# 借出连接前检查连接是否有效。
+pool_pre_ping = true
+
+[redis]
+# 算子注册表、心跳和容量租约使用的 Redis 地址。
+url = "redis://127.0.0.1:6379/0"
+# 本平台所有 Redis Key 的命名空间前缀。
+key_prefix = "algorithm-platform:"
+# 超过该时间未收到心跳时，算子实例视为离线。
+heartbeat_ttl_seconds = 15
+# Redis 客户端连接池上限。
+max_connections = 50
+# 建立 Redis 连接的超时秒数。
+socket_connect_timeout_seconds = 3.0
+# 单次 Redis 命令读写的超时秒数。
+socket_timeout_seconds = 3.0
+
+[operator_registry]
+# 节点执行器未指定 TTL 时使用的容量租约时长。
+default_lease_ttl_seconds = 60
+# 容量租约允许的最长 TTL，防止错误租约长期占用实例。
+max_lease_ttl_seconds = 3600
+# 将心跳摘要写入审计记录的最小间隔秒数。
+heartbeat_audit_interval_seconds = 60
+
+[features]
+# 本次交付允许 A 服务提交的离线任务类型；动态可用性仍由算子注册状态决定。
+enabled_task_types = ["PPT", "ASR", "TEACHER_BEHAVIOR", "STUDENT_BEHAVIOR"]
+
+[readiness]
+# readiness 检查 PostgreSQL、Redis 等依赖时的单项超时秒数。
+dependency_timeout_seconds = 3.0
+
