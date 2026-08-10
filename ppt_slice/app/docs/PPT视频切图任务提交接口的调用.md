@@ -140,6 +140,8 @@ manifest 原子发布后，算子向 `result_callback_uri` POST 一次：
 
 ## 7. 配置
 
+`config.toml` 是唯一的文件配置源，服务不读取 `.env`。加载优先级为“显式环境变量 > `config.toml` > 代码默认值”；`CONFIG_PATH` 只负责选择 TOML 文件。监听地址和端口由 Uvicorn 启动参数控制，不在 `config.toml` 中重复配置。
+
 ```toml
 [task]
 max_concurrent_tasks = 15
@@ -157,7 +159,7 @@ cluster_gap_ms = 90000
 cluster_min_segments = 3
 ```
 
-生产容器通常设置 `RESULT_ROOT=/data/result` 并将平台共享卷挂载到 `/data/result`。`CONFIG_PATH` 可覆盖默认的项目根 `config.toml`。
+生产容器通常设置 `RESULT_ROOT=/data/result` 并将平台共享卷挂载到 `/data/result`。也可以直接在选定的 `config.toml` 中配置 `[paths].result_root`。
 
 `merge_gap_ms` 处理普通短暂停顿；只有至少 `cluster_min_segments` 个动态段的相邻间隔均不超过 `cluster_gap_ms` 时，才把长静止镜头合并进连续动态簇。簇尚未决议时，候选切片只在内存中延迟发布。服务直接从 URL 解码，不下载或落盘源 MP4、完整副本和视频预览。
 

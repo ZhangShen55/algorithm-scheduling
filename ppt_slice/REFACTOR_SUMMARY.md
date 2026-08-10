@@ -185,17 +185,15 @@ ppt_slice/
 
 1. 显式环境变量
 2. `config.toml`
-3. `.env`
-4. 代码默认值
+3. 代码默认值
 
-默认配置文件是项目根目录的 `config.toml`，可用 `CONFIG_PATH` 指定其他配置文件。共享结果根目录可用 `RESULT_ROOT` 覆盖。
+`config.toml` 是唯一的文件配置源，服务不读取 `.env`。默认配置文件位于项目根目录，可用 `CONFIG_PATH` 指定其他 TOML 文件。共享结果根目录可用 `RESULT_ROOT` 覆盖。
 
 配置分为：
 
-- `[app]`：应用名称、版本、监听地址和端口。
+- `[app]`：应用名称和版本；监听地址与端口由 Uvicorn 启动参数控制。
 - `[task]`：最大并发任务数、帧队列容量等。
 - `[similarity]`：稳定页面和已保存页面的像素相似度阈值。
-- `[video]`：默认画面尺寸、帧率和超时。
 - `[dynamic_detection]`：采样、像素活动、网格活动、状态机、区间合并、动态簇、光流和候选稳定参数。
 - `[paths]`：共享结果根目录。
 - `[logging]`：日志级别、路径、格式、轮转大小和备份数量。
@@ -231,7 +229,7 @@ ppt_slice/
 
 - `python -m compileall -q app harness tests` 通过。
 - `from app.main import app` 导入成功。
-- 完整 `unittest` 共 92 项通过。
+- 完整 `unittest` 共 95 项通过。
 - `/health` 返回健康状态。
 - `/LocalVideoPPTSliceTasks/v1.0.0/getVersion` 返回版本信息。
 - OpenSpec 严格校验通过。

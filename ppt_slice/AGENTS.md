@@ -25,6 +25,13 @@ curl http://127.0.0.1:9001/LocalVideoPPTSliceTasks/v1.0.0/getVersion
 
 Use the documented video task and callback fixture for real slicing verification.
 
+## Configuration Boundary
+
+- `config.toml` is the only supported file-based configuration source. Do not restore `.env` loading or an `.env.example` file.
+- `CONFIG_PATH` may select another TOML file. Explicit process environment variables may override matching fields; code defaults are the final fallback.
+- Uvicorn host and port belong to the deployment command, not `Settings`. Do not re-add `app.debug`, `app.host`, `app.port` or the retired `[video]` defaults unless production code consumes them.
+- Keep every supported `config.toml` field documented with its runtime effect. Configuration fields that are only loaded but never consumed must not remain in the public configuration surface.
+
 ## Dynamic Detection Evidence
 
 - OpenSpec owns requirements and design; `harness/` owns iteration records, corpus snapshots, commands, review evidence and reports.

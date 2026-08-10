@@ -39,16 +39,13 @@ def load_toml_config() -> dict:
         with open(config_file, "rb") as f:
             config = tomllib.load(f)
 
-        # 将 TOML 配置转换为环境变量格式（大写+下划线）
+        # 将 TOML 配置转换为 Settings 字段格式（大写+下划线）
         flat_config = {}
 
         # app section
         if "app" in config:
             flat_config["APP_NAME"] = config["app"].get("name")
             flat_config["APP_VERSION"] = config["app"].get("version")
-            flat_config["DEBUG"] = config["app"].get("debug")
-            flat_config["HOST"] = config["app"].get("host")
-            flat_config["PORT"] = config["app"].get("port")
 
         # task section
         if "task" in config:
@@ -60,14 +57,6 @@ def load_toml_config() -> dict:
         if "similarity" in config:
             flat_config["DEFAULT_CONTIGUOUS_SIMILARITY"] = config["similarity"].get("default_contiguous_similarity")
             flat_config["DEFAULT_SAVED_SIMILARITY"] = config["similarity"].get("default_saved_similarity")
-
-        # video section
-        if "video" in config:
-            flat_config["DEFAULT_FRAME_WIDTH"] = config["video"].get("default_frame_width")
-            flat_config["DEFAULT_FRAME_HEIGHT"] = config["video"].get("default_frame_height")
-            flat_config["DEFAULT_FPS"] = config["video"].get("default_fps")
-            flat_config["STREAM_TIMEOUT_MS"] = config["video"].get("stream_timeout_ms")
-            flat_config["FRAME_QUEUE_TIMEOUT"] = config["video"].get("frame_queue_timeout")
 
         # dynamic detection section
         if "dynamic_detection" in config:
@@ -125,9 +114,6 @@ class Settings(BaseSettings):
     # 应用基础配置
     APP_NAME: str = "Video PPT Slice Service"
     APP_VERSION: str = "V1.0.0_20260806"
-    DEBUG: bool = False
-    HOST: str = "0.0.0.0"
-    PORT: int = 9001
 
     # 任务配置
     MAX_CONCURRENT_TASKS: int = 15  # 最大并发任务数
@@ -137,13 +123,6 @@ class Settings(BaseSettings):
     # 相似度阈值配置
     DEFAULT_CONTIGUOUS_SIMILARITY: float = 0.99  # 连续帧相似度阈值
     DEFAULT_SAVED_SIMILARITY: float = 0.98  # 保存帧相似度阈值
-
-    # 视频处理配置
-    DEFAULT_FRAME_WIDTH: int = 1920
-    DEFAULT_FRAME_HEIGHT: int = 1080
-    DEFAULT_FPS: int = 30
-    STREAM_TIMEOUT_MS: int = 100000  # 流超时时间（毫秒）
-    FRAME_QUEUE_TIMEOUT: int = 7  # 帧队列超时时间（秒）
 
     # 持续动态区间检测配置
     DYNAMIC_DETECTION_ENABLED: bool = True
@@ -191,15 +170,13 @@ class Settings(BaseSettings):
         return value if isinstance(value, str) and "%" in value else DEFAULT_LOG_FORMAT
 
     class Config:
-        env_file = ".env"
         case_sensitive = True
 
 
 # 加载配置的优先级：
 # 1. 环境变量（最高优先级）
-# 2. .env 文件
-# 3. config.toml 文件
-# 4. 默认值（最低优先级）
+# 2. config.toml 文件
+# 3. 默认值（最低优先级）
 
 # 先从 config.toml 加载
 toml_config = load_toml_config()

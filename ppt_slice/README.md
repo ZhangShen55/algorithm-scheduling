@@ -9,7 +9,7 @@ conda activate ppt_slice
 python -m uvicorn app.main:app --host 0.0.0.0 --port 9001 --workers 1
 ```
 
-配置文件默认为项目根目录 `config.toml`，可用 `CONFIG_PATH` 指定其他文件。共享输出根目录由 `[paths].result_root` 或环境变量 `RESULT_ROOT` 配置，请保证算子和平台回调接收方挂载的是同一个目录。
+唯一支持的文件配置源是项目根目录 `config.toml`，服务不读取 `.env`。可用显式环境变量 `CONFIG_PATH` 选择其他 TOML 文件；其他显式环境变量可覆盖同名字段。Uvicorn 的监听地址和端口由启动参数控制，不属于应用配置。共享输出根目录由 `[paths].result_root` 或环境变量 `RESULT_ROOT` 配置，请保证算子和平台回调接收方挂载的是同一个目录。
 
 ## 算法实现
 
@@ -167,10 +167,17 @@ python callback.py
 
 ## 配置
 
+加载优先级为“显式环境变量 > `config.toml` > 代码默认值”。`CONFIG_PATH` 只负责选择 TOML 文件，不提供第二套字段配置。项目不读取 `.env`，也不维护 `.env.example`。
+
 | TOML | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- | --- |
+| `app.name` | `APP_NAME` | `Video PPT Slice Service` | FastAPI 文档、健康信息和日志显示的服务名称 |
+| `app.version` | `APP_VERSION` | `V1.0.0_20260806` | FastAPI 文档、健康信息和版本接口返回的版本 |
 | `task.max_concurrent_tasks` | `MAX_CONCURRENT_TASKS` | `15` | 单 Uvicorn worker 最大并发任务数 |
 | `task.max_queue_size` | `MAX_QUEUE_SIZE` | `25` | 单任务帧队列容量 |
+| `task.min_frames_ok` | `MIN_FRAMES_OK` | `5` | 任务成功至少需要处理的采样帧数，完成条件为处理帧数大于该值 |
+| `similarity.default_contiguous_similarity` | `DEFAULT_CONTIGUOUS_SIMILARITY` | `0.99` | 相邻采样画面的稳定相似度阈值 |
+| `similarity.default_saved_similarity` | `DEFAULT_SAVED_SIMILARITY` | `0.98` | 无请求级阈值的 Harness 运行所用 PPT 去重阈值 |
 | `paths.result_root` | `RESULT_ROOT` | `./shared_results` | 共享结果根目录 |
 | `dynamic_detection.enabled` | `DYNAMIC_DETECTION_ENABLED` | `true` | 启用持续动态区间检测；关闭后恢复旧切片判断 |
 | `dynamic_detection.sample_interval_ms` | `DYNAMIC_SAMPLE_INTERVAL_MS` | `1000` | 动态检测参考帧进入流水线的最小时间间隔（毫秒） |
@@ -192,6 +199,13 @@ python callback.py
 | `dynamic_detection.optical_flow_active_ratio` | `DYNAMIC_OPTICAL_FLOW_ACTIVE_RATIO` | `0.05` | 认定弱光流活动的运动像素覆盖比例 |
 | `dynamic_detection.motion_grace_ms` | `DYNAMIC_MOTION_GRACE_MS` | `15000` | 最后由弱光流保活时的无运动宽限；最后为强活动时仍按 `exit_stable_ms` 退出 |
 | `dynamic_detection.candidate_stable_ms` | `DYNAMIC_CANDIDATE_STABLE_MS` | `2000` | 普通 PPT 候选页面需要保持稳定的时间（毫秒） |
+| `logging.level` | `LOG_LEVEL` | `INFO` | Python 应用 Logger 的最低记录级别 |
+| `logging.dir` | `LOG_DIR` | `./logs` | 日志输出目录 |
+| `logging.file` | `LOG_FILE` | `app.log` | 普通日志文件名 |
+| `logging.max_bytes` | `LOG_MAX_BYTES` | `10485760` | 单个日志文件轮转阈值（字节） |
+| `logging.backup_count` | `LOG_BACKUP_COUNT` | `5` | 每类轮转日志保留数量 |
+| `logging.format` | `LOG_FORMAT` | 见 `config.toml` | 文件日志格式 |
+| `logging.date_format` | `LOG_DATE_FORMAT` | `%Y-%m-%d %H:%M:%S` | 控制台和文件日志时间格式 |
 
 保持 `--workers 1`。容量锁只负责单 worker 内的 `N` 个并发任务，不设计跨进程协调、Kafka 或数据库依赖。
 

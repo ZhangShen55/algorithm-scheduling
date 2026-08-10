@@ -23,7 +23,6 @@ logger = get_logger("main")
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     logger.info(f"{settings.APP_NAME} {settings.APP_VERSION} 启动中...")
-    logger.info(f"监听地址: {settings.HOST}:{settings.PORT}")
     logger.info(f"最大并发任务数: {settings.MAX_CONCURRENT_TASKS}")
     logger.info(f"帧队列最大缓冲: {settings.MAX_QUEUE_SIZE}")
     yield

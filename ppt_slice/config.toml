@@ -3,30 +3,26 @@
 
 [app]
 # 应用基础配置
+# FastAPI 文档、健康信息和日志中显示的服务名称
 name = "Video PPT Slice Service"
+# FastAPI 文档、健康信息和版本接口返回的应用版本
 version = "V1.0.0_20260806"
-debug = false
-host = "0.0.0.0"
-port = 9001
 
 [task]
 # 任务配置
-max_concurrent_tasks = 15  # 最大并发任务数
-max_queue_size = 25        # 帧队列最大缓冲大小
-min_frames_ok = 5          # 最小有效帧数
+# 单 Uvicorn Worker 最多同时保留的任务数；第 N+1 个请求返回拒绝状态
+max_concurrent_tasks = 15
+# 每个任务的解码帧生产者与切片消费者之间的内存队列容量
+max_queue_size = 25
+# 任务成功至少需要处理的采样帧数；当前完成条件为 processed_frames > min_frames_ok
+min_frames_ok = 5
 
 [similarity]
 # 相似度阈值配置
-default_contiguous_similarity = 0.99  # 连续帧相似度阈值
-default_saved_similarity = 0.98       # 保存帧相似度阈值
-
-[video]
-# 视频处理配置
-default_frame_width = 1920
-default_frame_height = 1080
-default_fps = 30
-stream_timeout_ms = 100000  # 流超时时间（毫秒）
-frame_queue_timeout = 7     # 帧队列超时时间（秒）
+# 相邻采样画面达到该相似度时，认为页面连续稳定
+default_contiguous_similarity = 0.99
+# 未提供请求级 threshold 时使用的已保存 PPT 去重阈值；Harness 直接运行使用该值
+default_saved_similarity = 0.98
 
 [dynamic_detection]
 # 持续动态区间检测；关闭后恢复旧切片判断流程
@@ -78,10 +74,17 @@ result_root = "./shared_results"
 
 [logging]
 # 日志配置
+# Python 应用 Logger 的最低记录级别
 level = "INFO"
+# 日志目录；相对路径按服务启动目录解析
 dir = "./logs"
+# 普通日志文件名；错误日志固定为同目录下的 error.log
 file = "app.log"
-max_bytes = 10485760  # 10MB
+# 单个日志文件达到该字节数后轮转
+max_bytes = 10485760
+# 每类轮转日志保留的历史文件数量
 backup_count = 5
+# 文件日志格式
 format = "%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
+# 控制台和文件日志使用的时间格式
 date_format = "%Y-%m-%d %H:%M:%S"

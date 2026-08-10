@@ -2,7 +2,42 @@ import unittest
 
 from pydantic import ValidationError
 
-from app.core.config import Settings
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib
+
+from app.core.config import PROJECT_ROOT, Settings
+
+
+RETIRED_SETTING_FIELDS = {
+    "DEBUG",
+    "HOST",
+    "PORT",
+    "DEFAULT_FRAME_WIDTH",
+    "DEFAULT_FRAME_HEIGHT",
+    "DEFAULT_FPS",
+    "STREAM_TIMEOUT_MS",
+    "FRAME_QUEUE_TIMEOUT",
+}
+
+
+class ConfigurationSurfaceTests(unittest.TestCase):
+    def test_settings_do_not_auto_load_dotenv_file(self):
+        self.assertIsNone(Settings.model_config.get("env_file"))
+
+    def test_settings_model_excludes_retired_fields(self):
+        self.assertTrue(
+            RETIRED_SETTING_FIELDS.isdisjoint(Settings.model_fields),
+            RETIRED_SETTING_FIELDS.intersection(Settings.model_fields),
+        )
+
+    def test_project_toml_excludes_retired_sections_and_fields(self):
+        with (PROJECT_ROOT / "config.toml").open("rb") as stream:
+            config = tomllib.load(stream)
+
+        self.assertNotIn("video", config)
+        self.assertEqual(set(config["app"]), {"name", "version"})
 
 
 class DynamicConfigurationTests(unittest.TestCase):
