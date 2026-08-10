@@ -91,6 +91,73 @@ class SharedResultWriterTests(unittest.TestCase):
                 self.assertTrue(final.exists())
                 self.assertFalse(partial.exists())
 
+    def test_slice_filename_labels_frame_sequence_and_video_time(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            writer = self.shared_result.SharedResultWriter(
+                result_root=Path(temp_dir),
+                task_id="course-labeled-filename",
+                operator_task_id="ppt-run-labeled-filename",
+            )
+            frame = np.zeros((8, 8, 3), dtype=np.uint8)
+
+            image = writer.write_image(
+                frame_seq=1160,
+                snap_time=1175,
+                frame=frame,
+            )
+
+            self.assertEqual(
+                Path(image.path).name,
+                "ppt-0001-f1160-t1175s.jpg",
+            )
+
+    def test_manifest_contains_sorted_dynamic_segments_without_changing_image_count(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            writer = self.shared_result.SharedResultWriter(
+                result_root=Path(temp_dir),
+                task_id="course-dynamic",
+                operator_task_id="ppt-run-dynamic",
+            )
+            writer.write_image(frame_seq=1, snap_time=0, frame=np.zeros((8, 8, 3), dtype=np.uint8))
+            writer.set_dynamic_segments(
+                [
+                    {
+                        "type": "SUSPECTED_VIDEO_PLAYBACK",
+                        "start_ms": 5000,
+                        "end_ms": 9000,
+                        "confidence": 0.8,
+                        "reason": "sustained_visual_change",
+                    },
+                    {
+                        "type": "SUSPECTED_VIDEO_PLAYBACK",
+                        "start_ms": 1000,
+                        "end_ms": 3000,
+                        "confidence": 0.9,
+                        "reason": "sustained_visual_change",
+                    },
+                ]
+            )
+
+            manifest = writer.build_manifest(status=60)
+
+            self.assertEqual(manifest["count"], 1)
+            self.assertEqual([item["start_ms"] for item in manifest["dynamic_segments"]], [1000, 5000])
+
+    def test_rejects_overlapping_or_invalid_dynamic_segments(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            writer = self.shared_result.SharedResultWriter(
+                result_root=Path(temp_dir),
+                task_id="course-invalid-dynamic",
+                operator_task_id="ppt-run-invalid-dynamic",
+            )
+            with self.assertRaises(ValueError):
+                writer.set_dynamic_segments(
+                    [
+                        {"type": "SUSPECTED_VIDEO_PLAYBACK", "start_ms": 1000, "end_ms": 5000, "confidence": 0.8, "reason": "x"},
+                        {"type": "SUSPECTED_VIDEO_PLAYBACK", "start_ms": 4000, "end_ms": 6000, "confidence": 0.7, "reason": "x"},
+                    ]
+                )
+
     def test_task_identifiers_cannot_escape_result_root(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             for unsafe in ("../escape", "/tmp/escape", "nested/task", "..", ".", ""):
@@ -232,7 +299,7 @@ class ProcessingPipelineTests(unittest.TestCase):
             for timestamp in range(6):
                 frame_queue.put(
                     FrameData(
-                        frame=np.zeros((8, 8, 3), dtype=np.uint8),
+                        frame=np.full((8, 8, 3), 64, dtype=np.uint8),
                         timestamp=timestamp,
                     )
                 )

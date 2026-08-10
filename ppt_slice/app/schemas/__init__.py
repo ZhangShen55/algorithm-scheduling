@@ -2,7 +2,7 @@
 Pydantic Schemas
 请求和响应模型
 """
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 TASK_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
 
@@ -35,6 +35,22 @@ class TaskAcceptedResponse(BaseModel):
     reason: str = ""
 
 
+class DynamicSegmentSchema(BaseModel):
+    """疑似持续动态内容的半开时间区间。"""
+
+    type: str
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(gt=0)
+    confidence: float = Field(ge=0, le=1)
+    reason: str
+
+    @model_validator(mode="after")
+    def validate_interval(self):
+        if self.start_ms >= self.end_ms:
+            raise ValueError("动态区间必须满足 start_ms < end_ms")
+        return self
+
+
 class TerminalResultCallback(BaseModel):
     """一次性终态回调元数据。"""
 
@@ -45,6 +61,7 @@ class TerminalResultCallback(BaseModel):
     manifest_path: str
     count: int = Field(ge=0)
     reason: str = ""
+    dynamic_segments: list[DynamicSegmentSchema] = Field(default_factory=list)
 
 
 class TaskStatusResponse(BaseModel):

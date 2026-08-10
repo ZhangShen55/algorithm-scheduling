@@ -16,6 +16,7 @@ from app.schemas import TaskAcceptedResponse, VideoPPTCutRequest
 from app.services.shared_result import SharedResultWriter, TerminalResultPublisher
 from app.services.task_manager import task_manager
 from app.services.video_processor import send_terminal_callback, start_rtsp
+from app.utils.uri import redact_uri_for_log
 
 logger = get_logger("api.video")
 router = APIRouter()
@@ -46,7 +47,7 @@ async def process_rtsp(
     task_sum = task_manager.get_task_count()
     logger.debug(
         f"收到任务请求 - 当前任务数:[{task_sum}] 最大任务数:[{settings.MAX_CONCURRENT_TASKS}] "
-        f"最大队列:[{settings.MAX_QUEUE_SIZE}] uri:[{task_params.uri}] "
+        f"最大队列:[{settings.MAX_QUEUE_SIZE}] uri:[{redact_uri_for_log(task_params.uri)}] "
         f"task_id:[{task_params.task_id}] operator_task_id:[{task_params.operator_task_id}] "
         f"threshold:[{task_params.threshold}]"
     )

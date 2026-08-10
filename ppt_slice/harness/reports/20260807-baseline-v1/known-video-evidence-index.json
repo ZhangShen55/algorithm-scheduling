@@ -1,0 +1,82 @@
+[
+  {
+    "segment_index": 1,
+    "start_ms": 2372146,
+    "end_ms": 2480588,
+    "timestamps_ms": [
+      2367146,
+      2372146,
+      2426367,
+      2480587,
+      2485588
+    ],
+    "image_paths": [
+      "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0001-2372146-2480588/evidence-01-2367146.jpg",
+      "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0001-2372146-2480588/evidence-02-2372146.jpg",
+      "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0001-2372146-2480588/evidence-03-2426367.jpg",
+      "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0001-2372146-2480588/evidence-04-2480587.jpg",
+      "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0001-2372146-2480588/evidence-05-2485588.jpg"
+    ],
+    "contact_sheet_path": "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0001-2372146-2480588/contact-sheet.jpg"
+  },
+  {
+    "segment_index": 2,
+    "start_ms": 2497270,
+    "end_ms": 2552326,
+    "timestamps_ms": [
+      2492270,
+      2497270,
+      2524798,
+      2552325,
+      2557326
+    ],
+    "image_paths": [
+      "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0002-2497270-2552326/evidence-01-2492270.jpg",
+      "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0002-2497270-2552326/evidence-02-2497270.jpg",
+      "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0002-2497270-2552326/evidence-03-2524798.jpg",
+      "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0002-2497270-2552326/evidence-04-2552325.jpg",
+      "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0002-2497270-2552326/evidence-05-2557326.jpg"
+    ],
+    "contact_sheet_path": "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0002-2497270-2552326/contact-sheet.jpg"
+  },
+  {
+    "segment_index": 3,
+    "start_ms": 2560669,
+    "end_ms": 2622397,
+    "timestamps_ms": [
+      2555669,
+      2560669,
+      2591533,
+      2622396,
+      2627397
+    ],
+    "image_paths": [
+      "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0003-2560669-2622397/evidence-01-2555669.jpg",
+      "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0003-2560669-2622397/evidence-02-2560669.jpg",
+      "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0003-2560669-2622397/evidence-03-2591533.jpg",
+      "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0003-2560669-2622397/evidence-04-2622396.jpg",
+      "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0003-2560669-2622397/evidence-05-2627397.jpg"
+    ],
+    "contact_sheet_path": "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0003-2560669-2622397/contact-sheet.jpg"
+  },
+  {
+    "segment_index": 4,
+    "start_ms": 3083556,
+    "end_ms": 3091892,
+    "timestamps_ms": [
+      3078556,
+      3083556,
+      3087724,
+      3091891,
+      3096892
+    ],
+    "image_paths": [
+      "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0004-3083556-3091892/evidence-01-3078556.jpg",
+      "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0004-3083556-3091892/evidence-02-3083556.jpg",
+      "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0004-3083556-3091892/evidence-03-3087724.jpg",
+      "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0004-3083556-3091892/evidence-04-3091891.jpg",
+      "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0004-3083556-3091892/evidence-05-3096892.jpg"
+    ],
+    "contact_sheet_path": "harness/artifacts/20260807-baseline-v1/known-video-default/segment-0004-3083556-3091892/contact-sheet.jpg"
+  }
+]

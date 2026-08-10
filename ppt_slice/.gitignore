@@ -66,6 +66,11 @@ ppt_cut/
 shared_results/
 *.log
 *.whl
+*.mp4
+*.MP4
+harness/.cache/
+harness/artifacts/
+/test/
 
 # Old code
 extract_ppt/

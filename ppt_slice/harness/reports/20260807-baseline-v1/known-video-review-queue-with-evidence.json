@@ -1,0 +1,575 @@
+{
+  "schema_version": 1,
+  "run_id": "20260807-baseline-v1",
+  "inventory_fingerprint": "35082798ba6e98d9d115f5805e9f441ca6c7645b7321c67a92f28cc14fd6a5f6",
+  "candidates": [
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "DETECTION",
+      "source": "ALGORITHM",
+      "start_ms": 2372146,
+      "end_ms": 2622397,
+      "confidence": 0.788,
+      "label": "",
+      "review_status": "PENDING",
+      "reviewer": "",
+      "reviewed_at": "",
+      "evidence_path": "harness/artifacts/20260807-baseline-v1/known-video-review/5f76380997fbad43/segment-0001-2372146-2622397/contact-sheet.jpg",
+      "notes": "",
+      "evidence_frames": [
+        "harness/artifacts/20260807-baseline-v1/known-video-review/5f76380997fbad43/segment-0001-2372146-2622397/evidence-01-2367146.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/5f76380997fbad43/segment-0001-2372146-2622397/evidence-02-2372146.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/5f76380997fbad43/segment-0001-2372146-2622397/evidence-03-2497271.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/5f76380997fbad43/segment-0001-2372146-2622397/evidence-04-2622396.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/5f76380997fbad43/segment-0001-2372146-2622397/evidence-05-2627397.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "DETECTION",
+      "source": "ALGORITHM",
+      "start_ms": 3083556,
+      "end_ms": 3091892,
+      "confidence": 0.5938,
+      "label": "",
+      "review_status": "PENDING",
+      "reviewer": "",
+      "reviewed_at": "",
+      "evidence_path": "harness/artifacts/20260807-baseline-v1/known-video-review/bc2c61287908f08e/segment-0001-3083556-3091892/contact-sheet.jpg",
+      "notes": "",
+      "evidence_frames": [
+        "harness/artifacts/20260807-baseline-v1/known-video-review/bc2c61287908f08e/segment-0001-3083556-3091892/evidence-01-3078556.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/bc2c61287908f08e/segment-0001-3083556-3091892/evidence-02-3083556.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/bc2c61287908f08e/segment-0001-3083556-3091892/evidence-03-3087724.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/bc2c61287908f08e/segment-0001-3083556-3091892/evidence-04-3091891.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/bc2c61287908f08e/segment-0001-3083556-3091892/evidence-05-3096892.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 0,
+      "end_ms": 5000,
+      "confidence": "",
+      "label": "",
+      "review_status": "PENDING",
+      "reviewer": "",
+      "reviewed_at": "",
+      "evidence_path": "harness/artifacts/20260807-baseline-v1/known-video-review/869add1c19b2b7da/segment-0001-0-5000/contact-sheet.jpg",
+      "notes": "",
+      "evidence_frames": [
+        "harness/artifacts/20260807-baseline-v1/known-video-review/869add1c19b2b7da/segment-0001-0-5000/evidence-01-0.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/869add1c19b2b7da/segment-0001-0-5000/evidence-02-2500.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/869add1c19b2b7da/segment-0001-0-5000/evidence-03-4999.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/869add1c19b2b7da/segment-0001-0-5000/evidence-04-10000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 217500,
+      "end_ms": 227500,
+      "confidence": "",
+      "label": "",
+      "review_status": "PENDING",
+      "reviewer": "",
+      "reviewed_at": "",
+      "evidence_path": "harness/artifacts/20260807-baseline-v1/known-video-review/a8127c7ca873bbfb/segment-0001-217500-227500/contact-sheet.jpg",
+      "notes": "",
+      "evidence_frames": [
+        "harness/artifacts/20260807-baseline-v1/known-video-review/a8127c7ca873bbfb/segment-0001-217500-227500/evidence-01-212500.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/a8127c7ca873bbfb/segment-0001-217500-227500/evidence-02-217500.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/a8127c7ca873bbfb/segment-0001-217500-227500/evidence-03-222500.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/a8127c7ca873bbfb/segment-0001-217500-227500/evidence-04-227499.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/a8127c7ca873bbfb/segment-0001-217500-227500/evidence-05-232500.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 295000,
+      "end_ms": 305000,
+      "confidence": "",
+      "label": "",
+      "review_status": "PENDING",
+      "reviewer": "",
+      "reviewed_at": "",
+      "evidence_path": "harness/artifacts/20260807-baseline-v1/known-video-review/d1dbf3850bb62afe/segment-0001-295000-305000/contact-sheet.jpg",
+      "notes": "",
+      "evidence_frames": [
+        "harness/artifacts/20260807-baseline-v1/known-video-review/d1dbf3850bb62afe/segment-0001-295000-305000/evidence-01-290000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/d1dbf3850bb62afe/segment-0001-295000-305000/evidence-02-295000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/d1dbf3850bb62afe/segment-0001-295000-305000/evidence-03-300000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/d1dbf3850bb62afe/segment-0001-295000-305000/evidence-04-304999.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/d1dbf3850bb62afe/segment-0001-295000-305000/evidence-05-310000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 595000,
+      "end_ms": 605000,
+      "confidence": "",
+      "label": "",
+      "review_status": "PENDING",
+      "reviewer": "",
+      "reviewed_at": "",
+      "evidence_path": "harness/artifacts/20260807-baseline-v1/known-video-review/ced0f619c372b719/segment-0001-595000-605000/contact-sheet.jpg",
+      "notes": "",
+      "evidence_frames": [
+        "harness/artifacts/20260807-baseline-v1/known-video-review/ced0f619c372b719/segment-0001-595000-605000/evidence-01-590000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/ced0f619c372b719/segment-0001-595000-605000/evidence-02-595000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/ced0f619c372b719/segment-0001-595000-605000/evidence-03-600000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/ced0f619c372b719/segment-0001-595000-605000/evidence-04-604999.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/ced0f619c372b719/segment-0001-595000-605000/evidence-05-610000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 595500,
+      "end_ms": 605500,
+      "confidence": "",
+      "label": "",
+      "review_status": "PENDING",
+      "reviewer": "",
+      "reviewed_at": "",
+      "evidence_path": "harness/artifacts/20260807-baseline-v1/known-video-review/f91d3977ffd2d5d1/segment-0001-595500-605500/contact-sheet.jpg",
+      "notes": "",
+      "evidence_frames": [
+        "harness/artifacts/20260807-baseline-v1/known-video-review/f91d3977ffd2d5d1/segment-0001-595500-605500/evidence-01-590500.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/f91d3977ffd2d5d1/segment-0001-595500-605500/evidence-02-595500.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/f91d3977ffd2d5d1/segment-0001-595500-605500/evidence-03-600500.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/f91d3977ffd2d5d1/segment-0001-595500-605500/evidence-04-605499.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/f91d3977ffd2d5d1/segment-0001-595500-605500/evidence-05-610500.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 895000,
+      "end_ms": 905000,
+      "confidence": "",
+      "label": "",
+      "review_status": "PENDING",
+      "reviewer": "",
+      "reviewed_at": "",
+      "evidence_path": "harness/artifacts/20260807-baseline-v1/known-video-review/f898b06252704983/segment-0001-895000-905000/contact-sheet.jpg",
+      "notes": "",
+      "evidence_frames": [
+        "harness/artifacts/20260807-baseline-v1/known-video-review/f898b06252704983/segment-0001-895000-905000/evidence-01-890000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/f898b06252704983/segment-0001-895000-905000/evidence-02-895000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/f898b06252704983/segment-0001-895000-905000/evidence-03-900000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/f898b06252704983/segment-0001-895000-905000/evidence-04-904999.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/f898b06252704983/segment-0001-895000-905000/evidence-05-910000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 1023500,
+      "end_ms": 1033500,
+      "confidence": "",
+      "label": "",
+      "review_status": "PENDING",
+      "reviewer": "",
+      "reviewed_at": "",
+      "evidence_path": "harness/artifacts/20260807-baseline-v1/known-video-review/0393cc4ba730f089/segment-0001-1023500-1033500/contact-sheet.jpg",
+      "notes": "",
+      "evidence_frames": [
+        "harness/artifacts/20260807-baseline-v1/known-video-review/0393cc4ba730f089/segment-0001-1023500-1033500/evidence-01-1018500.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/0393cc4ba730f089/segment-0001-1023500-1033500/evidence-02-1023500.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/0393cc4ba730f089/segment-0001-1023500-1033500/evidence-03-1028500.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/0393cc4ba730f089/segment-0001-1023500-1033500/evidence-04-1033499.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/0393cc4ba730f089/segment-0001-1023500-1033500/evidence-05-1038500.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 1195000,
+      "end_ms": 1205000,
+      "confidence": "",
+      "label": "",
+      "review_status": "PENDING",
+      "reviewer": "",
+      "reviewed_at": "",
+      "evidence_path": "harness/artifacts/20260807-baseline-v1/known-video-review/2a61888b9274cb62/segment-0001-1195000-1205000/contact-sheet.jpg",
+      "notes": "",
+      "evidence_frames": [
+        "harness/artifacts/20260807-baseline-v1/known-video-review/2a61888b9274cb62/segment-0001-1195000-1205000/evidence-01-1190000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/2a61888b9274cb62/segment-0001-1195000-1205000/evidence-02-1195000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/2a61888b9274cb62/segment-0001-1195000-1205000/evidence-03-1200000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/2a61888b9274cb62/segment-0001-1195000-1205000/evidence-04-1204999.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/2a61888b9274cb62/segment-0001-1195000-1205000/evidence-05-1210000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 1432000,
+      "end_ms": 1442000,
+      "confidence": "",
+      "label": "",
+      "review_status": "PENDING",
+      "reviewer": "",
+      "reviewed_at": "",
+      "evidence_path": "harness/artifacts/20260807-baseline-v1/known-video-review/40b303501607cbc5/segment-0001-1432000-1442000/contact-sheet.jpg",
+      "notes": "",
+      "evidence_frames": [
+        "harness/artifacts/20260807-baseline-v1/known-video-review/40b303501607cbc5/segment-0001-1432000-1442000/evidence-01-1427000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/40b303501607cbc5/segment-0001-1432000-1442000/evidence-02-1432000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/40b303501607cbc5/segment-0001-1432000-1442000/evidence-03-1437000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/40b303501607cbc5/segment-0001-1432000-1442000/evidence-04-1441999.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/40b303501607cbc5/segment-0001-1432000-1442000/evidence-05-1447000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 1495000,
+      "end_ms": 1505000,
+      "confidence": "",
+      "label": "",
+      "review_status": "PENDING",
+      "reviewer": "",
+      "reviewed_at": "",
+      "evidence_path": "harness/artifacts/20260807-baseline-v1/known-video-review/193b05e62ed8acab/segment-0001-1495000-1505000/contact-sheet.jpg",
+      "notes": "",
+      "evidence_frames": [
+        "harness/artifacts/20260807-baseline-v1/known-video-review/193b05e62ed8acab/segment-0001-1495000-1505000/evidence-01-1490000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/193b05e62ed8acab/segment-0001-1495000-1505000/evidence-02-1495000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/193b05e62ed8acab/segment-0001-1495000-1505000/evidence-03-1500000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/193b05e62ed8acab/segment-0001-1495000-1505000/evidence-04-1504999.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/193b05e62ed8acab/segment-0001-1495000-1505000/evidence-05-1510000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 1795000,
+      "end_ms": 1805000,
+      "confidence": "",
+      "label": "",
+      "review_status": "PENDING",
+      "reviewer": "",
+      "reviewed_at": "",
+      "evidence_path": "harness/artifacts/20260807-baseline-v1/known-video-review/c8e71c4ef5d7d955/segment-0001-1795000-1805000/contact-sheet.jpg",
+      "notes": "",
+      "evidence_frames": [
+        "harness/artifacts/20260807-baseline-v1/known-video-review/c8e71c4ef5d7d955/segment-0001-1795000-1805000/evidence-01-1790000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/c8e71c4ef5d7d955/segment-0001-1795000-1805000/evidence-02-1795000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/c8e71c4ef5d7d955/segment-0001-1795000-1805000/evidence-03-1800000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/c8e71c4ef5d7d955/segment-0001-1795000-1805000/evidence-04-1804999.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/c8e71c4ef5d7d955/segment-0001-1795000-1805000/evidence-05-1810000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 1829000,
+      "end_ms": 1839000,
+      "confidence": "",
+      "label": "",
+      "review_status": "PENDING",
+      "reviewer": "",
+      "reviewed_at": "",
+      "evidence_path": "harness/artifacts/20260807-baseline-v1/known-video-review/de2e17ec3455fa1d/segment-0001-1829000-1839000/contact-sheet.jpg",
+      "notes": "",
+      "evidence_frames": [
+        "harness/artifacts/20260807-baseline-v1/known-video-review/de2e17ec3455fa1d/segment-0001-1829000-1839000/evidence-01-1824000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/de2e17ec3455fa1d/segment-0001-1829000-1839000/evidence-02-1829000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/de2e17ec3455fa1d/segment-0001-1829000-1839000/evidence-03-1834000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/de2e17ec3455fa1d/segment-0001-1829000-1839000/evidence-04-1838999.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/de2e17ec3455fa1d/segment-0001-1829000-1839000/evidence-05-1844000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 1964000,
+      "end_ms": 1974000,
+      "confidence": "",
+      "label": "",
+      "review_status": "PENDING",
+      "reviewer": "",
+      "reviewed_at": "",
+      "evidence_path": "harness/artifacts/20260807-baseline-v1/known-video-review/36dfb34c8212869e/segment-0001-1964000-1974000/contact-sheet.jpg",
+      "notes": "",
+      "evidence_frames": [
+        "harness/artifacts/20260807-baseline-v1/known-video-review/36dfb34c8212869e/segment-0001-1964000-1974000/evidence-01-1959000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/36dfb34c8212869e/segment-0001-1964000-1974000/evidence-02-1964000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/36dfb34c8212869e/segment-0001-1964000-1974000/evidence-03-1969000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/36dfb34c8212869e/segment-0001-1964000-1974000/evidence-04-1973999.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/36dfb34c8212869e/segment-0001-1964000-1974000/evidence-05-1979000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 2095000,
+      "end_ms": 2105000,
+      "confidence": "",
+      "label": "",
+      "review_status": "PENDING",
+      "reviewer": "",
+      "reviewed_at": "",
+      "evidence_path": "harness/artifacts/20260807-baseline-v1/known-video-review/6a7d48ca020f93bf/segment-0001-2095000-2105000/contact-sheet.jpg",
+      "notes": "",
+      "evidence_frames": [
+        "harness/artifacts/20260807-baseline-v1/known-video-review/6a7d48ca020f93bf/segment-0001-2095000-2105000/evidence-01-2090000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/6a7d48ca020f93bf/segment-0001-2095000-2105000/evidence-02-2095000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/6a7d48ca020f93bf/segment-0001-2095000-2105000/evidence-03-2100000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/6a7d48ca020f93bf/segment-0001-2095000-2105000/evidence-04-2104999.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/6a7d48ca020f93bf/segment-0001-2095000-2105000/evidence-05-2110000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 2190000,
+      "end_ms": 2200000,
+      "confidence": "",
+      "label": "",
+      "review_status": "PENDING",
+      "reviewer": "",
+      "reviewed_at": "",
+      "evidence_path": "harness/artifacts/20260807-baseline-v1/known-video-review/4a6a5fab55f4c60d/segment-0001-2190000-2200000/contact-sheet.jpg",
+      "notes": "",
+      "evidence_frames": [
+        "harness/artifacts/20260807-baseline-v1/known-video-review/4a6a5fab55f4c60d/segment-0001-2190000-2200000/evidence-01-2185000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/4a6a5fab55f4c60d/segment-0001-2190000-2200000/evidence-02-2190000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/4a6a5fab55f4c60d/segment-0001-2190000-2200000/evidence-03-2195000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/4a6a5fab55f4c60d/segment-0001-2190000-2200000/evidence-04-2199999.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/4a6a5fab55f4c60d/segment-0001-2190000-2200000/evidence-05-2205000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 2695000,
+      "end_ms": 2705000,
+      "confidence": "",
+      "label": "",
+      "review_status": "PENDING",
+      "reviewer": "",
+      "reviewed_at": "",
+      "evidence_path": "harness/artifacts/20260807-baseline-v1/known-video-review/4abe9df1fa626d43/segment-0001-2695000-2705000/contact-sheet.jpg",
+      "notes": "",
+      "evidence_frames": [
+        "harness/artifacts/20260807-baseline-v1/known-video-review/4abe9df1fa626d43/segment-0001-2695000-2705000/evidence-01-2690000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/4abe9df1fa626d43/segment-0001-2695000-2705000/evidence-02-2695000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/4abe9df1fa626d43/segment-0001-2695000-2705000/evidence-03-2700000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/4abe9df1fa626d43/segment-0001-2695000-2705000/evidence-04-2704999.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/4abe9df1fa626d43/segment-0001-2695000-2705000/evidence-05-2710000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 2995000,
+      "end_ms": 3005000,
+      "confidence": "",
+      "label": "",
+      "review_status": "PENDING",
+      "reviewer": "",
+      "reviewed_at": "",
+      "evidence_path": "harness/artifacts/20260807-baseline-v1/known-video-review/5632dd4c3649faa5/segment-0001-2995000-3005000/contact-sheet.jpg",
+      "notes": "",
+      "evidence_frames": [
+        "harness/artifacts/20260807-baseline-v1/known-video-review/5632dd4c3649faa5/segment-0001-2995000-3005000/evidence-01-2990000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/5632dd4c3649faa5/segment-0001-2995000-3005000/evidence-02-2995000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/5632dd4c3649faa5/segment-0001-2995000-3005000/evidence-03-3000000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/5632dd4c3649faa5/segment-0001-2995000-3005000/evidence-04-3004999.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/5632dd4c3649faa5/segment-0001-2995000-3005000/evidence-05-3010000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 3295000,
+      "end_ms": 3300107,
+      "confidence": "",
+      "label": "",
+      "review_status": "PENDING",
+      "reviewer": "",
+      "reviewed_at": "",
+      "evidence_path": "harness/artifacts/20260807-baseline-v1/known-video-review/f02880421889fc64/segment-0001-3295000-3300107/contact-sheet.jpg",
+      "notes": "",
+      "evidence_frames": [
+        "harness/artifacts/20260807-baseline-v1/known-video-review/f02880421889fc64/segment-0001-3295000-3300107/evidence-01-3290000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/f02880421889fc64/segment-0001-3295000-3300107/evidence-02-3295000.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/f02880421889fc64/segment-0001-3295000-3300107/evidence-03-3297553.jpg",
+        "harness/artifacts/20260807-baseline-v1/known-video-review/f02880421889fc64/segment-0001-3295000-3300107/evidence-04-3300106.jpg"
+      ]
+    }
+  ],
+  "audit_windows": [
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 0,
+      "end_ms": 5000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 217500,
+      "end_ms": 227500
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 295000,
+      "end_ms": 305000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 595000,
+      "end_ms": 605000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 595500,
+      "end_ms": 605500
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 895000,
+      "end_ms": 905000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 1023500,
+      "end_ms": 1033500
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 1195000,
+      "end_ms": 1205000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 1432000,
+      "end_ms": 1442000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 1495000,
+      "end_ms": 1505000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 1795000,
+      "end_ms": 1805000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 1829000,
+      "end_ms": 1839000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 1964000,
+      "end_ms": 1974000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 2095000,
+      "end_ms": 2105000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 2190000,
+      "end_ms": 2200000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 2695000,
+      "end_ms": 2705000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 2995000,
+      "end_ms": 3005000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 3295000,
+      "end_ms": 3300107
+    }
+  ]
+}

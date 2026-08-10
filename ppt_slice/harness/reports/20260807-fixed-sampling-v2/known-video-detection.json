@@ -1,0 +1,455 @@
+{
+  "status": "COMPLETED",
+  "observation_count": 3255,
+  "dynamic_segments": [
+    {
+      "type": "SUSPECTED_VIDEO_PLAYBACK",
+      "start_ms": 2392037,
+      "end_ms": 2422396,
+      "confidence": 0.6594,
+      "reason": "sustained_visual_change"
+    },
+    {
+      "type": "SUSPECTED_VIDEO_PLAYBACK",
+      "start_ms": 2496571,
+      "end_ms": 2551259,
+      "confidence": 0.7263,
+      "reason": "sustained_visual_change"
+    }
+  ],
+  "dynamic_segment_count": 2,
+  "slices": [
+    {
+      "frame_seq": 4,
+      "snap_time": 3
+    },
+    {
+      "frame_seq": 435,
+      "snap_time": 439
+    },
+    {
+      "frame_seq": 749,
+      "snap_time": 758
+    },
+    {
+      "frame_seq": 846,
+      "snap_time": 856
+    },
+    {
+      "frame_seq": 868,
+      "snap_time": 879
+    },
+    {
+      "frame_seq": 1160,
+      "snap_time": 1175
+    },
+    {
+      "frame_seq": 1676,
+      "snap_time": 1698
+    },
+    {
+      "frame_seq": 1734,
+      "snap_time": 1757
+    },
+    {
+      "frame_seq": 1882,
+      "snap_time": 1907
+    },
+    {
+      "frame_seq": 2000,
+      "snap_time": 2027
+    },
+    {
+      "frame_seq": 2016,
+      "snap_time": 2043
+    },
+    {
+      "frame_seq": 2312,
+      "snap_time": 2343
+    },
+    {
+      "frame_seq": 2334,
+      "snap_time": 2365
+    },
+    {
+      "frame_seq": 2590,
+      "snap_time": 2625
+    },
+    {
+      "frame_seq": 2606,
+      "snap_time": 2641
+    },
+    {
+      "frame_seq": 2622,
+      "snap_time": 2657
+    },
+    {
+      "frame_seq": 2672,
+      "snap_time": 2708
+    },
+    {
+      "frame_seq": 2687,
+      "snap_time": 2723
+    },
+    {
+      "frame_seq": 2700,
+      "snap_time": 2736
+    },
+    {
+      "frame_seq": 2757,
+      "snap_time": 2794
+    },
+    {
+      "frame_seq": 2835,
+      "snap_time": 2873
+    },
+    {
+      "frame_seq": 2884,
+      "snap_time": 2923
+    },
+    {
+      "frame_seq": 2910,
+      "snap_time": 2949
+    },
+    {
+      "frame_seq": 2957,
+      "snap_time": 2997
+    },
+    {
+      "frame_seq": 2964,
+      "snap_time": 3004
+    },
+    {
+      "frame_seq": 2981,
+      "snap_time": 3021
+    },
+    {
+      "frame_seq": 3005,
+      "snap_time": 3046
+    },
+    {
+      "frame_seq": 3010,
+      "snap_time": 3051
+    },
+    {
+      "frame_seq": 3021,
+      "snap_time": 3062
+    },
+    {
+      "frame_seq": 3034,
+      "snap_time": 3075
+    },
+    {
+      "frame_seq": 3051,
+      "snap_time": 3092
+    },
+    {
+      "frame_seq": 3135,
+      "snap_time": 3178
+    },
+    {
+      "frame_seq": 3200,
+      "snap_time": 3243
+    }
+  ],
+  "slice_count": 33,
+  "suppressed_candidate_count": 10,
+  "keyframe_intervals": {
+    "count": 3254,
+    "min_ms": 1000,
+    "max_ms": 1043,
+    "p50_ms": 1004,
+    "p95_ms": 1035
+  },
+  "near_threshold_windows": [
+    {
+      "start_ms": 436554,
+      "end_ms": 437554
+    },
+    {
+      "start_ms": 851796,
+      "end_ms": 852796
+    },
+    {
+      "start_ms": 1694621,
+      "end_ms": 1695621
+    },
+    {
+      "start_ms": 1904296,
+      "end_ms": 1905296
+    },
+    {
+      "start_ms": 2359534,
+      "end_ms": 2360534
+    },
+    {
+      "start_ms": 2374748,
+      "end_ms": 2375748
+    },
+    {
+      "start_ms": 2386026,
+      "end_ms": 2387026
+    },
+    {
+      "start_ms": 2388027,
+      "end_ms": 2389027
+    },
+    {
+      "start_ms": 2390029,
+      "end_ms": 2391029
+    },
+    {
+      "start_ms": 2394107,
+      "end_ms": 2395107
+    },
+    {
+      "start_ms": 2408250,
+      "end_ms": 2409250
+    },
+    {
+      "start_ms": 2413289,
+      "end_ms": 2415289
+    },
+    {
+      "start_ms": 2417326,
+      "end_ms": 2418326
+    },
+    {
+      "start_ms": 2422396,
+      "end_ms": 2426467
+    },
+    {
+      "start_ms": 2427502,
+      "end_ms": 2428502
+    },
+    {
+      "start_ms": 2429538,
+      "end_ms": 2431538
+    },
+    {
+      "start_ms": 2440717,
+      "end_ms": 2441717
+    },
+    {
+      "start_ms": 2442754,
+      "end_ms": 2444782
+    },
+    {
+      "start_ms": 2446823,
+      "end_ms": 2448855
+    },
+    {
+      "start_ms": 2451891,
+      "end_ms": 2452891
+    },
+    {
+      "start_ms": 2455899,
+      "end_ms": 2457932
+    },
+    {
+      "start_ms": 2470078,
+      "end_ms": 2472113
+    },
+    {
+      "start_ms": 2489465,
+      "end_ms": 2490465
+    },
+    {
+      "start_ms": 2492534,
+      "end_ms": 2494535
+    },
+    {
+      "start_ms": 2495571,
+      "end_ms": 2496571
+    },
+    {
+      "start_ms": 2499609,
+      "end_ms": 2500609
+    },
+    {
+      "start_ms": 2507650,
+      "end_ms": 2508650
+    },
+    {
+      "start_ms": 2511719,
+      "end_ms": 2512719
+    },
+    {
+      "start_ms": 2515792,
+      "end_ms": 2517794
+    },
+    {
+      "start_ms": 2528978,
+      "end_ms": 2531002
+    },
+    {
+      "start_ms": 2534042,
+      "end_ms": 2535042
+    },
+    {
+      "start_ms": 2539081,
+      "end_ms": 2540081
+    },
+    {
+      "start_ms": 2541154,
+      "end_ms": 2543155
+    },
+    {
+      "start_ms": 2547226,
+      "end_ms": 2550258
+    },
+    {
+      "start_ms": 2551259,
+      "end_ms": 2552259
+    },
+    {
+      "start_ms": 2555331,
+      "end_ms": 2557337
+    },
+    {
+      "start_ms": 2558367,
+      "end_ms": 2562436
+    },
+    {
+      "start_ms": 2565473,
+      "end_ms": 2566473
+    },
+    {
+      "start_ms": 2569479,
+      "end_ms": 2570479
+    },
+    {
+      "start_ms": 2577652,
+      "end_ms": 2578652
+    },
+    {
+      "start_ms": 2579656,
+      "end_ms": 2581657
+    },
+    {
+      "start_ms": 2586695,
+      "end_ms": 2587695
+    },
+    {
+      "start_ms": 2599843,
+      "end_ms": 2600843
+    },
+    {
+      "start_ms": 2603846,
+      "end_ms": 2604846
+    },
+    {
+      "start_ms": 2610920,
+      "end_ms": 2611920
+    },
+    {
+      "start_ms": 2618026,
+      "end_ms": 2619026
+    },
+    {
+      "start_ms": 2620030,
+      "end_ms": 2621030
+    },
+    {
+      "start_ms": 2638248,
+      "end_ms": 2639248
+    },
+    {
+      "start_ms": 2789556,
+      "end_ms": 2790556
+    },
+    {
+      "start_ms": 2791591,
+      "end_ms": 2792591
+    },
+    {
+      "start_ms": 2934869,
+      "end_ms": 2936869
+    },
+    {
+      "start_ms": 2946914,
+      "end_ms": 2947914
+    },
+    {
+      "start_ms": 2970205,
+      "end_ms": 2972235
+    },
+    {
+      "start_ms": 2991525,
+      "end_ms": 2992525
+    },
+    {
+      "start_ms": 3000631,
+      "end_ms": 3002633
+    },
+    {
+      "start_ms": 3018821,
+      "end_ms": 3019821
+    },
+    {
+      "start_ms": 3048249,
+      "end_ms": 3049249
+    },
+    {
+      "start_ms": 3058328,
+      "end_ms": 3060360
+    },
+    {
+      "start_ms": 3067499,
+      "end_ms": 3068499
+    },
+    {
+      "start_ms": 3089755,
+      "end_ms": 3090755
+    },
+    {
+      "start_ms": 3169940,
+      "end_ms": 3170940
+    },
+    {
+      "start_ms": 3188186,
+      "end_ms": 3189186
+    },
+    {
+      "start_ms": 3235871,
+      "end_ms": 3236871
+    },
+    {
+      "start_ms": 3237906,
+      "end_ms": 3238906
+    },
+    {
+      "start_ms": 3294730,
+      "end_ms": 3296731
+    },
+    {
+      "start_ms": 3297802,
+      "end_ms": 3299831
+    }
+  ],
+  "first_timestamp_ms": 0,
+  "last_timestamp_ms": 3299833,
+  "mp4_persisted": false,
+  "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+  "elapsed_seconds": 139.446,
+  "peak_memory_bytes": 317390848,
+  "algorithm_version": "V1.0.0_20260806",
+  "code_commit": "2cd407d5e02f961670347010fd34af8675321c41",
+  "effective_config": {
+    "dynamic_detection_enabled": true,
+    "sample_interval_ms": 1000,
+    "pixel_difference_threshold": 30,
+    "changed_pixel_ratio": 0.08,
+    "grid_rows": 4,
+    "grid_columns": 4,
+    "active_grid_ratio": 0.35,
+    "window_ms": 8000,
+    "confirmation_ms": 5000,
+    "required_active_ratio": 0.7,
+    "exit_stable_ms": 3000,
+    "merge_gap_ms": 20000,
+    "candidate_stable_ms": 2000,
+    "contiguous_similarity": 0.99,
+    "saved_similarity": 0.98
+  }
+}

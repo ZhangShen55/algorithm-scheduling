@@ -1,0 +1,375 @@
+{
+  "status": "COMPLETED",
+  "observation_count": 3961,
+  "dynamic_segments": [
+    {
+      "type": "SUSPECTED_VIDEO_PLAYBACK",
+      "start_ms": 2372146,
+      "end_ms": 2622397,
+      "confidence": 0.788,
+      "reason": "sustained_visual_change"
+    },
+    {
+      "type": "SUSPECTED_VIDEO_PLAYBACK",
+      "start_ms": 3083556,
+      "end_ms": 3091892,
+      "confidence": 0.5938,
+      "reason": "sustained_visual_change"
+    }
+  ],
+  "dynamic_segment_count": 2,
+  "slices": [
+    {
+      "frame_seq": 5,
+      "snap_time": 3
+    },
+    {
+      "frame_seq": 532,
+      "snap_time": 442
+    },
+    {
+      "frame_seq": 912,
+      "snap_time": 759
+    },
+    {
+      "frame_seq": 1030,
+      "snap_time": 858
+    },
+    {
+      "frame_seq": 1058,
+      "snap_time": 881
+    },
+    {
+      "frame_seq": 1412,
+      "snap_time": 1176
+    },
+    {
+      "frame_seq": 2037,
+      "snap_time": 1698
+    },
+    {
+      "frame_seq": 2110,
+      "snap_time": 1759
+    },
+    {
+      "frame_seq": 2290,
+      "snap_time": 1909
+    },
+    {
+      "frame_seq": 2434,
+      "snap_time": 2029
+    },
+    {
+      "frame_seq": 2452,
+      "snap_time": 2044
+    },
+    {
+      "frame_seq": 2814,
+      "snap_time": 2346
+    },
+    {
+      "frame_seq": 2840,
+      "snap_time": 2367
+    },
+    {
+      "frame_seq": 3152,
+      "snap_time": 2628
+    },
+    {
+      "frame_seq": 3168,
+      "snap_time": 2641
+    },
+    {
+      "frame_seq": 3191,
+      "snap_time": 2659
+    },
+    {
+      "frame_seq": 3251,
+      "snap_time": 2709
+    },
+    {
+      "frame_seq": 3269,
+      "snap_time": 2724
+    },
+    {
+      "frame_seq": 3287,
+      "snap_time": 2740
+    },
+    {
+      "frame_seq": 3355,
+      "snap_time": 2796
+    },
+    {
+      "frame_seq": 3452,
+      "snap_time": 2876
+    },
+    {
+      "frame_seq": 3510,
+      "snap_time": 2925
+    },
+    {
+      "frame_seq": 3540,
+      "snap_time": 2950
+    },
+    {
+      "frame_seq": 3597,
+      "snap_time": 2997
+    },
+    {
+      "frame_seq": 3608,
+      "snap_time": 3007
+    },
+    {
+      "frame_seq": 3626,
+      "snap_time": 3022
+    },
+    {
+      "frame_seq": 3658,
+      "snap_time": 3047
+    },
+    {
+      "frame_seq": 3663,
+      "snap_time": 3051
+    },
+    {
+      "frame_seq": 3676,
+      "snap_time": 3062
+    },
+    {
+      "frame_seq": 3694,
+      "snap_time": 3077
+    },
+    {
+      "frame_seq": 3723,
+      "snap_time": 3101
+    },
+    {
+      "frame_seq": 3816,
+      "snap_time": 3179
+    },
+    {
+      "frame_seq": 3896,
+      "snap_time": 3245
+    }
+  ],
+  "slice_count": 33,
+  "suppressed_candidate_count": 2,
+  "keyframe_intervals": {
+    "count": 3960,
+    "min_ms": 46,
+    "max_ms": 856,
+    "p50_ms": 834,
+    "p95_ms": 839
+  },
+  "near_threshold_windows": [
+    {
+      "start_ms": 1694852,
+      "end_ms": 1695852
+    },
+    {
+      "start_ms": 2360466,
+      "end_ms": 2361466
+    },
+    {
+      "start_ms": 2390497,
+      "end_ms": 2391497
+    },
+    {
+      "start_ms": 2413854,
+      "end_ms": 2414854
+    },
+    {
+      "start_ms": 2422194,
+      "end_ms": 2424866
+    },
+    {
+      "start_ms": 2430538,
+      "end_ms": 2431538
+    },
+    {
+      "start_ms": 2443887,
+      "end_ms": 2444887
+    },
+    {
+      "start_ms": 2457235,
+      "end_ms": 2458235
+    },
+    {
+      "start_ms": 2460569,
+      "end_ms": 2461569
+    },
+    {
+      "start_ms": 2493937,
+      "end_ms": 2496607
+    },
+    {
+      "start_ms": 2513957,
+      "end_ms": 2514957
+    },
+    {
+      "start_ms": 2525637,
+      "end_ms": 2526637
+    },
+    {
+      "start_ms": 2528978,
+      "end_ms": 2529978
+    },
+    {
+      "start_ms": 2533974,
+      "end_ms": 2534974
+    },
+    {
+      "start_ms": 2542318,
+      "end_ms": 2543318
+    },
+    {
+      "start_ms": 2545652,
+      "end_ms": 2546652
+    },
+    {
+      "start_ms": 2552326,
+      "end_ms": 2553326
+    },
+    {
+      "start_ms": 2555668,
+      "end_ms": 2560007
+    },
+    {
+      "start_ms": 2564007,
+      "end_ms": 2565007
+    },
+    {
+      "start_ms": 2577353,
+      "end_ms": 2578353
+    },
+    {
+      "start_ms": 2580689,
+      "end_ms": 2581689
+    },
+    {
+      "start_ms": 2584028,
+      "end_ms": 2585028
+    },
+    {
+      "start_ms": 2589029,
+      "end_ms": 2590029
+    },
+    {
+      "start_ms": 2594038,
+      "end_ms": 2595038
+    },
+    {
+      "start_ms": 2599040,
+      "end_ms": 2600040
+    },
+    {
+      "start_ms": 2602377,
+      "end_ms": 2603377
+    },
+    {
+      "start_ms": 2607386,
+      "end_ms": 2608386
+    },
+    {
+      "start_ms": 2610720,
+      "end_ms": 2611720
+    },
+    {
+      "start_ms": 2617395,
+      "end_ms": 2618395
+    },
+    {
+      "start_ms": 2639080,
+      "end_ms": 2640080
+    },
+    {
+      "start_ms": 2789222,
+      "end_ms": 2790222
+    },
+    {
+      "start_ms": 2934467,
+      "end_ms": 2937136
+    },
+    {
+      "start_ms": 2947815,
+      "end_ms": 2948815
+    },
+    {
+      "start_ms": 2992858,
+      "end_ms": 2993858
+    },
+    {
+      "start_ms": 3002868,
+      "end_ms": 3003868
+    },
+    {
+      "start_ms": 3019557,
+      "end_ms": 3020557
+    },
+    {
+      "start_ms": 3048517,
+      "end_ms": 3049517
+    },
+    {
+      "start_ms": 3058527,
+      "end_ms": 3061195
+    },
+    {
+      "start_ms": 3068535,
+      "end_ms": 3069535
+    },
+    {
+      "start_ms": 3090224,
+      "end_ms": 3091224
+    },
+    {
+      "start_ms": 3098565,
+      "end_ms": 3099565
+    },
+    {
+      "start_ms": 3170306,
+      "end_ms": 3171306
+    },
+    {
+      "start_ms": 3175047,
+      "end_ms": 3176047
+    },
+    {
+      "start_ms": 3188392,
+      "end_ms": 3189392
+    },
+    {
+      "start_ms": 3236771,
+      "end_ms": 3237771
+    },
+    {
+      "start_ms": 3296131,
+      "end_ms": 3300469
+    }
+  ],
+  "first_timestamp_ms": 0,
+  "last_timestamp_ms": 3299469,
+  "mp4_persisted": false,
+  "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+  "elapsed_seconds": 275.405,
+  "peak_memory_bytes": 324730880,
+  "algorithm_version": "V1.0.0_20260806",
+  "code_commit": "2cd407d5e02f961670347010fd34af8675321c41",
+  "effective_config": {
+    "dynamic_detection_enabled": true,
+    "sample_interval_ms": 1000,
+    "pixel_difference_threshold": 30,
+    "changed_pixel_ratio": 0.08,
+    "grid_rows": 4,
+    "grid_columns": 4,
+    "active_grid_ratio": 0.35,
+    "window_ms": 8000,
+    "confirmation_ms": 5000,
+    "required_active_ratio": 0.7,
+    "exit_stable_ms": 3000,
+    "merge_gap_ms": 20000,
+    "candidate_stable_ms": 2000,
+    "contiguous_similarity": 0.99,
+    "saved_similarity": 0.98
+  }
+}

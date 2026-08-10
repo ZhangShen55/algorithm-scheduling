@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "run_id": "20260807-calibration-v6",
+  "reviewer": "codex-static-evidence-v6",
+  "decisions": [
+    {
+      "candidate_number": 13,
+      "label": "CONFIRMED_VIDEO",
+      "notes": "稀疏联系表与 2265-2326s 逐秒静态证据显示：文件选择后持续播放航空教学视频，约 2272s 退出播放器并返回 PowerPoint；动态簇内部属于同一播放过程。"
+    },
+    {
+      "candidate_number": 15,
+      "label": "CONFIRMED_VIDEO",
+      "notes": "联系表起点、中点均为竖屏航空视频播放，终点后返回文件浏览器/桌面，确认是连续视频播放。"
+    },
+    {
+      "candidate_number": 30,
+      "label": "CONFIRMED_VIDEO",
+      "notes": "联系表从航空主题内嵌视频开始，中心和终点仍为连续航班视频画面，确认是视频播放。"
+    },
+    {
+      "candidate_number": 32,
+      "label": "CONFIRMED_VIDEO",
+      "notes": "联系表显示莎士比亚网页播放器、电影画面和播放结束后的网页，确认是连续视频播放流程。"
+    },
+    {
+      "candidate_number": 44,
+      "label": "CONFIRMED_SCROLL",
+      "notes": "联系表显示编程教学网页内容在长区间内持续滚动和切换代码示例，属于连续桌面交互。"
+    },
+    {
+      "candidate_number": 45,
+      "label": "CONFIRMED_SCROLL",
+      "notes": "联系表显示 IDE 代码选择、编辑与教学网页往返，属于持续代码演示和桌面交互。"
+    },
+    {
+      "candidate_number": 49,
+      "label": "CONFIRMED_SCROLL",
+      "notes": "联系表显示算法结果、说明文本和表格在网页中连续滚动，属于持续页面变化。"
+    },
+    {
+      "candidate_number": 50,
+      "label": "CONFIRMED_SCROLL",
+      "notes": "联系表显示编程教学网页在目标解释、表格和步骤之间连续滚动，属于持续页面变化。"
+    },
+    {
+      "candidate_number": 62,
+      "label": "CONFIRMED_SCROLL",
+      "notes": "联系表显示编程教学网页、代码示例与 IDE 窗口持续切换，属于连续桌面交互。"
+    }
+  ]
+}

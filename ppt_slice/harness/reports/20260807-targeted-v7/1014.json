@@ -1,0 +1,303 @@
+{
+  "status": "COMPLETED",
+  "observation_count": 3255,
+  "dynamic_segments": [
+    {
+      "type": "SUSPECTED_VIDEO_PLAYBACK",
+      "start_ms": 2064412,
+      "end_ms": 2134505,
+      "confidence": 0.3993,
+      "reason": "sustained_visual_change"
+    },
+    {
+      "type": "SUSPECTED_VIDEO_PLAYBACK",
+      "start_ms": 2179019,
+      "end_ms": 2279348,
+      "confidence": 0.3823,
+      "reason": "sustained_visual_change"
+    },
+    {
+      "type": "SUSPECTED_VIDEO_PLAYBACK",
+      "start_ms": 3112691,
+      "end_ms": 3136981,
+      "confidence": 0.5292,
+      "reason": "sustained_visual_change"
+    }
+  ],
+  "dynamic_segment_count": 3,
+  "slices": [
+    {
+      "frame_seq": 4,
+      "snap_time": 3
+    },
+    {
+      "frame_seq": 441,
+      "snap_time": 446
+    },
+    {
+      "frame_seq": 564,
+      "snap_time": 571
+    },
+    {
+      "frame_seq": 589,
+      "snap_time": 596
+    },
+    {
+      "frame_seq": 741,
+      "snap_time": 750
+    },
+    {
+      "frame_seq": 776,
+      "snap_time": 786
+    },
+    {
+      "frame_seq": 969,
+      "snap_time": 981
+    },
+    {
+      "frame_seq": 1061,
+      "snap_time": 1075
+    },
+    {
+      "frame_seq": 1083,
+      "snap_time": 1097
+    },
+    {
+      "frame_seq": 1177,
+      "snap_time": 1192
+    },
+    {
+      "frame_seq": 1291,
+      "snap_time": 1308
+    },
+    {
+      "frame_seq": 1352,
+      "snap_time": 1369
+    },
+    {
+      "frame_seq": 1391,
+      "snap_time": 1409
+    },
+    {
+      "frame_seq": 1456,
+      "snap_time": 1475
+    },
+    {
+      "frame_seq": 1622,
+      "snap_time": 1643
+    },
+    {
+      "frame_seq": 1633,
+      "snap_time": 1654
+    },
+    {
+      "frame_seq": 1744,
+      "snap_time": 1767
+    },
+    {
+      "frame_seq": 1816,
+      "snap_time": 1840
+    },
+    {
+      "frame_seq": 1885,
+      "snap_time": 1910
+    },
+    {
+      "frame_seq": 2023,
+      "snap_time": 2050
+    },
+    {
+      "frame_seq": 2123,
+      "snap_time": 2151
+    },
+    {
+      "frame_seq": 2254,
+      "snap_time": 2284
+    },
+    {
+      "frame_seq": 2263,
+      "snap_time": 2293
+    },
+    {
+      "frame_seq": 2268,
+      "snap_time": 2298
+    },
+    {
+      "frame_seq": 2327,
+      "snap_time": 2358
+    },
+    {
+      "frame_seq": 2694,
+      "snap_time": 2730
+    },
+    {
+      "frame_seq": 3063,
+      "snap_time": 3104
+    },
+    {
+      "frame_seq": 3100,
+      "snap_time": 3142
+    },
+    {
+      "frame_seq": 3193,
+      "snap_time": 3236
+    }
+  ],
+  "slice_count": 29,
+  "suppressed_candidate_count": 5,
+  "keyframe_intervals": {
+    "count": 3254,
+    "min_ms": 1000,
+    "max_ms": 1043,
+    "p50_ms": 1004,
+    "p95_ms": 1035
+  },
+  "near_threshold_windows": [
+    {
+      "start_ms": 1189910,
+      "end_ms": 1190910
+    },
+    {
+      "start_ms": 2051298,
+      "end_ms": 2052298
+    },
+    {
+      "start_ms": 2053333,
+      "end_ms": 2054333
+    },
+    {
+      "start_ms": 2059372,
+      "end_ms": 2061407
+    },
+    {
+      "start_ms": 2062408,
+      "end_ms": 2064410
+    },
+    {
+      "start_ms": 2088831,
+      "end_ms": 2089831
+    },
+    {
+      "start_ms": 2094932,
+      "end_ms": 2095932
+    },
+    {
+      "start_ms": 2112150,
+      "end_ms": 2113150
+    },
+    {
+      "start_ms": 2118256,
+      "end_ms": 2119256
+    },
+    {
+      "start_ms": 2121322,
+      "end_ms": 2122322
+    },
+    {
+      "start_ms": 2124361,
+      "end_ms": 2125361
+    },
+    {
+      "start_ms": 2169841,
+      "end_ms": 2172876
+    },
+    {
+      "start_ms": 2173946,
+      "end_ms": 2174946
+    },
+    {
+      "start_ms": 2175981,
+      "end_ms": 2176981
+    },
+    {
+      "start_ms": 2185090,
+      "end_ms": 2186090
+    },
+    {
+      "start_ms": 2189190,
+      "end_ms": 2192194
+    },
+    {
+      "start_ms": 2202407,
+      "end_ms": 2203407
+    },
+    {
+      "start_ms": 2217589,
+      "end_ms": 2218589
+    },
+    {
+      "start_ms": 2226832,
+      "end_ms": 2227832
+    },
+    {
+      "start_ms": 2228868,
+      "end_ms": 2230869
+    },
+    {
+      "start_ms": 2231902,
+      "end_ms": 2232902
+    },
+    {
+      "start_ms": 2249987,
+      "end_ms": 2251988
+    },
+    {
+      "start_ms": 2260064,
+      "end_ms": 2261064
+    },
+    {
+      "start_ms": 2295534,
+      "end_ms": 2296534
+    },
+    {
+      "start_ms": 3124866,
+      "end_ms": 3125866
+    },
+    {
+      "start_ms": 3128871,
+      "end_ms": 3129871
+    },
+    {
+      "start_ms": 3229104,
+      "end_ms": 3230104
+    },
+    {
+      "start_ms": 3231143,
+      "end_ms": 3232143
+    }
+  ],
+  "first_timestamp_ms": 0,
+  "last_timestamp_ms": 3299137,
+  "mp4_persisted": false,
+  "url": "http://192.168.29.12:5555/course/1014%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060_%E5%BE%90%E6%9C%88%E8%8A%B3___2025%E5%B9%B410%E6%9C%8814%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+  "elapsed_seconds": 270.444,
+  "peak_memory_bytes": 368492544,
+  "run_id": "20260807-targeted-v7",
+  "algorithm_version": "V1.0.0_20260806",
+  "code_commit": "d79efbd0ba391f694d5ef66925bd8797e1034be4",
+  "algorithm_source_fingerprint": "c987b6d348d476dfd65d4fca773ee2bd18c0b2058e90e02b35f1dd9979328d19",
+  "effective_config": {
+    "dynamic_detection_enabled": true,
+    "sample_interval_ms": 1000,
+    "pixel_difference_threshold": 30,
+    "changed_pixel_ratio": 0.04,
+    "grid_rows": 4,
+    "grid_columns": 4,
+    "active_grid_ratio": 0.18,
+    "window_ms": 8000,
+    "confirmation_ms": 5000,
+    "required_active_ratio": 0.7,
+    "exit_stable_ms": 3000,
+    "merge_gap_ms": 20000,
+    "candidate_stable_ms": 2000,
+    "contiguous_similarity": 0.99,
+    "saved_similarity": 0.98,
+    "cluster_gap_ms": 90000,
+    "cluster_min_segments": 3,
+    "optical_flow_enabled": true,
+    "optical_flow_width": 320,
+    "optical_flow_magnitude_threshold": 0.5,
+    "optical_flow_active_ratio": 0.05,
+    "motion_grace_ms": 15000
+  }
+}

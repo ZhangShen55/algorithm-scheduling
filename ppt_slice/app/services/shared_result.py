@@ -59,6 +59,7 @@ class SharedResultWriter:
         if not self.output_dir.resolve().is_relative_to(self.task_root.parent.resolve()):
             raise ValueError("PPT 输出目录不能跳出 result_root")
         self._images: list[SliceImage] = []
+        self._dynamic_segments: list[dict] = []
         self._lock = threading.Lock()
 
     @property
@@ -69,7 +70,9 @@ class SharedResultWriter:
     def write_image(self, *, frame_seq: int, snap_time: int, frame) -> SliceImage:
         with self._lock:
             image_number = len(self._images) + 1
-            filename = f"ppt-{image_number:04d}-{int(frame_seq)}-{int(snap_time)}.jpg"
+            filename = (
+                f"ppt-{image_number:04d}-f{int(frame_seq)}-t{int(snap_time)}s.jpg"
+            )
             final_path = self.output_dir / filename
             partial_path = final_path.with_name(f"{final_path.name}.part")
             encoded, buffer = cv2.imencode(".jpg", frame)
@@ -88,9 +91,37 @@ class SharedResultWriter:
             self._images.append(image)
             return image
 
+    def set_dynamic_segments(self, segments) -> None:
+        normalized = []
+        for segment in segments:
+            value = segment.as_dict() if hasattr(segment, "as_dict") else dict(segment)
+            start_ms = int(value["start_ms"])
+            end_ms = int(value["end_ms"])
+            confidence = float(value["confidence"])
+            if start_ms >= end_ms:
+                raise ValueError("动态区间必须满足 start_ms < end_ms")
+            if not 0 <= confidence <= 1:
+                raise ValueError("动态区间 confidence 必须位于 [0,1]")
+            normalized.append(
+                {
+                    "type": str(value["type"]),
+                    "start_ms": start_ms,
+                    "end_ms": end_ms,
+                    "confidence": confidence,
+                    "reason": str(value["reason"]),
+                }
+            )
+        normalized.sort(key=lambda item: item["start_ms"])
+        for previous, current in zip(normalized, normalized[1:]):
+            if current["start_ms"] < previous["end_ms"]:
+                raise ValueError("动态区间不能重叠")
+        with self._lock:
+            self._dynamic_segments = normalized
+
     def build_manifest(self, *, status: int, reason: str = "") -> dict:
         with self._lock:
             images = [asdict(image) for image in self._images]
+            dynamic_segments = [dict(segment) for segment in self._dynamic_segments]
         return {
             "schema_version": 1,
             "task_id": self.task_id,
@@ -101,6 +132,7 @@ class SharedResultWriter:
             "count": len(images),
             "reason": reason,
             "images": images,
+            "dynamic_segments": dynamic_segments,
         }
 
     def write_manifest(self, *, status: int, reason: str = "") -> Path:

@@ -1,0 +1,77 @@
+{
+  "status": "COMPLETED",
+  "observation_count": 2783,
+  "dynamic_segments": [],
+  "dynamic_segment_count": 0,
+  "slices": [
+    {
+      "frame_seq": 4,
+      "snap_time": 3
+    },
+    {
+      "frame_seq": 1738,
+      "snap_time": 1759
+    },
+    {
+      "frame_seq": 1754,
+      "snap_time": 1775
+    }
+  ],
+  "slice_count": 3,
+  "suppressed_candidate_count": 0,
+  "keyframe_intervals": {
+    "count": 2782,
+    "min_ms": 1000,
+    "max_ms": 1046,
+    "p50_ms": 1003,
+    "p95_ms": 1036
+  },
+  "near_threshold_windows": [
+    {
+      "start_ms": 1759731,
+      "end_ms": 1761734
+    },
+    {
+      "start_ms": 1762740,
+      "end_ms": 1763740
+    },
+    {
+      "start_ms": 1764769,
+      "end_ms": 1765769
+    }
+  ],
+  "first_timestamp_ms": 0,
+  "last_timestamp_ms": 2819437,
+  "mp4_persisted": false,
+  "url": "http://192.168.29.12:5555/course/%E8%8B%8F%E5%A4%A7%E8%AF%BE%E7%A8%8B/%E8%8E%8E%E5%A3%AB%E6%AF%94%E4%BA%9A%E4%BD%9C%E5%93%81%E6%AC%A3%E8%B5%8F_%E8%8E%8E%E5%A3%AB%E6%AF%94%E4%BA%9A%E4%BD%9C%E5%93%81%E6%AC%A3%E8%B5%8F_WW_2026%E5%B9%B45%E6%9C%8828%E5%8F%B716%E6%97%B645%E5%88%86/PPT.mp4",
+  "elapsed_seconds": 326.035,
+  "peak_memory_bytes": 341393408,
+  "run_id": "20260807-targeted-v7",
+  "algorithm_version": "V1.0.0_20260806",
+  "code_commit": "d79efbd0ba391f694d5ef66925bd8797e1034be4",
+  "algorithm_source_fingerprint": "c987b6d348d476dfd65d4fca773ee2bd18c0b2058e90e02b35f1dd9979328d19",
+  "effective_config": {
+    "dynamic_detection_enabled": true,
+    "sample_interval_ms": 1000,
+    "pixel_difference_threshold": 30,
+    "changed_pixel_ratio": 0.04,
+    "grid_rows": 4,
+    "grid_columns": 4,
+    "active_grid_ratio": 0.18,
+    "window_ms": 8000,
+    "confirmation_ms": 5000,
+    "required_active_ratio": 0.7,
+    "exit_stable_ms": 3000,
+    "merge_gap_ms": 20000,
+    "candidate_stable_ms": 2000,
+    "contiguous_similarity": 0.99,
+    "saved_similarity": 0.98,
+    "cluster_gap_ms": 90000,
+    "cluster_min_segments": 3,
+    "optical_flow_enabled": true,
+    "optical_flow_width": 320,
+    "optical_flow_magnitude_threshold": 0.5,
+    "optical_flow_active_ratio": 0.05,
+    "motion_grace_ms": 15000
+  }
+}

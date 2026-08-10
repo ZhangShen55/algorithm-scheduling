@@ -18,6 +18,8 @@ from app.core.config import settings
 from app.models.task import LocalVideoAnalysisTaskObject, FrameData
 from app.services.task_manager import task_manager
 from app.services.image_compare import compare_images
+from app.services.slice_pipeline import SlicePipeline, SlicePipelineConfig
+from app.utils.uri import redact_uri_for_log
 
 logger = get_logger("video_stream")
 
@@ -35,27 +37,28 @@ def open_stream(task: LocalVideoAnalysisTaskObject, get_stream_error_event: thre
     Returns:
         视频容器或None
     """
-    logger.debug(f"[open_stream] 开始拉取视频流, video_path={task.video_path}")
+    safe_video_path = redact_uri_for_log(task.video_path)
+    logger.debug(f"[open_stream] 开始拉取视频流, video_path={safe_video_path}")
 
     try:
         container = av.open(task.video_path)
         return container
     except av.error.InvalidDataError:
-        logger.error(f"打开失败：数据无效或格式错误: {task.video_path}")
+        logger.error(f"打开失败：数据无效或格式错误: {safe_video_path}")
         get_stream_error_event.set()
-        task.mark_failed(f"打开失败：数据无效或格式错误: {task.video_path}", 5)
+        task.mark_failed(f"打开失败：数据无效或格式错误: {safe_video_path}", 5)
     except av.error.FileNotFoundError:
-        logger.error(f"打开失败：文件或流地址未找到: {task.video_path}")
+        logger.error(f"打开失败：文件或流地址未找到: {safe_video_path}")
         get_stream_error_event.set()
-        task.mark_failed(f"打开失败：文件或流地址未找到: {task.video_path}", 6)
+        task.mark_failed(f"打开失败：文件或流地址未找到: {safe_video_path}", 6)
     except av.error.PermissionError:
-        logger.error(f"打开失败：权限不足: {task.video_path}")
+        logger.error(f"打开失败：权限不足: {safe_video_path}")
         get_stream_error_event.set()
-        task.mark_failed(f"打开失败：权限不足: {task.video_path}", 7)
+        task.mark_failed(f"打开失败：权限不足: {safe_video_path}", 7)
     except av.error.NetworkError:
-        logger.error(f"打开失败：网络问题: {task.video_path}")
+        logger.error(f"打开失败：网络问题: {safe_video_path}")
         get_stream_error_event.set()
-        task.mark_failed(f"打开失败：网络问题: {task.video_path}", 8)
+        task.mark_failed(f"打开失败：网络问题: {safe_video_path}", 8)
     except Exception as e:
         logger.error(f"流媒体打开失败：未知错误: {str(e)}")
         get_stream_error_event.set()
@@ -72,7 +75,8 @@ def get_stream(task: LocalVideoAnalysisTaskObject, get_stream_error_event: threa
         task: 任务对象
         get_stream_error_event: 错误事件
     """
-    logger.debug(f"[get_stream] 开始拉取视频流, video_path={task.video_path}")
+    safe_video_path = redact_uri_for_log(task.video_path)
+    logger.debug(f"[get_stream] 开始拉取视频流, video_path={safe_video_path}")
 
     ui_frame_no = 0
     ui_video_sec = 0
@@ -82,7 +86,7 @@ def get_stream(task: LocalVideoAnalysisTaskObject, get_stream_error_event: threa
     try:
         container = open_stream(task, get_stream_error_event)
         if container is None:
-            logger.error(f"open_stream failed. video_path={task.video_path}")
+            logger.error(f"open_stream failed. video_path={safe_video_path}")
             return
 
         video_stream = container.streams.video[0]
@@ -100,56 +104,65 @@ def get_stream(task: LocalVideoAnalysisTaskObject, get_stream_error_event: threa
         time_base = video_stream.time_base
 
         logger.info(
-            f"成功拉取视频流, video_path={task.video_path}, "
+            f"成功拉取视频流, video_path={safe_video_path}, "
             f"分辨率={task.cv_cap_prop_frame_width}x{task.cv_cap_prop_frame_height}, "
             f"frame_rate={frame_rate}, average_rate={float(average_rate):.2f}"
         )
 
-        # 设置只解码I帧
-        video_stream.codec_context.skip_frame = 'NONKEY'
+        dynamic_sampling_enabled = settings.DYNAMIC_DETECTION_ENABLED
+        # 动态检测需要覆盖短持续滚动；关闭时保持旧关键帧解码路径。
+        video_stream.codec_context.skip_frame = (
+            'NONREF' if dynamic_sampling_enabled else 'NONKEY'
+        )
+        sample_interval_ms = settings.DYNAMIC_SAMPLE_INTERVAL_MS
+        last_sampled_ms = None
 
-        i_frame_count = 0
         try_cnt = 0
         has_stream = False
         timeout_ms = 100000  # 100秒超时
-        get_iframe_time = time.time()
+        get_analysis_frame_time = time.time()
 
-        logger.debug(f"开始读取视频流 video_path={task.video_path}")
+        logger.debug(f"开始读取视频流 video_path={safe_video_path}")
 
         for packet in container.demux(video_stream):
             if task.cancel_event.is_set():
-                logger.debug(f"任务取消 video_path={task.video_path}")
+                logger.debug(f"任务取消 video_path={safe_video_path}")
                 break
 
             # 检查超时
-            if (time.time() - get_iframe_time) * 1000 > timeout_ms:
-                logger.error(f"等待100秒未收到I帧，退出. video_path={task.video_path}")
+            if (time.time() - get_analysis_frame_time) * 1000 > timeout_ms:
+                logger.error(f"等待100秒未收到分析帧，退出. video_path={safe_video_path}")
                 raise RuntimeError(f"{task.task_id} 的接收码流异常退出")
 
             has_stream = True
             ui_frame_no += 1
 
-            if packet.is_keyframe:
-                get_iframe_time = time.time()
-                i_frame_count += 1
-
+            if dynamic_sampling_enabled or packet.is_keyframe:
                 for frame in packet.decode():
                     # 计算时间戳
                     if frame.pts is not None:
-                        ui_video_sec = int(frame.pts * time_base)
+                        frame_time_base = frame.time_base or time_base
+                        timestamp_ms = int(round(float(frame.pts * frame_time_base) * 1000))
                     elif frame.dts is not None:
-                        ui_video_sec = int(frame.dts * time_base)
+                        timestamp_ms = int(round(float(frame.dts * time_base) * 1000))
                     else:
-                        ui_video_sec = int(ui_frame_no / frame_rate)
-
-                    timestamp_ms = ui_video_sec
+                        timestamp_ms = int(round(ui_frame_no / frame_rate * 1000))
+                    if (
+                        dynamic_sampling_enabled
+                        and last_sampled_ms is not None
+                        and timestamp_ms - last_sampled_ms < sample_interval_ms
+                    ):
+                        continue
+                    last_sampled_ms = timestamp_ms
+                    get_analysis_frame_time = time.time()
+                    ui_video_sec = timestamp_ms // 1000
 
                     # 转换图像格式
                     img = frame.to_image()
                     img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
 
                     # 创建 FrameData 对象并加入队列
-                    frame_data = FrameData(frame=img_cv, timestamp=timestamp_ms)
+                    frame_data = FrameData(frame=img_cv, timestamp_ms=timestamp_ms)
 
                     if task.frame_queue.full():
                         logger.info(f"{task.task_id} 的 frame_queue队列已满, 等待中...")
@@ -165,7 +178,7 @@ def get_stream(task: LocalVideoAnalysisTaskObject, get_stream_error_event: threa
                         else:
                             continue
 
-        logger.debug(f"完成读取视频流 video_path={task.video_path}")
+        logger.debug(f"完成读取视频流 video_path={safe_video_path}")
 
     except RuntimeError as e:
         logger.error(f"拉流时发生异常: {str(e)}")
@@ -212,12 +225,16 @@ def process_frames(task: LocalVideoAnalysisTaskObject, get_stream_error_event: t
         task: 任务对象
         get_stream_error_event: 错误事件
     """
-    last_frame = None
-    save_frame = None
     processed_frames = 0
-    processing_relative_time = 1
-    last_frame_time = 0
-    time_interval = 0
+    last_timestamp_ms = 0
+    pipeline = SlicePipeline(
+        task.result_writer,
+        SlicePipelineConfig.from_settings(
+            settings,
+            saved_similarity=task.saved_frame_similarity,
+        ),
+        comparator=compare_images,
+    )
 
     logger.info(f"process_frames 开始, task_id={task.task_id}")
 
@@ -232,51 +249,38 @@ def process_frames(task: LocalVideoAnalysisTaskObject, get_stream_error_event: t
             break
 
         if ret:
-            if last_frame is not None:
-                try:
-                    compare_contiguous_frame = compare_images(last_frame, frame_data.frame)
-
-                    if save_frame is None:
-                        save_frame = last_frame
-                        time_interval = frame_data.timestamp - frame_data.timestamp
-                        processing_relative_time = processing_relative_time + time_interval
-                        last_frame_time = frame_data.timestamp
-                        task.result_writer.write_image(
-                            frame_seq=processing_relative_time,
-                            frame=frame_data.frame,
-                            snap_time=frame_data.timestamp,
-                        )
-
-                    if compare_contiguous_frame > task.contiguous_frame_similarity:
-                        compare_saved_frame = compare_images(save_frame, frame_data.frame)
-
-                        if compare_saved_frame < task.saved_frame_similarity:
-                            time_interval = frame_data.timestamp - last_frame_time
-                            processing_relative_time = processing_relative_time + time_interval
-
-                            task.result_writer.write_image(
-                                frame_seq=processing_relative_time,
-                                frame=frame_data.frame,
-                                snap_time=frame_data.timestamp,
-                            )
-
-                            save_frame = frame_data.frame
-                            last_frame_time = frame_data.timestamp
-
-                except Exception as e:
-                    logger.error(f"处理视频流切片错误: {e}")
-                    task.mark_failed(f"处理视频流切片错误: {str(e)}")
-                    task.cancel_event.set()
-                    break
-
-            last_frame = frame_data.frame
-            processed_frames += 1
+            try:
+                pipeline.observe(frame_data)
+                last_timestamp_ms = frame_data.timestamp_ms
+                processed_frames += 1
+            except Exception as e:
+                logger.error(f"处理视频流切片错误: {e}", exc_info=True)
+                task.mark_failed(f"处理视频流切片错误: {str(e)}")
+                task.cancel_event.set()
+                break
         else:
             logger.info(f"process_frames get_frame_from_queue failed. task_id={task.task_id}")
             break
 
+    try:
+        pipeline.finish(last_timestamp_ms)
+    except Exception as exc:
+        logger.error(f"动态区间终态生成失败: {exc}", exc_info=True)
+        task.mark_failed(f"动态区间终态生成失败: {exc}")
+        task.cancel_event.set()
+
+    logger.info(
+        "切片流水线完成: task_id=%s observations=%s dynamic_segments=%s "
+        "suppressed_candidates=%s published_slices=%s",
+        task.task_id,
+        pipeline.observation_count,
+        len(pipeline.detector.segments),
+        pipeline.suppressed_candidate_count,
+        len(task.result_writer.images),
+    )
+
     if task.cancel_event.is_set():
-        logger.debug(f"视频流任务取消, url={task.video_path}")
+        logger.debug(f"视频流任务取消, url={redact_uri_for_log(task.video_path)}")
         terminal_status = 70
         reason = task.failure_reason or "任务已取消"
         task.task_status_code = 4 if not task.failure_reason else task.task_status_code
@@ -286,7 +290,7 @@ def process_frames(task: LocalVideoAnalysisTaskObject, get_stream_error_event: t
     elif not get_stream_error_event.is_set():
         if processed_frames > MIN_FRAMES_OK:
             task.task_status_code = 2
-            logger.debug(f"视频流处理完成, url={task.video_path}")
+            logger.debug(f"视频流处理完成, url={redact_uri_for_log(task.video_path)}")
             terminal_status = 60
             reason = ""
         else:
@@ -294,7 +298,7 @@ def process_frames(task: LocalVideoAnalysisTaskObject, get_stream_error_event: t
             task.mark_failed(reason)
             terminal_status = 70
             logger.debug(
-                f"视频流处理异常(小于{MIN_FRAMES_OK}秒数目), url={task.video_path}. "
+                f"视频流处理异常(小于{MIN_FRAMES_OK}秒数目), url={redact_uri_for_log(task.video_path)}. "
                 f"收到视频帧数目={processed_frames}"
             )
     else:
@@ -416,7 +420,7 @@ async def send_terminal_callback(payload: dict, *, callback_uri: str) -> None:
             response.raise_for_status()
             logger.info(
                 "终态回调成功: uri=%s status=%s task_id=%s operator_task_id=%s",
-                callback_uri,
+                redact_uri_for_log(callback_uri),
                 response.status,
                 payload["task_id"],
                 payload["operator_task_id"],

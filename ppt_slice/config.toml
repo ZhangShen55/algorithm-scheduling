@@ -28,6 +28,49 @@ default_fps = 30
 stream_timeout_ms = 100000  # 流超时时间（毫秒）
 frame_queue_timeout = 7     # 帧队列超时时间（秒）
 
+[dynamic_detection]
+# 持续动态区间检测；关闭后恢复旧切片判断流程
+enabled = true
+# 最小采样时间间隔（毫秒）；动态检测从参考帧中按该间隔限频
+sample_interval_ms = 1000
+# 灰度像素绝对差达到该值时认为像素变化
+pixel_difference_threshold = 30
+# 单帧变化像素比例阈值，范围 0-1
+changed_pixel_ratio = 0.04
+# 活动网格划分；用于忽略鼠标等小范围变化
+grid_rows = 4
+grid_columns = 4
+# 活动网格比例阈值，范围 0-1
+active_grid_ratio = 0.18
+# 活动观测滚动窗口（毫秒）
+window_ms = 8000
+# 从候选动态确认成动态区间的最短持续时间（毫秒）
+confirmation_ms = 5000
+# 窗口内活动观测比例阈值，范围 0-1
+required_active_ratio = 0.70
+# 动态内容连续稳定达到该时间后退出（毫秒）
+exit_stable_ms = 3000
+# 相邻动态区间间隔不超过该值时合并（毫秒）
+merge_gap_ms = 20000
+# 至少连续出现 cluster_min_segments 个动态段时，允许跨越的长静止镜头间隔（毫秒）
+cluster_gap_ms = 90000
+# 形成连续动态簇所需的最少动态段数；不得小于 3，避免吞掉普通 PPT
+cluster_min_segments = 3
+# 低运动视频延续开关；光流不能从稳定状态单独起段
+# 强活动已创建候选后，光流可参与确认并延续已确认动态段
+optical_flow_enabled = true
+# 光流分析缩放宽度（像素），用于控制 CPU 开销
+optical_flow_width = 320
+# 光流位移幅度达到该值时认为像素存在运动
+optical_flow_magnitude_threshold = 0.5
+# 运动像素覆盖比例阈值，范围 0-1；用于过滤鼠标等局部变化
+optical_flow_active_ratio = 0.05
+# 仅当已确认动态段最后由弱光流保活时，无运动后使用该宽限时间（毫秒）
+# 若最后是强像素/网格活动，仍使用 exit_stable_ms，避免延迟正常 PPT 恢复切片
+motion_grace_ms = 15000
+# 普通换页候选需要保持稳定的时间（毫秒）
+candidate_stable_ms = 2000
+
 [paths]
 # 平台内部共享结果根目录；请求不能覆盖该路径
 # 每个任务固定写入 {result_root}/{task_id}/ppt/slices，manifest 位于 ppt/manifest.json

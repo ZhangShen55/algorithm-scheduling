@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "run_id": "20260807-threshold-calibration-v3",
+  "inventory_run_id": "20260807-corpus-v2",
+  "inventory_fingerprint": "8bf4ae196ed8343efcb9fbd6ae2071f1fdc7533652011945064c361cc78b7143",
+  "algorithm_version": "V1.0.0_20260806",
+  "code_commit": "1f5c1f340bb019e51f220829a89f17f6828327d4",
+  "algorithm_source_fingerprint": "4ec9bc83ad9add2e012e1af5434601c51a25d2813443c63f2a4675dbe0e0f373",
+  "effective_config": {
+    "dynamic_detection_enabled": true,
+    "sample_interval_ms": 1000,
+    "pixel_difference_threshold": 30,
+    "changed_pixel_ratio": 0.04,
+    "grid_rows": 4,
+    "grid_columns": 4,
+    "active_grid_ratio": 0.18,
+    "window_ms": 8000,
+    "confirmation_ms": 5000,
+    "required_active_ratio": 0.7,
+    "exit_stable_ms": 3000,
+    "merge_gap_ms": 20000,
+    "candidate_stable_ms": 2000,
+    "contiguous_similarity": 0.99,
+    "saved_similarity": 0.98
+  },
+  "metrics": {
+    "prediction_count": 2,
+    "confirmed_predictions": 2,
+    "false_positive_count": 0,
+    "missed_detection_count": 0,
+    "uncertain_count": 0,
+    "unreviewed_prediction_count": 0,
+    "segment_precision": 1.0,
+    "segment_recall": 1.0,
+    "time_coverage_precision": 1.0,
+    "time_coverage_recall": 0.96066,
+    "boundary_error_p50_ms": 2720.0,
+    "boundary_error_p95_ms": 4907.65,
+    "discovery_coverage": 1.0,
+    "processing_completion": 0.027027,
+    "candidate_review_coverage": 1.0,
+    "audit_review_coverage": 1.0,
+    "false_positives_per_video_hour": 0.0,
+    "suppressed_candidate_count": 5,
+    "processing_speed_x": 23.261486,
+    "peak_memory_bytes": 328876032
+  },
+  "completion": {
+    "status": "INCOMPLETE",
+    "reasons": [
+      "尚未处理视频 36 项"
+    ]
+  },
+  "segments": [
+    {
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "video_url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "duration_seconds": 3300.107,
+      "start_ms": 2372747,
+      "end_ms": 2622064,
+      "type": "SUSPECTED_VIDEO_PLAYBACK",
+      "confidence": 0.659,
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/57ed7e723d5bbcd6/segment-0001-2372747-2622064/contact-sheet.jpg",
+      "review_label": "CONFIRMED_VIDEO",
+      "notes": "用户标注视频播放真值；检测边界误差在20秒门槛内",
+      "algorithm_version": "V1.0.0_20260806",
+      "config_summary": "{\"active_grid_ratio\":0.18,\"candidate_stable_ms\":2000,\"changed_pixel_ratio\":0.04,\"confirmation_ms\":5000,\"contiguous_similarity\":0.99,\"dynamic_detection_enabled\":true,\"exit_stable_ms\":3000,\"grid_columns\":4,\"grid_rows\":4,\"merge_gap_ms\":20000,\"pixel_difference_threshold\":30,\"required_active_ratio\":0.7,\"sample_interval_ms\":1000,\"saved_similarity\":0.98,\"window_ms\":8000}"
+    },
+    {
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "video_url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "duration_seconds": 3300.107,
+      "start_ms": 3291693,
+      "end_ms": 3299833,
+      "type": "SUSPECTED_VIDEO_PLAYBACK",
+      "confidence": 0.6094,
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/216421e1dfe39560/segment-0001-3291693-3299833/contact-sheet.jpg",
+      "review_label": "CONFIRMED_SCROLL",
+      "notes": "逐秒静态证据确认课程网页持续滚动超过8秒",
+      "algorithm_version": "V1.0.0_20260806",
+      "config_summary": "{\"active_grid_ratio\":0.18,\"candidate_stable_ms\":2000,\"changed_pixel_ratio\":0.04,\"confirmation_ms\":5000,\"contiguous_similarity\":0.99,\"dynamic_detection_enabled\":true,\"exit_stable_ms\":3000,\"grid_columns\":4,\"grid_rows\":4,\"merge_gap_ms\":20000,\"pixel_difference_threshold\":30,\"required_active_ratio\":0.7,\"sample_interval_ms\":1000,\"saved_similarity\":0.98,\"window_ms\":8000}"
+    }
+  ],
+  "failures": []
+}

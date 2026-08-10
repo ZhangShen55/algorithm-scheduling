@@ -7,6 +7,8 @@ from queue import Queue
 from threading import Event, Lock
 from typing import Any, Optional
 
+from app.utils.uri import redact_uri_for_log
+
 
 class LocalVideoAnalysisTaskObject:
     """本地视频分析任务对象"""
@@ -92,25 +94,31 @@ class LocalVideoAnalysisTaskObject:
             f"task_id='{self.task_id}', "
             f"operator_task_id='{self.operator_task_id}', "
             f"video_id='{self.video_id}', "
-            f"video_path='{self.video_path}', "
+            f"video_path='{redact_uri_for_log(self.video_path)}', "
             f"saved_frame_similarity={self.saved_frame_similarity}, "
             f"task_status_code={self.task_status_code}, "
             f"fps={self.fps}, "
             f"frame_queue_size={self.frame_queue.qsize()}, "
-            f"result_callback_uri='{self.result_callback_uri}')"
+            f"result_callback_uri='{redact_uri_for_log(self.result_callback_uri)}')"
         )
 
 
 class FrameData:
     """帧数据"""
 
-    def __init__(self, frame, timestamp: int):
+    def __init__(self, frame, timestamp: int | None = None, timestamp_ms: int | None = None):
         """
         初始化帧数据
 
         Args:
             frame: 图像帧
-            timestamp: 时间戳（秒）
+            timestamp: 兼容字段，时间戳（秒）
+            timestamp_ms: 精确视频时间戳（毫秒）
         """
+        if timestamp_ms is None:
+            if timestamp is None:
+                raise ValueError("timestamp 或 timestamp_ms 至少提供一个")
+            timestamp_ms = int(timestamp) * 1000
         self.frame = frame
-        self.timestamp = timestamp
+        self.timestamp_ms = int(timestamp_ms)
+        self.timestamp = int(self.timestamp_ms // 1000)

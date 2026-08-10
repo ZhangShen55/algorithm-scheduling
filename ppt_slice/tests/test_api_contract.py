@@ -8,7 +8,7 @@ from fastapi import BackgroundTasks
 from pydantic import ValidationError
 
 from app.api.v1 import video
-from app.schemas import VideoPPTCutRequest
+from app.schemas import TerminalResultCallback, VideoPPTCutRequest
 from app.services.task_manager import TaskManager
 
 
@@ -46,6 +46,29 @@ class RequestSchemaTests(unittest.TestCase):
                     "threshold": 0.98,
                 }
             )
+
+    def test_terminal_callback_accepts_dynamic_segments_without_changing_existing_fields(self):
+        callback = TerminalResultCallback(
+            task_id="course-001",
+            operator_task_id="ppt-run-001",
+            status=60,
+            path="/data/result/course-001/ppt/slices",
+            manifest_path="/data/result/course-001/ppt/manifest.json",
+            count=1,
+            reason="",
+            dynamic_segments=[
+                {
+                    "type": "SUSPECTED_VIDEO_PLAYBACK",
+                    "start_ms": 1000,
+                    "end_ms": 9000,
+                    "confidence": 0.8,
+                    "reason": "sustained_visual_change",
+                }
+            ],
+        )
+
+        self.assertEqual(callback.count, 1)
+        self.assertEqual(callback.dynamic_segments[0].start_ms, 1000)
 
 
 class SubmissionCapacityTests(unittest.TestCase):

@@ -11,6 +11,7 @@ except ImportError:
     import tomli as tomllib  # Python < 3.11
 
 from pydantic import field_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -68,6 +69,34 @@ def load_toml_config() -> dict:
             flat_config["STREAM_TIMEOUT_MS"] = config["video"].get("stream_timeout_ms")
             flat_config["FRAME_QUEUE_TIMEOUT"] = config["video"].get("frame_queue_timeout")
 
+        # dynamic detection section
+        if "dynamic_detection" in config:
+            dynamic = config["dynamic_detection"]
+            mappings = {
+                "DYNAMIC_DETECTION_ENABLED": "enabled",
+                "DYNAMIC_SAMPLE_INTERVAL_MS": "sample_interval_ms",
+                "DYNAMIC_PIXEL_DIFFERENCE_THRESHOLD": "pixel_difference_threshold",
+                "DYNAMIC_CHANGED_PIXEL_RATIO": "changed_pixel_ratio",
+                "DYNAMIC_GRID_ROWS": "grid_rows",
+                "DYNAMIC_GRID_COLUMNS": "grid_columns",
+                "DYNAMIC_ACTIVE_GRID_RATIO": "active_grid_ratio",
+                "DYNAMIC_WINDOW_MS": "window_ms",
+                "DYNAMIC_CONFIRMATION_MS": "confirmation_ms",
+                "DYNAMIC_REQUIRED_ACTIVE_RATIO": "required_active_ratio",
+                "DYNAMIC_EXIT_STABLE_MS": "exit_stable_ms",
+                "DYNAMIC_MERGE_GAP_MS": "merge_gap_ms",
+                "DYNAMIC_CLUSTER_GAP_MS": "cluster_gap_ms",
+                "DYNAMIC_CLUSTER_MIN_SEGMENTS": "cluster_min_segments",
+                "DYNAMIC_OPTICAL_FLOW_ENABLED": "optical_flow_enabled",
+                "DYNAMIC_OPTICAL_FLOW_WIDTH": "optical_flow_width",
+                "DYNAMIC_OPTICAL_FLOW_MAGNITUDE_THRESHOLD": "optical_flow_magnitude_threshold",
+                "DYNAMIC_OPTICAL_FLOW_ACTIVE_RATIO": "optical_flow_active_ratio",
+                "DYNAMIC_MOTION_GRACE_MS": "motion_grace_ms",
+                "DYNAMIC_CANDIDATE_STABLE_MS": "candidate_stable_ms",
+            }
+            for field_name, toml_name in mappings.items():
+                flat_config[field_name] = dynamic.get(toml_name)
+
         # paths section
         if "paths" in config:
             flat_config["RESULT_ROOT"] = config["paths"].get("result_root")
@@ -115,6 +144,28 @@ class Settings(BaseSettings):
     DEFAULT_FPS: int = 30
     STREAM_TIMEOUT_MS: int = 100000  # 流超时时间（毫秒）
     FRAME_QUEUE_TIMEOUT: int = 7  # 帧队列超时时间（秒）
+
+    # 持续动态区间检测配置
+    DYNAMIC_DETECTION_ENABLED: bool = True
+    DYNAMIC_SAMPLE_INTERVAL_MS: int = Field(1000, gt=0)
+    DYNAMIC_PIXEL_DIFFERENCE_THRESHOLD: int = Field(30, ge=1, le=255)
+    DYNAMIC_CHANGED_PIXEL_RATIO: float = Field(0.04, ge=0, le=1)
+    DYNAMIC_GRID_ROWS: int = Field(4, gt=0)
+    DYNAMIC_GRID_COLUMNS: int = Field(4, gt=0)
+    DYNAMIC_ACTIVE_GRID_RATIO: float = Field(0.18, ge=0, le=1)
+    DYNAMIC_WINDOW_MS: int = Field(8000, gt=0)
+    DYNAMIC_CONFIRMATION_MS: int = Field(5000, gt=0)
+    DYNAMIC_REQUIRED_ACTIVE_RATIO: float = Field(0.7, ge=0, le=1)
+    DYNAMIC_EXIT_STABLE_MS: int = Field(3000, gt=0)
+    DYNAMIC_MERGE_GAP_MS: int = Field(20000, gt=0)
+    DYNAMIC_CLUSTER_GAP_MS: int = Field(90000, gt=0)
+    DYNAMIC_CLUSTER_MIN_SEGMENTS: int = Field(3, ge=3)
+    DYNAMIC_OPTICAL_FLOW_ENABLED: bool = True
+    DYNAMIC_OPTICAL_FLOW_WIDTH: int = Field(320, ge=64)
+    DYNAMIC_OPTICAL_FLOW_MAGNITUDE_THRESHOLD: float = Field(0.5, gt=0)
+    DYNAMIC_OPTICAL_FLOW_ACTIVE_RATIO: float = Field(0.05, ge=0, le=1)
+    DYNAMIC_MOTION_GRACE_MS: int = Field(15000, gt=0)
+    DYNAMIC_CANDIDATE_STABLE_MS: int = Field(2000, gt=0)
 
     # 输出路径配置
     RESULT_ROOT: Path = PROJECT_ROOT / "shared_results"

@@ -1,0 +1,1015 @@
+{
+  "schema_version": 1,
+  "run_id": "20260807-corpus-v2",
+  "inventory_fingerprint": "8bf4ae196ed8343efcb9fbd6ae2071f1fdc7533652011945064c361cc78b7143",
+  "candidates": [
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "DETECTION",
+      "source": "ALGORITHM",
+      "start_ms": 2372747,
+      "end_ms": 2622064,
+      "confidence": 0.659,
+      "label": "CONFIRMED_VIDEO",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/57ed7e723d5bbcd6/segment-0001-2372747-2622064/contact-sheet.jpg",
+      "notes": "用户标注视频播放真值；检测边界误差在20秒门槛内",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/57ed7e723d5bbcd6/segment-0001-2372747-2622064/evidence-01-2367747.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/57ed7e723d5bbcd6/segment-0001-2372747-2622064/evidence-02-2372747.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/57ed7e723d5bbcd6/segment-0001-2372747-2622064/evidence-03-2497405.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/57ed7e723d5bbcd6/segment-0001-2372747-2622064/evidence-04-2622063.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/57ed7e723d5bbcd6/segment-0001-2372747-2622064/evidence-05-2627064.jpg"
+      ],
+      "truth_start_ms": 2368000,
+      "truth_end_ms": 2627000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "DETECTION",
+      "source": "ALGORITHM",
+      "start_ms": 3291693,
+      "end_ms": 3299833,
+      "confidence": 0.6094,
+      "label": "CONFIRMED_SCROLL",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/216421e1dfe39560/segment-0001-3291693-3299833/contact-sheet.jpg",
+      "notes": "逐秒静态证据确认课程网页持续滚动超过8秒",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/216421e1dfe39560/segment-0001-3291693-3299833/evidence-01-3286693.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/216421e1dfe39560/segment-0001-3291693-3299833/evidence-02-3291693.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/216421e1dfe39560/segment-0001-3291693-3299833/evidence-03-3295763.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/216421e1dfe39560/segment-0001-3291693-3299833/evidence-04-3299832.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/216421e1dfe39560/segment-0001-3291693-3299833/evidence-05-3300106.jpg"
+      ],
+      "truth_start_ms": 3291000,
+      "truth_end_ms": 3300000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 0,
+      "end_ms": 5000,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/869add1c19b2b7da/segment-0001-0-5000/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/869add1c19b2b7da/segment-0001-0-5000/evidence-01-0.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/869add1c19b2b7da/segment-0001-0-5000/evidence-02-2500.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/869add1c19b2b7da/segment-0001-0-5000/evidence-03-4999.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/869add1c19b2b7da/segment-0001-0-5000/evidence-04-10000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 216500,
+      "end_ms": 226500,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/f428e09bc00e0eb9/segment-0001-216500-226500/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/f428e09bc00e0eb9/segment-0001-216500-226500/evidence-01-211500.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/f428e09bc00e0eb9/segment-0001-216500-226500/evidence-02-216500.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/f428e09bc00e0eb9/segment-0001-216500-226500/evidence-03-221500.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/f428e09bc00e0eb9/segment-0001-216500-226500/evidence-04-226499.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/f428e09bc00e0eb9/segment-0001-216500-226500/evidence-05-231500.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 295000,
+      "end_ms": 305000,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/d1dbf3850bb62afe/segment-0001-295000-305000/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/d1dbf3850bb62afe/segment-0001-295000-305000/evidence-01-290000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/d1dbf3850bb62afe/segment-0001-295000-305000/evidence-02-295000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/d1dbf3850bb62afe/segment-0001-295000-305000/evidence-03-300000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/d1dbf3850bb62afe/segment-0001-295000-305000/evidence-04-304999.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/d1dbf3850bb62afe/segment-0001-295000-305000/evidence-05-310000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 594000,
+      "end_ms": 604000,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/4084d3ec7c28723a/segment-0001-594000-604000/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/4084d3ec7c28723a/segment-0001-594000-604000/evidence-01-589000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/4084d3ec7c28723a/segment-0001-594000-604000/evidence-02-594000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/4084d3ec7c28723a/segment-0001-594000-604000/evidence-03-599000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/4084d3ec7c28723a/segment-0001-594000-604000/evidence-04-603999.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/4084d3ec7c28723a/segment-0001-594000-604000/evidence-05-609000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 595000,
+      "end_ms": 605000,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/ced0f619c372b719/segment-0001-595000-605000/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/ced0f619c372b719/segment-0001-595000-605000/evidence-01-590000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/ced0f619c372b719/segment-0001-595000-605000/evidence-02-595000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/ced0f619c372b719/segment-0001-595000-605000/evidence-03-600000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/ced0f619c372b719/segment-0001-595000-605000/evidence-04-604999.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/ced0f619c372b719/segment-0001-595000-605000/evidence-05-610000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 755234,
+      "end_ms": 757236,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/b710f08115a01d8e/segment-0001-755234-757236/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/b710f08115a01d8e/segment-0001-755234-757236/evidence-01-750234.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/b710f08115a01d8e/segment-0001-755234-757236/evidence-02-755234.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/b710f08115a01d8e/segment-0001-755234-757236/evidence-03-756235.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/b710f08115a01d8e/segment-0001-755234-757236/evidence-04-757235.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/b710f08115a01d8e/segment-0001-755234-757236/evidence-05-762236.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 895000,
+      "end_ms": 905000,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/f898b06252704983/segment-0001-895000-905000/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/f898b06252704983/segment-0001-895000-905000/evidence-01-890000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/f898b06252704983/segment-0001-895000-905000/evidence-02-895000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/f898b06252704983/segment-0001-895000-905000/evidence-03-900000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/f898b06252704983/segment-0001-895000-905000/evidence-04-904999.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/f898b06252704983/segment-0001-895000-905000/evidence-05-910000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 1022000,
+      "end_ms": 1032000,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/cc1f77ed7cd7c42a/segment-0001-1022000-1032000/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/cc1f77ed7cd7c42a/segment-0001-1022000-1032000/evidence-01-1017000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/cc1f77ed7cd7c42a/segment-0001-1022000-1032000/evidence-02-1022000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/cc1f77ed7cd7c42a/segment-0001-1022000-1032000/evidence-03-1027000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/cc1f77ed7cd7c42a/segment-0001-1022000-1032000/evidence-04-1031999.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/cc1f77ed7cd7c42a/segment-0001-1022000-1032000/evidence-05-1037000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 1195000,
+      "end_ms": 1205000,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/2a61888b9274cb62/segment-0001-1195000-1205000/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/2a61888b9274cb62/segment-0001-1195000-1205000/evidence-01-1190000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/2a61888b9274cb62/segment-0001-1195000-1205000/evidence-02-1195000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/2a61888b9274cb62/segment-0001-1195000-1205000/evidence-03-1200000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/2a61888b9274cb62/segment-0001-1195000-1205000/evidence-04-1204999.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/2a61888b9274cb62/segment-0001-1195000-1205000/evidence-05-1210000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 1431500,
+      "end_ms": 1441500,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/f3ed7f7dfd32042a/segment-0001-1431500-1441500/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/f3ed7f7dfd32042a/segment-0001-1431500-1441500/evidence-01-1426500.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/f3ed7f7dfd32042a/segment-0001-1431500-1441500/evidence-02-1431500.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/f3ed7f7dfd32042a/segment-0001-1431500-1441500/evidence-03-1436500.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/f3ed7f7dfd32042a/segment-0001-1431500-1441500/evidence-04-1441499.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/f3ed7f7dfd32042a/segment-0001-1431500-1441500/evidence-05-1446500.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 1495000,
+      "end_ms": 1505000,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/193b05e62ed8acab/segment-0001-1495000-1505000/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/193b05e62ed8acab/segment-0001-1495000-1505000/evidence-01-1490000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/193b05e62ed8acab/segment-0001-1495000-1505000/evidence-02-1495000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/193b05e62ed8acab/segment-0001-1495000-1505000/evidence-03-1500000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/193b05e62ed8acab/segment-0001-1495000-1505000/evidence-04-1504999.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/193b05e62ed8acab/segment-0001-1495000-1505000/evidence-05-1510000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 1695622,
+      "end_ms": 1696622,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/79fe2eb346164c9d/segment-0001-1695622-1696622/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/79fe2eb346164c9d/segment-0001-1695622-1696622/evidence-01-1690622.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/79fe2eb346164c9d/segment-0001-1695622-1696622/evidence-02-1695622.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/79fe2eb346164c9d/segment-0001-1695622-1696622/evidence-03-1696122.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/79fe2eb346164c9d/segment-0001-1695622-1696622/evidence-04-1696621.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/79fe2eb346164c9d/segment-0001-1695622-1696622/evidence-05-1701622.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 1795000,
+      "end_ms": 1805000,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/c8e71c4ef5d7d955/segment-0001-1795000-1805000/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/c8e71c4ef5d7d955/segment-0001-1795000-1805000/evidence-01-1790000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/c8e71c4ef5d7d955/segment-0001-1795000-1805000/evidence-02-1795000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/c8e71c4ef5d7d955/segment-0001-1795000-1805000/evidence-03-1800000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/c8e71c4ef5d7d955/segment-0001-1795000-1805000/evidence-04-1804999.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/c8e71c4ef5d7d955/segment-0001-1795000-1805000/evidence-05-1810000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 1827500,
+      "end_ms": 1837500,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/89d02c05e194aafb/segment-0001-1827500-1837500/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/89d02c05e194aafb/segment-0001-1827500-1837500/evidence-01-1822500.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/89d02c05e194aafb/segment-0001-1827500-1837500/evidence-02-1827500.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/89d02c05e194aafb/segment-0001-1827500-1837500/evidence-03-1832500.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/89d02c05e194aafb/segment-0001-1827500-1837500/evidence-04-1837499.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/89d02c05e194aafb/segment-0001-1827500-1837500/evidence-05-1842500.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 2023984,
+      "end_ms": 2024984,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/e3b422c17fa89123/segment-0001-2023984-2024984/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/e3b422c17fa89123/segment-0001-2023984-2024984/evidence-01-2018984.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/e3b422c17fa89123/segment-0001-2023984-2024984/evidence-02-2023984.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/e3b422c17fa89123/segment-0001-2023984-2024984/evidence-03-2024484.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/e3b422c17fa89123/segment-0001-2023984-2024984/evidence-04-2024983.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/e3b422c17fa89123/segment-0001-2023984-2024984/evidence-05-2029984.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 2095000,
+      "end_ms": 2105000,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/6a7d48ca020f93bf/segment-0001-2095000-2105000/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/6a7d48ca020f93bf/segment-0001-2095000-2105000/evidence-01-2090000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/6a7d48ca020f93bf/segment-0001-2095000-2105000/evidence-02-2095000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/6a7d48ca020f93bf/segment-0001-2095000-2105000/evidence-03-2100000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/6a7d48ca020f93bf/segment-0001-2095000-2105000/evidence-04-2104999.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/6a7d48ca020f93bf/segment-0001-2095000-2105000/evidence-05-2110000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 2188000,
+      "end_ms": 2198000,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/f12697e68b37fccc/segment-0001-2188000-2198000/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/f12697e68b37fccc/segment-0001-2188000-2198000/evidence-01-2183000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/f12697e68b37fccc/segment-0001-2188000-2198000/evidence-02-2188000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/f12697e68b37fccc/segment-0001-2188000-2198000/evidence-03-2193000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/f12697e68b37fccc/segment-0001-2188000-2198000/evidence-04-2197999.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/f12697e68b37fccc/segment-0001-2188000-2198000/evidence-05-2203000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 2340382,
+      "end_ms": 2341382,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/2bc120dac4fef6df/segment-0001-2340382-2341382/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/2bc120dac4fef6df/segment-0001-2340382-2341382/evidence-01-2335382.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/2bc120dac4fef6df/segment-0001-2340382-2341382/evidence-02-2340382.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/2bc120dac4fef6df/segment-0001-2340382-2341382/evidence-03-2340882.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/2bc120dac4fef6df/segment-0001-2340382-2341382/evidence-04-2341381.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/2bc120dac4fef6df/segment-0001-2340382-2341382/evidence-05-2346382.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 2370746,
+      "end_ms": 2372747,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/b07e6b823ff57f5f/segment-0001-2370746-2372747/contact-sheet.jpg",
+      "notes": "已知视频播放区间边界附近，属于允许的边界误差，不是独立漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/b07e6b823ff57f5f/segment-0001-2370746-2372747/evidence-01-2365746.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/b07e6b823ff57f5f/segment-0001-2370746-2372747/evidence-02-2370746.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/b07e6b823ff57f5f/segment-0001-2370746-2372747/evidence-03-2371746.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/b07e6b823ff57f5f/segment-0001-2370746-2372747/evidence-04-2372746.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/b07e6b823ff57f5f/segment-0001-2370746-2372747/evidence-05-2377747.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 2626102,
+      "end_ms": 2627102,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/8e08a205e5910cca/segment-0001-2626102-2627102/contact-sheet.jpg",
+      "notes": "已知视频播放区间边界附近，属于允许的边界误差，不是独立漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/8e08a205e5910cca/segment-0001-2626102-2627102/evidence-01-2621102.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/8e08a205e5910cca/segment-0001-2626102-2627102/evidence-02-2626102.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/8e08a205e5910cca/segment-0001-2626102-2627102/evidence-03-2626602.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/8e08a205e5910cca/segment-0001-2626102-2627102/evidence-04-2627101.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/8e08a205e5910cca/segment-0001-2626102-2627102/evidence-05-2632102.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 2629138,
+      "end_ms": 2630138,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/af03109453c3c74a/segment-0001-2629138-2630138/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/af03109453c3c74a/segment-0001-2629138-2630138/evidence-01-2624138.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/af03109453c3c74a/segment-0001-2629138-2630138/evidence-02-2629138.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/af03109453c3c74a/segment-0001-2629138-2630138/evidence-03-2629638.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/af03109453c3c74a/segment-0001-2629138-2630138/evidence-04-2630137.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/af03109453c3c74a/segment-0001-2629138-2630138/evidence-05-2635138.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 2637248,
+      "end_ms": 2638248,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/34343a76435e43e8/segment-0001-2637248-2638248/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/34343a76435e43e8/segment-0001-2637248-2638248/evidence-01-2632248.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/34343a76435e43e8/segment-0001-2637248-2638248/evidence-02-2637248.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/34343a76435e43e8/segment-0001-2637248-2638248/evidence-03-2637748.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/34343a76435e43e8/segment-0001-2637248-2638248/evidence-04-2638247.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/34343a76435e43e8/segment-0001-2637248-2638248/evidence-05-2643248.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 2695000,
+      "end_ms": 2705000,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/4abe9df1fa626d43/segment-0001-2695000-2705000/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/4abe9df1fa626d43/segment-0001-2695000-2705000/evidence-01-2690000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/4abe9df1fa626d43/segment-0001-2695000-2705000/evidence-02-2695000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/4abe9df1fa626d43/segment-0001-2695000-2705000/evidence-03-2700000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/4abe9df1fa626d43/segment-0001-2695000-2705000/evidence-04-2704999.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/4abe9df1fa626d43/segment-0001-2695000-2705000/evidence-05-2710000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 2992560,
+      "end_ms": 2995595,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/da1a75764a66214e/segment-0001-2992560-2995595/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/da1a75764a66214e/segment-0001-2992560-2995595/evidence-01-2987560.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/da1a75764a66214e/segment-0001-2992560-2995595/evidence-02-2992560.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/da1a75764a66214e/segment-0001-2992560-2995595/evidence-03-2994077.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/da1a75764a66214e/segment-0001-2992560-2995595/evidence-04-2995594.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/da1a75764a66214e/segment-0001-2992560-2995595/evidence-05-3000595.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "FIXED_GRID",
+      "start_ms": 2995000,
+      "end_ms": 3005000,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/5632dd4c3649faa5/segment-0001-2995000-3005000/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/5632dd4c3649faa5/segment-0001-2995000-3005000/evidence-01-2990000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/5632dd4c3649faa5/segment-0001-2995000-3005000/evidence-02-2995000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/5632dd4c3649faa5/segment-0001-2995000-3005000/evidence-03-3000000.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/5632dd4c3649faa5/segment-0001-2995000-3005000/evidence-04-3004999.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/5632dd4c3649faa5/segment-0001-2995000-3005000/evidence-05-3010000.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 3009676,
+      "end_ms": 3011711,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/40bf8166b43fa716/segment-0001-3009676-3011711/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/40bf8166b43fa716/segment-0001-3009676-3011711/evidence-01-3004676.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/40bf8166b43fa716/segment-0001-3009676-3011711/evidence-02-3009676.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/40bf8166b43fa716/segment-0001-3009676-3011711/evidence-03-3010693.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/40bf8166b43fa716/segment-0001-3009676-3011711/evidence-04-3011710.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/40bf8166b43fa716/segment-0001-3009676-3011711/evidence-05-3016711.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 3017786,
+      "end_ms": 3018786,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/a4e723db7cf0f72b/segment-0001-3017786-3018786/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/a4e723db7cf0f72b/segment-0001-3017786-3018786/evidence-01-3012786.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/a4e723db7cf0f72b/segment-0001-3017786-3018786/evidence-02-3017786.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/a4e723db7cf0f72b/segment-0001-3017786-3018786/evidence-03-3018286.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/a4e723db7cf0f72b/segment-0001-3017786-3018786/evidence-04-3018785.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/a4e723db7cf0f72b/segment-0001-3017786-3018786/evidence-05-3023786.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 3041207,
+      "end_ms": 3042207,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/72873f223b1cbdf9/segment-0001-3041207-3042207/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/72873f223b1cbdf9/segment-0001-3041207-3042207/evidence-01-3036207.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/72873f223b1cbdf9/segment-0001-3041207-3042207/evidence-02-3041207.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/72873f223b1cbdf9/segment-0001-3041207-3042207/evidence-03-3041707.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/72873f223b1cbdf9/segment-0001-3041207-3042207/evidence-04-3042206.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/72873f223b1cbdf9/segment-0001-3041207-3042207/evidence-05-3047207.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 3062463,
+      "end_ms": 3063463,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/b8fb3eda26a12619/segment-0001-3062463-3063463/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/b8fb3eda26a12619/segment-0001-3062463-3063463/evidence-01-3057463.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/b8fb3eda26a12619/segment-0001-3062463-3063463/evidence-02-3062463.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/b8fb3eda26a12619/segment-0001-3062463-3063463/evidence-03-3062963.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/b8fb3eda26a12619/segment-0001-3062463-3063463/evidence-04-3063462.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/b8fb3eda26a12619/segment-0001-3062463-3063463/evidence-05-3068463.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 3064466,
+      "end_ms": 3065466,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/e4eaae8d56149245/segment-0001-3064466-3065466/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/e4eaae8d56149245/segment-0001-3064466-3065466/evidence-01-3059466.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/e4eaae8d56149245/segment-0001-3064466-3065466/evidence-02-3064466.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/e4eaae8d56149245/segment-0001-3064466-3065466/evidence-03-3064966.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/e4eaae8d56149245/segment-0001-3064466-3065466/evidence-04-3065465.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/e4eaae8d56149245/segment-0001-3064466-3065466/evidence-05-3070466.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 3070538,
+      "end_ms": 3071538,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/93c3b9f94f9c07f0/segment-0001-3070538-3071538/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/93c3b9f94f9c07f0/segment-0001-3070538-3071538/evidence-01-3065538.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/93c3b9f94f9c07f0/segment-0001-3070538-3071538/evidence-02-3070538.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/93c3b9f94f9c07f0/segment-0001-3070538-3071538/evidence-03-3071038.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/93c3b9f94f9c07f0/segment-0001-3070538-3071538/evidence-04-3071537.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/93c3b9f94f9c07f0/segment-0001-3070538-3071538/evidence-05-3076538.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 3087722,
+      "end_ms": 3088722,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/49055d7893d245d6/segment-0001-3087722-3088722/contact-sheet.jpg",
+      "notes": "逐秒证据显示仅约3秒浏览器输入与加载，未达到持续动态5秒定义",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/49055d7893d245d6/segment-0001-3087722-3088722/evidence-01-3082722.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/49055d7893d245d6/segment-0001-3087722-3088722/evidence-02-3087722.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/49055d7893d245d6/segment-0001-3087722-3088722/evidence-03-3088222.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/49055d7893d245d6/segment-0001-3087722-3088722/evidence-04-3088721.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/49055d7893d245d6/segment-0001-3087722-3088722/evidence-05-3093722.jpg"
+      ]
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "course_name": "0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分",
+      "duration_ms": 3300107,
+      "candidate_kind": "AUDIT",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 3098867,
+      "end_ms": 3099867,
+      "confidence": "",
+      "label": "FALSE_POSITIVE",
+      "review_status": "COMPLETED",
+      "reviewer": "Codex AI静态证据初审",
+      "reviewed_at": "2026-08-07T15:51:13+08:00",
+      "evidence_path": "harness/artifacts/20260807-threshold-calibration-v3/review/292b3ba1207d0a16/segment-0001-3098867-3099867/contact-sheet.jpg",
+      "notes": "静态证据为普通PPT、正常换页或短暂页面变化，不构成持续动态漏报",
+      "evidence_frames": [
+        "harness/artifacts/20260807-threshold-calibration-v3/review/292b3ba1207d0a16/segment-0001-3098867-3099867/evidence-01-3093867.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/292b3ba1207d0a16/segment-0001-3098867-3099867/evidence-02-3098867.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/292b3ba1207d0a16/segment-0001-3098867-3099867/evidence-03-3099367.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/292b3ba1207d0a16/segment-0001-3098867-3099867/evidence-04-3099866.jpg",
+        "harness/artifacts/20260807-threshold-calibration-v3/review/292b3ba1207d0a16/segment-0001-3098867-3099867/evidence-05-3104867.jpg"
+      ]
+    }
+  ],
+  "audit_windows": [
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 0,
+      "end_ms": 5000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 216500,
+      "end_ms": 226500
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 295000,
+      "end_ms": 305000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 594000,
+      "end_ms": 604000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 595000,
+      "end_ms": 605000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 755234,
+      "end_ms": 757236
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 895000,
+      "end_ms": 905000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 1022000,
+      "end_ms": 1032000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 1195000,
+      "end_ms": 1205000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 1431500,
+      "end_ms": 1441500
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 1495000,
+      "end_ms": 1505000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 1695622,
+      "end_ms": 1696622
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 1795000,
+      "end_ms": 1805000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 1827500,
+      "end_ms": 1837500
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 2023984,
+      "end_ms": 2024984
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 2095000,
+      "end_ms": 2105000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "LONG_SLICE_GAP",
+      "start_ms": 2188000,
+      "end_ms": 2198000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 2340382,
+      "end_ms": 2341382
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 2370746,
+      "end_ms": 2372747
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 2626102,
+      "end_ms": 2627102
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 2629138,
+      "end_ms": 2630138
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 2637248,
+      "end_ms": 2638248
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 2695000,
+      "end_ms": 2705000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 2992560,
+      "end_ms": 2995595
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "FIXED_GRID",
+      "start_ms": 2995000,
+      "end_ms": 3005000
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 3009676,
+      "end_ms": 3011711
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 3017786,
+      "end_ms": 3018786
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 3041207,
+      "end_ms": 3042207
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 3062463,
+      "end_ms": 3063463
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 3064466,
+      "end_ms": 3065466
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 3070538,
+      "end_ms": 3071538
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 3087722,
+      "end_ms": 3088722
+    },
+    {
+      "url": "http://192.168.29.12:5555/course/0912%E7%A9%BA%E4%B8%AD%E4%BA%A4%E9%80%9A%E7%AE%A1%E7%90%86%E4%B8%8E%E7%AD%BE%E6%B4%BE_1223121_1223122_90020060,%E5%BE%90%E6%9C%88%E8%8A%B3,__2025%E5%B9%B49%E6%9C%8812%E5%8F%B717%E6%97%B610%E5%88%86/PPT.mp4",
+      "source": "NEAR_THRESHOLD",
+      "start_ms": 3098867,
+      "end_ms": 3099867
+    }
+  ]
+}
