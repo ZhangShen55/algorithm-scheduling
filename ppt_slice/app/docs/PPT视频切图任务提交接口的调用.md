@@ -2,7 +2,7 @@
 
 ## 1. 协议概述
 
-该接口提交一个 PPT 视频切图任务。算子直接流式读取 `uri`，不落盘远程 MP4；稳定 PPT 图片写入平台共享结果目录，疑似视频播放或持续滚动区间内不发布切片。全部完成后原子发布 `manifest.json`，最后仅发送一次终态元数据回调。协议不包含 Base64 图片，也不逐图回调。
+该接口提交一个 PPT 视频切图任务。算子通过 `video_path` 读取远程 URL 或绝对本地视频路径；稳定 PPT 图片写入平台共享结果目录，疑似视频播放或持续滚动区间内不发布切片。全部完成后原子发布 `manifest.json`，最后仅发送一次终态元数据回调。协议不包含 Base64 图片，也不逐图回调。
 
 ## 2. 请求
 
@@ -13,7 +13,7 @@ Content-Type: application/json
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `uri` | string | 是 | 算子可访问的视频文件或视频流地址 |
+| `video_path` | string | 是 | 带 scheme 和主机的远程 URL，或算子可访问的绝对本地视频路径 |
 | `task_id` | string | 是 | 平台任务 ID，同时决定共享结果目录 |
 | `operator_task_id` | string | 是 | 本次算子执行 ID |
 | `result_callback_uri` | string | 是 | 一次性终态回调地址 |
@@ -23,13 +23,21 @@ Content-Type: application/json
 
 ```json
 {
-  "uri": "/data/course/course-001/media/slides.mp4",
+  "video_path": "/data/course/course-001/media/slides.mp4",
   "task_id": "course-001",
   "operator_task_id": "ppt-run-001",
   "result_callback_uri": "http://orchestrator-service:18101/internal/ppt-slice/callback/101",
   "threshold": 0.98
 }
 ```
+
+### 视频输入路径设计
+
+- 远程 URL：直接交给 PyAV 流式解码，不下载或落盘源 MP4。
+- 绝对本地路径：原地读取，不复制、不移动，也不由 PPT 算子删除。
+- 相对路径：请求校验阶段拒绝，避免依赖容器当前工作目录。
+- 文件存在性：POST 受理阶段不执行同步 I/O；本地文件不存在、权限不足或远程资源不可达时，由后台任务通过终态回调返回失败。
+- 兼容字段：旧 `uri` 暂时仍可输入并立即归一化为 `video_path`，但 OpenAPI、文档和调度适配器只使用 `video_path`。
 
 `task_id` 与 `operator_task_id` 只允许字母、数字、点、下划线和连字符，不能为 `.` 或 `..`。请求没有输出路径字段，不能覆盖服务端 `result_root`。
 

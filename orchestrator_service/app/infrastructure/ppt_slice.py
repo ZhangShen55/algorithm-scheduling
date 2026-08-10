@@ -104,10 +104,12 @@ class PptSliceAdapter:
         callback_url: str,
         threshold: float = 0.98,
     ) -> PptSliceAccepted:
+        if not local_video_path.is_absolute():
+            raise ValueError("PPT 视频必须使用绝对本地路径")
         response = await self._http.post(
             f"{instance_url.rstrip('/')}/LocalVideoPPTSliceTasks/v1.0.0",
             json={
-                "uri": str(local_video_path),
+                "video_path": str(local_video_path),
                 "task_id": task_id,
                 "operator_task_id": operator_task_id,
                 "result_callback_uri": callback_url,

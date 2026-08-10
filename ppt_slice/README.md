@@ -68,13 +68,20 @@ Content-Type: application/json
 
 ```json
 {
-  "uri": "/data/course/course-001/media/slides.mp4",
+  "video_path": "/data/course/course-001/media/slides.mp4",
   "task_id": "course-001",
   "operator_task_id": "ppt-run-001",
   "result_callback_uri": "http://orchestrator-service:18101/internal/ppt-slice/callback/101",
   "threshold": 0.98
 }
 ```
+
+`video_path` 支持两类输入：
+
+- 带 scheme 和主机的远程 URL，例如 `https://media.example/course-001/PPT.mp4`。算子直接流式解码，不下载或保存源视频。
+- 绝对本地路径，例如 `/data/course/course-001/media/slides.mp4`。算子直接读取该文件，不复制也不删除源文件。
+
+相对本地路径会被拒绝，避免依赖容器工作目录。POST 受理阶段只校验路径形式，不同步检查本地文件是否存在；PyAV 打开失败时通过一次终态回调返回失败。旧字段 `uri` 暂时作为兼容输入保留，但新调用方必须发送 `video_path`。
 
 受理成功立即返回：
 

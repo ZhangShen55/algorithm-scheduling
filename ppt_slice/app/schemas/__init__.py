@@ -2,6 +2,9 @@
 Pydantic Schemas
 请求和响应模型
 """
+from pathlib import Path
+from urllib.parse import urlsplit
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 TASK_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
@@ -12,11 +15,37 @@ class VideoPPTCutRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    uri: str = Field(..., description="视频流URI")
+    video_path: str = Field(..., description="远程视频URL或绝对本地视频路径")
     task_id: str = Field(..., pattern=TASK_ID_PATTERN, description="平台任务ID")
     operator_task_id: str = Field(..., pattern=TASK_ID_PATTERN, description="算子任务ID")
     result_callback_uri: str = Field(..., description="终态结果回调URI")
     threshold: float = Field(0.98, ge=0, le=1, description="相似度阈值")
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_uri(cls, value):
+        if not isinstance(value, dict) or "uri" not in value:
+            return value
+        normalized = dict(value)
+        if "video_path" in normalized:
+            raise ValueError("video_path 与兼容字段 uri 不能同时提供")
+        normalized["video_path"] = normalized.pop("uri")
+        return normalized
+
+    @field_validator("video_path")
+    @classmethod
+    def validate_video_path(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("video_path 不能为空")
+        parsed = urlsplit(value)
+        if parsed.scheme:
+            if not parsed.netloc:
+                raise ValueError("video_path 远程URL缺少主机")
+            return value
+        if not Path(value).is_absolute():
+            raise ValueError("video_path 本地路径必须是绝对路径")
+        return value
 
     @field_validator("task_id", "operator_task_id")
     @classmethod

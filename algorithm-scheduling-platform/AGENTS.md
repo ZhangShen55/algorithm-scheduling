@@ -20,6 +20,7 @@ Keep the four services as separate processes and containers. `control-service` a
 - Preserve operator code `vbas`; never reintroduce `tias` into new platform contracts.
 - Online image requests contain upstream Base64 images. Do not add stream ingestion or frame extraction to the online gateway.
 - PPT is an approved breaking internal contract: shared files under `/data/result/{task_id}/ppt`, atomic manifest, one terminal callback, no Base64 slide callbacks.
+- PPT submission uses canonical `video_path`. Orchestrator emits the prepared absolute local path; the operator also accepts remote URLs and only keeps legacy `uri` as a compatibility input.
 - Kafka messages contain identifiers, paths and metadata only, never media bytes.
 
 ## Dependency Ownership

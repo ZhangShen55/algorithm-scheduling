@@ -59,6 +59,43 @@ class _FakeContainer:
 
 
 class VideoProcessorDynamicIntegrationTests(unittest.TestCase):
+    def test_open_stream_decodes_absolute_local_video_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            video_path = Path(temp_dir) / "PPT.mp4"
+            output = av.open(str(video_path), mode="w")
+            stream = output.add_stream("mpeg4", rate=2)
+            stream.width = 64
+            stream.height = 64
+            stream.pix_fmt = "yuv420p"
+            for index in range(2):
+                frame = av.VideoFrame.from_ndarray(
+                    np.full((64, 64, 3), index * 80, dtype=np.uint8),
+                    format="bgr24",
+                )
+                for packet in stream.encode(frame):
+                    output.mux(packet)
+            for packet in stream.encode():
+                output.mux(packet)
+            output.close()
+
+            task = LocalVideoAnalysisTaskObject(
+                task_id="course-local-path",
+                operator_task_id="ppt-run-local-path",
+                video_id="course-local-path",
+                video_path=str(video_path),
+                result_callback_uri="http://orchestrator/internal/ppt-slice/callback",
+            )
+            error_event = threading.Event()
+            container = video_processor.open_stream(task, error_event)
+            self.assertIsNotNone(container)
+            try:
+                frames = list(container.decode(video=0))
+            finally:
+                container.close()
+
+            self.assertFalse(error_event.is_set())
+            self.assertEqual(len(frames), 2)
+
     def test_get_stream_time_samples_reference_frames_when_dynamic_detection_is_enabled(self):
         container = _FakeContainer()
         task = LocalVideoAnalysisTaskObject(

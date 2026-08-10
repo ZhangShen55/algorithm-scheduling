@@ -59,11 +59,14 @@ conda run -n ppt_slice python -m uvicorn app.main:app \
 ### 接口兼容边界
 
 - 保留 `POST /LocalVideoPPTSliceTasks/v1.0.0`。
+- 规范视频输入字段为 `video_path`，支持远程 URL 和绝对本地路径；旧 `uri` 只作为兼容输入。
 - 保留任务取消和版本查询路径。
 - 内部请求统一使用 snake_case 字段。
 - PPT 算子只接受视频 URL 或平台可访问的视频路径，不自行承担课程任务编排。
 - `task_id` 和 `operator_task_id` 必须经过路径安全校验。
 - 一个任务只发送一次终态元数据回调，不逐图回调，不在回调中传递 Base64 图片。
+
+远程 URL 由 PyAV 直接流式解码，不保存源 MP4。本地绝对路径原地读取，不复制或删除源文件；相对路径因依赖运行目录而被拒绝。
 
 ### 共享结果契约
 
@@ -229,7 +232,7 @@ ppt_slice/
 
 - `python -m compileall -q app harness tests` 通过。
 - `from app.main import app` 导入成功。
-- 完整 `unittest` 共 95 项通过。
+- 完整 `unittest` 共 99 项通过。
 - `/health` 返回健康状态。
 - `/LocalVideoPPTSliceTasks/v1.0.0/getVersion` 返回版本信息。
 - OpenSpec 严格校验通过。

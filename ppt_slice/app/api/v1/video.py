@@ -47,7 +47,8 @@ async def process_rtsp(
     task_sum = task_manager.get_task_count()
     logger.debug(
         f"收到任务请求 - 当前任务数:[{task_sum}] 最大任务数:[{settings.MAX_CONCURRENT_TASKS}] "
-        f"最大队列:[{settings.MAX_QUEUE_SIZE}] uri:[{redact_uri_for_log(task_params.uri)}] "
+        f"最大队列:[{settings.MAX_QUEUE_SIZE}] "
+        f"video_path:[{redact_uri_for_log(task_params.video_path)}] "
         f"task_id:[{task_params.task_id}] operator_task_id:[{task_params.operator_task_id}] "
         f"threshold:[{task_params.threshold}]"
     )
@@ -66,7 +67,7 @@ async def process_rtsp(
         task_id=task_params.task_id,
         operator_task_id=task_params.operator_task_id,
         video_id=task_params.task_id,
-        video_path=str(task_params.uri),
+        video_path=task_params.video_path,
         result_callback_uri=str(task_params.result_callback_uri),
         saved_frame_similarity=float(task_params.threshold),
         frame_queue=frame_queue,

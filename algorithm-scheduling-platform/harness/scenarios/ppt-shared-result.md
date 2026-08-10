@@ -2,7 +2,8 @@
 
 ## Contract
 
-- Input video is a local shared path under `/data/course/{task_id}`.
+- Orchestrator submits the canonical `video_path` field with an absolute local shared path under `/data/course/{task_id}`; legacy `uri` is compatibility-only.
+- The PPT operator also accepts a remote URL in `video_path`, streams it without persisting the source MP4, and rejects relative local paths.
 - Output slides are written under `/data/result/{task_id}/ppt/slices`.
 - `manifest.json` is published atomically only after all retained images are closed.
 - One terminal callback contains task identity, status, path, manifest path and count; it contains no Base64 image.

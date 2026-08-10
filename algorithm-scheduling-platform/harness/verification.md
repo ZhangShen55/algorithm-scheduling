@@ -44,6 +44,22 @@ delivery documentation.
 
 Integration and runtime commands must record infrastructure versions and container status. A skipped integration test is not passing evidence. Full end-to-end evidence must show Kafka offsets, Worker-produced database state, operator HTTP/WebSocket traffic and filesystem results.
 
+## 2026-08-10 PPT 视频输入字段规范化
+
+本轮将 PPT 算子的规范视频输入字段统一为 `video_path`。算子接受远程 URL 与绝对本地路径，旧
+`uri` 仅作为兼容输入；orchestrator 只发送已经准备好的绝对本地路径。验证结果如下：
+
+- `ppt_slice`：`compileall`、`app.main:app` 导入及完整 `unittest` 通过，共 `99` 项。
+- 本地文件能力：测试在临时目录生成并解码真实 MP4，共读取 `2` 帧；临时目录自动清理，不保留或提交视频。
+- 平台适配器：`tests/test_ppt_slice_adapter.py` 共 `10` 项通过。
+- 代码质量：orchestrator 相关 Ruff 与严格 Mypy 均通过。
+- 运行时：临时启动 `127.0.0.1:19001` 后，`/health` 与版本接口成功；OpenAPI 请求模型只暴露
+  `video_path`，不暴露旧 `uri`。
+- OpenSpec：`openspec validate detect-ppt-video-playback-segments --strict` 通过。
+
+该证据覆盖算子契约、真实本地文件解码、平台适配器和服务运行时冒烟，不表示 orchestrator
+后台循环或 Kafka 驱动的完整 PPT 端到端链路已经验收。
+
 方案 C 的基础闭环验收单独执行 `harness/scenarios/foundation-scheduling-closure.md`。该场景只要求
 真实 PostgreSQL、Redis、Kafka、`control-service`、`orchestrator-service` 和契约 Stub；不得因为
 真实 PPT 算子尚未接入而跳过基础运行时验证，也不得把静态 DDL 测试写成 Broker 闭环已通过。

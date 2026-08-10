@@ -55,6 +55,9 @@ Use the documented video task and callback fixture for real slicing verification
 ## Result Contract
 
 - Keep `POST /LocalVideoPPTSliceTasks/v1.0.0`.
+- The canonical source field is `video_path`. It accepts a remote URL with a scheme and host or an absolute local filesystem path. Reject relative local paths.
+- Normalize legacy `uri` input to `video_path` for compatibility, but all current callers and documentation must emit `video_path`.
+- Stream remote URLs without persisting the source MP4. Read local paths in place without copying or deleting the source file.
 - Requests and responses use the documented snake_case internal contract.
 - Write images only below `{result_root}/{task_id}/ppt/slices` and write `manifest.json` at `{result_root}/{task_id}/ppt/manifest.json`.
 - Publish images and the manifest through `.part` files followed by atomic replacement.

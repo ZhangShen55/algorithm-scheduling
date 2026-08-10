@@ -45,13 +45,30 @@ async def test_adapter_uses_new_platform_internal_submission_contract() -> None:
 
     assert captured["path"] == "/LocalVideoPPTSliceTasks/v1.0.0"
     assert captured["body"] == {
-        "uri": "/data/course/course-001/media/slides.mp4",
+        "video_path": "/data/course/course-001/media/slides.mp4",
         "task_id": "course-001",
         "operator_task_id": "ppt-run-001",
         "result_callback_uri": "http://orchestrator:18101/internal/ppt-slice/callback/11",
         "threshold": 0.98,
     }
     assert accepted.status == 50
+
+
+@pytest.mark.asyncio
+async def test_adapter_rejects_relative_local_video_path_before_http() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"不应发送请求: {request.url}")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = ppt_slice.PptSliceAdapter(client)
+        with pytest.raises(ValueError, match="绝对本地路径"):
+            await adapter.submit(
+                instance_url="http://ppt-slice:9001",
+                local_video_path=Path("media/slides.mp4"),
+                task_id="course-001",
+                operator_task_id="ppt-run-001",
+                callback_url="http://orchestrator:18101/internal/ppt-slice/callback/11",
+            )
 
 
 def test_terminal_callback_rejects_legacy_and_unsafe_identifiers() -> None:
