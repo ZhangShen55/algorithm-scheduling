@@ -10,7 +10,7 @@ RUN mv /etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo.bak &
     yum clean all && yum install -y vim
 
 # CentOS 7 仅 glibc 2.17；latest Miniconda 安装器要求 glibc >= 2.28，须固定旧版
-ARG MINICONDA_INSTALLER=Miniconda3-py310_23.11.0-2-Linux-x86_64.sh
+ARG MINICONDA_INSTALLER=Miniconda3-py311_23.11.0-2-Linux-x86_64.sh
 RUN wget -q "https://repo.anaconda.com/miniconda/${MINICONDA_INSTALLER}" -O /tmp/miniconda.sh && \
     bash /tmp/miniconda.sh -b -p /opt/conda && rm -f /tmp/miniconda.sh
 ENV PATH="/opt/conda/bin:$PATH"
@@ -25,7 +25,7 @@ RUN conda config --system --set show_channel_urls true && \
 
 # av 须从 conda 安装（PyPI 在 CentOS7 上常无 wheel，源码编译需 ffmpeg pkg-config）
 RUN conda create -n asr -y -c conda-forge \
-    python=3.10 \
+    python=3.11 \
     "ffmpeg>=6,<8" \
     av=14.4.0 \
     libsndfile \
@@ -41,10 +41,12 @@ RUN PIP_EXTRA_INDEX_URL=https://mirrors.aliyun.com/pypi/simple \
 RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
 
 WORKDIR /tmp/build
-COPY wheel/pyarrow-20.0.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl /tmp/wheels/pyarrow-20.0.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+ARG OPERATOR_REGISTRY_CLIENT_WHEEL=algorithm_operator_registry_client-0.1.0-py3-none-any.whl
+COPY wheel/${OPERATOR_REGISTRY_CLIENT_WHEEL} /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL}
 COPY requirements-pip.txt /tmp/requirements-pip.txt
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
-RUN pip install /tmp/wheels/pyarrow-20.0.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl && \
+RUN pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} && \
+    pip install --only-binary=:all: pyarrow==20.0.0 && \
     pip install --no-cache-dir --retries 10 --timeout 600 \
       --prefer-binary \
       -r /tmp/requirements-pip.txt

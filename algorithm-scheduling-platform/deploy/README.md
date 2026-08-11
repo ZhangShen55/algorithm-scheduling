@@ -60,18 +60,31 @@ contains two independent offline ASR and two independent realtime ASR endpoints 
 GPU 0/GPU 1, plus PPT slicing, OCR, text analysis, VBas, face recognition and image
 quality instances.
 
-Every image used by this compose file must include the
-`algorithm-scheduling-platform` Python distribution so that the operator can import
-`packages.operator_registry_client`. During local development install it into the
-operator environment from this repository:
+Every image used by this compose file must include the lightweight
+`algorithm-operator-registry-client` distribution so that the operator can import
+`packages.operator_registry_client`. Build it once and install the wheel into local
+operator environments:
 
 ```bash
-python -m pip install -e /absolute/path/to/algorithm-scheduling-platform
+cd packages/operator_registry_client
+python -m pip wheel --no-deps --wheel-dir dist .
+python -m pip install dist/algorithm_operator_registry_client-0.1.0-py3-none-any.whl
 ```
 
-Production images should install a versioned wheel built from this repository through
-the internal artifact repository. They must not mount or add the platform source tree
-to `PYTHONPATH`.
+All eight operator projects declare `algorithm-operator-registry-client==0.1.0` in
+their runtime requirements. Their Dockerfiles consume the same versioned artifact
+from an ignored `wheel/` build-context directory. Stage the generated wheel into all
+operator projects before building:
+
+```bash
+python scripts/stage_operator_registry_wheel.py
+```
+
+Production automation may instead download that exact wheel from the internal
+artifact repository into the build context. Images must not mount or add the platform
+source tree to `PYTHONPATH`. After an internal Python package index is available, the
+same exact requirement pin can be resolved from that index and the staging step can be
+replaced by the release pipeline.
 
 The infrastructure/platform Compose creates the shared `algorithm-platform` network.
 After it is running, validate and start the operator topology:

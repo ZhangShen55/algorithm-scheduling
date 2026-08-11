@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 COMMENT_MIGRATION = PROJECT_ROOT / "migrations/0004_schema_comments.sql"
 

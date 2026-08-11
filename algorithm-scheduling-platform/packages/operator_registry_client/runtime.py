@@ -14,8 +14,8 @@ from packages.operator_registry_client.client import (
     OperatorRegistryClientConfig,
     OperatorRuntimeStatus,
 )
+from packages.operator_registry_client.lifecycle import OperatorLifecycle
 from packages.operator_registry_client.ops import OperatorOpsStatus
-from packages.platform_common.operator_registry import OperatorLifecycle
 
 ModelReadyProvider = Callable[[], bool]
 InflightProvider = Callable[[], int]

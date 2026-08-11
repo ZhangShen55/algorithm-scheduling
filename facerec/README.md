@@ -44,7 +44,7 @@ app/
 
 ### 1) 环境要求
 
-- Python 3.8+
+- Python 3.10（当前 FastDeploy 1.0.7 的 macOS 本机验证版本）
 - MongoDB 4.4+
 - Dlib 编译依赖（cmake, libboost, libopencv）
 - GPU 可选（使用 fastdeploy-gpu-python）
@@ -52,21 +52,21 @@ app/
 ### 2) 安装依赖
 
 ```bash
-pip install -r app/requirements.txt
+pip install -r requirements.txt
 ```
 
 ### 3) 准备模型文件
 
-将模型文件放入 `app/ai_models/`：
+将模型文件放入项目根目录 `ai_models/`：
 
 - `shape_predictor_68_face_landmarks.dat`
 - `ms1mv3_arcface_r100.onnx`
 
-参考：`app/ai_models/README.md`
+参考：`ai_models/README.md`
 
 ### 4) 配置
 
-编辑 `app/config.toml`（按实际环境修改）：
+复制并编辑项目根目录的 `config.example.toml`，运行文件名为 `config.toml`；也可通过 `CONFIG_PATH` 指向其他位置：
 
 ```toml
 [db]
@@ -98,6 +98,7 @@ min_feature_image_height_px = 80
 max_feature_image_size_m = 10
 max_face_hw = 999
 min_face_hw = 50
+save_person_photo = false
 
 [stats]
 retention_days = 7
@@ -109,7 +110,7 @@ hourly_retention_days = 30
 在项目根目录执行：
 
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8003
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 1
 ```
 
 Swagger UI: `http://localhost:8003/docs`
@@ -171,7 +172,7 @@ POST /recognize
 - `_id`: ObjectId
 - `name`: 人物姓名
 - `number`: 唯一编号
-- `photo_path`: 裁剪人脸图片路径
+- `photo_path`: 裁剪人脸图片路径；`image.save_person_photo=false` 时为空字符串
 - `bbox`: 人脸框字符串 `x,y,w,h`
 - `embedding`: 512 维特征向量（Binary, float32 bytes）
 - `tip`: 图像质量提示
@@ -184,6 +185,7 @@ POST /recognize
 ## 说明与注意事项
 
 - `photo` 字段必须是 `data:image/...;base64,` 前缀的 Base64 字符串。
+- `image.save_person_photo=false` 只禁止裁剪图落盘；embedding、bbox、人物信息入库和识别均保持启用。
 - targets 为人员编号列表（`number`），匹配阈值为 `threshold / 2`。
 - Dlib 检测使用进程池，`threading.max_workers` 建议 1~2。
 - 日志由 `LOG_LEVEL` 与 `LOG_DIR` 环境变量控制，默认写入 `/app/logs/facerecapi.log`。

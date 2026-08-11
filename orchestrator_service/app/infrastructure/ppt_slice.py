@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from packages.platform_common.repository import NodeResultWrite
 from packages.platform_contracts.status import NodeStatus
@@ -43,6 +43,22 @@ class PptSliceAccepted(BaseModel):
         return value
 
 
+class PptDynamicSegment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: str
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(gt=0)
+    confidence: float = Field(ge=0, le=1)
+    reason: str
+
+    @model_validator(mode="after")
+    def validate_interval(self) -> PptDynamicSegment:
+        if self.start_ms >= self.end_ms:
+            raise ValueError("动态区间必须满足 start_ms < end_ms")
+        return self
+
+
 class PptSliceTerminalCallback(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -53,6 +69,7 @@ class PptSliceTerminalCallback(BaseModel):
     manifest_path: str
     count: int = Field(ge=0)
     reason: str = ""
+    dynamic_segments: list[PptDynamicSegment] = Field(default_factory=list)
 
     @field_validator("task_id", "operator_task_id")
     @classmethod
@@ -78,6 +95,7 @@ class ValidatedPptSliceResult:
     manifest_path: Path
     count: int
     images: tuple[PptSliceImage, ...]
+    dynamic_segments: tuple[PptDynamicSegment, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +150,17 @@ class PptSliceManifestValidator:
         self._result_root = result_root.expanduser().resolve()
         self._max_manifest_bytes = max_manifest_bytes
 
+    def _reject_symlink_ancestors(self, path: Path) -> None:
+        try:
+            relative = path.relative_to(self._result_root)
+        except ValueError as exc:
+            raise PptSliceManifestError("PPT 结果路径不在结果根目录") from exc
+        current = self._result_root
+        for part in relative.parts:
+            current = current / part
+            if current.is_symlink():
+                raise PptSliceManifestError("PPT 结果路径包含符号链接")
+
     def manifest_path(self, task_id: str) -> Path:
         if task_id in {".", ".."} or _TASK_ID_PATTERN.fullmatch(task_id) is None:
             raise PptSliceManifestError("PPT task_id 不合法")
@@ -144,6 +173,7 @@ class PptSliceManifestValidator:
         operator_task_id: str,
     ) -> PptSliceTerminalCallback | None:
         manifest_path = self.manifest_path(task_id)
+        self._reject_symlink_ancestors(manifest_path)
         if not manifest_path.exists():
             return None
         if manifest_path.is_symlink() or not manifest_path.is_file():
@@ -168,15 +198,20 @@ class PptSliceManifestValidator:
         if callback.status != NodeStatus.COMPLETED:
             raise PptSliceManifestError(callback.reason or "PPT 切片未成功完成")
 
-        task_ppt_root = (self._result_root / callback.task_id / "ppt").resolve()
+        task_ppt_root = self._result_root / callback.task_id / "ppt"
         expected_slices = task_ppt_root / "slices"
         expected_manifest = task_ppt_root / "manifest.json"
         callback_path = Path(callback.path).expanduser()
         callback_manifest = Path(callback.manifest_path).expanduser()
-        if not callback_path.is_absolute() or callback_path.resolve() != expected_slices:
+        if not callback_path.is_absolute() or callback_path.resolve() != expected_slices.resolve():
             raise PptSliceManifestError("PPT path 不在当前任务结果目录")
-        if not callback_manifest.is_absolute() or callback_manifest.resolve() != expected_manifest:
+        if (
+            not callback_manifest.is_absolute()
+            or callback_manifest.resolve() != expected_manifest.resolve()
+        ):
             raise PptSliceManifestError("PPT manifest_path 不在当前任务结果目录")
+        self._reject_symlink_ancestors(callback_path)
+        self._reject_symlink_ancestors(callback_manifest)
         if callback_path.is_symlink() or not callback_path.is_dir():
             raise PptSliceManifestError("PPT 切片结果目录不存在或不安全")
         if callback_manifest.is_symlink() or not callback_manifest.is_file():
@@ -200,6 +235,9 @@ class PptSliceManifestValidator:
             "manifest_path": callback.manifest_path,
             "count": callback.count,
             "reason": callback.reason,
+            "dynamic_segments": [
+                segment.model_dump() for segment in callback.dynamic_segments
+            ],
         }
         for key, expected in expected_metadata.items():
             if raw.get(key) != expected:
@@ -221,6 +259,7 @@ class PptSliceManifestValidator:
             except (KeyError, TypeError, ValueError) as exc:
                 raise PptSliceManifestError("PPT manifest 图片条目字段不合法") from exc
             resolved_image = image_path.resolve()
+            self._reject_symlink_ancestors(image_path)
             if (
                 not image_path.is_absolute()
                 or not resolved_image.is_relative_to(expected_slices)
@@ -251,6 +290,7 @@ class PptSliceManifestValidator:
             manifest_path=expected_manifest,
             count=callback.count,
             images=tuple(images),
+            dynamic_segments=tuple(callback.dynamic_segments),
         )
 
 
@@ -262,6 +302,13 @@ class PptTerminalRepository(Protocol):
         node_id: int,
         result: NodeResultWrite,
         *,
+        reason: str,
+    ) -> Any: ...
+
+    def transition_node(
+        self,
+        node_id: int,
+        status: NodeStatus,
         reason: str,
     ) -> Any: ...
 
@@ -334,10 +381,19 @@ class PptSliceTerminalHandler:
             raise PptSliceCallbackError("PPT 终态回调 operator_task_id 不匹配")
 
         node = self._repository.get_node(node_id)
-        if node.status is NodeStatus.COMPLETED:
+        if node.status is NodeStatus.COMPLETED and callback.status == NodeStatus.COMPLETED:
             return PptTerminalHandleResult(completed=True, duplicate=True)
+        if node.status is NodeStatus.FAILED and callback.status == NodeStatus.FAILED:
+            return PptTerminalHandleResult(completed=False, duplicate=True)
         if node.status is not NodeStatus.RUNNING:
             raise PptSliceCallbackError(f"PPT 节点当前状态不接受终态回调: {node.status}")
+
+        if callback.status == NodeStatus.FAILED:
+            reason = callback.reason or "PPT 切片处理失败"
+            self._repository.transition_node(node_id, NodeStatus.FAILED, reason)
+            return PptTerminalHandleResult(completed=False, duplicate=False)
+        if callback.status != NodeStatus.COMPLETED:
+            raise PptSliceCallbackError(f"PPT 终态状态不合法: {callback.status}")
 
         validated = self._validator.validate(callback)
         result = NodeResultWrite(
@@ -351,6 +407,9 @@ class PptSliceTerminalHandler:
                         "path": str(image.path),
                     }
                     for image in validated.images
+                ],
+                "dynamic_segments": [
+                    segment.model_dump() for segment in validated.dynamic_segments
                 ],
             },
             artifact_path=str(validated.path),
@@ -468,7 +527,9 @@ class PptCapacityLeaseKeeper:
         if self._released:
             return
         self._stop.set()
-        if self._task is not None:
-            await self._task
-        await self._client.release(self._lease_id)
-        self._released = True
+        try:
+            if self._task is not None:
+                await self._task
+        finally:
+            await self._client.release(self._lease_id)
+            self._released = True

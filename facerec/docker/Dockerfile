@@ -22,7 +22,10 @@ RUN apt-get update && apt-get install -y \
 RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel
 
 COPY requirements.txt /app/
-RUN pip3 install --no-cache-dir -r requirements.txt
+ARG OPERATOR_REGISTRY_CLIENT_WHEEL=algorithm_operator_registry_client-0.1.0-py3-none-any.whl
+COPY wheel/${OPERATOR_REGISTRY_CLIENT_WHEEL} /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL}
+RUN python3 -m pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} && \
+    pip3 install --no-cache-dir -r requirements.txt
 
 COPY . /app/
 

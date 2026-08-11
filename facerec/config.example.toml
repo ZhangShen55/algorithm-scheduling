@@ -1,0 +1,41 @@
+[db]
+username = "root"  # MongoDB 用户名
+password = "change-me"  # MongoDB 密码，生产环境请通过受控配置注入
+host = "127.0.0.1"  # MongoDB 地址
+port = "27017"  # MongoDB 端口
+database = "facerecapi"  # 人脸库数据库名
+auth_source = "admin"  # MongoDB 认证库
+limit = 5000  # 人脸库查询最大返回条数
+
+[face]
+threshold = 0.4  # 人脸识别阈值
+candidate_threshold = 0.2  # 候选人脸阈值
+rec_min_face_hw = 50  # 识别阶段允许的最小人脸宽高
+
+[gpu]
+device = "cpu"  # 可选 cpu 或 cuda:N，例如 cuda:0
+
+[threading]
+max_workers = 2  # Dlib 人脸检测进程数
+
+[frontlogin]
+username = "admin"  # 内置管理页面用户名
+password = "change-me"  # 内置管理页面密码
+
+[image]
+max_feature_image_width_px = 9999  # 特征录入图片最大宽度
+max_feature_image_height_px = 9999  # 特征录入图片最大高度
+min_feature_image_width_px = 80  # 特征录入图片最小宽度
+min_feature_image_height_px = 80  # 特征录入图片最小高度
+max_feature_image_size_m = 10  # 特征录入图片最大体积，单位 MB
+max_face_hw = 999  # 特征提取阶段最大人脸宽高
+min_face_hw = 50  # 特征提取阶段最小人脸宽高
+save_person_photo = false  # false 时只保存 embedding，不保存裁剪后的人脸图片
+
+[logger]
+level = "INFO"  # 日志级别
+log_path = "./logs/facere_service.log"  # 日志文件路径
+
+[stats]
+retention_days = 7  # API 详细统计保留天数
+hourly_retention_days = 30  # 小时聚合统计保留天数

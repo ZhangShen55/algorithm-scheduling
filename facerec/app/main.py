@@ -13,6 +13,7 @@ from app.core.database import db
 from app.core import ai_engine
 from app.core.config import settings
 from app.core.logger import get_logger
+from app.core.runtime_paths import ensure_runtime_directories
 from app.router import faces, persons, web, ops
 from app.core.logger import request_id_ctx, new_request_id
 from app.middleware import APIStatsMiddleware
@@ -24,6 +25,7 @@ logger = get_logger(__name__)
 APP_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = APP_DIR.parent
 MAX_WORKERS = settings.thread.max_workers
+ensure_runtime_directories(PROJECT_ROOT)
 
 # ---------------- 生命周期管理 (核心) ----------------
 @asynccontextmanager

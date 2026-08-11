@@ -24,6 +24,9 @@ python -m pytest -q tests/test_ppt_slice_adapter.py tests/test_platform_compose.
 conda run -n ppt_slice python -m unittest discover -s ../ppt_slice/tests -v
 ```
 
+算子本机真实运行的输入、环境、结果与缺口见
+`harness/scenarios/operator-local-runtime-validation.md`。该场景必须与课程 DAG 验收分开计数。
+
 Root-service relocation image checks use the workspace root as build context:
 
 ```bash
@@ -63,6 +66,15 @@ Integration and runtime commands must record infrastructure versions and contain
 方案 C 的基础闭环验收单独执行 `harness/scenarios/foundation-scheduling-closure.md`。该场景只要求
 真实 PostgreSQL、Redis、Kafka、`control-service`、`orchestrator-service` 和契约 Stub；不得因为
 真实 PPT 算子尚未接入而跳过基础运行时验证，也不得把静态 DDL 测试写成 Broker 闭环已通过。
+
+## 2026-08-11 算子本机运行与 PPT 最新终态合同
+
+- 注册客户端构建为 `algorithm_operator_registry_client-0.1.0-py3-none-any.whl`，要求 Python 3.10+，不携带平台内部包。
+- ASR 最终环境 `asr` 使用 Python 3.11.13；FaceRec 最终环境 `facerecapi` 使用 Python 3.10.19。
+- FaceRec 3.11 被 FastDeploy 的 CPython 3.10 macOS 扩展阻塞；未更换推理后端。
+- 八类算子均完成本机业务调用；PPT 使用合成 MP4，只证明机制，真实课程 P 视频仍待提供。
+- PPT 平台适配器现在接收并持久化 `dynamic_segments`，处理失败终态，拒绝祖先符号链接，并保证续租后台任务失败时仍释放容量。
+- 这些结果不表示 orchestrator factory 已注入 PPT handler；当前默认应用上的真实回调路由仍会返回 503，直到里程碑 2 接线完成。
 
 本机 PostgreSQL 现状使用以下只读查询复核；未经用户明确要求，不在审计步骤执行 DDL：
 

@@ -16,11 +16,11 @@ class AsrRequestParams:
     # output: Optional[str] = "json"
     language: Optional[str] = "auto"
     # task: Optional[str] = "transcribe"
-    showSpk: bool = False
+    showSpk: bool = True
     openPanel: bool = False
-    showEmotion: bool = False
+    showEmotion: bool = True
     showSpeed: bool = False
-    showRoleIdentify: bool = True
+    showRoleIdentify: bool = False
     # ws: Optional[websockets.WebSocketClientProtocol] = None  # 如果使用，需要取消注释
 
     # def hotwords_as_string(self) -> str:
@@ -33,11 +33,11 @@ async def get_asr_params(
     wordTimestamps: Annotated[bool, Form()] = False,
     output: Annotated[Optional[str], Form()] = None,
     hotWords: Annotated[Optional[List[str]], Form()] = None,
-    showSpk: Annotated[bool, Form()] = False,
+    showSpk: Annotated[bool, Form()] = True,
     openPanel: Annotated[bool, Form()] = False,
-    showEmotion: Annotated[bool, Form()] = False,
+    showEmotion: Annotated[bool, Form()] = True,
     showSpeed: Annotated[bool, Form()] = False,
-    showRoleIdentify: Annotated[bool, Form()] = True,
+    showRoleIdentify: Annotated[bool, Form()] = False,
 ) -> AsrRequestParams:
     if hotWords is None:
         hotWords = []

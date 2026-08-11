@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "algorithm-operator-registry-client"
+version = "0.1.0"
+description = "Lightweight runtime registration client for algorithm operators"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.109,<1",
+  "httpx>=0.25,<1",
+  "pydantic>=2.5,<3",
+]
+
+[tool.setuptools]
+packages = ["packages.operator_registry_client"]
+package-dir = {"packages.operator_registry_client" = "."}

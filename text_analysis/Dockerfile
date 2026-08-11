@@ -9,7 +9,10 @@ WORKDIR /build
 
 # 安装运行依赖 + PyArmor
 COPY requirements.txt /build/
-RUN pip install --no-cache-dir -r requirements.txt && \
+ARG OPERATOR_REGISTRY_CLIENT_WHEEL=algorithm_operator_registry_client-0.1.0-py3-none-any.whl
+COPY wheel/${OPERATOR_REGISTRY_CLIENT_WHEEL} /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL}
+RUN pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} && \
+    pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir pyarmor
 
 # 拷贝源码（config.toml 不拷贝，运行时挂载）
@@ -48,7 +51,10 @@ WORKDIR /app
 
 # 仅装运行依赖
 COPY requirements.txt /app/
-RUN pip install --no-cache-dir -r /app/requirements.txt
+ARG OPERATOR_REGISTRY_CLIENT_WHEEL=algorithm_operator_registry_client-0.1.0-py3-none-any.whl
+COPY wheel/${OPERATOR_REGISTRY_CLIENT_WHEEL} /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL}
+RUN pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} && \
+    pip install --no-cache-dir -r /app/requirements.txt
 
 # 拷贝混淆后的代码与启动脚本
 COPY --from=builder /build/obf /app
