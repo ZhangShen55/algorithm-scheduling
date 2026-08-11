@@ -6,6 +6,7 @@ from typing import Any
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer  # type: ignore[import-untyped]
 from aiokafka.admin import AIOKafkaAdminClient, NewTopic  # type: ignore[import-untyped]
+from aiokafka.errors import TopicAlreadyExistsError  # type: ignore[import-untyped]
 from aiokafka.structs import OffsetAndMetadata, TopicPartition  # type: ignore[import-untyped]
 
 REQUIRED_TOPICS = (
@@ -145,16 +146,19 @@ class KafkaTopicManager:
             existing = await self._admin.list_topics()
             missing = tuple(topic for topic in self._topics if topic not in existing)
             if missing:
-                await self._admin.create_topics(
-                    [
-                        NewTopic(
-                            name=topic,
-                            num_partitions=self._partitions,
-                            replication_factor=self._replication_factor,
-                        )
-                        for topic in missing
-                    ]
-                )
+                try:
+                    await self._admin.create_topics(
+                        [
+                            NewTopic(
+                                name=topic,
+                                num_partitions=self._partitions,
+                                replication_factor=self._replication_factor,
+                            )
+                            for topic in missing
+                        ]
+                    )
+                except TopicAlreadyExistsError:
+                    pass
             return missing
         finally:
             await self._admin.close()

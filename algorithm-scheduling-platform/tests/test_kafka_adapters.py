@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+from aiokafka.errors import TopicAlreadyExistsError
 from aiokafka.structs import TopicPartition
 
 from packages.platform_common.kafka import (
@@ -94,8 +95,14 @@ class FakeConsumer:
 
 
 class FakeAdmin:
-    def __init__(self, existing_topics: set[str] | None = None) -> None:
+    def __init__(
+        self,
+        existing_topics: set[str] | None = None,
+        *,
+        create_error: Exception | None = None,
+    ) -> None:
         self.existing_topics = existing_topics or set()
+        self.create_error = create_error
         self.started = False
         self.closed = False
         self.created: list[str] = []
@@ -110,6 +117,8 @@ class FakeAdmin:
         return set(self.existing_topics)
 
     async def create_topics(self, topics: list[Any]) -> None:
+        if self.create_error is not None:
+            raise self.create_error
         self.created.extend(topic.name for topic in topics)
 
 
@@ -188,4 +197,20 @@ async def test_topic_manager_creates_only_missing_required_topics() -> None:
     }
     assert set(admin.created) == set(created)
     assert admin.started is True
+    assert admin.closed is True
+
+
+@pytest.mark.asyncio
+async def test_topic_manager_treats_concurrent_topic_creation_as_idempotent() -> None:
+    admin = FakeAdmin(create_error=TopicAlreadyExistsError("并发创建"))
+    manager = KafkaTopicManager(
+        bootstrap_servers=["127.0.0.1:9092"],
+        client_id="test-admin-race",
+        topics=("algorithm.course.commands",),
+        admin_factory=lambda **_: admin,
+    )
+
+    created = await manager.ensure_topics()
+
+    assert created == ("algorithm.course.commands",)
     assert admin.closed is True
