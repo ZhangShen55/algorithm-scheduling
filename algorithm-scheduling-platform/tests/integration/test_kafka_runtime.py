@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import re
 import subprocess
+import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from aiokafka.admin import AIOKafkaAdminClient
+from aiokafka.admin import AIOKafkaAdminClient  # type: ignore[import-untyped]
 
 from packages.platform_common.kafka import (
     AioKafkaConsumerAdapter,
@@ -60,6 +62,8 @@ def _delete_group_cli(group_id: str) -> None:
 
 
 async def _delete_kafka_resources(topic: str, *group_ids: str) -> None:
+    if re.fullmatch(r"algorithm\.test\.milestone2a\.[0-9a-f]{32}", topic) is None:
+        raise AssertionError(f"拒绝删除非 Kafka 测试 Topic: {topic}")
     admin = AIOKafkaAdminClient(
         bootstrap_servers=BOOTSTRAP_SERVERS,
         client_id=f"milestone-2a-cleanup-{uuid4().hex[:8]}",
@@ -76,14 +80,101 @@ async def _delete_kafka_resources(topic: str, *group_ids: str) -> None:
             ):
                 raise AssertionError(f"拒绝删除非 Kafka 测试 Consumer Group: {group_id}")
         existing_groups = {str(row[0]) for row in await admin.list_consumer_groups()}
+        steps: list[tuple[str, Callable[[], Awaitable[object]]]] = []
         for group_id in group_ids:
             if group_id in existing_groups:
-                await asyncio.to_thread(_delete_group_cli, group_id)
+                async def delete_group(selected: str = group_id) -> None:
+                    await asyncio.to_thread(_delete_group_cli, selected)
+
+                steps.append(
+                    (
+                        f"group:{group_id}",
+                        delete_group,
+                    )
+                )
+        steps.append(("topic", lambda: admin.delete_topics([topic])))
+        errors = await _run_async_cleanup_steps(tuple(steps))
         remaining_groups = {str(row[0]) for row in await admin.list_consumer_groups()}
-        assert not (set(group_ids) & remaining_groups)
-        await admin.delete_topics([topic])
+        if set(group_ids) & remaining_groups:
+            errors.append(("group_verify", RuntimeError("测试 Group 清理后仍存在")))
+        deadline = asyncio.get_running_loop().time() + 10
+        while asyncio.get_running_loop().time() < deadline:
+            if topic not in await admin.list_topics():
+                break
+            await asyncio.sleep(0.05)
+        else:
+            errors.append(("topic_verify", RuntimeError(f"Topic 清理后仍存在: {topic}")))
+        _report_cleanup_errors(errors, None)
     finally:
         await admin.close()
+
+
+@pytest.mark.asyncio
+async def test_kafka_cleanup_rejects_non_test_topic_before_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailIfConstructed:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            raise AssertionError("Kafka Admin 不应被构造")
+
+    monkeypatch.setattr(sys.modules[__name__], "AIOKafkaAdminClient", FailIfConstructed)
+
+    with pytest.raises(AssertionError, match="拒绝删除非 Kafka 测试 Topic"):
+        await _delete_kafka_resources(
+            "algorithm.course.commands",
+            "algorithm-test-committed-0123456789abcdef0123456789abcdef",
+        )
+
+
+@pytest.mark.asyncio
+async def test_async_cleanup_steps_continue_after_an_earlier_failure() -> None:
+    calls: list[str] = []
+
+    async def fail() -> None:
+        calls.append("producer")
+        raise RuntimeError("producer stop failed")
+
+    async def succeed() -> None:
+        calls.append("kafka")
+
+    errors = await _run_async_cleanup_steps(
+        (("producer", fail), ("kafka", succeed))
+    )
+
+    assert calls == ["producer", "kafka"]
+    assert len(errors) == 1
+    assert errors[0][0] == "producer"
+
+
+CleanupError = tuple[str, Exception]
+
+
+async def _run_async_cleanup_steps(
+    steps: tuple[tuple[str, Callable[[], Awaitable[object]]], ...],
+) -> list[CleanupError]:
+    errors: list[CleanupError] = []
+    for name, operation in steps:
+        try:
+            await operation()
+        except Exception as exc:
+            errors.append((name, exc))
+    return errors
+
+
+def _report_cleanup_errors(
+    errors: list[CleanupError],
+    original_error: BaseException | None,
+) -> None:
+    if not errors:
+        return
+    if original_error is not None:
+        for name, error in errors:
+            original_error.add_note(f"清理步骤 {name} 失败: {error!r}")
+        return
+    raise ExceptionGroup(
+        "Kafka Broker 测试清理失败",
+        [RuntimeError(f"{name}: {error!r}") for name, error in errors],
+    )
 
 
 @pytest.mark.asyncio
@@ -166,5 +257,16 @@ async def test_real_kafka_publish_manual_commit_and_uncommitted_redelivery() -> 
         finally:
             await second_delivery.stop()
     finally:
-        await producer.stop()
-        await _delete_kafka_resources(topic, committed_group, redelivery_group)
+        original_error = sys.exception()
+        cleanup_errors = await _run_async_cleanup_steps(
+            (
+                ("producer", producer.stop),
+                (
+                    "kafka",
+                    lambda: _delete_kafka_resources(
+                        topic, committed_group, redelivery_group
+                    ),
+                ),
+            )
+        )
+        _report_cleanup_errors(cleanup_errors, original_error)

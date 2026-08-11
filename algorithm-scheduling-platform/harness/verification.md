@@ -125,10 +125,13 @@ docker compose -f deploy/docker-compose.infrastructure.yml exec -T redis \
 命令不得出现 skipped。运行时每次创建唯一 `_test` PostgreSQL 数据库、Redis DB 14 UUID 前缀、
 唯一 Kafka Topic/Consumer Group 和临时服务端口；不会连接或清理 `algorithm` 业务数据库。JSON
 证据写入 gitignore 的 `harness/reports/milestone-2a/`，应包含容器健康和版本、Outbox
-`published_at`/尝试次数、重启前后 Kafka offset、节点/任务轨迹、Stub 调用顺序、租约清理、
-Control/Stub/orchestrator 健康响应、两次 orchestrator readiness 和不同 PID/启动序号/停止日志，
-以及本次唯一 Consumer Group 精确删除验证和最终 GET。所有健康/readiness 探针必须为 HTTP 200；
-404 等非 200 响应不算启动成功。
+`published_at`/尝试次数、重启前后 Kafka committed/end offset、节点/任务轨迹、Stub 调用顺序、
+终态后的有界租约清理轮询、Control/Stub/orchestrator 健康响应、两次 orchestrator readiness 和不同
+PID/启动序号/停止日志/真实退出码/强杀与提前退出标记，以及本次唯一 Consumer Group 精确删除验证和
+最终 GET。所有健康/readiness 探针必须为 HTTP 200；404 等非 200 响应不算启动成功。重启恢复必须先
+等待 Outbox 重新发布完成，再证明 committed offset 和 Topic end offset 均精确为 4，并经过短暂静默窗口
+复核仍为 4。teardown 必须尝试全部进程、Redis、Kafka Group/Topic 和临时目录清理；删除 Topic 前先校验
+完整测试命名，删除后轮询确认不存在。
 
 2026-08-11 单场景实测：PostgreSQL 17.10、Redis 7.4.10、Kafka 4.0.0 均 healthy；首次 offset
 为 2，停止并重启 orchestrator、注入重复消息及恢复一条 Outbox 后 offset 为 4；任务事实仍为 2 个

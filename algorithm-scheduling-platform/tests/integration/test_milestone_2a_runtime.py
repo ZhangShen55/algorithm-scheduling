@@ -1,26 +1,30 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import re
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 from uuid import uuid4
 
 import httpx
 import psycopg
 import pytest
 import redis
-from aiokafka.admin import AIOKafkaAdminClient
+from aiokafka import AIOKafkaConsumer  # type: ignore[import-untyped]
+from aiokafka.admin import AIOKafkaAdminClient  # type: ignore[import-untyped]
+from aiokafka.structs import TopicPartition  # type: ignore[import-untyped]
 from psycopg import sql
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
@@ -39,8 +43,11 @@ DEFAULT_POSTGRES_TEMPLATE_DSN = (
 
 
 class MilestonePostgres(Protocol):
-    dsn: str
-    raw_dsn: str
+    @property
+    def dsn(self) -> str: ...
+
+    @property
+    def raw_dsn(self) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -113,6 +120,8 @@ class UvicornRun:
     health_response: dict[str, Any] | None = None
     stop_log: str | None = None
     exit_code: int | None = None
+    forced_kill: bool = False
+    unexpected_exit_before_stop: bool = False
 
     def evidence(self) -> dict[str, Any]:
         return {
@@ -121,6 +130,8 @@ class UvicornRun:
             "health_response": self.health_response,
             "stop_log": self.stop_log,
             "exit_code": self.exit_code,
+            "forced_kill": self.forced_kill,
+            "unexpected_exit_before_stop": self.unexpected_exit_before_stop,
         }
 
 
@@ -176,12 +187,21 @@ class UvicornProcess:
         run = self.runs[-1]
         assert run.pid == process.pid
         if process.poll() is None:
-            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
             try:
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
+                run.forced_kill = True
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 process.wait(timeout=5)
+        else:
+            run.unexpected_exit_before_stop = True
         output = process.stdout.read() if process.stdout is not None else ""
         run.stop_log = output
         run.exit_code = process.returncode
@@ -235,6 +255,129 @@ def test_wait_http_rejects_non_200_response(monkeypatch: pytest.MonkeyPatch) -> 
 
     with pytest.raises(AssertionError, match="等待 HTTP 端点超时"):
         _wait_http("http://stub.invalid/health", timeout_seconds=0.01)
+
+
+class _RaceProcess:
+    pid = 12345
+    returncode: int | None = None
+    stdout = io.StringIO("race-stop-log")
+
+    def poll(self) -> int | None:
+        return None
+
+    def wait(self, timeout: float) -> int:
+        self.returncode = 0
+        return 0
+
+
+def test_uvicorn_stop_tolerates_process_lookup_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = UvicornProcess("tests.fake:app", 12345, {})
+    process.process = _RaceProcess()  # type: ignore[assignment]
+    process.runs.append(UvicornRun(sequence=1, pid=12345))
+    monkeypatch.setattr(os, "killpg", lambda *args: (_ for _ in ()).throw(ProcessLookupError()))
+
+    run = process.stop()
+
+    assert run is not None
+    assert run.forced_kill is False
+    assert run.unexpected_exit_before_stop is False
+    assert run.exit_code == 0
+
+
+class _ExitedProcess(_RaceProcess):
+    returncode = 7
+
+    def poll(self) -> int:
+        return 7
+
+
+def test_uvicorn_stop_marks_process_that_exited_before_stop() -> None:
+    process = UvicornProcess("tests.fake:app", 12345, {})
+    process.process = _ExitedProcess()  # type: ignore[assignment]
+    process.runs.append(UvicornRun(sequence=1, pid=12345))
+
+    run = process.stop()
+
+    assert run is not None
+    assert run.unexpected_exit_before_stop is True
+    assert run.forced_kill is False
+    assert run.exit_code == 7
+
+
+def test_cleanup_steps_continue_after_an_earlier_failure() -> None:
+    calls: list[str] = []
+
+    def fail() -> None:
+        calls.append("first")
+        raise RuntimeError("first cleanup failed")
+
+    def succeed() -> None:
+        calls.append("second")
+
+    errors = _run_cleanup_steps((("first", fail), ("second", succeed)))
+
+    assert calls == ["first", "second"]
+    assert len(errors) == 1
+    assert errors[0][0] == "first"
+
+
+CleanupError = tuple[str, Exception]
+
+
+def _run_cleanup_steps(
+    steps: tuple[tuple[str, Callable[[], object]], ...],
+) -> list[CleanupError]:
+    errors: list[CleanupError] = []
+    for name, operation in steps:
+        try:
+            operation()
+        except Exception as exc:
+            errors.append((name, exc))
+    return errors
+
+
+async def _run_async_cleanup_steps(
+    steps: tuple[tuple[str, Callable[[], Awaitable[object]]], ...],
+) -> list[CleanupError]:
+    errors: list[CleanupError] = []
+    for name, operation in steps:
+        try:
+            await operation()
+        except Exception as exc:
+            errors.append((name, exc))
+    return errors
+
+
+def _report_cleanup_errors(
+    errors: list[CleanupError],
+    original_error: BaseException | None,
+) -> None:
+    if not errors:
+        return
+    if original_error is not None:
+        for name, error in errors:
+            original_error.add_note(f"清理步骤 {name} 失败: {error!r}")
+        return
+    raise ExceptionGroup(
+        "里程碑 2A Harness 清理失败",
+        [RuntimeError(f"{name}: {error!r}") for name, error in errors],
+    )
+
+
+@pytest.mark.asyncio
+async def test_runtime_topic_cleanup_rejects_non_test_topic_before_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailIfConstructed:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            raise AssertionError("Kafka Admin 不应被构造")
+
+    monkeypatch.setattr(sys.modules[__name__], "AIOKafkaAdminClient", FailIfConstructed)
+
+    with pytest.raises(AssertionError, match="拒绝删除非里程碑 2A Topic"):
+        await _delete_topics("algorithm.course.commands")
 
 
 def _poll(
@@ -295,8 +438,11 @@ def _infrastructure_evidence(engine: Any) -> dict[str, Any]:
     with engine.connect() as connection:
         postgres_version = connection.execute(text("SHOW server_version")).scalar_one()
     redis_client = redis.Redis.from_url("redis://127.0.0.1:6379/14", decode_responses=True)
-    redis_version = redis_client.info("server")["redis_version"]
-    redis_client.close()
+    try:
+        server_info = cast(dict[str, Any], redis_client.info("server"))
+        redis_version = str(server_info["redis_version"])
+    finally:
+        redis_client.close()
     return {
         "containers": [
             {
@@ -327,6 +473,44 @@ async def _group_offsets(group_id: str) -> dict[str, int]:
         }
     finally:
         await admin.close()
+
+
+async def _topic_end_offsets(topic: str) -> dict[str, int]:
+    consumer = AIOKafkaConsumer(
+        topic,
+        bootstrap_servers=BOOTSTRAP_SERVERS,
+        client_id=f"milestone-2a-end-offset-{uuid4().hex[:8]}",
+        enable_auto_commit=False,
+    )
+    await consumer.start()
+    try:
+        partitions = consumer.partitions_for_topic(topic)
+        assert partitions is not None, f"Kafka Topic 不存在: {topic}"
+        topic_partitions = [TopicPartition(topic, partition) for partition in partitions]
+        offsets = await consumer.end_offsets(topic_partitions)
+        return {
+            f"{partition.topic}:{partition.partition}": int(offset)
+            for partition, offset in offsets.items()
+        }
+    finally:
+        await consumer.stop()
+
+
+def _lease_snapshot(client: redis.Redis, prefix: str) -> dict[str, Any]:
+    lease_keys = list(client.scan_iter(match=f"{prefix}lease:*"))
+    instance_lease_sets = list(client.scan_iter(match=f"{prefix}leases:*"))
+    return {
+        "lease_keys": lease_keys,
+        "instance_lease_counts": {
+            key: cast(int, client.scard(key)) for key in instance_lease_sets
+        },
+    }
+
+
+def _leases_released(snapshot: dict[str, Any]) -> bool:
+    return not snapshot["lease_keys"] and all(
+        count == 0 for count in snapshot["instance_lease_counts"].values()
+    )
 
 
 async def _consumer_groups() -> set[str]:
@@ -399,6 +583,21 @@ async def _publish_duplicate(topic: str, envelope: dict[str, Any]) -> None:
 
 
 async def _delete_topics(*topics: str) -> None:
+    if len(topics) != 3:
+        raise AssertionError(f"拒绝删除非里程碑 2A Topic 集合: {topics!r}")
+    base_match = re.fullmatch(
+        r"algorithm\.test\.milestone2a\.runtime\.([0-9a-f]{32})",
+        topics[0],
+    )
+    if base_match is None:
+        raise AssertionError(f"拒绝删除非里程碑 2A Topic: {topics[0]}")
+    expected = (
+        topics[0],
+        f"{topics[0]}.visual.commands",
+        f"{topics[0]}.visual.events",
+    )
+    if topics != expected:
+        raise AssertionError(f"拒绝删除 UUID 不一致的里程碑 2A Topic: {topics!r}")
     admin = AIOKafkaAdminClient(
         bootstrap_servers=BOOTSTRAP_SERVERS,
         client_id=f"milestone-2a-cleanup-{uuid4().hex[:8]}",
@@ -409,22 +608,41 @@ async def _delete_topics(*topics: str) -> None:
         selected = [topic for topic in topics if topic in existing]
         if selected:
             await admin.delete_topics(selected)
+        deadline = asyncio.get_running_loop().time() + 10
+        while asyncio.get_running_loop().time() < deadline:
+            remaining = set(topics) & set(await admin.list_topics())
+            if not remaining:
+                return
+            await asyncio.sleep(0.05)
+        raise AssertionError(f"Kafka Topic 删除后仍存在: {sorted(remaining)}")
     finally:
         await admin.close()
 
 
 async def _cleanup_kafka_resources(group_id: str, *topics: str) -> bool:
-    group_deleted = await _delete_consumer_group(group_id)
-    await _delete_topics(*topics)
+    result: dict[str, bool] = {"group_deleted": False}
+
+    async def delete_group() -> None:
+        result["group_deleted"] = await _delete_consumer_group(group_id)
+
+    errors = await _run_async_cleanup_steps(
+        (
+            ("consumer_group", delete_group),
+            ("topics", lambda: _delete_topics(*topics)),
+        )
+    )
     if group_id in await _consumer_groups():
-        raise AssertionError(f"Kafka Consumer Group 清理验证失败: {group_id}")
-    return group_deleted
+        errors.append(
+            ("consumer_group_verify", RuntimeError(f"Group 仍存在: {group_id}"))
+        )
+    _report_cleanup_errors(errors, None)
+    return result["group_deleted"]
 
 
 @contextmanager
 def _services(
     postgres: MilestonePostgres,
-) -> Iterator[tuple[UvicornProcess, UvicornProcess, UvicornProcess, dict[str, str]]]:
+) -> Iterator[tuple[UvicornProcess, UvicornProcess, UvicornProcess, dict[str, Any]]]:
     suffix = uuid4().hex
     control_port, orchestrator_port, stub_port = (_free_port() for _ in range(3))
     redis_prefix = f"milestone-2a:{suffix}:"
@@ -481,7 +699,7 @@ def _services(
         orchestrator_port,
         orchestrator_env,
     )
-    metadata = {
+    metadata: dict[str, Any] = {
         "suffix": suffix,
         "redis_prefix": redis_prefix,
         "topic": topic,
@@ -493,35 +711,56 @@ def _services(
         "stub_url": f"http://127.0.0.1:{stub_port}",
     }
     logs: list[str] = []
+    original_error: BaseException | None = None
     try:
         control.start()
         stub.start()
         yield control, orchestrator, stub, metadata
+    except BaseException as exc:
+        original_error = exc
+        raise
     finally:
-        orchestrator.stop()
-        stub.stop()
-        control.stop()
+        def cleanup_redis() -> None:
+            redis_client = redis.Redis.from_url(
+                "redis://127.0.0.1:6379/14", decode_responses=True
+            )
+            try:
+                keys = list(redis_client.scan_iter(match=f"{redis_prefix}*"))
+                if keys:
+                    redis_client.delete(*keys)
+            finally:
+                redis_client.close()
+
+        def cleanup_kafka() -> None:
+            metadata["consumer_group_deleted"] = asyncio.run(
+                _cleanup_kafka_resources(
+                    group,
+                    topic,
+                    visual_command_topic,
+                    visual_event_topic,
+                )
+            )
+
+        cleanup_errors = _run_cleanup_steps(
+            (
+                ("orchestrator.stop", orchestrator.stop),
+                ("stub.stop", stub.stop),
+                ("control.stop", control.stop),
+                ("redis", cleanup_redis),
+                ("kafka", cleanup_kafka),
+                ("storage", storage.cleanup),
+            )
+        )
         logs.extend(
             run.stop_log or ""
             for service in (orchestrator, stub, control)
             for run in service.runs
         )
-        redis_client = redis.Redis.from_url("redis://127.0.0.1:6379/14", decode_responses=True)
-        keys = list(redis_client.scan_iter(match=f"{redis_prefix}*"))
-        if keys:
-            redis_client.delete(*keys)
-        redis_client.close()
-        metadata["consumer_group_deleted"] = asyncio.run(
-            _cleanup_kafka_resources(
-                group,
-                topic,
-                visual_command_topic,
-                visual_event_topic,
-            )
-        )
-        storage.cleanup()
         if any("Traceback" in output for output in logs):
-            pytest.fail("Uvicorn 日志包含 Traceback:\n" + "\n".join(logs))
+            cleanup_errors.append(
+                ("uvicorn_logs", RuntimeError("Uvicorn 日志包含 Traceback"))
+            )
+        _report_cleanup_errors(cleanup_errors, original_error)
 
 
 def test_real_milestone_2a_runtime_closes_and_recovers(
@@ -580,7 +819,7 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
                 selected_task_id: str = task_id,
                 selected_trajectory: list[dict[str, Any]] = trajectory,
             ) -> dict[str, Any]:
-                payload = httpx.get(
+                payload: dict[str, Any] = httpx.get(
                     f"{control_url}/api/course-jobs/{selected_task_id}", timeout=2
                 ).json()
                 snapshot = _status_snapshot(payload)
@@ -650,12 +889,55 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
             timeout_seconds=20,
             process=orchestrator,
         )
-        offsets_after_restart = _poll(
-            lambda: asyncio.run(_group_offsets(metadata["group"])),
-            lambda offsets: offsets.get(f"{metadata['topic']}:0", -1) >= 4,
-            message="orchestrator 重启后未从已提交 offset 继续消费重复消息",
+
+        def query_outbox_after_restart() -> list[dict[str, Any]]:
+            with engine.connect() as connection:
+                return [
+                    dict(row)
+                    for row in connection.execute(
+                        text(
+                            "SELECT event_id, published_at, publish_attempts "
+                            "FROM outbox_events ORDER BY created_at, event_id"
+                        )
+                    ).mappings()
+                ]
+
+        outbox_after = _poll(
+            query_outbox_after_restart,
+            lambda rows: (
+                all(row["published_at"] is not None for row in rows)
+                and max(row["publish_attempts"] for row in rows) >= 2
+            ),
+            message="orchestrator 重启后 Outbox 未完成重新发布",
         )
+        evidence["outbox_after_restart"] = [
+            {key: str(value) for key, value in row.items()} for row in outbox_after
+        ]
+
+        topic_partition = f"{metadata['topic']}:0"
+
+        def kafka_offsets() -> dict[str, dict[str, int]]:
+            return {
+                "committed": asyncio.run(_group_offsets(metadata["group"])),
+                "end": asyncio.run(_topic_end_offsets(metadata["topic"])),
+            }
+
+        offsets_after_restart = _poll(
+            kafka_offsets,
+            lambda offsets: (
+                offsets["committed"].get(topic_partition) == 4
+                and offsets["end"].get(topic_partition) == 4
+            ),
+            message="orchestrator 重启后的 committed/end offset 未精确收敛到 4",
+        )
+        assert offsets_after_restart["committed"][topic_partition] == 4
+        assert offsets_after_restart["end"][topic_partition] == 4
         evidence["kafka_offsets_after_restart"] = offsets_after_restart
+        time.sleep(0.25)
+        quiet_offsets = kafka_offsets()
+        assert quiet_offsets["committed"][topic_partition] == 4
+        assert quiet_offsets["end"][topic_partition] == 4
+        evidence["kafka_offsets_after_quiet_window"] = quiet_offsets
         with engine.connect() as connection:
             counts = dict(
                 connection.execute(
@@ -749,34 +1031,21 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
             assert trajectory[-1]["task_status"] == 60
             assert set(trajectory[-1]["nodes"].values()) == {60}
 
-        redis_client = redis.Redis.from_url("redis://127.0.0.1:6379/14", decode_responses=True)
-        lease_keys = list(redis_client.scan_iter(match=f"{metadata['redis_prefix']}lease:*"))
-        instance_lease_sets = list(
-            redis_client.scan_iter(match=f"{metadata['redis_prefix']}leases:*")
+        redis_client = redis.Redis.from_url(
+            "redis://127.0.0.1:6379/14", decode_responses=True
         )
-        assert lease_keys == []
-        assert all(redis_client.scard(key) == 0 for key in instance_lease_sets)
-        evidence["lease_release"] = {
-            "lease_keys": lease_keys,
-            "instance_lease_counts": {key: redis_client.scard(key) for key in instance_lease_sets},
-        }
-        redis_client.close()
-
-        with engine.connect() as connection:
-            outbox_after = [
-                dict(row)
-                for row in connection.execute(
-                    text(
-                        "SELECT event_id, published_at, publish_attempts "
-                        "FROM outbox_events ORDER BY created_at, event_id"
-                    )
-                ).mappings()
-            ]
-        assert all(row["published_at"] is not None for row in outbox_after)
-        assert max(row["publish_attempts"] for row in outbox_after) >= 2
-        evidence["outbox_after_restart"] = [
-            {key: str(value) for key, value in row.items()} for row in outbox_after
-        ]
+        try:
+            lease_release = _poll(
+                lambda: _lease_snapshot(redis_client, metadata["redis_prefix"]),
+                _leases_released,
+                timeout_seconds=10,
+                interval_seconds=0.02,
+                message="任务终态 60 后租约未在截止时间内释放",
+            )
+            assert _leases_released(lease_release)
+            evidence["lease_release"] = lease_release
+        finally:
+            redis_client.close()
         evidence["service_probes"] = {
             "control_health": control.runs[0].health_response,
             "stub_health": stub.runs[0].health_response,
@@ -794,6 +1063,8 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
     for run in all_runs:
         assert run.stop_log is not None
         assert "Traceback" not in run.stop_log
+        assert run.forced_kill is False
+        assert run.unexpected_exit_before_stop is False
     evidence["orchestrator_processes"] = [
         run.evidence() for run in orchestrator.runs
     ]
