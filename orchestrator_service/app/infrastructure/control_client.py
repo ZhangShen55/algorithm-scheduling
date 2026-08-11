@@ -6,8 +6,10 @@ import httpx
 
 from packages.platform_common.operator_registry import CapacityLease
 
+from ..application.dispatcher import CapacityUnavailableError
 
-class LeaseUnavailableError(RuntimeError):
+
+class LeaseUnavailableError(CapacityUnavailableError):
     pass
 
 

@@ -464,6 +464,27 @@ class CourseRepository:
             ).mappings().one()
         return _task_type_record(row, created=False)
 
+    def aggregate_capability_task_types(self, capability: str) -> list[TaskTypeRecord]:
+        with self._engine.connect() as connection:
+            task_type_ids = list(
+                connection.execute(
+                    text(
+                        """
+                        SELECT DISTINCT course_task_type_id
+                        FROM task_nodes
+                        WHERE required_capability = :capability
+                          AND status IN (10, 30)
+                        ORDER BY course_task_type_id
+                        """
+                    ),
+                    {"capability": capability},
+                ).scalars()
+            )
+        return [
+            self.aggregate_task_type_state(int(course_task_type_id))
+            for course_task_type_id in task_type_ids
+        ]
+
     @staticmethod
     def _derive_task_type_state(
         task_type: TaskType,

@@ -148,3 +148,24 @@ def test_failed_node_derives_failed_task_type(repository: CourseRepository) -> N
 
     assert failed.status is NodeStatus.FAILED
     assert failed.reason == "节点处理失败: ASR Stub 返回业务错误"
+
+
+def test_capability_state_changes_are_aggregated_for_affected_tasks(
+    repository: CourseRepository,
+) -> None:
+    task_type_id, _ = _create_asr_pipeline(
+        repository,
+        task_id="course-capability-state",
+    )
+    repository.defer_capability_nodes("asr_offline")
+
+    waiting = repository.aggregate_capability_task_types("asr_offline")
+
+    assert [record.id for record in waiting] == [task_type_id]
+    assert waiting[0].status is NodeStatus.WAITING_OPERATOR
+
+    repository.resume_capability_nodes("asr_offline")
+    resumed = repository.aggregate_capability_task_types("asr_offline")
+
+    assert resumed[0].status is NodeStatus.PENDING
+    assert resumed[0].reason == "等待节点处理: ASR_TRANSCRIPTION"
