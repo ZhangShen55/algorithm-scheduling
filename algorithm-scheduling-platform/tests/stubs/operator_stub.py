@@ -20,6 +20,11 @@ received_calls: list[StubExecutionRequest] = []
 app = FastAPI(title="milestone-2a-operator-stub")
 
 
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 @app.post("/execute")
 async def execute(request: StubExecutionRequest) -> dict[str, object]:
     received_calls.append(request)

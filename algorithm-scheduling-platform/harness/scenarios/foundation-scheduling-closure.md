@@ -60,7 +60,9 @@
 - 未注册实例时，两个 `ASR_TRANSCRIPTION` 均由 Worker 推进到状态 30；注册 `asr_offline`、`text_analysis` 并首次心跳后，GET 轨迹实际观察到节点状态 10、50、60，任务类型最终为 60。
 - URGENT 的 `ASR_TRANSCRIPTION` Stub 调用先于 NORMAL；四次 Stub 调用覆盖两个任务各自的 `ASR_TRANSCRIPTION` 和 `COURSE_OVERVIEW`，GET 结果包含 Stub 返回值。
 - 首次消费提交 offset 2；停止 orchestrator 后注入重复 Kafka 消息并将一条 Outbox 恢复为未发布，再启动同一 Consumer Group，提交 offset 推进到 4。重复处理后仍只有 2 个任务类型、4 个节点，Outbox 重新发布项的 `publish_attempts` 为 2。
-- 终态后 Redis `lease:*` key 和实例租约集合均为空。完整 JSON 证据写入 gitignore 的 `harness/reports/milestone-2a/`，包括容器镜像/健康、隔离标识、请求响应、Outbox、offset、状态轨迹、Stub 调用、租约和最终 GET。
+- Control、orchestrator 和独立 Stub 均以真实 `/health` HTTP 200 作为启动条件，orchestrator 两次启动还分别通过 `/ops/readiness` HTTP 200；非 200 响应不能作为进程就绪证据。
+- 两次 orchestrator 启动保留不同 PID、启动序号、健康响应、停止日志和真实退出码；首次停止日志不会被第二次启动覆盖，所有 Uvicorn run 均已停止且无 Traceback。
+- 终态后 Redis `lease:*` key 和实例租约集合均为空；本次唯一 Consumer Group 在服务停止后按完整名称删除并验证不存在，再清理本次唯一 Topic。完整 JSON 证据写入 gitignore 的 `harness/reports/milestone-2a/`，包括容器镜像/健康、隔离标识、健康/readiness 响应、两次进程身份和日志、请求响应、Outbox、offset、状态轨迹、Stub 调用、租约、Consumer Group 清理和最终 GET。
 
 ### 2B：首个真实同步算子
 

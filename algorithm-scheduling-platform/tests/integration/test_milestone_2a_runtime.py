@@ -11,7 +11,7 @@ import tempfile
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
@@ -107,14 +107,35 @@ def milestone2a_postgres() -> Iterator[StrictMilestone2APostgres]:
 
 
 @dataclass
+class UvicornRun:
+    sequence: int
+    pid: int
+    health_response: dict[str, Any] | None = None
+    stop_log: str | None = None
+    exit_code: int | None = None
+
+    def evidence(self) -> dict[str, Any]:
+        return {
+            "sequence": self.sequence,
+            "pid": self.pid,
+            "health_response": self.health_response,
+            "stop_log": self.stop_log,
+            "exit_code": self.exit_code,
+        }
+
+
+@dataclass
 class UvicornProcess:
     app: str
     port: int
     env: dict[str, str]
     cwd: Path = WORKSPACE_ROOT
     process: subprocess.Popen[str] | None = None
+    runs: list[UvicornRun] = field(default_factory=list)
 
-    def start(self) -> None:
+    def start(self) -> UvicornRun:
+        if self.process is not None:
+            raise RuntimeError(f"Uvicorn 已启动: {self.app}")
         process_env = os.environ.copy()
         process_env.update(self.env)
         self.process = subprocess.Popen(
@@ -139,16 +160,21 @@ class UvicornProcess:
             text=True,
             start_new_session=True,
         )
-        _wait_http(
+        run = UvicornRun(sequence=len(self.runs) + 1, pid=self.process.pid)
+        self.runs.append(run)
+        run.health_response = _wait_http(
             f"http://127.0.0.1:{self.port}/health",
             timeout_seconds=20,
             process=self,
         )
+        return run
 
-    def stop(self) -> str:
+    def stop(self) -> UvicornRun | None:
         if self.process is None:
-            return ""
+            return None
         process = self.process
+        run = self.runs[-1]
+        assert run.pid == process.pid
         if process.poll() is None:
             os.killpg(process.pid, signal.SIGTERM)
             try:
@@ -157,8 +183,10 @@ class UvicornProcess:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=5)
         output = process.stdout.read() if process.stdout is not None else ""
+        run.stop_log = output
+        run.exit_code = process.returncode
         self.process = None
-        return output
+        return run
 
 
 def _free_port() -> int:
@@ -178,17 +206,35 @@ def _wait_http(
     while time.monotonic() < deadline:
         if process is not None and process.process is not None:
             if process.process.poll() is not None:
-                output = process.stop()
+                stopped_run = process.stop()
+                output = stopped_run.stop_log if stopped_run is not None else ""
                 raise AssertionError(f"Uvicorn 在等待 {url} 时退出:\n{output}")
         try:
             response = httpx.get(url, timeout=1)
-            if response.status_code < 500:
+            if response.status_code == 200:
                 payload = response.json()
                 return payload if isinstance(payload, dict) else {"payload": payload}
+            last_error = RuntimeError(
+                f"HTTP {response.status_code}: {response.text[:200]}"
+            )
         except (httpx.HTTPError, ValueError) as exc:
             last_error = exc
         time.sleep(0.05)
     raise AssertionError(f"等待 HTTP 端点超时: {url}; last_error={last_error!r}")
+
+
+def test_wait_http_rejects_non_200_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda *args, **kwargs: httpx.Response(
+            404,
+            json={"detail": "Not Found"},
+        ),
+    )
+
+    with pytest.raises(AssertionError, match="等待 HTTP 端点超时"):
+        _wait_http("http://stub.invalid/health", timeout_seconds=0.01)
 
 
 def _poll(
@@ -283,6 +329,59 @@ async def _group_offsets(group_id: str) -> dict[str, int]:
         await admin.close()
 
 
+async def _consumer_groups() -> set[str]:
+    admin = AIOKafkaAdminClient(
+        bootstrap_servers=BOOTSTRAP_SERVERS,
+        client_id=f"milestone-2a-group-list-{uuid4().hex[:8]}",
+    )
+    await admin.start()
+    try:
+        return {str(row[0]) for row in await admin.list_consumer_groups()}
+    finally:
+        await admin.close()
+
+
+async def _delete_consumer_group(group_id: str) -> bool:
+    if re.fullmatch(r"algorithm-test-milestone2a-[0-9a-f]{32}", group_id) is None:
+        raise AssertionError(f"拒绝删除非里程碑 2A Consumer Group: {group_id}")
+    if group_id not in await _consumer_groups():
+        return False
+    await asyncio.to_thread(
+        subprocess.run,
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(PLATFORM_ROOT / "deploy" / "docker-compose.infrastructure.yml"),
+            "exec",
+            "-T",
+            "kafka",
+            "/opt/kafka/bin/kafka-consumer-groups.sh",
+            "--bootstrap-server",
+            "localhost:9092",
+            "--delete",
+            "--group",
+            group_id,
+        ],
+        cwd=PLATFORM_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    deadline = asyncio.get_running_loop().time() + 10
+    while asyncio.get_running_loop().time() < deadline:
+        if group_id not in await _consumer_groups():
+            return True
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"Kafka Consumer Group 删除后仍存在: {group_id}")
+
+
+@pytest.mark.asyncio
+async def test_consumer_group_cleanup_rejects_non_harness_group() -> None:
+    with pytest.raises(AssertionError, match="拒绝删除非里程碑 2A"):
+        await _delete_consumer_group("algorithm-production-consumer")
+
+
 async def _publish_duplicate(topic: str, envelope: dict[str, Any]) -> None:
     producer = AioKafkaProducerAdapter(
         bootstrap_servers=BOOTSTRAP_SERVERS,
@@ -312,6 +411,14 @@ async def _delete_topics(*topics: str) -> None:
             await admin.delete_topics(selected)
     finally:
         await admin.close()
+
+
+async def _cleanup_kafka_resources(group_id: str, *topics: str) -> bool:
+    group_deleted = await _delete_consumer_group(group_id)
+    await _delete_topics(*topics)
+    if group_id in await _consumer_groups():
+        raise AssertionError(f"Kafka Consumer Group 清理验证失败: {group_id}")
+    return group_deleted
 
 
 @contextmanager
@@ -391,13 +498,27 @@ def _services(
         stub.start()
         yield control, orchestrator, stub, metadata
     finally:
-        logs.extend((orchestrator.stop(), stub.stop(), control.stop()))
+        orchestrator.stop()
+        stub.stop()
+        control.stop()
+        logs.extend(
+            run.stop_log or ""
+            for service in (orchestrator, stub, control)
+            for run in service.runs
+        )
         redis_client = redis.Redis.from_url("redis://127.0.0.1:6379/14", decode_responses=True)
         keys = list(redis_client.scan_iter(match=f"{redis_prefix}*"))
         if keys:
             redis_client.delete(*keys)
         redis_client.close()
-        asyncio.run(_delete_topics(topic, visual_command_topic, visual_event_topic))
+        metadata["consumer_group_deleted"] = asyncio.run(
+            _cleanup_kafka_resources(
+                group,
+                topic,
+                visual_command_topic,
+                visual_event_topic,
+            )
+        )
         storage.cleanup()
         if any("Traceback" in output for output in logs):
             pytest.fail("Uvicorn 日志包含 Traceback:\n" + "\n".join(logs))
@@ -407,7 +528,7 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
     milestone2a_postgres: StrictMilestone2APostgres,
 ) -> None:
     engine = create_engine(milestone2a_postgres.dsn)
-    with _services(milestone2a_postgres) as (_, orchestrator, _, metadata):
+    with _services(milestone2a_postgres) as (control, orchestrator, stub, metadata):
         control_url = metadata["control_url"]
         evidence: dict[str, Any] = {
             "infrastructure": _infrastructure_evidence(engine),
@@ -445,8 +566,8 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
             assert response.json()["code"] == 0
             evidence.setdefault("submissions", []).append(response.json())
 
-        orchestrator.start()
-        _wait_http(
+        first_orchestrator_run = orchestrator.start()
+        first_readiness = _wait_http(
             f"{metadata['orchestrator_url']}/ops/readiness",
             timeout_seconds=20,
             process=orchestrator,
@@ -501,7 +622,10 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
         assert offsets_before[f"{metadata['topic']}:0"] == 2
         evidence["kafka_offsets_before_restart"] = offsets_before
 
-        orchestrator.stop()
+        stopped_first_run = orchestrator.stop()
+        assert stopped_first_run is first_orchestrator_run
+        assert stopped_first_run.stop_log is not None
+        assert "Traceback" not in stopped_first_run.stop_log
         duplicate_envelope = {
             "event_id": str(outbox_rows[0]["event_id"]),
             "aggregate_type": "COURSE_JOB",
@@ -519,7 +643,13 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
                 {"event_id": outbox_rows[0]["event_id"]},
             )
 
-        orchestrator.start()
+        second_orchestrator_run = orchestrator.start()
+        assert first_orchestrator_run.pid != second_orchestrator_run.pid
+        second_readiness = _wait_http(
+            f"{metadata['orchestrator_url']}/ops/readiness",
+            timeout_seconds=20,
+            process=orchestrator,
+        )
         offsets_after_restart = _poll(
             lambda: asyncio.run(_group_offsets(metadata["group"])),
             lambda offsets: offsets.get(f"{metadata['topic']}:0", -1) >= 4,
@@ -647,18 +777,45 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
         evidence["outbox_after_restart"] = [
             {key: str(value) for key, value in row.items()} for row in outbox_after
         ]
+        evidence["service_probes"] = {
+            "control_health": control.runs[0].health_response,
+            "stub_health": stub.runs[0].health_response,
+            "orchestrator_health": [
+                first_orchestrator_run.health_response,
+                second_orchestrator_run.health_response,
+            ],
+            "orchestrator_readiness": [first_readiness, second_readiness],
+        }
 
-        report_root = Path(
-            os.environ.get(
-                "MILESTONE_2A_REPORT_DIR",
-                PLATFORM_ROOT / "harness" / "reports" / "milestone-2a",
-            )
+    assert len(orchestrator.runs) == 2
+    assert [run.sequence for run in orchestrator.runs] == [1, 2]
+    assert len({run.pid for run in orchestrator.runs}) == 2
+    all_runs = [*control.runs, *orchestrator.runs, *stub.runs]
+    for run in all_runs:
+        assert run.stop_log is not None
+        assert "Traceback" not in run.stop_log
+    evidence["orchestrator_processes"] = [
+        run.evidence() for run in orchestrator.runs
+    ]
+    remaining_groups = asyncio.run(_consumer_groups())
+    assert metadata["group"] not in remaining_groups
+    assert metadata["consumer_group_deleted"] is True
+    evidence["cleanup"] = {
+        "consumer_group": metadata["group"],
+        "consumer_group_deleted": metadata["consumer_group_deleted"],
+        "consumer_group_present_after_cleanup": False,
+    }
+    report_root = Path(
+        os.environ.get(
+            "MILESTONE_2A_REPORT_DIR",
+            PLATFORM_ROOT / "harness" / "reports" / "milestone-2a",
         )
-        report_root.mkdir(parents=True, exist_ok=True)
-        report_path = report_root / f"{metadata['suffix']}.json"
-        report_path.write_text(
-            json.dumps(evidence, ensure_ascii=False, indent=2, default=str) + "\n",
-            encoding="utf-8",
-        )
-        assert report_path.is_file()
+    )
+    report_root.mkdir(parents=True, exist_ok=True)
+    report_path = report_root / f"{metadata['suffix']}.json"
+    report_path.write_text(
+        json.dumps(evidence, ensure_ascii=False, indent=2, default=str) + "\n",
+        encoding="utf-8",
+    )
+    assert report_path.is_file()
     engine.dispose()

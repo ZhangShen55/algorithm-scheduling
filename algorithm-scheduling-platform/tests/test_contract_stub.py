@@ -13,6 +13,14 @@ from orchestrator_service.app.infrastructure.contract_stub import (
 from tests.stubs.operator_stub import app, received_calls
 
 
+def test_standalone_stub_exposes_real_health_endpoint() -> None:
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
 @pytest.mark.asyncio
 async def test_contract_adapter_sends_full_node_context_and_reads_result() -> None:
     captured: dict[str, object] = {}

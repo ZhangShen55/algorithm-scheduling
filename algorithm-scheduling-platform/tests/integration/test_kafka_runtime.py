@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import re
+import subprocess
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -16,6 +19,7 @@ from packages.platform_common.kafka import (
 pytestmark = pytest.mark.integration
 
 BOOTSTRAP_SERVERS = ["127.0.0.1:9092"]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 async def _poll_one(
@@ -31,13 +35,52 @@ async def _poll_one(
     raise AssertionError("在截止时间内未收到 Kafka 消息")
 
 
-async def _delete_topic(topic: str) -> None:
+def _delete_group_cli(group_id: str) -> None:
+    subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(PROJECT_ROOT / "deploy" / "docker-compose.infrastructure.yml"),
+            "exec",
+            "-T",
+            "kafka",
+            "/opt/kafka/bin/kafka-consumer-groups.sh",
+            "--bootstrap-server",
+            "localhost:9092",
+            "--delete",
+            "--group",
+            group_id,
+        ],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+async def _delete_kafka_resources(topic: str, *group_ids: str) -> None:
     admin = AIOKafkaAdminClient(
         bootstrap_servers=BOOTSTRAP_SERVERS,
         client_id=f"milestone-2a-cleanup-{uuid4().hex[:8]}",
     )
     await admin.start()
     try:
+        for group_id in group_ids:
+            if (
+                re.fullmatch(
+                    r"algorithm-test-(?:committed|redelivery)-[0-9a-f]{32}",
+                    group_id,
+                )
+                is None
+            ):
+                raise AssertionError(f"拒绝删除非 Kafka 测试 Consumer Group: {group_id}")
+        existing_groups = {str(row[0]) for row in await admin.list_consumer_groups()}
+        for group_id in group_ids:
+            if group_id in existing_groups:
+                await asyncio.to_thread(_delete_group_cli, group_id)
+        remaining_groups = {str(row[0]) for row in await admin.list_consumer_groups()}
+        assert not (set(group_ids) & remaining_groups)
         await admin.delete_topics([topic])
     finally:
         await admin.close()
@@ -124,4 +167,4 @@ async def test_real_kafka_publish_manual_commit_and_uncommitted_redelivery() -> 
             await second_delivery.stop()
     finally:
         await producer.stop()
-        await _delete_topic(topic)
+        await _delete_kafka_resources(topic, committed_group, redelivery_group)
