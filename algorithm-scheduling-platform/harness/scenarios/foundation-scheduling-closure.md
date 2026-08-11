@@ -50,3 +50,19 @@
 ## 当前结论
 
 里程碑 1 符合；方案 C 整体仍为部分符合。真实 Kafka adapter、Publisher、Consumer、Dispatcher、Stub 调用和服务重启闭环尚未完成，因此不得宣称基础调度闭环完成。
+
+## 里程碑 2 分层验收
+
+### 2A：真实 Broker 与契约 Stub
+
+- 实际启动 PostgreSQL、Redis、Kafka、`control-service`、`orchestrator-service` 和独立 HTTP Stub。
+- A 请求可先由测试脚本发送，但任务必须经过 HTTP、Outbox、Kafka、DAG、租约和 Stub 调用，不得直接调用 Repository 完成节点。
+- 留存 Outbox 发布确认、Kafka topic/offset、节点状态轨迹、Redis 租约、Stub 调用记录和最终查询结果。
+- 覆盖状态 30 后恢复、URGENT/NORMAL、重复消息、重复发布和 Worker 重启恢复。
+
+### 2B：首个真实同步算子
+
+- 优先从 OCR 或 ScreenDet 选择一个，使用真实注册、首次心跳、容量和推理响应替换 Stub。
+- 平台任务状态由 orchestrator 根据调用事实推进；算子不直接写 PostgreSQL，也不直接汇报课程节点状态给 control。
+- 验证同能力多实例按请求分发、过载快速失败、错误分类、关联日志和结果适配。
+- PPT 等异步长任务使用 `operator_task_id`、续租、终态通知和恢复对账，待内部契约冻结后单独接入。
