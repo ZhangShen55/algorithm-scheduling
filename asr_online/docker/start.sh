@@ -2,7 +2,7 @@
 set -e
 
 export CONFIG_PATH="${CONFIG_PATH:-/config.toml}"
-export CONDA_ENV_NAME="${CONDA_ENV_NAME:-seacraftasr_online}"
+export CONDA_ENV_NAME="${CONDA_ENV_NAME:-asr}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
 export KMP_DUPLICATE_LIB_OK="${KMP_DUPLICATE_LIB_OK:-TRUE}"

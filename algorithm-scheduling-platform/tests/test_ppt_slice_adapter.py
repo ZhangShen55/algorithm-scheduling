@@ -105,6 +105,15 @@ def _write_manifest(result_root: Path, *, count: int = 2) -> dict[str, object]:
         "count": count,
         "reason": "",
         "images": images,
+        "dynamic_segments": [
+            {
+                "type": "SUSPECTED_VIDEO_PLAYBACK",
+                "start_ms": 6000,
+                "end_ms": 15000,
+                "confidence": 0.4722,
+                "reason": "sustained_visual_change",
+            }
+        ],
     }
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     return manifest
@@ -123,10 +132,56 @@ def test_manifest_validator_accepts_complete_shared_result(tmp_path: Path) -> No
 
     assert validated.path == tmp_path / "course-001/ppt/slices"
     assert validated.count == 2
+    assert validated.dynamic_segments[0].start_ms == 6000
     assert [image.ppt_image_id for image in validated.images] == [
         make_ppt_image_id("course-001", frame_seq=1, snap_time=0),
         make_ppt_image_id("course-001", frame_seq=2, snap_time=1),
     ]
+
+
+def test_manifest_validator_rejects_dynamic_segments_that_differ_from_callback(
+    tmp_path: Path,
+) -> None:
+    manifest = _write_manifest(tmp_path)
+    callback_payload = {
+        key: value
+        for key, value in manifest.items()
+        if key not in {"schema_version", "images"}
+    }
+    callback_payload["dynamic_segments"] = []
+    callback = ppt_slice.PptSliceTerminalCallback.model_validate(callback_payload)
+
+    with pytest.raises(ppt_slice.PptSliceManifestError, match="dynamic_segments"):
+        ppt_slice.PptSliceManifestValidator(
+            result_root=tmp_path,
+            max_manifest_bytes=4096,
+        ).validate(callback)
+
+
+def test_manifest_validator_rejects_symlinked_task_ancestor(tmp_path: Path) -> None:
+    real_result_root = tmp_path / "real"
+    manifest = _write_manifest(real_result_root)
+    exposed_result_root = tmp_path / "exposed"
+    exposed_result_root.mkdir()
+    (exposed_result_root / "course-001").symlink_to(
+        real_result_root / "course-001",
+        target_is_directory=True,
+    )
+    callback = ppt_slice.PptSliceTerminalCallback.model_validate(
+        {
+            key: str(value).replace(str(real_result_root), str(exposed_result_root))
+            if key in {"path", "manifest_path"}
+            else value
+            for key, value in manifest.items()
+            if key not in {"schema_version", "images"}
+        }
+    )
+
+    with pytest.raises(ppt_slice.PptSliceManifestError, match="符号链接"):
+        ppt_slice.PptSliceManifestValidator(
+            result_root=exposed_result_root,
+            max_manifest_bytes=4096,
+        ).validate(callback)
 
 
 def test_manifest_validator_rejects_callback_outside_task_result_root(tmp_path: Path) -> None:
@@ -156,6 +211,7 @@ class _Repository:
     def __init__(self) -> None:
         self.node = _Node(NodeStatus.RUNNING)
         self.completions: list[tuple[int, NodeResultWrite, str]] = []
+        self.transitions: list[tuple[int, NodeStatus, str]] = []
 
     def get_node(self, node_id: int) -> _Node:
         assert node_id == 11
@@ -165,6 +221,11 @@ class _Repository:
         self.completions.append((node_id, result, reason))
         self.node.status = NodeStatus.COMPLETED
         self.node.progress = result.progress
+        return self.node
+
+    def transition_node(self, node_id: int, status: NodeStatus, reason: str) -> _Node:
+        self.transitions.append((node_id, status, reason))
+        self.node.status = status
         return self.node
 
 
@@ -199,6 +260,46 @@ def test_terminal_handler_is_idempotent_after_durable_completion(tmp_path: Path)
     assert duplicate.completed is True and duplicate.duplicate is True
     assert len(repository.completions) == 1
     assert repository.completions[0][1].artifact_count == 2
+    assert repository.completions[0][1].result is not None
+    assert repository.completions[0][1].result["dynamic_segments"] == [
+        {
+            "type": "SUSPECTED_VIDEO_PLAYBACK",
+            "start_ms": 6000,
+            "end_ms": 15000,
+            "confidence": 0.4722,
+            "reason": "sustained_visual_change",
+        }
+    ]
+
+
+def test_terminal_handler_persists_failed_terminal_state_idempotently(tmp_path: Path) -> None:
+    repository = _Repository()
+    handler = ppt_slice.PptSliceTerminalHandler(
+        repository=repository,
+        validator=ppt_slice.PptSliceManifestValidator(
+            result_root=tmp_path,
+            max_manifest_bytes=4096,
+        ),
+    )
+    callback = ppt_slice.PptSliceTerminalCallback.model_validate(
+        {
+            "task_id": "course-001",
+            "operator_task_id": "ppt-run-001",
+            "status": 70,
+            "path": str(tmp_path / "course-001/ppt/slices"),
+            "manifest_path": str(tmp_path / "course-001/ppt/manifest.json"),
+            "count": 0,
+            "reason": "视频解码失败",
+            "dynamic_segments": [],
+        }
+    )
+
+    first = handler.handle_callback(node_id=11, callback=callback)
+    duplicate = handler.handle_callback(node_id=11, callback=callback)
+
+    assert first.completed is False and first.duplicate is False
+    assert duplicate.completed is False and duplicate.duplicate is True
+    assert repository.transitions == [(11, NodeStatus.FAILED, "视频解码失败")]
 
 
 def test_manifest_reconciliation_uses_persisted_node_identity(tmp_path: Path) -> None:
@@ -284,6 +385,29 @@ async def test_capacity_lease_is_renewed_until_terminal_persistence() -> None:
     await keeper.release_after_terminal_persistence()
 
     assert client.renewals >= 2
+    assert client.releases == 1
+
+
+@pytest.mark.asyncio
+async def test_capacity_lease_is_released_when_background_renewal_failed() -> None:
+    class _FailingCapacityClient(_CapacityClient):
+        async def renew(self, lease_id: str, ttl_seconds: int) -> None:
+            await super().renew(lease_id, ttl_seconds)
+            raise ppt_slice.PptCapacityLeaseError("续租服务不可用")
+
+    client = _FailingCapacityClient()
+    keeper = ppt_slice.PptCapacityLeaseKeeper(
+        client=client,
+        lease_id="lease-001",
+        ttl_seconds=60,
+        renew_interval_seconds=0.01,
+    )
+
+    await keeper.start()
+    await asyncio.sleep(0.02)
+    with pytest.raises(ppt_slice.PptCapacityLeaseError, match="续租服务不可用"):
+        await keeper.release_after_terminal_persistence()
+
     assert client.releases == 1
 
 

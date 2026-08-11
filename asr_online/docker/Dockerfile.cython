@@ -18,7 +18,7 @@ RUN mv /etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo.bak &
     yum -y groupinstall "Development Tools" && \
     yum clean all
 
-ARG MINICONDA_INSTALLER=Miniconda3-py310_23.11.0-2-Linux-x86_64.sh
+ARG MINICONDA_INSTALLER=Miniconda3-py311_23.11.0-2-Linux-x86_64.sh
 RUN wget -q "https://repo.anaconda.com/miniconda/${MINICONDA_INSTALLER}" -O /tmp/miniconda.sh && \
     bash /tmp/miniconda.sh -b -p /opt/conda && rm -f /tmp/miniconda.sh
 ENV PATH="/opt/conda/bin:$PATH"
@@ -31,22 +31,25 @@ RUN conda config --system --set show_channel_urls true && \
     conda config --system --add default_channels https://conda.anaconda.org/conda-forge && \
     conda info
 
-RUN conda create -n seacraftasr_online -y -c conda-forge python=3.10 && conda clean -afy
+RUN conda create -n asr -y -c conda-forge python=3.11 && conda clean -afy
 SHELL ["bash", "-lc"]
-ENV PATH="/opt/conda/envs/seacraftasr_online/bin:$PATH"
+ENV PATH="/opt/conda/envs/asr/bin:$PATH"
 
 RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
 
 COPY requirements.txt /tmp/requirements.txt
+ARG OPERATOR_REGISTRY_CLIENT_WHEEL=algorithm_operator_registry_client-0.1.0-py3-none-any.whl
+COPY wheel/${OPERATOR_REGISTRY_CLIENT_WHEEL} /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL}
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
-RUN pip install --no-cache-dir --retries 10 --timeout 60 --prefer-binary \
-    -r /tmp/requirements.txt
+RUN pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} && \
+    pip install --no-cache-dir --retries 10 --timeout 60 --prefer-binary \
+      -r /tmp/requirements.txt
 
 # modelscope imports these at runtime, but the cached base requirements layer may not install them.
 RUN pip install --no-cache-dir setuptools==69.5.1 modelscope==1.16.0 addict datasets==2.18.0 pyarrow==15.0.2 pandas==2.2.2 Pillow torchaudio==2.6.0 sortedcontainers==2.4.0
 
 # datasets imports soundfile during modelscope import; soundfile needs libsndfile.so.
-RUN conda install -n seacraftasr_online -y libsndfile && conda clean -afy
+RUN conda install -n asr -y libsndfile && conda clean -afy
 
 
 # ================== Cython 编译层 ==================

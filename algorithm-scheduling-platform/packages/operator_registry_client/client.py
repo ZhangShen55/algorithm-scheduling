@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Self
 
 import httpx
 
@@ -132,7 +131,7 @@ class OperatorRegistryClient:
     async def aclose(self) -> None:
         await self._http.aclose()
 
-    async def __aenter__(self) -> Self:
+    async def __aenter__(self) -> OperatorRegistryClient:
         await self.start()
         return self
 

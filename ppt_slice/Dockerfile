@@ -5,7 +5,9 @@ RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
 WORKDIR /workspace
 COPY . /workspace/
 
-RUN pip install --no-cache-dir -r requirements.txt
+ARG OPERATOR_REGISTRY_CLIENT_WHEEL=algorithm_operator_registry_client-0.1.0-py3-none-any.whl
+RUN pip install --no-deps wheel/${OPERATOR_REGISTRY_CLIENT_WHEEL} \
+    && pip install --no-cache-dir -r requirements.txt
 
 ENV RESULT_ROOT=/data/result
 VOLUME ["/data/result"]

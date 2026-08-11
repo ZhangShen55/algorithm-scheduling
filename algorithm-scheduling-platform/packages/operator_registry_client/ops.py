@@ -3,7 +3,7 @@ from collections.abc import Callable
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from packages.platform_common.operator_registry import OperatorLifecycle
+from packages.operator_registry_client.lifecycle import OperatorLifecycle
 
 
 class OperatorOpsStatus(BaseModel):

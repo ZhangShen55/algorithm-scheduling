@@ -79,7 +79,7 @@ class PackagingSecurityTests(unittest.TestCase):
             dockerfile,
         )
         self.assertIn('"setuptools==69.5.1"', dockerfile)
-        self.assertIn("conda install -n seacraftasr_online -y libsndfile", dockerfile)
+        self.assertIn("conda install -n asr -y libsndfile", dockerfile)
 
     def test_cython_dockerfile_removes_bytecode_caches(self):
         dockerfile = Path("docker/Dockerfile.cython").read_text(encoding="utf-8")
@@ -89,13 +89,15 @@ class PackagingSecurityTests(unittest.TestCase):
         self.assertIn('root.rglob("*.pyo")', dockerfile)
 
     def test_deployment_files_live_under_docker_directory(self):
-        for file_name in ("Dockerfile", "Dockerfile.cython", "start.sh", "nginx.conf"):
+        for file_name in ("Dockerfile", "Dockerfile.cython", "start.sh"):
             self.assertTrue(Path("docker", file_name).exists())
             self.assertFalse(Path(file_name).exists())
 
+        self.assertFalse(Path("docker/nginx.conf").exists())
+
         dockerfile = Path("docker/Dockerfile.cython").read_text(encoding="utf-8")
         self.assertIn("docker/start.sh", dockerfile)
-        self.assertIn("docker/nginx.conf", dockerfile)
+        self.assertNotIn("nginx", dockerfile.lower())
         self.assertIn("docker build -f docker/Dockerfile.cython", dockerfile)
 
     def test_runtime_entrypoint_uses_obfuscated_module_name(self):

@@ -1,5 +1,3 @@
-import uuid
-import cv2
 import numpy as np
 from typing import List
 from pathlib import Path
@@ -14,6 +12,7 @@ from app.core.database import get_session
 from app.core.exceptions import DatabaseError
 from app.core.config import settings
 from app.services import person as person_crud
+from app.services.person_photo import persist_person_photo
 from app.utils.image_loader import base64_to_mat
 from app.utils.utils_mongo import doc_to_person_read
 from app.core.logger import get_logger
@@ -93,22 +92,18 @@ async def create_person_api(
                 message=f"人脸特征提取失败: {str(e)}"
             )
 
-        # 4. 保存裁剪后的人脸图片
-        photo_path = ""  # 默认为空
-        try:
-            media_dir = PROJECT_ROOT / "media" / "person_photos"
-            media_dir.mkdir(parents=True, exist_ok=True)
-
-            # 文件名
-            filename = f"{request.name}_{request.number}_{uuid.uuid4().hex[:8]}.jpg"
-            save_path = media_dir / filename
-            cv2.imwrite(str(save_path), face_image)
-            photo_path = f"/media/person_photos/{filename}"
-        except Exception as e:
-            logger.error(f"[/persons] 保存图片失败: {e}")
-            # 文件保存失败，但人脸检测和特征提取已成功，继续保存到数据库
-            logger.warning(f"[/persons] 图片保存失败，但继续保存特征数据到数据库")
-            photo_path = ""  # 图片路径为空
+        # 4. 按配置决定是否保存裁剪后的人脸图片
+        photo_result = persist_person_photo(
+            face_image,
+            name=request.name,
+            number=request.number,
+            project_root=PROJECT_ROOT,
+            enabled=settings.feature_image.save_person_photo,
+        )
+        photo_path = photo_result.path
+        if photo_result.failed:
+            logger.error("[/persons] 保存图片失败")
+            logger.warning("[/persons] 图片保存失败，但继续保存特征数据到数据库")
 
         # 5. 保存到数据库
         bbox_str = f"{bbox['x']},{bbox['y']},{bbox['w']},{bbox['h']}" if bbox else ""
@@ -136,7 +131,7 @@ async def create_person_api(
             )
 
         # 如果图片保存失败，返回 503 状态码但包含数据
-        if not photo_path:
+        if photo_result.failed:
             return ApiResponse.error(
                 status_code=StatusCode.FILE_SAVE_ERROR,
                 message=f"人物特征{action}成功，但图片保存失败",
@@ -313,19 +308,27 @@ async def create_persons_batch_api(
                 ))
                 continue
 
-            media_dir = PROJECT_ROOT / "media" / "person_photos"
-            media_dir.mkdir(parents=True, exist_ok=True)
-
-            filename = f"{person_req.name}_{person_req.number}_{uuid.uuid4().hex[:8]}.jpg"
-            save_path = media_dir / filename
-            cv2.imwrite(str(save_path), face_image)
+            photo_result = persist_person_photo(
+                face_image,
+                name=person_req.name,
+                number=person_req.number,
+                project_root=PROJECT_ROOT,
+                enabled=settings.feature_image.save_person_photo,
+            )
+            if photo_result.failed:
+                error_msg = (
+                    f"第{idx+1}个人物({person_req.name}_{person_req.number}): "
+                    "图片保存失败"
+                )
+                logger.error(f"[/persons/batch] {error_msg}")
+                failed_records.append(error_msg)
 
             bbox_str = f"{bbox['x']},{bbox['y']},{bbox['w']},{bbox['h']}" if bbox else ""
 
             person_dict = {
                 "name": person_req.name,
                 "number": person_req.number,
-                "photo_path": f"/media/person_photos/{filename}",
+                "photo_path": photo_result.path,
                 "bbox": bbox_str,
                 "embedding": Binary(emb_q.tobytes()),
                 "tip": tip if tip else ""

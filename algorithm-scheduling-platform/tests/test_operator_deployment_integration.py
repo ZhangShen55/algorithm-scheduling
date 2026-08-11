@@ -1,6 +1,8 @@
 from pathlib import Path
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
+REGISTRY_REQUIREMENT = "algorithm-operator-registry-client==0.1.0"
+REGISTRY_WHEEL = "algorithm_operator_registry_client-0.1.0-py3-none-any.whl"
 
 
 def test_all_operator_entrypoints_install_the_shared_registry_runtime() -> None:
@@ -49,6 +51,94 @@ def test_asr_images_run_one_registered_uvicorn_endpoint_without_internal_nginx()
         assert f"EXPOSE {port}" in docker_text, project
         assert "instance_count" not in config, project
         assert not (project_root / "docker" / "nginx.conf").exists(), project
+
+
+def test_asr_images_use_python311_asr_environment_and_versioned_registry_wheel() -> None:
+    registry_wheel = (
+        "algorithm_operator_registry_client-0.1.0-py3-none-any.whl"
+    )
+    for project in ("asr_offline", "asr_online"):
+        project_root = WORKSPACE_ROOT / project
+        start_script = (project_root / "docker" / "start.sh").read_text(encoding="utf-8")
+        dockerfiles = list((project_root / "docker").glob("Dockerfile*"))
+
+        assert '${CONDA_ENV_NAME:-asr}' in start_script, project
+        for dockerfile in dockerfiles:
+            source = dockerfile.read_text(encoding="utf-8")
+            assert "python=3.11" in source, dockerfile
+            assert "/opt/conda/envs/asr" in source, dockerfile
+            assert registry_wheel in source, dockerfile
+            assert "pip install --no-deps" in source, dockerfile
+
+
+def test_facerec_image_installs_versioned_registry_wheel() -> None:
+    source = (WORKSPACE_ROOT / "facerec/docker/Dockerfile").read_text(encoding="utf-8")
+
+    assert "algorithm_operator_registry_client-0.1.0-py3-none-any.whl" in source
+    assert "pip install --no-deps" in source
+
+
+def test_all_operator_requirements_declare_registry_client() -> None:
+    requirement_files = {
+        "asr_offline": ("requirements.txt", "requirements-pip.txt"),
+        "asr_online": ("requirements.txt",),
+        "ppt_slice": ("requirements.txt",),
+        "ocr": ("requirements.txt",),
+        "text_analysis": ("requirements.txt",),
+        "vbas": ("requirements.txt",),
+        "facerec": ("requirements.txt",),
+        "screen_det": ("requirements.txt", "docker/requirements-docker.txt"),
+    }
+
+    for project, relative_paths in requirement_files.items():
+        for relative_path in relative_paths:
+            requirements = (WORKSPACE_ROOT / project / relative_path).read_text(
+                encoding="utf-8"
+            )
+            assert REGISTRY_REQUIREMENT in requirements.splitlines(), (
+                project,
+                relative_path,
+            )
+
+
+def test_all_canonical_operator_images_install_staged_registry_wheel() -> None:
+    dockerfiles = {
+        "asr_offline": ("docker/Dockerfile",),
+        "asr_online": ("docker/Dockerfile", "docker/Dockerfile.cython"),
+        "ppt_slice": ("Dockerfile",),
+        "ocr": ("docker/Dockerfile", "docker/Dockerfile.npu"),
+        "text_analysis": ("Dockerfile",),
+        "vbas": ("docker/Dockerfile", "docker/Dockerfile.runtime"),
+        "facerec": ("docker/Dockerfile",),
+        "screen_det": ("docker/Dockerfile",),
+    }
+
+    for project, relative_paths in dockerfiles.items():
+        for relative_path in relative_paths:
+            source = (WORKSPACE_ROOT / project / relative_path).read_text(
+                encoding="utf-8"
+            )
+            assert REGISTRY_WHEEL in source, (project, relative_path)
+            assert "pip install --no-deps" in source, (project, relative_path)
+
+
+def test_registry_wheel_staging_covers_all_operator_projects() -> None:
+    source = (
+        WORKSPACE_ROOT
+        / "algorithm-scheduling-platform/scripts/stage_operator_registry_wheel.py"
+    ).read_text(encoding="utf-8")
+
+    for project in (
+        "asr_offline",
+        "asr_online",
+        "ppt_slice",
+        "ocr",
+        "text_analysis",
+        "vbas",
+        "facerec",
+        "screen_det",
+    ):
+        assert f'"{project}"' in source
 
 
 def test_operator_business_routes_and_default_ports_remain_compatible() -> None:
@@ -149,6 +239,7 @@ def test_operator_compose_declares_restart_health_mounts_and_instance_identity()
     assert "PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100" in compose
     assert "PLATFORM_REGISTRATION_ENABLED: \"true\"" in compose
     assert "PLATFORM_DECLARED_CAPACITY: ${PPT_SLICE_CAPACITY:-15}" in compose
+    assert "MAX_CONCURRENT_TASKS: ${PPT_SLICE_CAPACITY:-15}" in compose
     assert "${COURSE_ROOT:-/data/course}:/data/course" in compose
     assert "${RESULT_ROOT:-/data/result}:/data/result" in compose
     assert "/ops/health" in compose

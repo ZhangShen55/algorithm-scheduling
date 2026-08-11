@@ -103,6 +103,7 @@ services:
       OPERATOR_PORT: "9001"
       PLATFORM_INSTANCE_ID: ppt-slice
       PLATFORM_SERVICE_URL: http://ppt-slice:9001
+      MAX_CONCURRENT_TASKS: ${PPT_SLICE_CAPACITY:-15}
       PLATFORM_DECLARED_CAPACITY: ${PPT_SLICE_CAPACITY:-15}
     volumes:
       - ${COURSE_ROOT:-/data/course}:/data/course
