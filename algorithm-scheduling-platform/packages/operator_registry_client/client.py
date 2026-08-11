@@ -98,6 +98,7 @@ class OperatorRegistryClient:
 
     async def start(self) -> None:
         await self.register()
+        await self.heartbeat()
         self._stop_event.clear()
         self._heartbeat_task = asyncio.create_task(
             self._heartbeat_loop(),
@@ -114,13 +115,18 @@ class OperatorRegistryClient:
 
     async def _heartbeat_loop(self) -> None:
         while not self._stop_event.is_set():
-            await self.heartbeat()
             try:
                 await asyncio.wait_for(
                     self._stop_event.wait(),
                     timeout=self._config.heartbeat_interval_seconds,
                 )
             except TimeoutError:
+                pass
+            if self._stop_event.is_set():
+                return
+            try:
+                await self.heartbeat()
+            except httpx.HTTPError:
                 continue
 
     async def aclose(self) -> None:

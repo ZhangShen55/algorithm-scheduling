@@ -1,11 +1,12 @@
+from __future__ import annotations
+
 import asyncio
-import os
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
-import psycopg
 import pytest
 from control_service.app.api.control import create_control_app
 from fastapi.testclient import TestClient
@@ -14,7 +15,7 @@ from orchestrator_service.app.application.outbox import OutboxPublisher
 from orchestrator_service.app.application.pipeline import PipelineInitializer, pipeline_nodes
 from orchestrator_service.app.domain.ppt_work import PptImageWork, PptWorkLimits
 from orchestrator_service.app.infrastructure.ppt_text import PptTextPipeline
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError
 from vision_orchestrator_service.app.domain.adaptive_scan import (
     AdaptiveScanConfig,
@@ -44,41 +45,14 @@ from packages.platform_common.state_machine import InvalidNodeTransition
 from packages.platform_contracts.status import NodeStatus, Priority, TaskType
 
 pytestmark = pytest.mark.integration
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-TEST_DATABASE = "algorithm_repository_test"
-ADMIN_DSN = os.getenv(
-    "PLATFORM_TEST_POSTGRES_ADMIN_DSN",
-    "postgresql://algorithm:algorithm@127.0.0.1:5432/postgres",
-)
-TEST_DSN = os.getenv(
-    "PLATFORM_TEST_POSTGRES_DSN",
-    f"postgresql+psycopg://algorithm:algorithm@127.0.0.1:5432/{TEST_DATABASE}",
-)
+
+if TYPE_CHECKING:
+    from conftest import Milestone1Postgres
 
 
 @pytest.fixture(scope="session")
-def database_engine() -> Iterator[Engine]:
-    try:
-        with psycopg.connect(ADMIN_DSN, autocommit=True) as admin:
-            exists = admin.execute(
-                "SELECT 1 FROM pg_database WHERE datname = %s",
-                (TEST_DATABASE,),
-            ).fetchone()
-            if exists is None:
-                admin.execute(f'CREATE DATABASE "{TEST_DATABASE}"')
-    except psycopg.OperationalError as exc:
-        pytest.skip(f"PostgreSQL 集成测试环境不可用: {exc}")
-
-    engine = create_engine(TEST_DSN)
-    raw_test_dsn = TEST_DSN.replace("postgresql+psycopg://", "postgresql://", 1)
-    with psycopg.connect(raw_test_dsn, autocommit=True) as connection:
-        connection.execute("DROP SCHEMA public CASCADE")
-        connection.execute("CREATE SCHEMA public")
-        for migration_path in sorted((PROJECT_ROOT / "migrations").glob("*.sql")):
-            connection.execute(migration_path.read_text(encoding="utf-8"))
-
-    yield engine
-    engine.dispose()
+def database_engine(milestone1_postgres: Milestone1Postgres) -> Engine:
+    return milestone1_postgres.engine
 
 
 @pytest.fixture

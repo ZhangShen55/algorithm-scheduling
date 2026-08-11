@@ -4,6 +4,7 @@ from typing import Any
 
 from control_service.app.api.control import create_control_app
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import SQLAlchemyError
 
 from packages.platform_common.config import PlatformSettings
 from packages.platform_common.repository import NodeRecord, TaskTypeRecord, TaskTypeWrite
@@ -154,6 +155,28 @@ class StatefulRecordingRepository(RecordingRepository):
             self.records[key] = created
             result.append(created)
         return result
+
+
+class UnavailableRepository(RecordingRepository):
+    def create_task_types(
+        self,
+        *,
+        task_id: str,
+        writes: list[TaskTypeWrite],
+        input_snapshot: dict[str, Any] | None = None,
+    ) -> list[TaskTypeRecord]:
+        del task_id, writes, input_snapshot
+        raise SQLAlchemyError("database unavailable")
+
+    def list_task_types(self, task_id: str) -> list[TaskTypeRecord]:
+        del task_id
+        raise SQLAlchemyError("database unavailable")
+
+
+class UnavailableNodeRepository(QueryRepository):
+    def list_nodes(self, course_task_type_id: int) -> list[NodeRecord]:
+        del course_task_type_id
+        raise SQLAlchemyError("database unavailable")
 
 
 def test_post_course_job_accepts_sparse_ppt_request(tmp_path: Path) -> None:
@@ -428,3 +451,61 @@ def test_duplicate_submission_returns_existing_task_type(tmp_path: Path) -> None
 
     assert first["data"]["tasks"][0]["created"] is True
     assert second["data"]["tasks"][0]["created"] is False
+
+
+def test_post_course_job_returns_business_error_when_database_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    settings = PlatformSettings(course_root=tmp_path / "course", result_root=tmp_path / "result")
+    app = create_control_app(repository=UnavailableRepository(), settings=settings)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/api/course-jobs",
+            json={
+                "task_id": "course-database-unavailable",
+                "task_types": ["PPT"],
+                "slides_video_path": "http://media/ppt.mp4",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "code": 50000,
+        "message": "任务数据库暂不可用",
+        "data": None,
+    }
+
+
+def test_get_course_job_returns_business_error_when_database_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    settings = PlatformSettings(course_root=tmp_path / "course", result_root=tmp_path / "result")
+    app = create_control_app(repository=UnavailableRepository(), settings=settings)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/api/course-jobs/course-database-unavailable")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "code": 50000,
+        "message": "任务数据库暂不可用",
+        "data": None,
+    }
+
+
+def test_get_course_job_returns_business_error_when_node_query_fails(
+    tmp_path: Path,
+) -> None:
+    settings = PlatformSettings(course_root=tmp_path / "course", result_root=tmp_path / "result")
+    app = create_control_app(repository=UnavailableNodeRepository(), settings=settings)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/api/course-jobs/course-query-api")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "code": 50000,
+        "message": "任务数据库暂不可用",
+        "data": None,
+    }

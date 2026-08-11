@@ -17,11 +17,11 @@
 
 ## 3. 方案 C 里程碑 1：control-service 事实闭环
 
-- [ ] 3.1 将 PostgreSQL Repository 装配到真实 `control-service` lifespan，验证任务幂等提交、任务类型追加和完整查询
-- [ ] 3.2 验证课程事实、任务类型与 Outbox 在同一事务中提交，control API 不直接发布 Kafka
-- [ ] 3.3 增加算子注册声明、心跳摘要、生命周期变化、注销事件和运维历史的 PostgreSQL Repository
-- [ ] 3.4 封装 Redis 注册中心，使 TTL/租约实时态留在 Redis，重要审计事实事务写入 PostgreSQL
-- [ ] 3.5 使用真实 PostgreSQL/Redis 验证整数状态、中文 `reason`、URGENT/NORMAL、注册、排空和容量租约
+- [x] 3.1 将 PostgreSQL Repository 装配到真实 `control-service` lifespan，验证任务幂等提交、任务类型追加和完整查询
+- [x] 3.2 验证课程事实、任务类型与 Outbox 在同一事务中提交，control API 不直接发布 Kafka
+- [x] 3.3 增加算子注册声明、心跳摘要、生命周期变化、注销事件和运维历史的 PostgreSQL Repository
+- [x] 3.4 封装 Redis 注册中心，使 TTL/租约实时态留在 Redis，重要审计事实事务写入 PostgreSQL
+- [x] 3.5 使用真实 PostgreSQL/Redis 验证整数状态、中文 `reason`、URGENT/NORMAL、注册、排空和容量租约
 
 ## 4. 方案 C 里程碑 2：orchestrator-service 通用运行时
 

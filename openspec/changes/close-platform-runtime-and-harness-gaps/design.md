@@ -12,8 +12,8 @@
 | `orchestrator-service` 可部署执行 | `main.py` 只有通用 FastAPI `/health`，未装配 Publisher、Consumer、Dispatcher、媒体和适配器 | 不符合 |
 | 视觉自适应分析 | 扫描、缓存、区间、VBas client、证据和事件处理器分别存在；无组合 `VisualAnalyzer` 和常驻 consumer | 部分符合 |
 | 在线图片与实时 ASR | 请求级租约、完整请求不拆分、WebSocket 粘性已接入真实 FastAPI 路由 | 基本符合 |
-| 算子注册与容量 | Redis TTL、原子租约、ops 路由和八个源码入口已接入 | 部分符合 |
-| 注册审计 | migration 有 PostgreSQL 表，运行代码没有写入这些表 | 不符合 |
+| 算子注册与容量 | Redis TTL、原子租约、首次心跳激活、ops 路由和注册客户端已接入 | 里程碑 1 范围符合 |
+| 注册审计 | PostgreSQL 已持久化注册/重注册、心跳摘要、生命周期和注销历史 | 里程碑 1 范围符合 |
 | 算子容器可启动 | 源码导入平台 registry client，但 Dockerfile 未安装平台 wheel | 不符合部署闭环 |
 | 临时目录清理 | `TerminalWorkspaceCleaner` 有单测，无终态执行入口 | 部分符合 |
 | 指标和审计 | 指标/日志函数存在，只有少数在线/Outbox/运维路径调用 | 部分符合 |
@@ -129,7 +129,7 @@ Kafka 仍只在课程级边界使用，不把单帧循环拆到 Kafka。
 
 ### 7. Redis 负责实时态，PostgreSQL 负责审计事实
 
-在现有 Redis registry 外增加审计 repository/decorator：注册、心跳摘要、desired lifecycle、unregister 和运维排空写入 PostgreSQL。Redis TTL 到期决定实时 OFFLINE；PostgreSQL 用于运维历史，不参与每次原子 lease 的热路径。
+在现有 Redis registry 外增加审计 repository/decorator：注册、心跳摘要、desired lifecycle、unregister 和运维排空写入 PostgreSQL。Redis TTL 到期决定实时 OFFLINE；PostgreSQL 用于运维历史，不参与每次原子 lease 的热路径。注册只写声明并清理同 ID 旧心跳/租约，首次成功心跳后才允许路由；客户端启动必须等待该心跳，后续短暂 HTTP 故障按周期重试。现阶段同一 `instance_id` 只允许一个存活进程，世代令牌不在里程碑 1 范围内。
 
 ### 8. 平台和算子部署一起闭环
 
@@ -174,7 +174,8 @@ harness/scenarios/*.md
 ### 11. 数据库 DDL 通过前向迁移维护中文说明
 
 正式结构由 `0001-0003` 定义 10 张调度表、依赖关系和调度索引；
-`0004_schema_comments.sql` 对每张表和每个物理字段执行 `COMMENT ON TABLE/COLUMN`。以后新增字段
+`0004_schema_comments.sql` 对每张表和每个物理字段执行 `COMMENT ON TABLE/COLUMN`；
+`0005_operator_audit_and_status_comments.sql` 增加算子历史索引，并修正 `40 已排队、50 处理中` 状态说明。以后新增字段
 必须在新的前向迁移中同时增加注释，不回改已经执行过的旧迁移作为唯一交付方式。
 
 2026-08-07 只读审计确认：本机 `algorithm` 业务库没有用户表；两个测试库只包含调度测试表，

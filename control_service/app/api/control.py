@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request, status
@@ -10,12 +10,12 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from redis import Redis
-from sqlalchemy import create_engine
+from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
 from packages.platform_common.application import create_service_app
 from packages.platform_common.config import PlatformSettings
+from packages.platform_common.operator_audit_repository import OperatorInstanceEvent
 from packages.platform_common.operator_registry import (
     CapacityLease,
     CapacityLeaseNotFoundError,
@@ -26,9 +26,7 @@ from packages.platform_common.operator_registry import (
     OperatorLifecycle,
     OperatorRegistry,
 )
-from packages.platform_common.redis_operator_registry import RedisOperatorRegistry
 from packages.platform_common.repository import (
-    CourseRepository,
     NodeRecord,
     OperationsQueueSnapshot,
     TaskTypeRecord,
@@ -36,6 +34,8 @@ from packages.platform_common.repository import (
 )
 from packages.platform_contracts.responses import BusinessCode, BusinessResponse
 from packages.platform_contracts.status import Priority, TaskType, status_text
+
+from ..infrastructure.runtime import ControlReadinessChecker, ControlRuntime
 
 
 class CourseTaskRepository(Protocol):
@@ -122,6 +122,54 @@ class CapacityLeaseRenewRequest(BaseModel):
 
 class SubmissionValidationError(ValueError):
     pass
+
+
+REGISTRY_INFRASTRUCTURE_ERRORS = (RuntimeError, RedisError, SQLAlchemyError)
+
+
+def _task_database_error() -> BusinessResponse[dict[str, Any]]:
+    return BusinessResponse[dict[str, Any]].failure(
+        BusinessCode.INTERNAL_ERROR,
+        "任务数据库暂不可用",
+    )
+
+
+def _registry_unavailable() -> HTTPException:
+    return HTTPException(status_code=503, detail="算子注册中心暂不可用")
+
+
+def _course_repository(request: Request) -> CourseTaskRepository:
+    runtime = cast(ControlRuntime, request.app.state.control_runtime)
+    if runtime.repository is None:
+        raise HTTPException(status_code=503, detail="任务数据库尚未就绪")
+    return cast(CourseTaskRepository, runtime.repository)
+
+
+def _operator_registry(request: Request) -> OperatorRegistry:
+    runtime = cast(ControlRuntime, request.app.state.control_runtime)
+    if runtime.operator_registry is None:
+        raise HTTPException(status_code=503, detail="算子注册中心尚未就绪")
+    return cast(OperatorRegistry, runtime.operator_registry)
+
+
+def _readiness_checker(request: Request) -> ControlReadinessChecker:
+    runtime = cast(ControlRuntime, request.app.state.control_runtime)
+    checker = runtime.readiness_checker
+    if checker is None:
+        checker = ControlReadinessChecker(runtime.engine, runtime.redis_client)
+    return checker
+
+
+def _operator_events(
+    request: Request,
+    instance_id: str,
+    *,
+    limit: int,
+) -> list[OperatorInstanceEvent]:
+    runtime = cast(ControlRuntime, request.app.state.control_runtime)
+    if runtime.audit_repository is None:
+        raise HTTPException(status_code=503, detail="算子审计数据库尚未就绪")
+    return runtime.audit_repository.list_events(instance_id, limit=limit)
 
 
 def _required_url(submission: CourseJobSubmission, field_name: str) -> str:
@@ -264,21 +312,19 @@ def create_control_app(
     operator_registry: OperatorRegistry | None = None,
     settings: PlatformSettings | None = None,
     enabled_task_types: set[TaskType] | None = None,
+    runtime: ControlRuntime | None = None,
 ) -> FastAPI:
     resolved = settings or PlatformSettings(service_name="control-service")
     resolved_enabled_task_types = (
         set(TaskType) if enabled_task_types is None else set(enabled_task_types)
     )
-    app = create_service_app(resolved)
-    if repository is None:
-        engine = create_engine(resolved.postgres_dsn, pool_pre_ping=True)
-        repository = CourseRepository(engine)
-        app.state.database_engine = engine
-    app.state.course_repository = repository
-    resolved_operator_registry = operator_registry or RedisOperatorRegistry(
-        Redis.from_url(resolved.redis_url, decode_responses=True)
+    resolved_runtime = runtime or ControlRuntime.from_platform_settings(
+        resolved,
+        repository=repository,
+        operator_registry=operator_registry,
     )
-    app.state.operator_registry = resolved_operator_registry
+    app = create_service_app(resolved, service_lifespan=resolved_runtime.lifespan)
+    resolved_runtime.attach(app)
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_handler(
@@ -300,8 +346,9 @@ def create_control_app(
         return JSONResponse(status_code=200, content=body.model_dump(mode="json"))
 
     @app.post("/api/course-jobs")
-    async def submit_course_job(
+    def submit_course_job(
         submission: CourseJobSubmission,
+        request: Request,
     ) -> BusinessResponse[dict[str, Any]]:
         try:
             selected_types = list(dict.fromkeys(submission.task_types))
@@ -320,11 +367,14 @@ def create_control_app(
                 str(exc),
             )
 
-        records = repository.create_task_types(
-            task_id=submission.task_id,
-            writes=writes,
-            input_snapshot=submission.model_extra or {},
-        )
+        try:
+            records = _course_repository(request).create_task_types(
+                task_id=submission.task_id,
+                writes=writes,
+                input_snapshot=submission.model_extra or {},
+            )
+        except (RuntimeError, SQLAlchemyError):
+            return _task_database_error()
         return BusinessResponse[dict[str, Any]].success(
             {
                 "task_id": submission.task_id,
@@ -334,8 +384,15 @@ def create_control_app(
         )
 
     @app.get("/api/course-jobs/{task_id}")
-    async def get_course_job(task_id: str) -> BusinessResponse[dict[str, Any]]:
-        records = repository.list_task_types(task_id)
+    def get_course_job(
+        task_id: str,
+        request: Request,
+    ) -> BusinessResponse[dict[str, Any]]:
+        repository = _course_repository(request)
+        try:
+            records = repository.list_task_types(task_id)
+        except (RuntimeError, SQLAlchemyError):
+            return _task_database_error()
         if not records:
             return BusinessResponse[dict[str, Any]].failure(
                 BusinessCode.NOT_FOUND,
@@ -349,64 +406,82 @@ def create_control_app(
             if record is None:
                 tasks.append(_unrequested_task_response(task_type))
             else:
-                tasks.append(_queried_task_response(record, repository.list_nodes(record.id)))
+                try:
+                    nodes = repository.list_nodes(record.id)
+                except (RuntimeError, SQLAlchemyError):
+                    return _task_database_error()
+                tasks.append(_queried_task_response(record, nodes))
         return BusinessResponse[dict[str, Any]].success(
             {"task_id": task_id, "tasks": tasks},
             message="课程任务查询成功",
         )
 
     @app.post("/api/operator-instances/register", status_code=status.HTTP_201_CREATED)
-    async def register_operator(request: OperatorRegistrationRequest) -> OperatorInstance:
+    def register_operator(
+        payload: OperatorRegistrationRequest,
+        request: Request,
+    ) -> OperatorInstance:
         try:
-            return resolved_operator_registry.register(
+            return _operator_registry(request).register(
                 OperatorInstance(
-                    instance_id=request.instance_id,
-                    operator_code=request.operator_code,
-                    capabilities=request.capabilities,
-                    service_url=request.service_url,
-                    model_version=request.model_version,
-                    api_version=request.api_version,
-                    declared_capacity=request.declared_capacity,
-                    labels=request.labels,
+                    instance_id=payload.instance_id,
+                    operator_code=payload.operator_code,
+                    capabilities=payload.capabilities,
+                    service_url=payload.service_url,
+                    model_version=payload.model_version,
+                    api_version=payload.api_version,
+                    declared_capacity=payload.declared_capacity,
+                    labels=payload.labels,
                 )
             )
-        except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except REGISTRY_INFRASTRUCTURE_ERRORS as exc:
+            raise _registry_unavailable() from exc
 
     @app.post("/api/operator-instances/heartbeat")
-    async def heartbeat_operator(request: OperatorHeartbeatRequest) -> OperatorInstance:
+    def heartbeat_operator(
+        payload: OperatorHeartbeatRequest,
+        request: Request,
+    ) -> OperatorInstance:
         try:
-            return resolved_operator_registry.heartbeat(
-                request.instance_id,
-                inflight=request.inflight,
-                model_ready=request.model_ready,
+            return _operator_registry(request).heartbeat(
+                payload.instance_id,
+                inflight=payload.inflight,
+                model_ready=payload.model_ready,
             )
         except OperatorInstanceNotFoundError as exc:
             raise HTTPException(
                 status_code=404,
-                detail=f"算子实例不存在: {request.instance_id}",
+                detail=f"算子实例不存在: {payload.instance_id}",
             ) from exc
+        except REGISTRY_INFRASTRUCTURE_ERRORS as exc:
+            raise _registry_unavailable() from exc
 
     @app.post("/api/operator-instances/unregister")
-    async def unregister_operator(request: OperatorUnregisterRequest) -> dict[str, str]:
+    def unregister_operator(
+        payload: OperatorUnregisterRequest,
+        request: Request,
+    ) -> dict[str, str]:
         try:
-            resolved_operator_registry.unregister(request.instance_id)
+            _operator_registry(request).unregister(payload.instance_id)
         except OperatorInstanceNotFoundError as exc:
             raise HTTPException(
                 status_code=404,
-                detail=f"算子实例不存在: {request.instance_id}",
+                detail=f"算子实例不存在: {payload.instance_id}",
             ) from exc
-        return {"instance_id": request.instance_id, "status": "OFFLINE"}
+        except REGISTRY_INFRASTRUCTURE_ERRORS as exc:
+            raise _registry_unavailable() from exc
+        return {"instance_id": payload.instance_id, "status": "OFFLINE"}
 
     @app.get("/api/operator-instances")
-    async def list_operator_instances(
+    def list_operator_instances(
+        request: Request,
         capability: str | None = None,
         lifecycle: OperatorLifecycle | None = None,
     ) -> list[OperatorInstance]:
         try:
-            instances = resolved_operator_registry.list_instances()
-        except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+            instances = _operator_registry(request).list_instances()
+        except REGISTRY_INFRASTRUCTURE_ERRORS as exc:
+            raise _registry_unavailable() from exc
         if capability is not None:
             instances = [instance for instance in instances if capability in instance.capabilities]
         if lifecycle is not None:
@@ -414,47 +489,73 @@ def create_control_app(
         return instances
 
     @app.post("/api/operator-instances/lifecycle")
-    async def set_operator_lifecycle(
-        request: OperatorLifecycleRequest,
+    def set_operator_lifecycle(
+        payload: OperatorLifecycleRequest,
+        request: Request,
     ) -> OperatorInstance:
         try:
-            return resolved_operator_registry.set_lifecycle(
-                request.instance_id,
-                request.lifecycle,
+            return _operator_registry(request).set_lifecycle(
+                payload.instance_id,
+                payload.lifecycle,
             )
         except OperatorInstanceNotFoundError as exc:
             raise HTTPException(
                 status_code=404,
-                detail=f"算子实例不存在: {request.instance_id}",
+                detail=f"算子实例不存在: {payload.instance_id}",
             ) from exc
+        except REGISTRY_INFRASTRUCTURE_ERRORS as exc:
+            raise _registry_unavailable() from exc
 
     @app.post("/internal/operator-instances/lease")
-    async def lease_operator(request: CapacityLeaseRequest) -> CapacityLease:
+    def lease_operator(
+        payload: CapacityLeaseRequest,
+        request: Request,
+    ) -> CapacityLease:
         try:
-            return resolved_operator_registry.lease(request.capability, request.ttl_seconds)
+            return _operator_registry(request).lease(
+                payload.capability,
+                payload.ttl_seconds,
+            )
         except CapacityUnavailableError as exc:
             raise HTTPException(
                 status_code=503,
-                detail=f"暂无可用算子容量: {request.capability}",
+                detail=f"暂无可用算子容量: {payload.capability}",
             ) from exc
+        except REGISTRY_INFRASTRUCTURE_ERRORS as exc:
+            raise _registry_unavailable() from exc
 
     @app.post("/internal/operator-instances/release")
-    async def release_operator(request: CapacityReleaseRequest) -> dict[str, str]:
-        resolved_operator_registry.release(request.lease_id)
-        return {"lease_id": request.lease_id, "status": "RELEASED"}
+    def release_operator(
+        payload: CapacityReleaseRequest,
+        request: Request,
+    ) -> dict[str, str]:
+        try:
+            _operator_registry(request).release(payload.lease_id)
+        except REGISTRY_INFRASTRUCTURE_ERRORS as exc:
+            raise _registry_unavailable() from exc
+        return {"lease_id": payload.lease_id, "status": "RELEASED"}
 
     @app.post("/internal/operator-instances/lease/renew")
-    async def renew_operator_lease(request: CapacityLeaseRenewRequest) -> CapacityLease:
+    def renew_operator_lease(
+        payload: CapacityLeaseRenewRequest,
+        request: Request,
+    ) -> CapacityLease:
         try:
-            return resolved_operator_registry.renew(request.lease_id, request.ttl_seconds)
+            return _operator_registry(request).renew(
+                payload.lease_id,
+                payload.ttl_seconds,
+            )
         except CapacityLeaseNotFoundError as exc:
             raise HTTPException(
                 status_code=404,
-                detail=f"算子容量租约不存在或已过期: {request.lease_id}",
+                detail=f"算子容量租约不存在或已过期: {payload.lease_id}",
             ) from exc
+        except REGISTRY_INFRASTRUCTURE_ERRORS as exc:
+            raise _registry_unavailable() from exc
 
     @app.get("/ops/course-jobs/{task_id}")
-    async def inspect_course_job(task_id: str) -> dict[str, Any]:
+    def inspect_course_job(task_id: str, request: Request) -> dict[str, Any]:
+        repository = _course_repository(request)
         try:
             records = repository.list_task_types(task_id)
         except (RuntimeError, SQLAlchemyError) as exc:
@@ -469,17 +570,24 @@ def create_control_app(
             if record is None:
                 tasks.append(_unrequested_task_response(task_type))
             else:
-                tasks.append(_queried_task_response(record, repository.list_nodes(record.id)))
+                try:
+                    nodes = repository.list_nodes(record.id)
+                except (RuntimeError, SQLAlchemyError) as exc:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="任务数据库暂不可用",
+                    ) from exc
+                tasks.append(_queried_task_response(record, nodes))
         return {"task_id": task_id, "tasks": tasks}
 
     @app.get("/ops/operator-instances")
-    async def inspect_operator_instances() -> list[OperatorInstance]:
+    def inspect_operator_instances(request: Request) -> list[OperatorInstance]:
         try:
-            instances = resolved_operator_registry.list_instances()
-        except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+            instances = _operator_registry(request).list_instances()
+        except REGISTRY_INFRASTRUCTURE_ERRORS as exc:
+            raise _registry_unavailable() from exc
         for instance in instances:
-            app.state.platform_metrics.set_operator_instance(
+            request.app.state.platform_metrics.set_operator_instance(
                 operator_code=instance.operator_code.value,
                 lifecycle=instance.lifecycle.value,
                 model_ready=instance.model_ready,
@@ -489,9 +597,12 @@ def create_control_app(
         return instances
 
     @app.post("/ops/operator-instances/{instance_id}/drain")
-    async def drain_operator_instance(instance_id: str) -> OperatorInstance:
+    def drain_operator_instance(
+        instance_id: str,
+        request: Request,
+    ) -> OperatorInstance:
         try:
-            return resolved_operator_registry.set_lifecycle(
+            return _operator_registry(request).set_lifecycle(
                 instance_id,
                 OperatorLifecycle.DRAINING,
             )
@@ -500,19 +611,33 @@ def create_control_app(
                 status_code=404,
                 detail=f"算子实例不存在: {instance_id}",
             ) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except REGISTRY_INFRASTRUCTURE_ERRORS as exc:
+            raise _registry_unavailable() from exc
+
+    @app.get("/ops/operator-instances/{instance_id}/events")
+    def inspect_operator_instance_events(
+        instance_id: str,
+        request: Request,
+        limit: int = 100,
+    ) -> list[OperatorInstanceEvent]:
+        if not 1 <= limit <= 1000:
+            raise HTTPException(status_code=422, detail="事件查询数量必须在 1 到 1000 之间")
+        try:
+            return _operator_events(request, instance_id, limit=limit)
+        except SQLAlchemyError as exc:
+            raise HTTPException(status_code=503, detail="算子审计数据库暂不可用") from exc
 
     @app.get("/ops/queues")
-    async def inspect_queues() -> dict[str, Any]:
+    def inspect_queues(request: Request) -> dict[str, Any]:
+        repository = _course_repository(request)
         try:
             snapshot = repository.operations_queue_snapshot()
         except (RuntimeError, SQLAlchemyError) as exc:
             raise HTTPException(status_code=503, detail="任务数据库暂不可用") from exc
-        app.state.platform_metrics.set_outbox_pending(snapshot.outbox_pending)
+        request.app.state.platform_metrics.set_outbox_pending(snapshot.outbox_pending)
         queues = []
         for item in snapshot.queues:
-            app.state.platform_metrics.set_node_state(
+            request.app.state.platform_metrics.set_node_state(
                 node_code=item.capability or "no_capability",
                 status=item.status.value,
                 count=item.count,
@@ -529,7 +654,7 @@ def create_control_app(
         return {"queues": queues, "outbox_pending": snapshot.outbox_pending}
 
     @app.get("/ops/storage")
-    async def inspect_storage() -> dict[str, Any]:
+    def inspect_storage(request: Request) -> dict[str, Any]:
         try:
             roots = [
                 _storage_root_response(resolved.course_root, "course"),
@@ -537,8 +662,23 @@ def create_control_app(
             ]
         except OSError as exc:
             raise HTTPException(status_code=503, detail="存储目录暂不可用") from exc
-        app.state.platform_metrics.update_disk_usage(resolved.course_root, kind="course")
-        app.state.platform_metrics.update_disk_usage(resolved.result_root, kind="result")
+        request.app.state.platform_metrics.update_disk_usage(
+            resolved.course_root,
+            kind="course",
+        )
+        request.app.state.platform_metrics.update_disk_usage(
+            resolved.result_root,
+            kind="result",
+        )
         return {"roots": roots}
+
+    @app.get("/ops/readiness")
+    def readiness(request: Request) -> JSONResponse:
+        result = _readiness_checker(request).check()
+        response_status = 200 if result["status"] == "ready" else 503
+        return JSONResponse(
+            status_code=response_status,
+            content=jsonable_encoder(result),
+        )
 
     return app
