@@ -49,20 +49,22 @@
 
 ## 当前结论
 
-里程碑 1 符合；方案 C 整体仍为部分符合。真实 Kafka adapter、Publisher、Consumer、Dispatcher、Stub 调用和服务重启闭环尚未完成，因此不得宣称基础调度闭环完成。
+里程碑 1 和里程碑 2A 均符合。2A 已达到真实 PostgreSQL、Redis、Kafka、两个独立平台服务进程和独立 HTTP 契约 Stub 的基础调度闭环；不表示真实 PPT、OCR、离线 ASR、VBas 或视觉链路已接入。
 
 ## 里程碑 2 分层验收
 
 ### 2A：真实 Broker 与契约 Stub
 
-- 实际启动 PostgreSQL、Redis、Kafka、`control-service`、`orchestrator-service` 和独立 HTTP Stub。
-- A 请求可先由测试脚本发送，但任务必须经过 HTTP、Outbox、Kafka、DAG、租约和 Stub 调用，不得直接调用 Repository 完成节点。
-- 留存 Outbox 发布确认、Kafka topic/offset、节点状态轨迹、Redis 租约、Stub 调用记录和最终查询结果。
-- 覆盖状态 30 后恢复、URGENT/NORMAL、重复消息、重复发布和 Worker 重启恢复。
+- `scripts/run_milestone_2a.py` 启动并等待真实 PostgreSQL、Redis、Kafka 后，运行真实进程 Harness；测试使用每次唯一且以 `_test` 结尾的 PostgreSQL 数据库、Redis DB 14 的 UUID 前缀、唯一 Kafka Topic/Consumer Group 和临时端口。
+- NORMAL 与 URGENT 的 ASR-only 请求均经过 `POST /api/course-jobs`、事务 Outbox、真实 Kafka、幂等 DAG、Control HTTP 租约和独立 Stub `/execute`，测试没有调用 Repository 完成节点。
+- 未注册实例时，两个 `ASR_TRANSCRIPTION` 均由 Worker 推进到状态 30；注册 `asr_offline`、`text_analysis` 并首次心跳后，GET 轨迹实际观察到节点状态 10、50、60，任务类型最终为 60。
+- URGENT 的 `ASR_TRANSCRIPTION` Stub 调用先于 NORMAL；四次 Stub 调用覆盖两个任务各自的 `ASR_TRANSCRIPTION` 和 `COURSE_OVERVIEW`，GET 结果包含 Stub 返回值。
+- 首次消费提交 offset 2；停止 orchestrator 后注入重复 Kafka 消息并将一条 Outbox 恢复为未发布，再启动同一 Consumer Group，提交 offset 推进到 4。重复处理后仍只有 2 个任务类型、4 个节点，Outbox 重新发布项的 `publish_attempts` 为 2。
+- 终态后 Redis `lease:*` key 和实例租约集合均为空。完整 JSON 证据写入 gitignore 的 `harness/reports/milestone-2a/`，包括容器镜像/健康、隔离标识、请求响应、Outbox、offset、状态轨迹、Stub 调用、租约和最终 GET。
 
 ### 2B：首个真实同步算子
 
-- 优先从 OCR 或 ScreenDet 选择一个，使用真实注册、首次心跳、容量和推理响应替换 Stub。
+- 优先从 OCR 或离线 ASR 选择一个，使用真实注册、首次心跳、容量和推理响应替换 Stub。ScreenDet 只属于 `online-gateway-service`，不进入离线 2B DAG。
 - 平台任务状态由 orchestrator 根据调用事实推进；算子不直接写 PostgreSQL，也不直接汇报课程节点状态给 control。
 - 验证同能力多实例按请求分发、过载快速失败、错误分类、关联日志和结果适配。
 - PPT 等异步长任务使用 `operator_task_id`、续租、终态通知和恢复对账，待内部契约冻结后单独接入。

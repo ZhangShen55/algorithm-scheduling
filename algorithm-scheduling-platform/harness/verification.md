@@ -106,6 +106,33 @@ docker compose -f deploy/docker-compose.infrastructure.yml exec -T redis \
 真实 PostgreSQL、Redis、Kafka、`control-service`、`orchestrator-service` 和契约 Stub；不得因为
 真实 PPT 算子尚未接入而跳过基础运行时验证，也不得把静态 DDL 测试写成 Broker 闭环已通过。
 
+## 方案 C 里程碑 2A 真实运行时验收
+
+从平台目录执行一键 Harness：
+
+```bash
+.venv/bin/python scripts/run_milestone_2a.py
+```
+
+或在基础设施已 healthy 时直接执行验收命令：
+
+```bash
+.venv/bin/python -m pytest -q -rs \
+  tests/integration/test_kafka_runtime.py \
+  tests/integration/test_milestone_2a_runtime.py
+```
+
+命令不得出现 skipped。运行时每次创建唯一 `_test` PostgreSQL 数据库、Redis DB 14 UUID 前缀、
+唯一 Kafka Topic/Consumer Group 和临时服务端口；不会连接或清理 `algorithm` 业务数据库。JSON
+证据写入 gitignore 的 `harness/reports/milestone-2a/`，应包含容器健康和版本、Outbox
+`published_at`/尝试次数、重启前后 Kafka offset、节点/任务轨迹、Stub 调用顺序、租约清理及最终 GET。
+
+2026-08-11 单场景实测：PostgreSQL 17.10、Redis 7.4.10、Kafka 4.0.0 均 healthy；首次 offset
+为 2，停止并重启 orchestrator、注入重复消息及恢复一条 Outbox 后 offset 为 4；任务事实仍为 2 个
+task type 和 4 个节点，重复发布项 `publish_attempts=2`。NORMAL/URGENT 均观察到状态 30、50、60，
+URGENT 的 ASR Stub 调用先于 NORMAL，最终租约为零。该证据完成 2A 契约 Stub 层级，不包含真实
+PPT、OCR、离线 ASR、VBas；ScreenDet 仅属于 `online-gateway-service`。
+
 ## 2026-08-11 算子本机运行与 PPT 最新终态合同
 
 - 注册客户端构建为 `algorithm_operator_registry_client-0.1.0-py3-none-any.whl`，要求 Python 3.10+，不携带平台内部包。

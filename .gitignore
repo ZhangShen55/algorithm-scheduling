@@ -108,3 +108,4 @@ Thumbs.db
 
 # Local generated architecture/PDF render output only; source docs stay tracked
 /algorithm-scheduling-platform/algorithm_scheduling_platform.egg-info/
+/algorithm-scheduling-platform/harness/reports/

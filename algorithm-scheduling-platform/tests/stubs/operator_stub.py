@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import os
 from typing import Any
 
 from fastapi import FastAPI
@@ -21,6 +23,9 @@ app = FastAPI(title="milestone-2a-operator-stub")
 @app.post("/execute")
 async def execute(request: StubExecutionRequest) -> dict[str, object]:
     received_calls.append(request)
+    delay_seconds = float(os.environ.get("MILESTONE_2A_STUB_DELAY_SECONDS", "0"))
+    if delay_seconds > 0:
+        await asyncio.sleep(delay_seconds)
     return {
         "result": {
             "stub": True,
