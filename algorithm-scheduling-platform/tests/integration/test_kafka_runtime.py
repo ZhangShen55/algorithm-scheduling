@@ -146,6 +146,45 @@ async def test_async_cleanup_steps_continue_after_an_earlier_failure() -> None:
     assert errors[0][0] == "producer"
 
 
+@pytest.mark.asyncio
+async def test_producer_start_failure_still_cleans_kafka(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class FailingProducer:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def start(self) -> None:
+            calls.append("producer.start")
+            raise RuntimeError("producer start failed")
+
+        async def stop(self) -> None:
+            calls.append("producer.stop")
+
+    class TopicManager:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def ensure_topics(self) -> tuple[str, ...]:
+            calls.append("topics.ensure")
+            return ()
+
+    async def cleanup(topic: str, *group_ids: str) -> None:
+        calls.append("kafka.cleanup")
+
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "AioKafkaProducerAdapter", FailingProducer)
+    monkeypatch.setattr(module, "KafkaTopicManager", TopicManager)
+    monkeypatch.setattr(module, "_delete_kafka_resources", cleanup)
+
+    with pytest.raises(RuntimeError, match="producer start failed"):
+        await test_real_kafka_publish_manual_commit_and_uncommitted_redelivery()
+
+    assert calls == ["topics.ensure", "producer.start", "kafka.cleanup"]
+
+
 CleanupError = tuple[str, Exception]
 
 
@@ -193,9 +232,11 @@ async def test_real_kafka_publish_manual_commit_and_uncommitted_redelivery() -> 
         client_id=f"milestone-2a-producer-{suffix[:8]}",
     )
 
-    await manager.ensure_topics()
-    await producer.start()
+    producer_started = False
     try:
+        await manager.ensure_topics()
+        await producer.start()
+        producer_started = True
         committed_consumer = AioKafkaConsumerAdapter(
             topics=[topic],
             bootstrap_servers=BOOTSTRAP_SERVERS,
@@ -258,15 +299,13 @@ async def test_real_kafka_publish_manual_commit_and_uncommitted_redelivery() -> 
             await second_delivery.stop()
     finally:
         original_error = sys.exception()
-        cleanup_errors = await _run_async_cleanup_steps(
-            (
-                ("producer", producer.stop),
-                (
-                    "kafka",
-                    lambda: _delete_kafka_resources(
-                        topic, committed_group, redelivery_group
-                    ),
-                ),
-            )
-        )
+
+        async def cleanup_kafka() -> None:
+            await _delete_kafka_resources(topic, committed_group, redelivery_group)
+
+        cleanup_steps: list[tuple[str, Callable[[], Awaitable[object]]]] = []
+        if producer_started:
+            cleanup_steps.append(("producer", producer.stop))
+        cleanup_steps.append(("kafka", cleanup_kafka))
+        cleanup_errors = await _run_async_cleanup_steps(tuple(cleanup_steps))
         _report_cleanup_errors(cleanup_errors, original_error)

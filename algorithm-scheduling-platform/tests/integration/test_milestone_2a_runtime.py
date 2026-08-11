@@ -306,6 +306,28 @@ def test_uvicorn_stop_marks_process_that_exited_before_stop() -> None:
     assert run.exit_code == 7
 
 
+def test_uvicorn_run_rejects_unknown_nonzero_exit_code() -> None:
+    run = UvicornRun(
+        sequence=1,
+        pid=12345,
+        stop_log="unknown-exit",
+        exit_code=7,
+    )
+
+    with pytest.raises(AssertionError, match="不允许的退出码"):
+        _assert_clean_uvicorn_run(run)
+
+
+def _assert_clean_uvicorn_run(run: UvicornRun) -> None:
+    assert run.stop_log is not None
+    assert "Traceback" not in run.stop_log
+    assert run.forced_kill is False
+    assert run.unexpected_exit_before_stop is False
+    assert run.exit_code in {0, -signal.SIGTERM}, (
+        f"Uvicorn 不允许的退出码: {run.exit_code}"
+    )
+
+
 def test_cleanup_steps_continue_after_an_earlier_failure() -> None:
     calls: list[str] = []
 
@@ -1046,6 +1068,11 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
             evidence["lease_release"] = lease_release
         finally:
             redis_client.close()
+        final_readiness = _wait_http(
+            f"{metadata['orchestrator_url']}/ops/readiness",
+            timeout_seconds=20,
+            process=orchestrator,
+        )
         evidence["service_probes"] = {
             "control_health": control.runs[0].health_response,
             "stub_health": stub.runs[0].health_response,
@@ -1054,6 +1081,7 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
                 second_orchestrator_run.health_response,
             ],
             "orchestrator_readiness": [first_readiness, second_readiness],
+            "orchestrator_final_readiness": final_readiness,
         }
 
     assert len(orchestrator.runs) == 2
@@ -1061,10 +1089,7 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
     assert len({run.pid for run in orchestrator.runs}) == 2
     all_runs = [*control.runs, *orchestrator.runs, *stub.runs]
     for run in all_runs:
-        assert run.stop_log is not None
-        assert "Traceback" not in run.stop_log
-        assert run.forced_kill is False
-        assert run.unexpected_exit_before_stop is False
+        _assert_clean_uvicorn_run(run)
     evidence["orchestrator_processes"] = [
         run.evidence() for run in orchestrator.runs
     ]
