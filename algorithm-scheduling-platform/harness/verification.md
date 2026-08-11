@@ -106,6 +106,23 @@ docker compose -f deploy/docker-compose.infrastructure.yml exec -T redis \
 真实 PostgreSQL、Redis、Kafka、`control-service`、`orchestrator-service` 和契约 Stub；不得因为
 真实 PPT 算子尚未接入而跳过基础运行时验证，也不得把静态 DDL 测试写成 Broker 闭环已通过。
 
+### Kafka 客户端选择与兼容性证据
+
+正式客户端选择 `aiokafka` 0.14.x：共享 adapter 需要原生异步 Producer/Consumer、
+`send_and_wait`、手动 offset 提交、有界轮询和 lag 查询，`aiokafka` 可直接提供这些能力，
+无需在 asyncio 运行时外再包装线程模型。安装元数据显示 0.14.0 的 `Requires-Python` 为
+`>=3.10`，平台基线为 `>=3.11`，因此兼容；`orchestrator-service` 显式限定
+`aiokafka>=0.14,<0.15`，避免未验证的次版本漂移。此 Kafka 客户端仅安装在平台运行环境，
+不进入算子模型环境，不改变算子 wheel 与业务协议。
+
+```bash
+.venv/bin/python -c 'from importlib.metadata import metadata, version; print("aiokafka", version("aiokafka")); print("Requires-Python", metadata("aiokafka")["Requires-Python"])'
+rg -n '^requires-python|^aiokafka' pyproject.toml ../orchestrator_service/requirements.txt
+```
+
+2026-08-11 实测输出为 `aiokafka 0.14.0`、`Requires-Python >=3.10`、平台
+`requires-python = ">=3.11"` 与 orchestrator `aiokafka>=0.14,<0.15`。
+
 ## 方案 C 里程碑 2A 真实运行时验收
 
 从平台目录执行一键 Harness：
@@ -138,6 +155,22 @@ PID/启动序号/停止日志/真实退出码/强杀与提前退出标记，以�
 task type 和 4 个节点，重复发布项 `publish_attempts=2`。NORMAL/URGENT 均观察到状态 30、50、60，
 URGENT 的 ASR Stub 调用先于 NORMAL，最终租约为零。该证据完成 2A 契约 Stub 层级，不包含真实
 PPT、OCR、离线 ASR、VBas；ScreenDet 仅属于 `online-gateway-service`。
+
+Outbox 发布失败保留待发布的证据来自 `tests/test_outbox_publisher.py` 的组件故障注入；
+真实 Broker Harness 通过将一条 Outbox 恢复为待发布、重启 orchestrator，验证其重投后
+`published_at` 恢复且 `publish_attempts>=2`。这是“组件故障注入 + 真实 Broker 恢复闭环”，
+未执行、也不声称执行过真实 Broker 停机。
+
+Broker 集成用例另外验证真实发布/消费、手动提交、同 group 重启 offset 恢复和
+未提交消息重投；里程碑 Harness 验证重复消息幂等。`orchestrator_service/tests/test_runtime.py`
+使用 `FakeConsumer.lag()` 注入“Kafka 依赖不可用”，验证 `/ops/readiness` 返回 503、
+`checks.kafka.ready=false` 且中文诊断可见。该就绪用例不停止真实 Kafka 容器，与真实
+Broker 行为集成证据合并支撑 2.6。
+
+2026-08-11 状态同步复审：`compileall`、Ruff 和严格 Mypy 均通过；平台完整套件
+`276 passed`，orchestrator 完整套件 `17 passed`；两份真实集成文件直接运行与一键
+Harness 分别为 `12 passed`，均无 skipped。基础设施和平台两份 Compose 配置通过
+`config --quiet`，`openspec validate close-platform-runtime-and-harness-gaps --strict` 通过。
 
 ## 2026-08-11 算子本机运行与 PPT 最新终态合同
 

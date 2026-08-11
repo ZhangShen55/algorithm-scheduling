@@ -73,10 +73,12 @@ class FakeConsumer:
         events: list[str],
         *,
         poll_error: Exception | None = None,
+        lag_error: Exception | None = None,
         messages: list[KafkaMessage] | None = None,
     ) -> None:
         self.events = events
         self.poll_error = poll_error
+        self.lag_error = lag_error
         self.messages = list(messages or [])
         self.started = False
         self.stopped = False
@@ -101,6 +103,8 @@ class FakeConsumer:
         self.committed.append(message)
 
     async def lag(self) -> dict[str, int]:
+        if self.lag_error is not None:
+            raise self.lag_error
         return {"algorithm.course.commands:0": 0}
 
 
@@ -236,6 +240,26 @@ def test_readiness_reports_required_loop_failure(tmp_path: Path) -> None:
 
         assert readiness.status_code == 503
         assert "Kafka 消费循环异常" in str(readiness.json())
+
+
+def test_readiness_reports_kafka_dependency_failure(tmp_path: Path) -> None:
+    runtime, _, _ = _runtime(
+        tmp_path,
+        consumer_factory=lambda events: FakeConsumer(
+            events,
+            lag_error=RuntimeError("Kafka 依赖不可用"),
+        ),
+    )
+    app = create_app(_settings(tmp_path), runtime=runtime)
+
+    with TestClient(app) as client:
+        readiness = client.get("/ops/readiness")
+
+        assert readiness.status_code == 503
+        kafka_check = readiness.json()["checks"]["kafka"]
+        assert kafka_check["ready"] is False
+        assert "依赖检查失败" in kafka_check["detail"]
+        assert "Kafka 依赖不可用" in kafka_check["detail"]
 
 
 @pytest.mark.asyncio

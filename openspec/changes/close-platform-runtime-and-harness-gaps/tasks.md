@@ -10,10 +10,10 @@
 
 - [x] 2.1 为四服务增加带中文注释的 `config.toml` 和类型化配置，覆盖基础设施、主题、消费组、并发、关闭、媒体、PPT 共享结果、租约和就绪探针
 - [x] 2.2 增加 `0004_schema_comments.sql`，为 10 张调度表及全部物理字段写入中文说明，并记录本机 PostgreSQL 只读审计结果
-- [ ] 2.3 结合目标 Python 与算法环境的 wheel 兼容性选择正式 Kafka 客户端，并在 Harness 记录决策
-- [ ] 2.4 实现共享异步 Kafka Producer/Consumer adapter，支持启动、停止、确认发送、手动提交、有界轮询和 lag 指标
-- [ ] 2.5 增加 `algorithm.course.commands`、`algorithm.visual.commands` 和 `algorithm.visual.events` 的 topic 引导与校验
-- [ ] 2.6 增加真实 Broker 的发布、消费、手动提交、重连、重复投递和 Broker 不可用就绪测试
+- [x] 2.3 结合目标 Python 与算法环境的 wheel 兼容性选择正式 Kafka 客户端，并在 Harness 记录决策
+- [x] 2.4 实现共享异步 Kafka Producer/Consumer adapter，支持启动、停止、确认发送、手动提交、有界轮询和 lag 指标
+- [x] 2.5 增加 `algorithm.course.commands`、`algorithm.visual.commands` 和 `algorithm.visual.events` 的 topic 引导与校验
+- [x] 2.6 增加真实 Broker 的发布、消费、手动提交、重连、重复投递和 Broker 不可用就绪测试
 
 ## 3. 方案 C 里程碑 1：control-service 事实闭环
 
@@ -25,20 +25,20 @@
 
 ## 4. 方案 C 里程碑 2：orchestrator-service 通用运行时
 
-- [ ] 4.1 用 lifespan 管理的运行时工厂替换仅健康检查的 orchestrator 入口，统一持有 engine、HTTP client、Kafka、停止事件和后台任务组
-- [ ] 4.2 将 Outbox Publisher 接入真实 Kafka Producer，验证发布失败时事件保持待发布并在 Broker 恢复后继续
-- [ ] 4.3 将课程命令 Consumer 接入 `PipelineInitializer`，仅在幂等 DAG 初始化成功后提交 offset
-- [ ] 4.4 实现 Dispatcher 循环，按 URGENT 优先于 NORMAL 领取等待节点、不抢占运行节点，并在无容量时暴露状态 30
-- [ ] 4.5 实现通用算子调用框架、执行上下文、容量租约、状态推进、任务类型汇总、就绪检查和优雅停止
-- [ ] 4.6 建立不依赖真实 PPT 的通用 HTTP 契约 Stub，验证 Stub 注册、选择、调用和结构化结果持久化
+- [x] 4.1 用 lifespan 管理的运行时工厂替换仅健康检查的 orchestrator 入口，统一持有 engine、HTTP client、Kafka、停止事件和后台任务组
+- [x] 4.2 将 Outbox Publisher 接入真实 Kafka Producer，验证发布失败时事件保持待发布并在 Broker 恢复后继续
+- [x] 4.3 将课程命令 Consumer 接入 `PipelineInitializer`，仅在幂等 DAG 初始化成功后提交 offset
+- [x] 4.4 实现 Dispatcher 循环，按 URGENT 优先于 NORMAL 领取等待节点、不抢占运行节点，并在无容量时暴露状态 30
+- [x] 4.5 实现通用算子调用框架、执行上下文、容量租约、状态推进、任务类型汇总、就绪检查和优雅停止
+- [x] 4.6 建立不依赖真实 PPT 的通用 HTTP 契约 Stub，验证 Stub 注册、选择、调用和结构化结果持久化
 - [ ] 4.7 实现按 `submission_id` 隔离的执行上下文和共享下载协调，使同一次 ASR/教师组合提交只共享一次 T 下载
 - [ ] 4.8 等 PPT 契约冻结后接入共享路径切片、原子 manifest、幂等终态通知、manifest 对账、容量续约和 OCR 释放
 - [ ] 4.9 实现 `PPT_OCR` 与 `PPT_KEYWORDS`，按 `ppt_image_id` 子项、配置并发、租约和部分进度持久化
 - [ ] 4.10 实现 `ASR_TRANSCRIPTION` 的媒体/WAV/租约执行，校验 v1.1.8 业务响应并持久化完整结果
 - [ ] 4.11 从已保存 ASR segments 执行 `COURSE_OVERVIEW`，持久化完整嵌套 GenericResponse
 - [ ] 4.12 将教师/学生视觉节点发布到 `algorithm.visual.commands`，并幂等消费视觉进度/完成事件
-- [ ] 4.13 从节点状态推导任务类型状态和当前节点中文原因，禁止测试或算子直接更新任务终态
-- [ ] 4.14 增加 orchestrator 就绪和关闭测试，证明必需循环启动、异常可见、停止消费并关闭资源
+- [x] 4.13 从节点状态推导任务类型状态和当前节点中文原因，禁止测试或算子直接更新任务终态
+- [x] 4.14 增加 orchestrator 就绪和关闭测试，证明必需循环启动、异常可见、停止消费并关闭资源
 
 ## 5. vision-orchestrator-service 运行时闭环
 
@@ -68,11 +68,11 @@
 
 ## 8. 方案 C 基础闭环验收
 
-- [ ] 8.1 启动真实 PostgreSQL、Redis、Kafka、control、orchestrator 和通用契约 Stub，贯通 `POST -> Outbox -> Kafka -> DAG -> Stub -> GET`
-- [ ] 8.2 验证查询状态完全由运行中的 Worker 产生；若测试直接调用 Repository 完成节点，Harness 必须失败
-- [ ] 8.3 验证 URGENT 插队、无算子状态 30、算子恢复、重复 Kafka 消息、Publisher 重启、Worker 重启和 offset 恢复
-- [ ] 8.4 记录容器状态、版本、API 证据、Outbox 行、topic offset、节点变化、实例选择、Redis 租约和最终结果
-- [ ] 8.5 在不部署真实 PPT、ASR、视觉和在线算子的条件下完成基础闭环验收，并明确不得扩张为完整产品完成声明
+- [x] 8.1 启动真实 PostgreSQL、Redis、Kafka、control、orchestrator 和通用契约 Stub，贯通 `POST -> Outbox -> Kafka -> DAG -> Stub -> GET`
+- [x] 8.2 验证查询状态完全由运行中的 Worker 产生；若测试直接调用 Repository 完成节点，Harness 必须失败
+- [x] 8.3 验证 URGENT 插队、无算子状态 30、算子恢复、重复 Kafka 消息、Publisher 重启、Worker 重启和 offset 恢复
+- [x] 8.4 记录容器状态、版本、API 证据、Outbox 行、topic offset、节点变化、实例选择、Redis 租约和最终结果
+- [x] 8.5 在不部署真实 PPT、ASR、视觉和在线算子的条件下完成基础闭环验收，并明确不得扩张为完整产品完成声明
 
 ## 9. 完整产品端到端验收
 
