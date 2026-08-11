@@ -143,7 +143,8 @@ rg -n '^requires-python|^aiokafka' pyproject.toml ../orchestrator_service/requir
 唯一 Kafka Topic/Consumer Group 和临时服务端口；不会连接或清理 `algorithm` 业务数据库。JSON
 证据写入 gitignore 的 `harness/reports/milestone-2a/`，应包含容器健康和版本、Outbox
 `published_at`/尝试次数、重启前后 Kafka committed/end offset、节点/任务轨迹、Stub 调用顺序、
-终态后的有界租约清理轮询、Control/Stub/orchestrator 健康响应、两次 orchestrator readiness 和不同
+运行中 `lease:*` hash 得到的 `selected_instances`、终态后的有界租约清理轮询、
+Control/Stub/orchestrator 健康响应、两次 orchestrator readiness 和不同
 PID/启动序号/停止日志/真实退出码/强杀与提前退出标记，以及本次唯一 Consumer Group 精确删除验证和
 最终 GET。所有健康/readiness 探针必须为 HTTP 200；404 等非 200 响应不算启动成功。重启恢复必须先
 等待 Outbox 重新发布完成，再证明 committed offset 和 Topic end offset 均精确为 4，并经过短暂静默窗口
@@ -155,6 +156,12 @@ PID/启动序号/停止日志/真实退出码/强杀与提前退出标记，以�
 task type 和 4 个节点，重复发布项 `publish_attempts=2`。NORMAL/URGENT 均观察到状态 30、50、60，
 URGENT 的 ASR Stub 调用先于 NORMAL，最终租约为零。该证据完成 2A 契约 Stub 层级，不包含真实
 PPT、OCR、离线 ASR、VBas；ScreenDet 仅属于 `online-gateway-service`。
+
+8.4 的“实例选择”不使用注册响应推断。E2E 在节点执行轮询期间扫描本次唯一
+Redis 前缀下的 `lease:*` hash，按 `lease_id` 去重记录 `lease_id`、`instance_id`、
+`capability` 和 `service_url` 到 `evidence.selected_instances`。测试断言运行时实际观察到
+`asr_offline` 和 `text_analysis`，实例 ID 等于本次对应注册实例且 URL 均为契约
+Stub；证据在租约释放前采集，终态后仍独立断言租约清零。
 
 Outbox 发布失败保留待发布的证据来自 `tests/test_outbox_publisher.py` 的组件故障注入；
 真实 Broker Harness 通过将一条 Outbox 恢复为待发布、重启 orchestrator，验证其重投后

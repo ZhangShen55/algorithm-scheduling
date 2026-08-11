@@ -529,6 +529,27 @@ def _lease_snapshot(client: redis.Redis, prefix: str) -> dict[str, Any]:
     }
 
 
+def _selected_instance_snapshots(
+    client: redis.Redis,
+    prefix: str,
+) -> list[dict[str, str]]:
+    lease_key_prefix = f"{prefix}lease:"
+    snapshots: list[dict[str, str]] = []
+    for lease_key in client.scan_iter(match=f"{lease_key_prefix}*"):
+        lease = cast(dict[str, str], client.hgetall(lease_key))
+        if not lease:
+            continue
+        snapshots.append(
+            {
+                "lease_id": lease_key.removeprefix(lease_key_prefix),
+                "instance_id": lease["instance_id"],
+                "capability": lease["capability"],
+                "service_url": lease["service_url"],
+            }
+        )
+    return snapshots
+
+
 def _leases_released(snapshot: dict[str, Any]) -> bool:
     return not snapshot["lease_keys"] and all(
         count == 0 for count in snapshot["instance_lease_counts"].values()
@@ -1002,27 +1023,62 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
             heartbeat.raise_for_status()
             assert heartbeat.json()["lifecycle"] == "ONLINE"
 
-        def query_until_completed() -> dict[str, dict[str, Any]]:
-            payloads: dict[str, dict[str, Any]] = {}
-            for label, task_id in task_ids.items():
-                payload = httpx.get(f"{control_url}/api/course-jobs/{task_id}", timeout=2).json()
-                snapshot = _status_snapshot(payload)
-                trajectory = evidence["status_trajectories"][label]
-                if trajectory[-1] != snapshot:
-                    trajectory.append(snapshot)
-                payloads[label] = payload
-            return payloads
+        selected_instances_by_lease: dict[str, dict[str, str]] = {}
+        with redis.Redis.from_url(
+            "redis://127.0.0.1:6379/14", decode_responses=True
+        ) as lease_client:
 
-        completed_payloads = _poll(
-            query_until_completed,
-            lambda payloads: all(
-                _task(payload)["status"] == 60
-                and [node["status"] for node in _task(payload)["nodes"]] == [60, 60]
-                for payload in payloads.values()
-            ),
-            timeout_seconds=30,
-            interval_seconds=0.02,
-            message="NORMAL/URGENT 任务未由运行中 Worker 推进到 60",
+            def query_until_completed() -> dict[str, dict[str, Any]]:
+                for item in _selected_instance_snapshots(
+                    lease_client, metadata["redis_prefix"]
+                ):
+                    selected_instances_by_lease[item["lease_id"]] = item
+                payloads: dict[str, dict[str, Any]] = {}
+                for label, task_id in task_ids.items():
+                    payload = httpx.get(
+                        f"{control_url}/api/course-jobs/{task_id}", timeout=2
+                    ).json()
+                    snapshot = _status_snapshot(payload)
+                    trajectory = evidence["status_trajectories"][label]
+                    if trajectory[-1] != snapshot:
+                        trajectory.append(snapshot)
+                    payloads[label] = payload
+                return payloads
+
+            completed_payloads = _poll(
+                query_until_completed,
+                lambda payloads: all(
+                    _task(payload)["status"] == 60
+                    and [node["status"] for node in _task(payload)["nodes"]]
+                    == [60, 60]
+                    for payload in payloads.values()
+                ),
+                timeout_seconds=30,
+                interval_seconds=0.02,
+                message="NORMAL/URGENT 任务未由运行中 Worker 推进到 60",
+            )
+
+        evidence["selected_instances"] = sorted(
+            selected_instances_by_lease.values(),
+            key=lambda item: item["lease_id"],
+        )
+
+        selected_instances = evidence["selected_instances"]
+        assert {item["capability"] for item in selected_instances} == {
+            "asr_offline",
+            "text_analysis",
+        }
+        assert {
+            (item["capability"], item["instance_id"])
+            for item in selected_instances
+        } == {
+            ("asr_offline", f"asr_offline-{metadata['suffix'][:8]}"),
+            ("text_analysis", f"text_analysis-{metadata['suffix'][:8]}"),
+        }
+        assert all(item["lease_id"] for item in selected_instances)
+        assert all(
+            item["service_url"] == metadata["stub_url"]
+            for item in selected_instances
         )
 
         calls_response = httpx.get(f"{metadata['stub_url']}/ops/calls", timeout=5)
