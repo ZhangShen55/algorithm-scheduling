@@ -54,6 +54,10 @@ class KafkaConfig(BaseModel):
     enable_auto_commit: bool = False
     auto_offset_reset: str = "earliest"
     max_poll_records: int = Field(default=10, ge=1)
+    poll_timeout_seconds: float = Field(default=0.5, gt=0)
+    ensure_topics: bool = True
+    topic_partitions: int = Field(default=1, ge=1)
+    topic_replication_factor: int = Field(default=1, ge=1)
     acks: str = "all"
 
 

@@ -47,6 +47,14 @@ enable_auto_commit = false
 auto_offset_reset = "earliest"
 # 单次 poll 最多取回的消息数，应与 Worker 并发上限协调。
 max_poll_records = 10
+# 单次 Kafka poll 的最长等待秒数；较短的有界轮询保证服务能够及时关闭。
+poll_timeout_seconds = 0.5
+# 启动时是否校验并补建平台必需 Topic。
+ensure_topics = true
+# 单机第一版每个 Topic 的分区数；扩容消费者前再评估增加。
+topic_partitions = 1
+# 单 Broker 环境只能使用 1；多 Broker 生产环境应提高副本数。
+topic_replication_factor = 1
 # Producer 要求所有同步副本确认消息。
 acks = "all"
 

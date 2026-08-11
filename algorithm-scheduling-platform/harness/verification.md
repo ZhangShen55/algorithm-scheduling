@@ -106,6 +106,79 @@ docker compose -f deploy/docker-compose.infrastructure.yml exec -T redis \
 真实 PostgreSQL、Redis、Kafka、`control-service`、`orchestrator-service` 和契约 Stub；不得因为
 真实 PPT 算子尚未接入而跳过基础运行时验证，也不得把静态 DDL 测试写成 Broker 闭环已通过。
 
+### Kafka 客户端选择与兼容性证据
+
+正式客户端选择 `aiokafka` 0.14.x：共享 adapter 需要原生异步 Producer/Consumer、
+`send_and_wait`、手动 offset 提交、有界轮询和 lag 查询，`aiokafka` 可直接提供这些能力，
+无需在 asyncio 运行时外再包装线程模型。安装元数据显示 0.14.0 的 `Requires-Python` 为
+`>=3.10`，平台基线为 `>=3.11`，因此兼容；`orchestrator-service` 显式限定
+`aiokafka>=0.14,<0.15`，避免未验证的次版本漂移。此 Kafka 客户端仅安装在平台运行环境，
+不进入算子模型环境，不改变算子 wheel 与业务协议。
+
+```bash
+.venv/bin/python -c 'from importlib.metadata import metadata, version; print("aiokafka", version("aiokafka")); print("Requires-Python", metadata("aiokafka")["Requires-Python"])'
+rg -n '^requires-python|^aiokafka' pyproject.toml ../orchestrator_service/requirements.txt
+```
+
+2026-08-11 实测输出为 `aiokafka 0.14.0`、`Requires-Python >=3.10`、平台
+`requires-python = ">=3.11"` 与 orchestrator `aiokafka>=0.14,<0.15`。
+
+## 方案 C 里程碑 2A 真实运行时验收
+
+从平台目录执行一键 Harness：
+
+```bash
+.venv/bin/python scripts/run_milestone_2a.py
+```
+
+或在基础设施已 healthy 时直接执行验收命令：
+
+```bash
+.venv/bin/python -m pytest -q -rs \
+  tests/integration/test_kafka_runtime.py \
+  tests/integration/test_milestone_2a_runtime.py
+```
+
+命令不得出现 skipped。运行时每次创建唯一 `_test` PostgreSQL 数据库、Redis DB 14 UUID 前缀、
+唯一 Kafka Topic/Consumer Group 和临时服务端口；不会连接或清理 `algorithm` 业务数据库。JSON
+证据写入 gitignore 的 `harness/reports/milestone-2a/`，应包含容器健康和版本、Outbox
+`published_at`/尝试次数、重启前后 Kafka committed/end offset、节点/任务轨迹、Stub 调用顺序、
+运行中 `lease:*` hash 得到的 `selected_instances`、终态后的有界租约清理轮询、
+Control/Stub/orchestrator 健康响应、两次 orchestrator readiness 和不同
+PID/启动序号/停止日志/真实退出码/强杀与提前退出标记，以及本次唯一 Consumer Group 精确删除验证和
+最终 GET。所有健康/readiness 探针必须为 HTTP 200；404 等非 200 响应不算启动成功。重启恢复必须先
+等待 Outbox 重新发布完成，再证明 committed offset 和 Topic end offset 均精确为 4，并经过短暂静默窗口
+复核仍为 4。teardown 必须尝试全部进程、Redis、Kafka Group/Topic 和临时目录清理；删除 Topic 前先校验
+完整测试命名，删除后轮询确认不存在。
+
+2026-08-11 单场景实测：PostgreSQL 17.10、Redis 7.4.10、Kafka 4.0.0 均 healthy；首次 offset
+为 2，停止并重启 orchestrator、注入重复消息及恢复一条 Outbox 后 offset 为 4；任务事实仍为 2 个
+task type 和 4 个节点，重复发布项 `publish_attempts=2`。NORMAL/URGENT 均观察到状态 30、50、60，
+URGENT 的 ASR Stub 调用先于 NORMAL，最终租约为零。该证据完成 2A 契约 Stub 层级，不包含真实
+PPT、OCR、离线 ASR、VBas；ScreenDet 仅属于 `online-gateway-service`。
+
+8.4 的“实例选择”不使用注册响应推断。E2E 在节点执行轮询期间扫描本次唯一
+Redis 前缀下的 `lease:*` hash，按 `lease_id` 去重记录 `lease_id`、`instance_id`、
+`capability` 和 `service_url` 到 `evidence.selected_instances`。测试断言运行时实际观察到
+`asr_offline` 和 `text_analysis`，实例 ID 等于本次对应注册实例且 URL 均为契约
+Stub；证据在租约释放前采集，终态后仍独立断言租约清零。
+
+Outbox 发布失败保留待发布的证据来自 `tests/test_outbox_publisher.py` 的组件故障注入；
+真实 Broker Harness 通过将一条 Outbox 恢复为待发布、重启 orchestrator，验证其重投后
+`published_at` 恢复且 `publish_attempts>=2`。这是“组件故障注入 + 真实 Broker 恢复闭环”，
+未执行、也不声称执行过真实 Broker 停机。
+
+Broker 集成用例另外验证真实发布/消费、手动提交、同 group 重启 offset 恢复和
+未提交消息重投；里程碑 Harness 验证重复消息幂等。`orchestrator_service/tests/test_runtime.py`
+使用 `FakeConsumer.lag()` 注入“Kafka 依赖不可用”，验证 `/ops/readiness` 返回 503、
+`checks.kafka.ready=false` 且中文诊断可见。该就绪用例不停止真实 Kafka 容器，与真实
+Broker 行为集成证据合并支撑 2.6。
+
+2026-08-11 状态同步复审：`compileall`、Ruff 和严格 Mypy 均通过；平台完整套件
+`276 passed`，orchestrator 完整套件 `17 passed`；两份真实集成文件直接运行与一键
+Harness 分别为 `12 passed`，均无 skipped。基础设施和平台两份 Compose 配置通过
+`config --quiet`，`openspec validate close-platform-runtime-and-harness-gaps --strict` 通过。
+
 ## 2026-08-11 算子本机运行与 PPT 最新终态合同
 
 - 注册客户端构建为 `algorithm_operator_registry_client-0.1.0-py3-none-any.whl`，要求 Python 3.10+，不携带平台内部包。

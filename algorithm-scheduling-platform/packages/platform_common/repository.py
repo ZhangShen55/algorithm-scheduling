@@ -366,6 +366,174 @@ class CourseRepository:
             ).mappings()
             return [_task_type_record(row, created=False) for row in rows]
 
+    def get_task_type(self, course_task_type_id: int) -> TaskTypeRecord:
+        with self._engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT id, task_id, task_type, status, priority, reason,
+                           request_payload, effective_params, updated_at
+                    FROM course_task_types
+                    WHERE id = :course_task_type_id
+                    """
+                ),
+                {"course_task_type_id": course_task_type_id},
+            ).mappings().one_or_none()
+        if row is None:
+            raise RepositoryNotFoundError(f"任务类型不存在: {course_task_type_id}")
+        return _task_type_record(row, created=False)
+
+    def list_dispatch_capabilities(self) -> list[str]:
+        with self._engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT DISTINCT required_capability
+                    FROM task_nodes
+                    WHERE status IN (10, 30)
+                      AND required_capability IS NOT NULL
+                    ORDER BY required_capability
+                    """
+                )
+            ).scalars()
+            return [str(capability) for capability in rows]
+
+    def aggregate_task_type_state(self, course_task_type_id: int) -> TaskTypeRecord:
+        with self._engine.begin() as connection:
+            task_type_row = connection.execute(
+                text(
+                    """
+                    SELECT id, task_id, task_type, status, priority, reason,
+                           request_payload, effective_params, updated_at
+                    FROM course_task_types
+                    WHERE id = :course_task_type_id
+                    FOR UPDATE
+                    """
+                ),
+                {"course_task_type_id": course_task_type_id},
+            ).mappings().one_or_none()
+            if task_type_row is None:
+                raise RepositoryNotFoundError(f"任务类型不存在: {course_task_type_id}")
+
+            nodes = list(
+                connection.execute(
+                    text(
+                        """
+                        SELECT node_code, status, reason, required_capability
+                        FROM task_nodes
+                        WHERE course_task_type_id = :course_task_type_id
+                        ORDER BY created_at, id
+                        FOR UPDATE
+                        """
+                    ),
+                    {"course_task_type_id": course_task_type_id},
+                ).mappings()
+            )
+            status, reason = self._derive_task_type_state(
+                TaskType(task_type_row["task_type"]),
+                nodes,
+            )
+            row = connection.execute(
+                text(
+                    """
+                    UPDATE course_task_types
+                    SET status = :status,
+                        reason = :reason,
+                        started_at = CASE
+                            WHEN :status = 50 THEN COALESCE(started_at, now())
+                            ELSE started_at
+                        END,
+                        finished_at = CASE
+                            WHEN :status IN (60, 70, 80) THEN COALESCE(finished_at, now())
+                            ELSE finished_at
+                        END,
+                        updated_at = CASE
+                            WHEN status <> :status OR reason <> :reason THEN now()
+                            ELSE updated_at
+                        END
+                    WHERE id = :course_task_type_id
+                    RETURNING id, task_id, task_type, status, priority, reason,
+                              request_payload, effective_params, updated_at
+                    """
+                ),
+                {
+                    "course_task_type_id": course_task_type_id,
+                    "status": status.value,
+                    "reason": reason,
+                },
+            ).mappings().one()
+        return _task_type_record(row, created=False)
+
+    def aggregate_capability_task_types(self, capability: str) -> list[TaskTypeRecord]:
+        with self._engine.connect() as connection:
+            task_type_ids = list(
+                connection.execute(
+                    text(
+                        """
+                        SELECT DISTINCT course_task_type_id
+                        FROM task_nodes
+                        WHERE required_capability = :capability
+                          AND status IN (10, 30)
+                        ORDER BY course_task_type_id
+                        """
+                    ),
+                    {"capability": capability},
+                ).scalars()
+            )
+        return [
+            self.aggregate_task_type_state(int(course_task_type_id))
+            for course_task_type_id in task_type_ids
+        ]
+
+    @staticmethod
+    def _derive_task_type_state(
+        task_type: TaskType,
+        nodes: list[RowMapping],
+    ) -> tuple[NodeStatus, str]:
+        if not nodes:
+            return NodeStatus.PENDING, "等待调度初始化"
+
+        failed = next(
+            (row for row in nodes if NodeStatus(row["status"]) is NodeStatus.FAILED),
+            None,
+        )
+        if failed is not None:
+            return NodeStatus.FAILED, f"节点处理失败: {failed['reason']}"
+
+        if all(NodeStatus(row["status"]) is NodeStatus.COMPLETED for row in nodes):
+            return NodeStatus.COMPLETED, f"{task_type.value} 所有节点处理完成"
+
+        active = next(
+            (
+                row
+                for row in nodes
+                if NodeStatus(row["status"])
+                in {NodeStatus.QUEUED, NodeStatus.RUNNING}
+            ),
+            None,
+        )
+        if active is not None:
+            return NodeStatus.RUNNING, f"正在处理节点: {active['node_code']}"
+
+        waiting_operator = next(
+            (
+                row
+                for row in nodes
+                if NodeStatus(row["status"]) is NodeStatus.WAITING_OPERATOR
+            ),
+            None,
+        )
+        if waiting_operator is not None:
+            return NodeStatus.WAITING_OPERATOR, str(waiting_operator["reason"])
+
+        next_node = next(
+            (row for row in nodes if NodeStatus(row["status"]) is not NodeStatus.COMPLETED),
+            nodes[0],
+        )
+        if any(NodeStatus(row["status"]) is NodeStatus.COMPLETED for row in nodes):
+            return NodeStatus.RUNNING, f"正在处理节点: {next_node['node_code']}"
+        return NodeStatus.PENDING, f"等待节点处理: {next_node['node_code']}"
+
     def update_task_type_state(
         self,
         course_task_type_id: int,
