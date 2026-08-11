@@ -7,6 +7,8 @@ from typing import Protocol
 from packages.platform_common.operator_registry import CapacityLease
 from packages.platform_common.repository import NodeRecord
 
+from ..domain.errors import CapacityUnavailableError
+
 
 class DispatchRepository(Protocol):
     def defer_capability_nodes(self, capability: str) -> int: ...
@@ -18,10 +20,6 @@ class DispatchRepository(Protocol):
 
 class CapacityRegistry(Protocol):
     def has_available_capacity(self, capability: str) -> bool: ...
-
-
-class CapacityUnavailableError(RuntimeError):
-    pass
 
 
 class CapacityLeaseClient(Protocol):

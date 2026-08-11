@@ -40,6 +40,16 @@ def test_control_readiness_probe_allows_dependency_timeout_headroom() -> None:
     assert "ops/readiness', timeout=4)" in compose
 
 
+def test_orchestrator_healthcheck_uses_runtime_readiness() -> None:
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+    orchestrator = compose.split("  orchestrator-service:", 1)[1].split(
+        "  vision-orchestrator-service:", 1
+    )[0]
+
+    assert "http://127.0.0.1:18101/ops/readiness" in orchestrator
+    assert "http://127.0.0.1:18101/health" not in orchestrator
+
+
 def test_all_platform_dockerfiles_use_repo_root_context_and_one_worker() -> None:
     for service in (
         "control_service",
