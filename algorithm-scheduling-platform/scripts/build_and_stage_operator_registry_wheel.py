@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import argparse
+import csv
 import email
 import hashlib
+import io
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import zipfile
+from base64 import urlsafe_b64encode
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -21,6 +26,22 @@ EXPECTED_METADATA_NAME = "algorithm-operator-registry-client"
 EXPECTED_VERSION = "0.1.0"
 EXPECTED_REQUIRES_PYTHON = ">=3.10"
 EXPECTED_WHEEL_NAME = "algorithm_operator_registry_client-0.1.0-py3-none-any.whl"
+EXPECTED_RUNTIME_REQUIREMENTS = frozenset(
+    {
+        "fastapi<1,>=0.109",
+        "httpx<1,>=0.25",
+        "pydantic<3,>=2.5",
+    }
+)
+DIST_INFO_DIRECTORY = "algorithm_operator_registry_client-0.1.0.dist-info"
+EXPECTED_DIST_INFO_MEMBERS = frozenset(
+    {
+        f"{DIST_INFO_DIRECTORY}/METADATA",
+        f"{DIST_INFO_DIRECTORY}/WHEEL",
+        f"{DIST_INFO_DIRECTORY}/top_level.txt",
+        f"{DIST_INFO_DIRECTORY}/RECORD",
+    }
+)
 TARGET_PROJECTS = (
     "asr_offline",
     "asr_online",
@@ -45,6 +66,69 @@ class PublishedWheel:
     dist_path: Path
     staged_paths: tuple[Path, ...]
     sha256: str
+
+
+def _tracked_source_files(package_root: Path) -> tuple[str, ...]:
+    completed = subprocess.run(
+        ["git", "-C", str(package_root), "ls-files", "-z", "--", "."],
+        check=True,
+        capture_output=True,
+        timeout=10,
+    )
+    return tuple(
+        sorted(
+            path.decode("utf-8")
+            for path in completed.stdout.split(b"\0")
+            if path
+        )
+    )
+
+
+def _validate_source_path(relative_path: str) -> PurePosixPath:
+    path = PurePosixPath(relative_path)
+    if (
+        path.is_absolute()
+        or not path.parts
+        or any(part in {"", ".", ".."} or part.startswith(".") for part in path.parts)
+        or "\\" in relative_path
+    ):
+        raise WheelBuildError(f"不允许的 tracked 源文件路径: {relative_path!r}")
+    allowed = (
+        relative_path in {"README.md", "pyproject.toml"}
+        or path.suffix == ".py"
+        or path.name == "py.typed"
+    )
+    if not allowed:
+        raise WheelBuildError(f"不允许的 tracked 源文件: {relative_path}")
+    return path
+
+
+def _prepare_clean_source(
+    package_root: Path,
+    clean_source: Path,
+    source_files: Sequence[str],
+) -> tuple[str, ...]:
+    if not source_files:
+        raise WheelBuildError("Git 索引中没有 registry client 源文件")
+    clean_source.mkdir()
+    validated: list[str] = []
+    for relative_path in source_files:
+        path = _validate_source_path(relative_path)
+        source = package_root.joinpath(*path.parts)
+        if source.is_symlink():
+            raise WheelBuildError(f"tracked 源文件不得为符号链接: {relative_path}")
+        if not source.is_file() or not stat.S_ISREG(source.stat().st_mode):
+            raise WheelBuildError(f"tracked 源文件必须是普通文件: {relative_path}")
+        destination = clean_source.joinpath(*path.parts)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        destination.chmod(0o644)
+        validated.append(path.as_posix())
+    required = {"README.md", "pyproject.toml", "__init__.py"}
+    missing = required.difference(validated)
+    if missing:
+        raise WheelBuildError("tracked 源文件缺少必需项: " + ", ".join(sorted(missing)))
+    return tuple(sorted(validated))
 
 
 def _build_wheel(package_root: Path, wheelhouse: Path) -> None:
@@ -74,30 +158,47 @@ def _build_wheel(package_root: Path, wheelhouse: Path) -> None:
     )
 
 
-def _forbidden_member(name: str) -> bool:
-    path = PurePosixPath(name)
-    parts = path.parts
-    platform_roots = {
-        "control_service",
-        "online_gateway_service",
-        "orchestrator_service",
-        "vision_orchestrator_service",
+def _expected_wheel_members(source_files: Sequence[str]) -> frozenset[str]:
+    package_members = {
+        f"packages/operator_registry_client/{relative_path}"
+        for relative_path in source_files
+        if relative_path.endswith(".py") or PurePosixPath(relative_path).name == "py.typed"
     }
-    if parts and parts[0] in platform_roots:
-        return True
-    if len(parts) >= 2 and parts[:2] in {
-        ("packages", "platform_common"),
-        ("packages", "platform_contracts"),
-    }:
-        return True
-    filename = path.name.lower()
-    return (
-        filename in {".env", "credentials", "credentials.json", "secrets.json"}
-        or filename.endswith((".key", ".pem", ".crt", ".p12", ".pfx"))
-    )
+    return frozenset(package_members) | EXPECTED_DIST_INFO_MEMBERS
 
 
-def _validate_wheel(wheelhouse: Path) -> Path:
+def _validate_record(archive: zipfile.ZipFile, expected_members: frozenset[str]) -> None:
+    record_name = f"{DIST_INFO_DIRECTORY}/RECORD"
+    try:
+        rows = list(
+            csv.reader(
+                io.StringIO(archive.read(record_name).decode("utf-8")),
+                strict=True,
+            )
+        )
+    except (UnicodeDecodeError, csv.Error) as exc:
+        raise WheelBuildError("wheel RECORD 不是有效 UTF-8 CSV") from exc
+    if any(len(row) != 3 for row in rows):
+        raise WheelBuildError("wheel RECORD 每行必须恰好包含 3 列")
+    record_names = [row[0] for row in rows]
+    if len(record_names) != len(set(record_names)):
+        raise WheelBuildError("wheel RECORD 包含重复成员")
+    if set(record_names) != set(expected_members):
+        raise WheelBuildError("wheel RECORD 成员集合不匹配")
+    for member_name, recorded_hash, recorded_size in rows:
+        if member_name == record_name:
+            if recorded_hash or recorded_size:
+                raise WheelBuildError("wheel RECORD 自身的 hash 和 size 必须为空")
+            continue
+        content = archive.read(member_name)
+        digest = urlsafe_b64encode(hashlib.sha256(content).digest()).rstrip(b"=").decode()
+        if recorded_hash != f"sha256={digest}":
+            raise WheelBuildError(f"wheel RECORD hash 不匹配: {member_name}")
+        if recorded_size != str(len(content)):
+            raise WheelBuildError(f"wheel RECORD size 不匹配: {member_name}")
+
+
+def _validate_wheel(wheelhouse: Path, source_files: Sequence[str]) -> Path:
     artifacts = sorted(path for path in wheelhouse.iterdir() if path.is_file())
     wheels = [path for path in artifacts if path.suffix == ".whl"]
     if len(wheels) != 1 or len(artifacts) != 1:
@@ -113,19 +214,33 @@ def _validate_wheel(wheelhouse: Path) -> Path:
 
     try:
         with zipfile.ZipFile(wheel) as archive:
-            names = archive.namelist()
-            forbidden = sorted(name for name in names if _forbidden_member(name))
-            if forbidden:
-                raise WheelBuildError(f"wheel 包含禁止发布的文件: {forbidden[0]}")
-            metadata_names = [
-                name for name in names if name.endswith(".dist-info/METADATA")
+            entries = archive.infolist()
+            names = [entry.filename for entry in entries]
+            if len(names) != len(set(names)):
+                raise WheelBuildError("wheel 包含重复 ZIP 成员")
+            unsafe = [
+                entry.filename
+                for entry in entries
+                if entry.is_dir()
+                or PurePosixPath(entry.filename).is_absolute()
+                or ".." in PurePosixPath(entry.filename).parts
+                or "\\" in entry.filename
+                or stat.S_IFMT(entry.external_attr >> 16) == stat.S_IFLNK
             ]
-            if len(metadata_names) != 1:
+            if unsafe:
+                raise WheelBuildError(f"wheel 包含不安全的 ZIP 成员: {unsafe[0]}")
+            expected_members = _expected_wheel_members(source_files)
+            if set(names) != set(expected_members):
+                extras = sorted(set(names).difference(expected_members))
+                missing = sorted(expected_members.difference(names))
                 raise WheelBuildError(
-                    "wheel 必须包含唯一的 .dist-info/METADATA，"
-                    f"实际为 {len(metadata_names)}"
+                    "wheel 包含禁止发布的文件或缺少预期文件: "
+                    f"extras={extras}, missing={missing}"
                 )
-            metadata = email.message_from_bytes(archive.read(metadata_names[0]))
+            metadata = email.message_from_bytes(
+                archive.read(f"{DIST_INFO_DIRECTORY}/METADATA")
+            )
+            _validate_record(archive, expected_members)
     except zipfile.BadZipFile as exc:
         raise WheelBuildError(f"wheel 不是有效的 ZIP 制品: {wheel}") from exc
 
@@ -138,6 +253,14 @@ def _validate_wheel(wheelhouse: Path) -> Path:
         actual = metadata[key]
         if actual != expected:
             raise WheelBuildError(f"METADATA {key} 不匹配: {actual!r} != {expected!r}")
+    requirements = metadata.get_all("Requires-Dist", [])
+    if len(requirements) != len(EXPECTED_RUNTIME_REQUIREMENTS) or set(
+        requirements
+    ) != set(EXPECTED_RUNTIME_REQUIREMENTS):
+        raise WheelBuildError(
+            "METADATA Requires-Dist 不匹配: "
+            f"{requirements!r} != {sorted(EXPECTED_RUNTIME_REQUIREMENTS)!r}"
+        )
     return wheel
 
 
@@ -240,6 +363,7 @@ def build_and_stage_registry_wheel(
     target_projects: Sequence[str] = TARGET_PROJECTS,
     builder: Builder = _build_wheel,
     replace: Replace = os.replace,
+    source_files: Sequence[str] | None = None,
 ) -> PublishedWheel:
     package_root = package_root.resolve()
     dist_dir = dist_dir.resolve()
@@ -247,10 +371,23 @@ def build_and_stage_registry_wheel(
     dist_dir.mkdir(parents=True, exist_ok=True)
     _assert_dist_contains_only_expected_wheel(dist_dir)
 
-    with tempfile.TemporaryDirectory(prefix="operator-registry-wheelhouse-") as raw_dir:
-        wheelhouse = Path(raw_dir)
-        builder(package_root, wheelhouse)
-        wheel = _validate_wheel(wheelhouse)
+    selected_source_files = (
+        tuple(source_files)
+        if source_files is not None
+        else _tracked_source_files(package_root)
+    )
+    with tempfile.TemporaryDirectory(prefix="operator-registry-build-") as raw_dir:
+        build_root = Path(raw_dir)
+        clean_source = build_root / "source"
+        wheelhouse = build_root / "wheelhouse"
+        wheelhouse.mkdir()
+        validated_source_files = _prepare_clean_source(
+            package_root,
+            clean_source,
+            selected_source_files,
+        )
+        builder(clean_source, wheelhouse)
+        wheel = _validate_wheel(wheelhouse, validated_source_files)
         wheel_hash = hashlib.sha256(wheel.read_bytes()).hexdigest()
         dist_path = dist_dir / EXPECTED_WHEEL_NAME
         staged_paths = tuple(
@@ -280,7 +417,11 @@ def build_and_stage_registry_wheel(
     )
 
 
-def main() -> None:
+def main(arguments: Sequence[str] = ()) -> None:
+    parser = argparse.ArgumentParser(
+        description="Build, validate and stage the operator registry wheel.",
+    )
+    parser.parse_args(arguments)
     published = build_and_stage_registry_wheel()
     print(f"已构建: {published.dist_path} sha256={published.sha256}")
     for path in published.staged_paths:
@@ -288,4 +429,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])

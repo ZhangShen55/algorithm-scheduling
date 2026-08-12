@@ -92,8 +92,9 @@ python -m pip install \
 All eight operator projects declare `algorithm-operator-registry-client==0.1.0` in
 their runtime requirements. Their Dockerfiles consume the same versioned artifact
 from an ignored `wheel/` build-context directory. The command above builds without an
-index, validates the fixed filename and metadata, atomically publishes `dist`, and
-stages byte-identical copies with SHA-256 verification. Run it before building images.
+index from a clean Git-tracked source allowlist, validates the fixed filename,
+metadata, wheel member set and RECORD, atomically publishes `dist`, and stages
+byte-identical copies with SHA-256 verification. Run it before building images.
 The legacy command remains an alias for the same rebuild-and-stage pipeline and never
 copies a previously built wheel without rebuilding:
 
