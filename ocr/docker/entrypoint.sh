@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROCESS_NAME="${GPU_PROCESS_NAME:-vbas}"
-PORT="${PORT:-8981}"
+PROCESS_NAME="${GPU_PROCESS_NAME:-ocr}"
+PORT="${PORT:-8866}"
 WORKERS="${UVICORN_WORKERS:-1}"
 [[ "$WORKERS" == "1" ]] || { echo "[ERROR] GPU operator requires exactly one Uvicorn worker" >&2; exit 1; }
 
-export CONFIG_PATH="${CONFIG_PATH:-/workspace/config.toml}"
-[[ -f "$CONFIG_PATH" ]] || { echo "[ERROR] 配置文件不存在: $CONFIG_PATH" >&2; exit 1; }
-
-echo "[INFO] 启动单实例 VBas，端口: $PORT"
 exec -a "$PROCESS_NAME" python -m uvicorn app.main:app \
   --host 0.0.0.0 \
   --port "$PORT" \

@@ -9,11 +9,14 @@ docker build -f docker/Dockerfile -t vbas:6.0 .
 docker run --rm --name vbas-8981 \
   -p 8981:8981 \
   -e CONFIG_PATH=/workspace/config.toml \
+  -e UVICORN_WORKERS=1 \
   -v "$PWD/config.toml:/workspace/config.toml:ro" \
   -v "$PWD/models:/workspace/models:ro" \
-  vbas:6.0 \
-  python -m uvicorn app.main:app --host 0.0.0.0 --port 8981
+  vbas:6.0
 ```
+
+容器使用 `docker/start.sh` 直接启动单个 Uvicorn 进程，默认监听 `8981`。
+扩容由平台增加容器实例完成，容器内不启动负载均衡或多实例。
 
 `docker/Dockerfile.cuda113` 用于需要 CUDA 11.3/Python 3.8 兼容的环境。
 

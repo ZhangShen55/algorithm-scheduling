@@ -29,12 +29,17 @@ openspec/
 *.env
 .env
 **/config.toml
+!config.toml
 **/*.pt
 **/*.pth
 **/*.onnx
 **/*.engine
 **/models/
+!models/
+!models/**
 !app/vendor/DirectMHP/models/
 !app/vendor/DirectMHP/models/**
 **/models-encrypted/
+!models-encrypted/
+!models-encrypted/**
 **/models-encrypted/*.key

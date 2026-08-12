@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -18,10 +17,15 @@ def test_cpu_gpu_dockerfile_uses_official_paddle_runtime():
     assert "libgl1 libglib2.0-0" in content
     assert "COPY config.toml" not in content
     assert "EXPOSE 8866" in content
-    assert (
-        'CMD ["python", "-m", "uvicorn", "app.main:app", '
-        '"--host", "0.0.0.0", "--port", "8866", "--workers", "1"]'
-    ) in content
+    assert "COPY docker/entrypoint.sh /usr/local/bin/ocr-entrypoint" in content
+    assert 'CMD ["/usr/local/bin/ocr-entrypoint"]' in content
+
+    entrypoint = (PROJECT_ROOT / "docker" / "entrypoint.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'PORT="${PORT:-8866}"' in entrypoint
+    assert "--workers 1" in entrypoint
+    assert 'exec -a "$PROCESS_NAME"' in entrypoint
 
 
 def test_npu_dockerfile_reuses_application_and_models_without_cuda_base():

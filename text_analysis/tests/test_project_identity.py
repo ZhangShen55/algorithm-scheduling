@@ -18,6 +18,12 @@ class ProjectIdentityTests(unittest.TestCase):
             Path("start.sh").read_text(encoding="utf-8"),
         )
 
+    def test_scheduling_routes_remain_available(self):
+        paths = app.openapi()["paths"]
+
+        self.assertIn("post", paths["/v1/course_overviews"])
+        self.assertIn("post", paths["/v1/extract_keywords"])
+
 
 if __name__ == "__main__":
     unittest.main()

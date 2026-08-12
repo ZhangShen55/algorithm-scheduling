@@ -21,9 +21,11 @@ RUN python -m pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL
 COPY app ./app
 COPY models ./models
 COPY scripts/verify_models.py ./scripts/verify_models.py
+COPY docker/entrypoint.sh /usr/local/bin/ocr-entrypoint
 
-RUN python scripts/verify_models.py
+RUN chmod 0755 /usr/local/bin/ocr-entrypoint && \
+    python scripts/verify_models.py
 
 EXPOSE 8866
 
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8866", "--workers", "1"]
+CMD ["/usr/local/bin/ocr-entrypoint"]

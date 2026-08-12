@@ -48,9 +48,10 @@ curl -sS http://127.0.0.1:8981/ImageDetect/teacher/v1.0.0 \
 - `GET /AE/WorkerStatus`：查看运行批次和队列。
 - `PUT /AE/Drain`：停止接受新批次，便于下线实例。
 
-## 多实例启动脚本
+## 容器启动脚本
 
-`docker/start.sh` 读取根级 `config.toml` 的 `INSTANCE_COUNT` 和 `WORKERS_PER_INSTANCE`。单实例对外默认端口为 `8881`；多实例在 `8981...` 启动 Uvicorn，由 Nginx 在 `8881` 转发。
+`docker/start.sh` 启动单个 Uvicorn 进程，默认监听 `8981`。
+`UVICORN_WORKERS` 必须为 `1`；如需扩容，由平台增加容器实例。
 
 ```bash
 export CONFIG_PATH="$PWD/config.toml"
@@ -66,10 +67,10 @@ docker build -f docker/Dockerfile -t vbas:6.0 .
 docker run --rm --name vbas-8981 \
   -p 8981:8981 \
   -e CONFIG_PATH=/workspace/config.toml \
+  -e UVICORN_WORKERS=1 \
   -v "$PWD/config.toml:/workspace/config.toml:ro" \
   -v "$PWD/models:/workspace/models:ro" \
-  vbas:6.0 \
-  python -m uvicorn app.main:app --host 0.0.0.0 --port 8981
+  vbas:6.0
 ```
 
 Compose 文件位于 `docker/`，具体见 [docker/README.md](docker/README.md)。

@@ -79,8 +79,10 @@ COPY --from=builder /workspace/app/services ./app/services
 COPY --from=builder /workspace/app/schemas ./app/schemas
 COPY --from=builder /workspace/app/vendor/DirectMHP ./app/vendor/DirectMHP
 COPY ./docker/secure-entrypoint.sh /usr/local/bin/tias-secure-entrypoint
+COPY ./docker/start.sh /usr/local/bin/vbas-start
 
 RUN chmod 0755 /usr/local/bin/tias-secure-entrypoint && \
+    chmod 0755 /usr/local/bin/vbas-start && \
     mkdir -p /workspace/model-assets /workspace/models-encrypted && \
     find /workspace/app -type d -name '__pycache__' -prune -exec rm -rf {} + && \
     find /workspace/app -type f \( -name '*.pt' -o -name '*.pth' -o -name '*.onnx' -o -name '*.engine' -o -name '*.key' -o -name '*.pem' -o -name '*.crt' \) -delete
@@ -90,7 +92,7 @@ ENV PYTHONUNBUFFERED=1 \
     YOLO_CONFIG_DIR=/tmp/Ultralytics \
     CONFIG_PATH=/workspace/config.toml
 
-EXPOSE 8881 8981 8982
+EXPOSE 8981
 
 ENTRYPOINT ["/usr/local/bin/tias-secure-entrypoint"]
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8881"]
+CMD ["/usr/local/bin/vbas-start"]

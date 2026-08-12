@@ -3,7 +3,7 @@
 ########################
 # 1) 构建阶段（加密）
 ########################
-FROM python:3.10 AS builder
+FROM python:3.11 AS builder
 
 WORKDIR /build
 
@@ -36,13 +36,13 @@ RUN chmod +x /build/obf/start.sh
 ########################
 # 2) 运行阶段（仅加密产物）
 ########################
-FROM python:3.10 AS runtime
+FROM python:3.11 AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UVICORN_HOST=0.0.0.0 \
     UVICORN_PORT=8000 \
-    UVICORN_WORKERS=2 \
+    UVICORN_WORKERS=1 \
     UVICORN_RELOAD=0 \
     UVICORN_LOG_LEVEL=info \
     APP_MODULE=app.main:app

@@ -8,7 +8,6 @@ RUN apt-get update && \
         build-essential \
         jq \
         curl \
-        nginx \
         libgl1-mesa-glx \
         libglib2.0-0 \
         libsm6 \
@@ -35,7 +34,6 @@ COPY ./models ./models
 COPY ./models-encrypted ./models-encrypted
 COPY ./docker/start.sh ./docker/start.sh
 COPY ./scripts/build_cython_modules.py ./scripts/build_cython_modules.py
-COPY ./docker/nginx.conf /etc/nginx/nginx.conf
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -64,5 +62,5 @@ RUN set -e; \
         find /workspace -type d -name '__pycache__' -prune -exec rm -rf {} +; \
     fi
 
-EXPOSE 8881
+EXPOSE 8981
 CMD ["/bin/bash", "-c", "docker/start.sh"]

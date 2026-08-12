@@ -1,5 +1,10 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROCESS_NAME="${GPU_PROCESS_NAME:-asr_online}"
+PORT="${PORT:-8084}"
+WORKERS="${UVICORN_WORKERS:-1}"
+[[ "$WORKERS" == "1" ]] || { echo "[ERROR] GPU operator requires exactly one Uvicorn worker" >&2; exit 1; }
 
 export CONFIG_PATH="${CONFIG_PATH:-/config.toml}"
 export CONDA_ENV_NAME="${CONDA_ENV_NAME:-asr}"
@@ -17,8 +22,8 @@ fi
 
 source /opt/conda/bin/activate "$CONDA_ENV_NAME"
 
-echo "[INFO] 启动单实例实时 ASR，端口: ${PORT:-8084}"
-exec python -m uvicorn app.main:app \
+echo "[INFO] 启动单实例实时 ASR，端口: $PORT"
+exec -a "$PROCESS_NAME" python -m uvicorn app.main:app \
     --host 0.0.0.0 \
-    --port "${PORT:-8084}" \
+    --port "$PORT" \
     --workers 1

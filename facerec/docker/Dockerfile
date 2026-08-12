@@ -28,9 +28,11 @@ RUN python3 -m pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEE
     pip3 install --no-cache-dir -r requirements.txt
 
 COPY . /app/
+COPY docker/entrypoint.sh /usr/local/bin/facerec-entrypoint
 
-RUN mkdir -p /app/logs /app/uploaded_faces
+RUN chmod 0755 /usr/local/bin/facerec-entrypoint && \
+    mkdir -p /app/logs /app/uploaded_faces
 
 EXPOSE 8000
 
-CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["/usr/local/bin/facerec-entrypoint"]
