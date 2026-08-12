@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
+import subprocess
 import sys
 from pathlib import Path, PurePosixPath
 
@@ -90,6 +91,8 @@ PROTECTED_PARTS = frozenset(
 
 SECRET_SUFFIXES = frozenset({".pem", ".key", ".p12", ".pfx"})
 
+IGNORABLE_UNTRACKED_NAMES = frozenset({".DS_Store", ".gitkeep"})
+
 
 class GateError(RuntimeError):
     pass
@@ -98,12 +101,19 @@ class GateError(RuntimeError):
 def _logical_lines(source: str) -> list[str]:
     lines: list[str] = []
     pending = ""
+    escape = "\\"
     for raw_line in source.splitlines():
         stripped = raw_line.strip()
+        if not pending and stripped.lower().startswith("# escape="):
+            value = stripped.partition("=")[2].strip()
+            if value not in {"\\", "`"}:
+                raise GateError(f"unsupported Dockerfile escape directive: {stripped}")
+            escape = value
+            continue
         if not stripped or stripped.startswith("#"):
             continue
         pending = f"{pending} {stripped}".strip()
-        if pending.endswith("\\"):
+        if pending.endswith(escape):
             pending = pending[:-1].rstrip()
             continue
         lines.append(pending)
@@ -114,22 +124,36 @@ def _logical_lines(source: str) -> list[str]:
 
 
 def _copy_sources(instruction: str) -> tuple[str | None, bool, list[str]]:
-    operation, _, arguments = instruction.partition(" ")
+    match = re.match(r"^([A-Za-z]+)\s+(.+)$", instruction, flags=re.DOTALL)
+    if match is None:
+        raise GateError(f"cannot parse Dockerfile instruction: {instruction}")
+    operation, arguments = match.groups()
     if operation.upper() not in {"COPY", "ADD"}:
         return None, False, []
     if not arguments:
         raise GateError(f"invalid {operation} instruction: {instruction}")
-    if arguments.lstrip().startswith("["):
-        values = json.loads(arguments)
-        if not isinstance(values, list) or len(values) < 2:
+    from_stage = False
+    remainder = arguments.lstrip()
+    while remainder.startswith("--"):
+        flag_match = re.match(r"^(--[a-z-]+)(?:=([^\s]+)|\s+([^\s]+))\s+", remainder)
+        if flag_match is None:
+            raise GateError(f"cannot parse {operation} flag: {instruction}")
+        option_name, equals_value, separate_value = flag_match.groups()
+        if option_name not in {"--chown", "--chmod", "--exclude", "--checksum", "--from"}:
+            raise GateError(f"unsupported {operation} flag: {option_name}")
+        if option_name == "--from":
+            from_stage = True
+        if equals_value is None and separate_value is None:
+            raise GateError(f"missing value for {option_name}")
+        remainder = remainder[flag_match.end() :].lstrip()
+    if remainder.startswith("["):
+        parsed_values = json.loads(remainder)
+        if not isinstance(parsed_values, list) or len(parsed_values) < 2 or not all(
+            isinstance(value, str) for value in parsed_values
+        ):
             raise GateError(f"invalid JSON {operation} instruction: {instruction}")
-        return operation.upper(), False, [str(value) for value in values[:-1]]
-    values = shlex.split(arguments)
-    from_stage = any(value.startswith("--from=") for value in values)
-    while values and values[0].startswith("--"):
-        option = values.pop(0)
-        if option in {"--chown", "--chmod", "--exclude"} and values:
-            values.pop(0)
+        return operation.upper(), from_stage, parsed_values[:-1]
+    values = shlex.split(remainder)
     if len(values) < 2:
         raise GateError(f"invalid {operation} instruction: {instruction}")
     return operation.upper(), from_stage, values[:-1]
@@ -264,6 +288,96 @@ def _validate_context_files(
             )
 
 
+def _git_paths(workspace_root: Path, *arguments: str) -> set[str]:
+    completed = subprocess.run(
+        ["git", "-C", str(workspace_root), *arguments],
+        check=True,
+        capture_output=True,
+        timeout=30,
+    )
+    return {
+        item.decode("utf-8")
+        for item in completed.stdout.split(b"\0")
+        if item
+    }
+
+
+def _included_operator_paths(
+    workspace_root: Path,
+    matrix: tuple[tuple[str, str, str], ...],
+) -> set[str]:
+    included: set[str] = set()
+    for context_name, _, _ in matrix:
+        context = workspace_root / context_name
+        patterns = _dockerignore_patterns(
+            (context / ".dockerignore").read_text(encoding="utf-8")
+        )
+        for path in context.rglob("*"):
+            if not path.is_file() and not path.is_symlink():
+                continue
+            relative_to_context = path.relative_to(context).as_posix()
+            if not _is_ignored(relative_to_context, patterns):
+                included.add(path.relative_to(workspace_root).as_posix())
+    return included
+
+
+def _validate_git_inputs(
+    workspace_root: Path,
+    matrix: tuple[tuple[str, str, str], ...],
+) -> None:
+    dirty = _git_paths(workspace_root, "diff", "--name-only", "-z", "HEAD", "--")
+    untracked = _git_paths(
+        workspace_root,
+        "ls-files",
+        "--others",
+        "-z",
+        "--",
+    )
+    included = _included_operator_paths(workspace_root, matrix)
+    wheel_source_root = "algorithm-scheduling-platform/packages/operator_registry_client/"
+    wheel_source_names = {
+        "README.md",
+        "pyproject.toml",
+        "__init__.py",
+        "client.py",
+        "lifecycle.py",
+        "ops.py",
+        "runtime.py",
+    }
+    wheel_inputs = {
+        path
+        for path in dirty | untracked
+        if (
+            path.startswith(wheel_source_root)
+            and path.removeprefix(wheel_source_root) in wheel_source_names
+        )
+        or path
+        == "algorithm-scheduling-platform/scripts/build_and_stage_operator_registry_wheel.py"
+    }
+    untracked_included = {
+        path
+        for path in untracked.intersection(included)
+        if not _under_allowed_root(
+            path.partition("/")[2],
+            MODEL_ASSET_ROOTS.get(path.partition("/")[0], ()),
+        )
+        and not path.endswith(
+            "/wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl"
+        )
+        and PurePosixPath(path).name not in IGNORABLE_UNTRACKED_NAMES
+        and ".vscode" not in PurePosixPath(path).parts
+        and not (
+            path.startswith("asr_offline/wheel/")
+            and path.endswith(".whl")
+        )
+    }
+    unsafe = sorted(dirty.intersection(included).union(untracked_included, wheel_inputs))
+    if unsafe:
+        raise GateError(
+            "Git revision does not describe included build inputs: " + ", ".join(unsafe)
+        )
+
+
 def _read_matrix(path: Path) -> tuple[tuple[str, str, str], ...]:
     rows: list[tuple[str, str, str]] = []
     for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
@@ -277,6 +391,9 @@ def _read_matrix(path: Path) -> tuple[tuple[str, str, str], ...]:
 
 
 def main() -> int:
+    arguments = sys.argv[1:]
+    if any(argument != "--verify-git-clean-included" for argument in arguments):
+        raise GateError("usage: verify-operator-build-contexts [--verify-git-clean-included]")
     platform_root = Path(__file__).resolve().parents[2]
     workspace_root = platform_root.parent
     manifest = platform_root / "deploy/operator-images.tsv"
@@ -332,6 +449,9 @@ def main() -> int:
             for source in sources:
                 _validate_source(context_name, dockerfile_name, source)
         print(f"build-context: OK: {context_name}/{dockerfile_name}")
+    if "--verify-git-clean-included" in arguments:
+        _validate_git_inputs(workspace_root, matrix)
+        print("build-context: OK: Git describes included build inputs")
     print("build-context: PASS")
     return 0
 

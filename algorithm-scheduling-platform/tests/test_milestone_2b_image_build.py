@@ -94,6 +94,9 @@ if [[ "$1" == "-C" && "$3" == "rev-parse" && "$4" == "HEAD" ]]; then
   printf '%s\n' "${GIT_SHA}"
   exit 0
 fi
+if [[ "$1" == "-C" && ("$3" == "diff" || "$3" == "ls-files") ]]; then
+  exit 0
+fi
 exit 64
 """,
     )
@@ -103,6 +106,10 @@ exit 64
 import json, os, sys
 if sys.argv[1:2] and sys.argv[1].endswith("verify-operator-build-contexts"):
     os.execv({sys.executable!r}, [{sys.executable!r}, *sys.argv[1:]])
+if sys.argv[1:2] == ["-"]:
+    target, payload = sys.argv[2:]
+    tags = json.loads(payload)
+    raise SystemExit(0 if isinstance(tags, list) and target in tags else 1)
 with open(os.environ["COMMAND_LOG"], "a", encoding="utf-8") as stream:
     stream.write(json.dumps(["python3", *sys.argv[1:]]) + "\\n")
 raise SystemExit(int(os.environ.get("WHEEL_EXIT", "0")))
@@ -122,7 +129,8 @@ if args[:2] == ["image", "inspect"]:
     image = args[-1]
     format_value = args[args.index("--format") + 1]
     if "RepoTags" in format_value:
-        print(os.environ.get("INSPECT_REPO_TAG", image))
+        extra = json.loads(os.environ.get("INSPECT_EXTRA_REPO_TAGS", "[]"))
+        print(os.environ.get("INSPECT_REPO_TAGS", json.dumps([*extra, image])))
     elif "revision" in format_value:
         print(os.environ.get("INSPECT_REVISION", os.environ["GIT_SHA"]))
     else:
@@ -141,6 +149,7 @@ def _environment(fake_bin: Path) -> dict[str, str]:
             "COMMAND_LOG": str(fake_bin / "commands.jsonl"),
             "DF_STATE": str(fake_bin / "df-count"),
             "GIT_SHA": "a" * 40,
+            "EXPECTED_GIT_SHA": "a" * 40,
             "MIN_ROOT_FREE_GIB": "100",
         }
     )
@@ -176,18 +185,39 @@ def _run_build(
     )
 
 
-def _run_gate(workspace: Path) -> subprocess.CompletedProcess[str]:
+def _run_gate(
+    workspace: Path, *arguments: str
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             str(
                 workspace
                 / "algorithm-scheduling-platform/deploy/scripts/verify-operator-build-contexts"
-            )
+            ),
+            *arguments,
         ],
         cwd=workspace / "asr_offline",
         text=True,
         capture_output=True,
         check=False,
+    )
+
+
+def _initialize_git_workspace(workspace: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "tests@example.invalid"],
+        cwd=workspace,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Build Gate Tests"],
+        cwd=workspace,
+        check=True,
+    )
+    subprocess.run(["git", "add", "-f", "."], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "test fixture"], cwd=workspace, check=True
     )
 
 
@@ -272,6 +302,38 @@ def test_build_images_rejects_invalid_or_multiple_tag_arguments(
     assert _commands(environment) == []
 
 
+def test_build_images_requires_expected_git_sha(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    _install_build_stubs(fake_bin)
+    environment = _environment(fake_bin)
+    environment.pop("EXPECTED_GIT_SHA")
+
+    completed = _run_build(workspace, tmp_path, environment)
+
+    assert completed.returncode != 0
+    assert "EXPECTED_GIT_SHA" in completed.stderr
+    assert _commands(environment) == []
+
+
+def test_build_images_rejects_expected_git_sha_that_differs_from_head(
+    tmp_path: Path,
+) -> None:
+    workspace = _make_workspace(tmp_path)
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    _install_build_stubs(fake_bin)
+    environment = _environment(fake_bin)
+    environment["EXPECTED_GIT_SHA"] = "b" * 40
+
+    completed = _run_build(workspace, tmp_path, environment)
+
+    assert completed.returncode != 0
+    assert "does not match" in completed.stderr
+    assert not any(command[:2] == ["docker", "build"] for command in _commands(environment))
+
+
 @pytest.mark.parametrize(
     ("environment_overrides", "expected_build_count"),
     [
@@ -280,7 +342,7 @@ def test_build_images_rejects_invalid_or_multiple_tag_arguments(
         ({"DF_FAIL_CALL": "3"}, 1),
         ({"FAIL_BUILD_REF": "algorithm-ocr:v1.0_260812"}, 3),
         ({"INSPECT_REVISION": "b" * 40}, 1),
-        ({"INSPECT_REPO_TAG": "unexpected:v1"}, 1),
+        ({"INSPECT_REPO_TAGS": '["unexpected:v1"]'}, 1),
     ],
 )
 def test_build_images_stops_at_the_first_failed_gate_or_verification(
@@ -307,6 +369,21 @@ def test_build_images_stops_at_the_first_failed_gate_or_verification(
         for command in _commands(environment)
         for argument in command
     )
+
+
+def test_build_images_accepts_target_tag_when_it_is_not_first_in_repo_tags(
+    tmp_path: Path,
+) -> None:
+    workspace = _make_workspace(tmp_path)
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    _install_build_stubs(fake_bin)
+    environment = _environment(fake_bin)
+    environment["INSPECT_EXTRA_REPO_TAGS"] = json.dumps(["unrelated:old"])
+
+    completed = _run_build(workspace, tmp_path, environment)
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_build_context_gate_rejects_a_matrix_drift(tmp_path: Path) -> None:
@@ -462,6 +539,123 @@ def test_build_context_gate_applies_negations_in_order_to_real_files(tmp_path: P
 
     assert completed.returncode != 0
     assert "fixture.mp4" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "dockerfile_source",
+    (
+        "FROM scratch\nCOPY\t../outside\t/app/\n",
+        '# escape=`\nFROM scratch\nCOPY ../outside `\n  /app/\n',
+        'FROM scratch\nCOPY --chown=1:1 ["../outside", "/app/"]\n',
+        'FROM scratch\nADD --checksum=sha256:abc ["https://example.invalid/a", "/"]\n',
+    ),
+)
+def test_build_context_gate_fails_closed_for_complex_external_sources(
+    tmp_path: Path, dockerfile_source: str
+) -> None:
+    workspace = _make_workspace(tmp_path)
+    (workspace / "asr_offline/docker/Dockerfile").write_text(
+        dockerfile_source, encoding="utf-8"
+    )
+
+    completed = _run_gate(workspace)
+
+    assert completed.returncode != 0
+
+
+@pytest.mark.parametrize(
+    "dockerfile_source",
+    (
+        "FROM scratch AS builder\nCOPY app /app\nFROM scratch\nCOPY --from=builder /app /app\n",
+        "FROM scratch AS builder\nCOPY app /app\nFROM scratch\nCOPY --from builder /app /app\n",
+    ),
+)
+def test_build_context_gate_accepts_both_multistage_from_flag_forms(
+    tmp_path: Path, dockerfile_source: str
+) -> None:
+    workspace = _make_workspace(tmp_path)
+    (workspace / "asr_offline/docker/Dockerfile").write_text(
+        dockerfile_source, encoding="utf-8"
+    )
+
+    completed = _run_gate(workspace)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_git_input_gate_rejects_dirty_included_tracked_file(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    _initialize_git_workspace(workspace)
+    (workspace / "asr_offline/app/main.py").write_text("dirty = True\n", encoding="utf-8")
+
+    completed = _run_gate(workspace, "--verify-git-clean-included")
+
+    assert completed.returncode != 0
+    assert "asr_offline/app/main.py" in completed.stderr
+
+
+def test_git_input_gate_allows_dirty_tracked_file_excluded_from_context(
+    tmp_path: Path,
+) -> None:
+    workspace = _make_workspace(tmp_path)
+    excluded = workspace / "asr_offline/tests/test_user_work.py"
+    excluded.parent.mkdir()
+    excluded.write_text("original\n", encoding="utf-8")
+    _initialize_git_workspace(workspace)
+    excluded.write_text("dirty but ignored\n", encoding="utf-8")
+
+    completed = _run_gate(workspace, "--verify-git-clean-included")
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_git_input_gate_rejects_an_untracked_included_source(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    _initialize_git_workspace(workspace)
+    (workspace / "asr_offline/app/untracked.py").write_text("value = 1\n", encoding="utf-8")
+
+    completed = _run_gate(workspace, "--verify-git-clean-included")
+
+    assert completed.returncode != 0
+    assert "asr_offline/app/untracked.py" in completed.stderr
+
+
+def test_git_input_gate_rejects_gitignored_untracked_included_source(
+    tmp_path: Path,
+) -> None:
+    workspace = _make_workspace(tmp_path)
+    (workspace / ".gitignore").write_text("*.generated.py\n", encoding="utf-8")
+    _initialize_git_workspace(workspace)
+    generated = workspace / "asr_offline/app/local.generated.py"
+    generated.write_text("value = 1\n", encoding="utf-8")
+
+    completed = _run_gate(workspace, "--verify-git-clean-included")
+
+    assert completed.returncode != 0
+    assert "asr_offline/app/local.generated.py" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        "algorithm-scheduling-platform/packages/operator_registry_client/runtime.py",
+        "algorithm-scheduling-platform/scripts/build_and_stage_operator_registry_wheel.py",
+    ),
+)
+def test_git_input_gate_rejects_dirty_registry_wheel_input(
+    tmp_path: Path, relative_path: str
+) -> None:
+    workspace = _make_workspace(tmp_path)
+    path = workspace / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("original\n", encoding="utf-8")
+    _initialize_git_workspace(workspace)
+    path.write_text("dirty\n", encoding="utf-8")
+
+    completed = _run_gate(workspace, "--verify-git-clean-included")
+
+    assert completed.returncode != 0
+    assert relative_path in completed.stderr
 
 
 def test_real_facerec_and_ppt_contexts_exclude_private_or_large_local_inputs() -> None:

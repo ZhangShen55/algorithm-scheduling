@@ -27,13 +27,18 @@ platform_root="$(cd -- "${script_dir}/../.." && pwd -P)"
 workspace_root="$(cd -- "${platform_root}/.." && pwd -P)"
 matrix="${platform_root}/deploy/operator-images.tsv"
 
-"${script_dir}/verify-operator-build-contexts"
+: "${EXPECTED_GIT_SHA:?EXPECTED_GIT_SHA is required and must match the release commit}"
+[[ "$EXPECTED_GIT_SHA" =~ ^[0-9a-f]{40}$ ]] || fail \
+  "EXPECTED_GIT_SHA must be a full lowercase 40-character SHA"
+git_sha="$(git -C "$workspace_root" rev-parse HEAD)"
+[[ "$git_sha" =~ ^[0-9a-f]{40}$ ]] || fail "Git revision is not a full lowercase SHA: ${git_sha}"
+[[ "$git_sha" == "$EXPECTED_GIT_SHA" ]] || fail \
+  "current Git SHA ${git_sha} does not match EXPECTED_GIT_SHA ${EXPECTED_GIT_SHA}"
+
+"${script_dir}/verify-operator-build-contexts" --verify-git-clean-included
 check_root_disk
 cd -- "$platform_root"
 python3 scripts/build_and_stage_operator_registry_wheel.py
-
-git_sha="$(git -C "$workspace_root" rev-parse HEAD)"
-[[ "$git_sha" =~ ^[0-9a-f]{40}$ ]] || fail "Git revision is not a full lowercase SHA: ${git_sha}"
 
 while IFS=$'\t' read -r context_name dockerfile_name image_repository; do
   [[ -n "$context_name" && "${context_name:0:1}" != "#" ]] || continue
@@ -47,9 +52,16 @@ while IFS=$'\t' read -r context_name dockerfile_name image_repository; do
     --tag "$image_ref" \
     --label "org.opencontainers.image.revision=${git_sha}" \
     "$context"
-  inspected_ref="$(docker image inspect --format '{{index .RepoTags 0}}' "$image_ref")"
-  [[ "$inspected_ref" == "$image_ref" ]] || fail \
-    "image inspect returned unexpected reference ${inspected_ref} for ${image_ref}"
+  inspected_tags="$(docker image inspect --format '{{json .RepoTags}}' "$image_ref")"
+  python3 - "$image_ref" "$inspected_tags" <<'PY' || fail \
+    "image inspect RepoTags does not contain target reference ${image_ref}"
+import json
+import sys
+
+target, payload = sys.argv[1:]
+tags = json.loads(payload)
+raise SystemExit(0 if isinstance(tags, list) and target in tags else 1)
+PY
   inspected_revision="$(docker image inspect \
     --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image_ref")"
   [[ "$inspected_revision" == "$git_sha" ]] || fail \
