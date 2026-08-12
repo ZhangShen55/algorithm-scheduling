@@ -43,7 +43,7 @@ Harness 报告。当前明文模式不要求 runtime secret。未来启用加密
 算子本机真实运行的输入、环境、结果与缺口见
 `harness/scenarios/operator-local-runtime-validation.md`。该场景必须与课程 DAG 验收分开计数。
 
-## 2026-08-12 离线 ASR v1.1.8 多语言合同
+## 2026-08-12 离线 ASR v1.1.8 多语言与 FiveWh 退役合同
 
 从工作区根目录执行静态、单元和平台合同验证：
 
@@ -55,7 +55,8 @@ Harness 报告。当前明文模式不要求 runtime secret。未来启用加密
   tests/test_milestone_2b_operator_configs.py \
   tests/test_milestone_2b_gpu_fail_fast.py \
   tests/test_operator_deployment_integration.py \
-  tests/test_offline_asr_adapter.py)
+  tests/test_offline_asr_adapter.py \
+  tests/test_harness_consistency.py)
 ```
 
 冷启动和 HTTP 合同验证需使用两个终端。终端 1 启动服务：
@@ -73,10 +74,12 @@ cd asr_offline
 until curl -fsS http://127.0.0.1:18084/ops/health; do sleep 1; done
 curl -fsS http://127.0.0.1:18084/ops/health
 curl -fsS http://127.0.0.1:18084/openapi.json | jq '.paths | keys | sort'
-curl -sS -o /dev/null -w '%{http_code}\n' \
-  -X POST http://127.0.0.1:18084/v1.1.7/seacraft_asr
-curl -sS -o /dev/null -w '%{http_code}\n' \
-  -X POST http://127.0.0.1:18084/audio/detect_mandarin
+test "$(curl -sS -o /dev/null -w '%{http_code}' \
+  -X POST http://127.0.0.1:18084/v1.1.7/seacraft_asr)" = 404
+test "$(curl -sS -o /dev/null -w '%{http_code}' \
+  -X POST http://127.0.0.1:18084/audio/detect_mandarin)" = 404
+test "$(curl -sS -o /dev/null -w '%{http_code}' \
+  -X POST http://127.0.0.1:18084/text/question)" = 404
 curl -sS -X POST http://127.0.0.1:18084/v1.1.8/seacraft_asr \
   -F 'audioFile=@test_wav/chinEng-16k.wav' \
   -F 'language=Klingon'
@@ -134,16 +137,68 @@ jq -e --argjson duration 442.853878 '
 rm -f /tmp/asr-fr-response.json
 ```
 
+FiveWh 退役后的真实中文复验使用仓库隔离的临时 CPU 配置和 12 秒派生音频：
+
+```bash
+cd asr_offline
+runtime_dir=/tmp/asr-fivewh-runtime-validation
+test ! -e "$runtime_dir"
+mkdir "$runtime_dir"
+cp config.toml "$runtime_dir/config.toml"
+perl -pi -e 's/^device = .*/device = "cpu"/; s/^ngpu = .*/ngpu = 0/; s/^open_emotion = .*/open_emotion = false/; s/^open_mul_lang = .*/open_mul_lang = false/' "$runtime_dir/config.toml"
+ffmpeg -v error -y -ss 0 -t 12 -i test_wav/chinEng-16k.wav \
+  -ac 1 -ar 16000 "$runtime_dir/short.wav"
+CONFIG_PATH="$runtime_dir/config.toml" PLATFORM_REGISTRATION_ENABLED=false \
+  conda run -n asr python -m uvicorn app.main:app \
+  --host 127.0.0.1 --port 18085 --workers 1
+```
+
+服务就绪后从第二个终端执行：
+
+```bash
+cd asr_offline
+runtime_dir=/tmp/asr-fivewh-runtime-validation
+curl -fsS http://127.0.0.1:18085/ops/health
+test "$(curl -sS -o /dev/null -w '%{http_code}' \
+  -X POST http://127.0.0.1:18085/v1.1.7/seacraft_asr)" = 404
+test "$(curl -sS -o /dev/null -w '%{http_code}' \
+  -X POST http://127.0.0.1:18085/audio/detect_mandarin)" = 404
+test "$(curl -sS -o /dev/null -w '%{http_code}' \
+  -X POST http://127.0.0.1:18085/text/question)" = 404
+curl -fsS http://127.0.0.1:18085/openapi.json | jq -e '
+  (.paths | has("/v1.1.8/seacraft_asr")) and
+  (.paths | has("/v1.1.7/seacraft_asr") | not) and
+  (.paths | has("/audio/detect_mandarin") | not) and
+  (.paths | has("/text/question") | not) and
+  .paths["/v1.1.8/seacraft_asr"].post.operationId ==
+    "api_asr_v18_v1_1_8_seacraft_asr_post"'
+curl -fsS -X POST http://127.0.0.1:18085/v1.1.8/seacraft_asr \
+  -F "audioFile=@$runtime_dir/short.wav" \
+  -F 'language=zh' -F 'showSpk=true' -F 'showEmotion=false' \
+  -F 'showRoleIdentify=false' -F 'wordTimestamps=false' \
+  > "$runtime_dir/asr.json"
+jq -e '
+  (keys | sort) == ["gpu_time_ms", "language", "load_audio_time_ms", "segments", "speed_info", "text"] and
+  .language == "zh" and (.text | length) > 0 and
+  (.segments | length) > 0 and [.speed_info[].unit] == [1, 5, 10]
+' "$runtime_dir/asr.json"
+```
+
+验证完成后在第一个终端按 `Ctrl-C` 停止服务，确认
+`lsof -nP -iTCP:18085 -sTCP:LISTEN` 无输出，再将精确目录
+`/tmp/asr-fivewh-runtime-validation` 移入废纸篓；不得使用宽泛递归删除命令。
+
 本次环境为 macOS / `asr` Python 3.11.13 / CPU，本机无可用 CUDA/CTranslate2 GPU。结果为：
 
-- 算子完整测试 `50/50` 通过，平台聚焦合同测试 `20/20` 通过，`pip check` 无损坏依赖。
-- 冷启动 `/ops/health` 返回 HTTP 200；OpenAPI 包含 `POST /v1.1.8/seacraft_asr`，不包含两个退役路由，两个退役路由实际均返回 HTTP 404。未支持语言返回 HTTP 200 / 业务码 `4009`。
+- 算子完整测试 `53/53` 通过，平台聚焦合同测试 `22/22` 通过，`compileall`、`app.main:app` 导入和 `pip check` 通过。
+- 冷启动 `/ops/health` 返回 HTTP 200；OpenAPI 包含 `POST /v1.1.8/seacraft_asr`，不包含三个退役路由，三个退役路由实际均返回 HTTP 404。未支持语言返回 HTTP 200 / 业务码 `4009`。
+- 12 秒真实中文音频返回 6 个 segment、71 字符非空文本、原有 6 个顶层字段和 1/5/10 分钟 `speed_info`；v1.1.8 operationId 未因模块从 `asr_v18.py` 重命名为 `asr.py` 而变化。
 - `442.853878` 秒真实法语 MP3 推理耗时约 `536.8` 秒，得到 140 个 segment、1063 个真实词时间、139 个正数 `speed`，1/5/10 分钟 `speed_info` 窗口数为 8/2/1，所有请求的 `role`/`emotion` 均为 `null`。
 - 成功响应顶层精确为 `language`、`segments`、`text`、`speed_info`、`load_audio_time_ms` 和 `gpu_time_ms`，未增加能力状态或成功业务码字段。
 
 上述证据层级为算子静态/单元合同、本机服务运行和真实 CPU 推理。它不包含通过
 `control-service` 真实租约选择的调用，也不代表 Kafka、课程 DAG、GPU 容器或三卡部署已验收。
-旧报告流水线仍调用 `/audio/detect_mandarin`，在其迁移或确认停用前不得发布该套新合同。
+旧报告流水线仍调用 `/audio/detect_mandarin` 和 ASR Offline `/text/question`，在其迁移或确认停用前不得发布该套新合同。`text_analysis` 的同路径实现需要独立报告回归，不能视为透明替换。
 
 Root-service relocation image checks use the workspace root as build context:
 

@@ -22,11 +22,12 @@
 ## ASR Offline 多语言合同
 
 - 外部样本 `/Volumes/Data55/asr测试文件/法语音频.mp3` 时长 `442.853878` 秒，只用于本机验证，不复制进仓库。
-- 唯一离线转写路由为 `POST /v1.1.8/seacraft_asr`；`POST /v1.1.7/seacraft_asr` 和 `POST /audio/detect_mandarin` 均返回 HTTP 404，且不再出现于 OpenAPI。
+- 唯一离线转写路由为 `POST /v1.1.8/seacraft_asr`；`POST /v1.1.7/seacraft_asr`、`POST /audio/detect_mandarin` 和 ASR Offline `POST /text/question` 均返回 HTTP 404，且不再出现于 OpenAPI。独立 `text_analysis` 算子不受影响。
 - `language=auto/zh/en` 保持 Paraformer 路由，`language=fr` 在 `open_mul_lang=true` 且 Whisper 就绪时执行小语种转写。功能关闭或模型未就绪时返回 HTTP 200 / 业务码 `4003`，空语言和未支持语言返回 HTTP 200 / 业务码 `4009`。
 - 法语成功响应顶层仅有 `language`、`segments`、`text`、`speed_info`、`load_audio_time_ms` 和 `gpu_time_ms`。实测得到 140 个 segment、1063 个真实词时间和 139 个正数 `speed`；`speed_info` 的 1/5/10 分钟窗口数分别为 8/2/1。
 - 小语种不调用说话人、角色或情绪增强模型。请求相应能力时 `role`/`emotion` 为 `null`；`wordTimestamps=false` 时 `segment_words=[]`，为 `true` 时返回 Whisper 真实词时间。Whisper 始终启用词对齐，仅在序列化时按请求隐藏词数组，保证 `wordTimestamps` 不改变 `speed` 和 `speed_info`。
-- `rate_factor=0.4` 只用于单段 `speed`，`speed_info` 不乘该系数。Pyannote 运行时、直接依赖和部署资源已移除；Paraformer、CAM++、emotion2vec、Whisper 和 FiveWh 在本次验证时仍保留。
+- `rate_factor=0.4` 只用于单段 `speed`，`speed_info` 不乘该系数。Pyannote 与 FiveWh/BERT 运行时、配置和部署资源均已移除；本地 BERT 两目录约 1.5 GB，只从 Docker context 排除而不物理删除。Paraformer、VAD、标点、CAM++、emotion2vec 和 Whisper 保留。
+- FiveWh 退役后使用从 `test_wav/chinEng-16k.wav` 派生的 12 秒临时 WAV 复验真实 HTTP 路径：冷启动 `/ops/health` 为 200，三个退役路由均为 404；`language=zh` 返回 6 个 segment、71 字符非空文本、原有 6 个顶层字段和 1/5/10 分钟 `speed_info`。临时配置和音频未进入仓库，服务停止后移至废纸篓。
 - 证据层级仅为算子静态/单元合同、本机冷启动和真实 CPU 推理，不代表已经通过真实租约调用，也不证明 Kafka、课程 DAG、GPU 容器或三卡部署已验收。
 
 ## FaceRec Python 约束
@@ -63,4 +64,4 @@ wheel 的 `Requires-Python` 为 `>=3.10`，运行依赖只有 FastAPI、HTTPX �
 2. `orchestrator-service` factory 尚未注入 PPT handler；提交、续租、终态持久化和 OCR 释放还没有组成常驻运行闭环。
 3. ScreenDet 与 Text Analysis 的通用 `/ops/status` 尚未反映真实模型/下游 LLM 就绪，应分别以 `/health`、`/api/models` 和真实请求作为就绪证据。
 4. 本场景没有证明多 GPU 部署、Kafka 消费、课程 DAG 或在线网关实例路由。
-5. 仓库外的旧报告流水线 `/Users/zhangshen/Documents/workspace/ai报告分析课程数据/scripts/pipeline.py` 仍调用已退役的 `/audio/detect_mandarin`；发布前必须迁移该步骤或确认整条流水线已停用。
+5. 仓库外的旧报告流水线 `/Users/zhangshen/Documents/workspace/ai报告分析课程数据/scripts/pipeline.py` 仍调用已退役的 `/audio/detect_mandarin` 和 ASR Offline `/text/question`；发布前必须迁移这些步骤或确认整条流水线已停用。`text_analysis` 的同路径实现语义并非逐字段等价，迁移后必须做真实报告回归。

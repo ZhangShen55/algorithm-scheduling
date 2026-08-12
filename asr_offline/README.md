@@ -9,7 +9,6 @@
 | **ASR 转写** | 语音转文字 | Paraformer(`auto`/`zh`/`en`) + Faster-Whisper(`fr`) |
 | **说话人分离** | 区分不同说话人 | CAM++（Paraformer 路径） |
 | **情感识别** | 分析语音情绪 | emotion2vec（Paraformer 路径） |
-| **五何分类** | 教师提问分类 | BERT 文本分类 |
 | **角色识别** | 自动识别教师/学生 | 特征工程 + 规则引擎 |
 
 ## 🏗️ 架构设计
@@ -19,7 +18,6 @@
 │                        API 路由层                            │
 ├─────────────────────────────────────────────────────────────┤
 │  /v1.1.8/seacraft_asr    │  离线ASR（中英文 + 法语）        │
-│  /text/question          │  五何分类分析                   │
 │  /audio/db_snr           │  音频质量分析                   │
 │  /get_status             │  服务状态监控                   │
 └─────────────────────────────────────────────────────────────┘
@@ -38,7 +36,7 @@
 ┌─────────────────────────────────────────────────────────────┐
 │                       模型层 (Models)                        │
 ├─────────────────────────────────────────────────────────────┤
-│  Paraformer  │  Whisper  │  emotion2vec  │  BERT  │  CAM++  │
+│     Paraformer  │  Whisper  │  emotion2vec  │  CAM++         │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -49,9 +47,8 @@ asr_offline/
 ├── app/
 │   ├── main.py                # FastAPI 入口，导出 app
 │   ├── api/routes/
-│   │   ├── asr_v18.py         # 唯一离线 ASR 路由
+│   │   ├── asr.py             # 唯一离线 ASR 路由
 │   │   ├── asr_common.py      # ASR 公共处理
-│   │   ├── text.py            # 五何分类
 │   │   ├── audio.py           # 音频质量分析
 │   │   └── status.py          # 状态监控
 │   ├── core/
@@ -117,8 +114,6 @@ asr_model_dir = "/var/model_zoo/model_asr/speech_seaco_paraformer_large_asr_nat-
 spk_model_dir = "/var/model_zoo/model_asr/speech_campplus_sv_zh_en_16k-common_advanced"
 emotion_model_dir = "/var/model_zoo/model_asr/emotion2vec_plus_large"
 whisper_model_dir = "/var/model_zoo/model_asr/faster-whisper-large-v3"
-bert_model_tokenizer = "/var/model_zoo/model_asr/bert-base-chinese"
-bert_model_dir = "/var/model_zoo/model_asr/bert_output/checkpoint-88"
 
 # 计算配置（faster-whisper）
 [compute]
@@ -134,7 +129,6 @@ open_spk = true            # Paraformer 路径说话人分离
 open_emotion = true        # Paraformer 路径情感识别
 ban_hotword = true         # 禁用热词
 open_mul_lang = true       # 法语 Faster-Whisper 转写
-open_fivewh = true         # 五何分类(/text/question)
 ```
 
 > 实时转写（WebSocket）已拆分为独立项目 `jy-algorithm-app-asr-online`，不在本仓库内提供。
@@ -154,6 +148,8 @@ CONFIG_PATH=./config.toml bash docker/start.sh
 ### 离线ASR转写
 
 `POST /v1.1.8/seacraft_asr` 是唯一离线 ASR 接口。服务先对 `language` 去除首尾空白并转为小写，再按下表路由：
+
+`POST /v1.1.7/seacraft_asr`、`POST /audio/detect_mandarin` 和本算子原有的 `POST /text/question` 均已退役，不再出现在 OpenAPI 中。五何分析如仍有业务需求，应迁移到独立的 `text_analysis` 算子并单独验证响应语义。
 
 | `language` | 转写引擎 | 说明 |
 |---|---|---|
@@ -275,7 +271,6 @@ overlap(句子, 窗口k) = min(ed, 窗口k末) − max(bg, 窗口k首)
 | `open_spk` | 开启 Paraformer 路径说话人分离 | `true` |
 | `open_emotion` | 开启 Paraformer 路径情感识别 | `true` |
 | `open_mul_lang` | 开启法语 Whisper 转写；关闭或模型未就绪时 `language=fr` 返回 HTTP 200、`code=4003` | `true` |
-| `open_fivewh` | 开启五何分类(`/text/question`) | `true` |
 | `ban_hotword` | 禁用热词功能 | `true` |
 
 ## 🐳 Docker 部署
@@ -283,9 +278,9 @@ overlap(句子, 窗口k) = min(ed, 窗口k末) − max(bg, 窗口k首)
 ### 构建前准备
 
 1. 确保存在 `wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl`；PyArrow 20.0.0 由 Dockerfile 直接通过 pip 安装。
-2. 确保项目根目录存在 `model/`，镜像会把 Paraformer、Whisper、CAM++、emotion2vec 和 FiveWh 所需模型直接打入镜像，不需要运行时挂载模型目录。
+2. 确保项目根目录存在 `model/`，镜像会把 Paraformer、Whisper、CAM++ 和 emotion2vec 所需模型直接打入镜像，不需要运行时挂载模型目录。
 3. 基础镜像为 **CentOS 7**（`glibc 2.17`），Dockerfile 已固定 `Miniconda3-py311_23.11.0-2`，勿改用 `Miniconda3-latest`（会报 `GLIBC >=2.28`）。
-4. 构建上下文通过 `.dockerignore` 排除 `tests/`、`test_wav/`、日志及已退役的小语种说话人模型目录；其余运行所需权重仍进入镜像。
+4. 构建上下文通过 `.dockerignore` 排除 `tests/`、`test_wav/`、日志以及已退役的 Pyannote/BERT 模型目录；其余运行所需权重仍进入镜像。
 
 ### 构建镜像
 

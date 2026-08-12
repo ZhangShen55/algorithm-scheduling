@@ -1,5 +1,17 @@
 # Change Ledger
 
+## 2026-08-12 - 离线 ASR 五何能力退役与路由模块收敛
+
+- 先前状态：`asr_offline` 仍暴露 `POST /text/question`，请求首次触发时会加载 BERT FiveWh 模型并驻留；v1.1.7 已退役，但保留的 v1.1.8 路由源码仍命名为 `asr_v18.py`。
+- 目标状态：只保留离线 ASR、音频质量和运行状态能力；删除本算子的 FiveWh HTTP 路由、请求实体、特征整理、BERT 推理与配置，将唯一 ASR 路由模块收敛为 `app/api/routes/asr.py`。独立 `text_analysis` 算子不在本次变更范围。
+- 变更文件：`asr_offline` 路由装配、模型/配置/实体/工具、Docker ignore、单元合同、README/AGENTS；平台共享 ASR 配置、部署源文件合同及本 Harness。历史设计和上一条多语言账本不回写。
+- 契约影响：显式删除 `POST /text/question`，HTTP 实测为 404；`POST /v1.1.8/seacraft_asr` 的路径、请求、响应、处理函数名和 OpenAPI operationId 保持不变，`speed`、`speed_info` 与 `rate_factor=0.4` 不变。
+- 资源边界：删除所有 BERT/FiveWh 直接加载点，并将本机约 `393 MB` 的 `model/bert-base-chinese/` 与约 `1.1 GB` 的 `model/bert_output/` 排除出 Docker context；两个 Git 忽略的本地目录不物理删除。Paraformer、VAD、标点、CAM++、emotion2vec 和 Whisper 均保留。`transformers` 仍由 FunASR/ModelScope 音频依赖链使用，不因删除 FiveWh 而贸然移除。
+- 验证命令与环境：`asr` Python 3.11.13 / macOS CPU 环境执行 `compileall`、`app.main:app` 导入、完整 `unittest`、`pip check`、平台 ASR 配置/GPU fail-fast/部署/适配器/Harness 聚焦合同，并用临时 CPU 配置冷启动真实服务。
+- 真实证据：算子完整测试 `53/53`、平台聚焦合同测试 `22/22` 通过；`/ops/health` 为 HTTP 200，OpenAPI 只包含 v1.1.8 而不含三个退役路由，三个退役路由实际均为 HTTP 404。v1.1.8 对 12 秒真实中文音频返回 6 个 segment、71 字符非空文本、原有 6 个顶层字段和 1/5/10 分钟 `speed_info`，operationId 仍为 `api_asr_v18_v1_1_8_seacraft_asr_post`。
+- 证据层级与结论：达到算子静态/单元合同、本机冷启动和真实 CPU HTTP 推理层级；FiveWh 退役及 v1.1.8 内部模块重命名符合。本轮未重复耗时约 9 分钟的法语推理，沿用上一条中对未改动 Whisper 响应链路的真实样本证据；未达到 GPU 容器、真实租约、Kafka 或课程 DAG 验收层级。
+- 剩余风险：仓库外旧报告流水线 `/Users/zhangshen/Documents/workspace/ai报告分析课程数据/scripts/pipeline.py` 仍调用 `/audio/detect_mandarin` 和 ASR Offline `/text/question`。后者失败虽会被捕获，但报告会缺失五何结果；发布前必须迁移或确认停用。`text_analysis` 的同路径实现可作为候选，但依赖外部 LLM 且响应语义并非逐字段等价，不能只替换端口而不做报告回归。
+
 ## 2026-08-12 - 离线 ASR v1.1.8 多语言收敛与资源缩减
 
 - 先前状态：离线 ASR 同时暴露 `v1.1.7`、`v1.1.8` 和普通话检测路由；小语种路径保留了当前调度不需要且额外占用模型资源的 Pyannote 说话人链路，v1.1.8 未承接法语 Whisper 响应合同。
