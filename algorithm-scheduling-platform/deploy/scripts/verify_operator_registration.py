@@ -240,44 +240,43 @@ def main() -> int:
         )
         deadline = time.monotonic() + args.timeout_seconds
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                last_issues = list(last_specific_issues or last_issues)
+                if "注册验证全局超时" not in last_issues:
+                    last_issues.append("注册验证全局超时")
+                break
             try:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError("注册验证全局超时")
                 rows = get_json(
                     f"{base_url}/ops/operator-instances",
                     min(args.request_timeout_seconds, remaining),
                 )
                 observed_count = len(rows) if isinstance(rows, list) else 0
                 last_issues, observed = validate_instances(rows, expected)
-                if last_issues:
-                    break
-                last_issues.extend(
-                    heartbeat_issues(
-                        base_url,
-                        observed,
-                        args.request_timeout_seconds,
-                        deadline,
+                if not last_issues:
+                    last_issues.extend(
+                        heartbeat_issues(
+                            base_url,
+                            observed,
+                            args.request_timeout_seconds,
+                            deadline,
+                        )
                     )
-                )
                 if last_issues and not any("全局超时" in issue for issue in last_issues):
                     last_specific_issues = list(last_issues)
             except (ConnectionError, ValueError, TimeoutError) as exc:
-                if time.monotonic() >= deadline:
-                    last_issues = list(last_specific_issues)
-                    if str(exc) not in last_issues:
-                        last_issues.append(str(exc))
-                    if "注册验证全局超时" not in last_issues:
-                        last_issues.append("注册验证全局超时")
-                else:
-                    last_issues = [str(exc)]
-            if not last_issues or time.monotonic() >= deadline:
+                last_issues = [str(exc)]
+                last_specific_issues = list(last_issues)
+            if not last_issues:
                 break
             time.sleep(min(args.poll_seconds, max(0, deadline - time.monotonic())))
         status = "通过" if not last_issues else "失败"
         report = {
             "schema_version": 1,
+            "evidence_type": "operator_registration",
             "status": status,
+            "mock": False,
+            "target": "operator-registry",
             "release_tag": tag,
             "git_sha": sha,
             "started_at": started_at,

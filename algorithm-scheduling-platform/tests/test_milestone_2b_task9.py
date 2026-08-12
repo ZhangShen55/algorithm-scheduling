@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import socket
@@ -24,6 +25,14 @@ SCRIPTS = DEPLOY / "scripts"
 PYTHON = PLATFORM_ROOT / ".venv" / "bin" / "python"
 SHA = "a" * 40
 TAG = "v1.0_260812"
+
+SMOKE_SPEC = importlib.util.spec_from_file_location(
+    "task9_run_operator_smoke", SCRIPTS / "run_operator_smoke.py"
+)
+assert SMOKE_SPEC is not None and SMOKE_SPEC.loader is not None
+SMOKE_MODULE = importlib.util.module_from_spec(SMOKE_SPEC)
+SMOKE_SPEC.loader.exec_module(SMOKE_MODULE)
+load_and_stage_fixtures = SMOKE_MODULE.load_and_stage_fixtures
 
 
 def _release(tmp_path: Path) -> Path:
@@ -226,6 +235,51 @@ def test_registration_verifier_requires_heartbeat_event(tmp_path: Path) -> None:
     assert "首次心跳" in completed.stderr
 
 
+@pytest.mark.parametrize("first_status", (200, 503))
+def test_registration_retries_transient_list_state_until_ready(
+    tmp_path: Path, first_status: int
+) -> None:
+    instances = _expected_instances()
+    calls = 0
+
+    def handler(path: str, _headers: Any, _raw: bytes) -> tuple[int, Any]:
+        nonlocal calls
+        if path == "/ops/operator-instances":
+            calls += 1
+            if calls == 1:
+                return (
+                    (200, instances[:-1])
+                    if first_status == 200
+                    else (503, {"detail": "starting"})
+                )
+            return 200, instances
+        if path.endswith("/events?limit=100"):
+            return 200, [
+                {
+                    "event_type": "HEARTBEAT_SUMMARY",
+                    "event_payload": {"model_ready": True},
+                }
+            ]
+        return 404, {"detail": "missing"}
+
+    with _Server({}, handler) as url:
+        completed = _run_registration(tmp_path, url, timeout="1")
+    assert completed.returncode == 0, completed.stderr
+    assert calls >= 2
+
+
+def test_registration_persistent_protocol_failure_is_bounded_and_keeps_cause(
+    tmp_path: Path,
+) -> None:
+    with _Server({}, lambda *_: (503, {"detail": "starting"})) as url:
+        started = time.monotonic()
+        completed = _run_registration(tmp_path, url, timeout="0.08")
+        elapsed = time.monotonic() - started
+    assert completed.returncode != 0
+    assert elapsed < 1
+    assert "503" in completed.stderr and "全局超时" in completed.stderr
+
+
 def _case(case_id: str, *, status: str = "通过", mock: bool = False) -> dict[str, Any]:
     return {
         "case_id": case_id,
@@ -248,7 +302,21 @@ def _run_renderer(tmp_path: Path, cases: list[dict[str, Any]]) -> subprocess.Com
         for relative in item.get("evidence", []):
             evidence = release / relative
             evidence.parent.mkdir(parents=True, exist_ok=True)
-            evidence.write_text("{}\n", encoding="utf-8")
+            evidence.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "evidence_type": "operator_smoke",
+                        "status": "PASS",
+                        "mock": item["mock"],
+                        "release_tag": item["release_tag"],
+                        "git_sha": item["git_sha"],
+                        "target": item["target"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
     source = release / "summary" / f"cases-{uuid.uuid4().hex}.json"
     source.write_text(json.dumps(cases, ensure_ascii=False), encoding="utf-8")
     return subprocess.run(
@@ -274,7 +342,7 @@ def _run_renderer(tmp_path: Path, cases: list[dict[str, Any]]) -> subprocess.Com
 def test_renderer_summarizes_real_mock_and_statuses(tmp_path: Path) -> None:
     cases = [
         _case("INF-001"),
-        _case("INF-MOCK", mock=True),
+        {**_case("INF-MOCK", mock=True), "evidence": ["smoke/ocr-mock.json"]},
         {**_case("INF-002", status="失败"), "evidence": [], "reason": "HTTP 500"},
         {
             **_case("INF-003", status="未执行及原因"),
@@ -315,6 +383,82 @@ def test_renderer_rejects_unsafe_or_invalid_cases(tmp_path: Path, mutate: Any) -
     completed = _run_renderer(tmp_path, cases)
 
     assert completed.returncode != 0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("status", "FAIL"),
+        ("mock", True),
+        ("git_sha", "b" * 40),
+        ("target", "other-target"),
+        ("evidence_type", "unknown"),
+    ),
+)
+def test_renderer_rejects_evidence_semantic_mismatch(
+    tmp_path: Path, field: str, value: Any
+) -> None:
+    cases = [_case("INF-001")]
+    release = _release(tmp_path)
+    evidence = release / "smoke" / "ocr.json"
+    evidence.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "evidence_type": "operator_smoke",
+                "status": "PASS",
+                "mock": False,
+                "release_tag": TAG,
+                "git_sha": SHA,
+                "target": "ocr-gpu0",
+                field: value,
+            }
+        ),
+        encoding="utf-8",
+    )
+    source = release / "summary" / "cases.json"
+    source.write_text(json.dumps(cases), encoding="utf-8")
+    completed = subprocess.run(
+        [
+            str(PYTHON),
+            str(PLATFORM_ROOT / "scripts" / "render_milestone_2b_report.py"),
+            "--input",
+            str(source),
+            "--release-root",
+            str(release),
+            "--output-json",
+            str(release / "summary" / "report.json"),
+            "--output-markdown",
+            str(release / "summary" / "report.md"),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode != 0
+
+
+def test_renderer_escapes_all_markdown_cells_and_rejects_invalid_identifiers(
+    tmp_path: Path,
+) -> None:
+    escaped = [
+        {
+            **_case("INF-001"),
+            "status": "失败",
+            "evidence": [],
+            "target": "ocr|<script>alert(1)</script>",
+            "reason": "bad|<img src=x>\nnext",
+        }
+    ]
+    completed = _run_renderer(tmp_path, escaped)
+    assert completed.returncode == 0, completed.stderr
+    markdown = (_release(tmp_path) / "summary" / "report.md").read_text(encoding="utf-8")
+    assert "<script>" not in markdown and "<img" not in markdown
+    assert "ocr\\|&lt;script&gt;" in markdown
+
+    invalid = [{**_case("bad|id"), "status": "失败", "evidence": []}]
+    rejected = _run_renderer(tmp_path / "invalid", invalid)
+    assert rejected.returncode != 0
 
 
 def test_registration_entrypoint_is_executable() -> None:
@@ -436,6 +580,8 @@ def _smoke_handler(
     fail_ocr: bool = False,
     wrong_face: bool = False,
     missing_managed_face: bool = False,
+    cleanup_delete_fails: bool = False,
+    cleanup_leaves_person: bool = False,
     vbas_failed: bool = False,
     screen_failed: bool = False,
 ) -> Any:
@@ -510,16 +656,27 @@ def _smoke_handler(
                 },
             }
         if path.startswith("/persons?"):
+            managed_number = (
+                state["number"]
+                if state["created"] or cleanup_leaves_person
+                else "existing-person"
+            )
             return 200, {
                 "status_code": 200,
                 "message": "listed",
                 "data": {
                     "persons": [
-                        {"number": "existing-person" if missing_managed_face else state["number"]}
+                        {
+                            "number": (
+                                "existing-person" if missing_managed_face else managed_number
+                            )
+                        }
                     ]
                 },
             }
         if path == "/persons/delete":
+            if cleanup_delete_fails:
+                return 500, {"detail": "cleanup failed"}
             state["created"] = False
             return 200, {"status_code": 200, "message": "deleted", "data": {"deleted_count": 1}}
         if path == "/v1/extract_keywords":
@@ -775,6 +932,39 @@ def test_ppt_callback_advertise_rejects_non_http_or_userinfo(
 
 
 @pytest.mark.parametrize(
+    ("handler_kwargs", "expected"),
+    (
+        ({"cleanup_delete_fails": True}, "cleanup HTTP 500"),
+        ({"cleanup_leaves_person": True}, "清理后仍存在"),
+        (
+            {"wrong_face": True, "cleanup_delete_fails": True},
+            "未精确匹配",
+        ),
+    ),
+)
+def test_facerec_cleanup_failure_is_reported(
+    tmp_path: Path, handler_kwargs: dict[str, bool], expected: str
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    with _WebSocketServer() as ws_url, _Server(
+        {}, _smoke_handler(tmp_path, **handler_kwargs)
+    ) as http_url:
+        completed = _run_smoke(
+            tmp_path,
+            http_url,
+            ws_url,
+            manifest,
+            cases="facerec",
+            face_endpoints=[http_url, http_url + "/b", http_url + "/c"],
+        )
+    assert completed.returncode != 0
+    assert expected in completed.stderr
+    if handler_kwargs.get("wrong_face"):
+        assert "cleanup HTTP 500" in completed.stderr
+    assert "base64" not in completed.stderr.lower()
+
+
+@pytest.mark.parametrize(
     ("case", "kwargs", "expected"),
     (
         ("vbas", {"vbas_failed": True}, "StatusCode"),
@@ -802,6 +992,52 @@ def test_smoke_runner_rejects_fixture_hash_mismatch(tmp_path: Path) -> None:
         completed = _run_smoke(tmp_path, http_url, ws_url, manifest, cases="asr_offline")
     assert completed.returncode != 0
     assert "SHA-256" in completed.stderr
+
+
+def test_fixture_staging_rejects_existing_destination_symlink_with_same_content(
+    tmp_path: Path,
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    item = document["fixtures"][0]
+    destination = Path(item["server_target"])
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.symlink_to(manifest.parent / "fixtures" / item["source"])
+    with pytest.raises(ValueError, match="目标不是普通文件"):
+        load_and_stage_fixtures(
+            manifest,
+            manifest.parent / "fixtures",
+            tmp_path / "staged",
+        )
+    assert destination.is_symlink()
+
+
+def test_fixture_staging_uses_open_source_snapshot_when_path_is_replaced(
+    tmp_path: Path,
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    first = document["fixtures"][0]
+    source = manifest.parent / "fixtures" / first["source"]
+    original = source.read_bytes()
+    replaced = False
+
+    def replace_after_open(opened: Path) -> None:
+        nonlocal replaced
+        if replaced or opened != source:
+            return
+        replaced = True
+        opened.rename(opened.with_suffix(opened.suffix + ".original"))
+        opened.write_bytes(b"malicious replacement")
+
+    staged, _ = load_and_stage_fixtures(
+        manifest,
+        manifest.parent / "fixtures",
+        tmp_path / "staged",
+        _after_source_open=replace_after_open,
+    )
+    assert staged[first["fixture_id"]].read_bytes() == original
+    assert source.read_bytes() == b"malicious replacement"
 
 
 def test_smoke_runner_marks_declared_missing_fixture_unexecuted(tmp_path: Path) -> None:
@@ -955,7 +1191,20 @@ def test_renderer_recovers_after_process_crash_after_first_rename(tmp_path: Path
     release = _release(tmp_path)
     source = release / "summary" / "cases.json"
     evidence = release / "smoke" / "ocr.json"
-    evidence.write_text("{}\n", encoding="utf-8")
+    evidence.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "evidence_type": "operator_smoke",
+                "status": "PASS",
+                "mock": False,
+                "release_tag": TAG,
+                "git_sha": SHA,
+                "target": "ocr-gpu0",
+            }
+        ),
+        encoding="utf-8",
+    )
     source.write_text(json.dumps(cases), encoding="utf-8")
     command = [
         str(PYTHON),
@@ -987,7 +1236,20 @@ def test_renderer_recovers_after_crash_during_atomic_journal_replace(tmp_path: P
     release = _release(tmp_path)
     source = release / "summary" / "cases.json"
     evidence = release / "smoke" / "ocr.json"
-    evidence.write_text("{}\n", encoding="utf-8")
+    evidence.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "evidence_type": "operator_smoke",
+                "status": "PASS",
+                "mock": False,
+                "release_tag": TAG,
+                "git_sha": SHA,
+                "target": "ocr-gpu0",
+            }
+        ),
+        encoding="utf-8",
+    )
     source.write_text(json.dumps(cases), encoding="utf-8")
     command = [
         str(PYTHON),

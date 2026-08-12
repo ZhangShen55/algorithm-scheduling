@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import html
 import json
 import os
 import re
@@ -14,6 +15,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 STATUSES = ("通过", "失败", "未执行及原因")
+CASE_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+EVIDENCE_TYPES = {"operator_smoke", "operator_registration", "gpu_runtime"}
 FIELDS = {
     "case_id",
     "status",
@@ -48,7 +51,7 @@ def safe_relative(value: str) -> PurePosixPath:
     return relative
 
 
-def require_regular(path: Path, root: Path) -> None:
+def load_evidence(path: Path, root: Path) -> dict[str, Any]:
     absolute_root = root.resolve(strict=True)
     candidate = root.joinpath(*safe_relative(path.as_posix()).parts)
     try:
@@ -62,6 +65,31 @@ def require_regular(path: Path, root: Path) -> None:
         and absolute_root not in candidate.resolve(strict=True).parents
     ):
         raise ValueError(f"证据越出 release 目录: {path}")
+    try:
+        payload = json.loads(candidate.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"证据不是有效 JSON: {path}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"证据 JSON 必须是对象: {path}")
+    return payload
+
+
+def validate_evidence(payload: dict[str, Any], case: dict[str, Any], path: str) -> None:
+    if payload.get("schema_version") != 1:
+        raise ValueError(f"证据 schema_version 不受支持: {path}")
+    if payload.get("evidence_type") not in EVIDENCE_TYPES:
+        raise ValueError(f"证据类型未知: {path}")
+    if payload.get("status") not in {"PASS", "通过"}:
+        raise ValueError(f"证据状态不是通过: {path}")
+    expected = {
+        "mock": case["mock"],
+        "release_tag": case["release_tag"],
+        "git_sha": case["git_sha"],
+        "target": case["target"],
+    }
+    for field, value in expected.items():
+        if payload.get(field) != value:
+            raise ValueError(f"证据 {field} 与用例不匹配: {path}")
 
 
 def validate(cases: Any, release_root: Path) -> tuple[list[dict[str, Any]], str, str]:
@@ -81,13 +109,22 @@ def validate(cases: Any, release_root: Path) -> tuple[list[dict[str, Any]], str,
         if missing:
             raise ValueError(f"用例缺少字段: {sorted(missing)}")
         case_id = case["case_id"]
-        if not isinstance(case_id, str) or not case_id or case_id in seen:
+        if (
+            not isinstance(case_id, str)
+            or CASE_ID_PATTERN.fullmatch(case_id) is None
+            or case_id in seen
+        ):
             raise ValueError(f"case_id 重复或无效: {case_id}")
         seen.add(case_id)
         if case["status"] not in STATUSES:
             raise ValueError(f"未知测试状态: {case['status']}")
         if not isinstance(case["mock"], bool):
             raise ValueError("mock 必须是布尔值")
+        target = case["target"]
+        if not isinstance(target, str) or not target or any(
+            ord(character) < 32 or ord(character) == 127 for character in target
+        ):
+            raise ValueError(f"target 无效: {case_id}")
         if case["status"] == "通过":
             if not case["command"] or not case["evidence"]:
                 raise ValueError(f"通过用例缺少 command 或 evidence: {case_id}")
@@ -100,7 +137,9 @@ def validate(cases: Any, release_root: Path) -> tuple[list[dict[str, Any]], str,
         for evidence in case["evidence"]:
             if not isinstance(evidence, str):
                 raise ValueError(f"证据路径必须是字符串: {case_id}")
-            require_regular(Path(evidence), release_root)
+            payload = load_evidence(Path(evidence), release_root)
+            if case["status"] == "通过":
+                validate_evidence(payload, case, evidence)
         if not release_tag:
             release_tag, git_sha = case["release_tag"], case["git_sha"]
         if case["release_tag"] != release_tag or case["git_sha"] != git_sha:
@@ -312,9 +351,22 @@ def render(cases: list[dict[str, Any]], tag: str, sha: str) -> tuple[dict[str, A
     ]
     for case in cases:
         kind = "Mock" if case["mock"] else "真实"
-        reason = str(case["reason"]).replace("|", "\\|").replace("\n", " ")
+        cells = [
+            str(case["case_id"]),
+            kind,
+            str(case["status"]),
+            str(case["target"]),
+            str(case["reason"]),
+        ]
+        escaped = [
+            html.escape(cell, quote=True)
+            .replace("|", "\\|")
+            .replace("\r", " ")
+            .replace("\n", " ")
+            for cell in cells
+        ]
         lines.append(
-            f"| {case['case_id']} | {kind} | {case['status']} | {case['target']} | {reason} |"
+            "| " + " | ".join(escaped) + " |"
         )
     return document, "\n".join(lines) + "\n"
 

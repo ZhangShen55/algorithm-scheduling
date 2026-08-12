@@ -5,13 +5,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import errno
 import hashlib
 import ipaddress
 import json
 import os
 import re
 import shlex
-import shutil
 import stat
 import sys
 import tempfile
@@ -88,9 +88,9 @@ def safe_relative(value: str, name: str) -> Path:
 
 
 def inside(path: Path, root: Path) -> bool:
-    resolved = path.resolve(strict=False)
-    resolved_root = root.resolve(strict=False)
-    return resolved == resolved_root or resolved_root in resolved.parents
+    normalized = Path(os.path.abspath(path))
+    normalized_root = Path(os.path.abspath(root))
+    return normalized == normalized_root or normalized_root in normalized.parents
 
 
 def atomic_json(path: Path, payload: Any) -> None:
@@ -141,20 +141,114 @@ def load_cases(path: Path) -> list[dict[str, Any]]:
     return cases
 
 
-def hash_file(path: Path) -> tuple[int, str]:
+def hash_stream(stream: Any) -> tuple[int, str]:
     digest = hashlib.sha256()
     total = 0
-    with path.open("rb") as stream:
-        while chunk := stream.read(1024 * 1024):
-            total += len(chunk)
-            digest.update(chunk)
+    while chunk := stream.read(1024 * 1024):
+        total += len(chunk)
+        digest.update(chunk)
     return total, digest.hexdigest()
+
+
+def open_regular_relative(root: Path, relative: Path, name: str) -> int:
+    reject_symlink_chain(root, name)
+    directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in relative.parts[:-1]:
+            try:
+                next_fd = os.open(
+                    part,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=directory_fd,
+                )
+            except OSError as exc:
+                if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+                    raise ValueError(f"{name} 不能包含软链接或非目录") from exc
+                raise
+            os.close(directory_fd)
+            directory_fd = next_fd
+        try:
+            descriptor = os.open(
+                relative.name,
+                os.O_RDONLY | os.O_NOFOLLOW,
+                dir_fd=directory_fd,
+            )
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                raise ValueError(f"{name} 不能是软链接") from exc
+            raise
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            os.close(descriptor)
+            raise ValueError(f"{name} 不是普通文件")
+        return descriptor
+    finally:
+        os.close(directory_fd)
+
+
+def verify_existing_fixture(path: Path, expected: tuple[int, str], fixture_id: str) -> None:
+    metadata = os.lstat(path)
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise ValueError(f"fixture 目标不是普通文件: {fixture_id}")
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            actual = hash_stream(stream)
+    finally:
+        os.close(descriptor)
+    if actual != expected:
+        raise ValueError(f"fixture 目标已存在不同内容: {fixture_id}")
+
+
+def copy_fixture_snapshot(
+    source_fd: int,
+    source: Path,
+    destination: Path,
+    expected: tuple[int, str],
+    fixture_id: str,
+    after_source_open: Callable[[Path], None] | None,
+) -> None:
+    descriptor, name = tempfile.mkstemp(prefix=f".{destination.name}.", dir=destination.parent)
+    temporary = Path(name)
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        os.fchmod(descriptor, 0o600)
+        if after_source_open is not None:
+            after_source_open(source)
+        with (
+            os.fdopen(os.dup(source_fd), "rb") as source_stream,
+            os.fdopen(descriptor, "wb", closefd=True) as target_stream,
+        ):
+            descriptor = -1
+            while chunk := source_stream.read(1024 * 1024):
+                target_stream.write(chunk)
+                digest.update(chunk)
+                total += len(chunk)
+            target_stream.flush()
+            os.fsync(target_stream.fileno())
+        if (total, digest.hexdigest()) != expected:
+            raise ValueError(f"fixture 字节数或 SHA-256 不匹配: {fixture_id}")
+        try:
+            os.link(temporary, destination, follow_symlinks=False)
+        except FileExistsError:
+            verify_existing_fixture(destination, expected, fixture_id)
+        directory_fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
 
 
 def load_and_stage_fixtures(
     manifest_path: Path,
     external_root: Path,
     target_root: Path,
+    *,
+    _after_source_open: Callable[[Path], None] | None = None,
 ) -> tuple[dict[str, Path], dict[str, str]]:
     reject_symlink_chain(manifest_path, "fixture manifest")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -190,44 +284,30 @@ def load_and_stage_fixtures(
         source_kind = item["source_kind"]
         relative = safe_relative(str(item["source"]), "fixture source")
         if source_kind == "external":
-            source = external_root / relative
+            source_root = external_root
         elif source_kind == "repository":
-            source = WORKSPACE_ROOT / relative
-            if not inside(source, WORKSPACE_ROOT):
-                raise ValueError("仓库 fixture 越出工作区")
+            source_root = WORKSPACE_ROOT
         else:
             raise ValueError(f"未知 fixture source_kind: {source_kind}")
-        reject_symlink_chain(source, "fixture source")
-        metadata = os.lstat(source)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise ValueError(f"fixture source 不是普通文件: {fixture_id}")
-        size, digest = hash_file(source)
-        if size != item["bytes"]:
-            raise ValueError(f"fixture 字节数不匹配: {fixture_id}")
-        if digest != item["sha256"]:
-            raise ValueError(f"fixture SHA-256 不匹配: {fixture_id}")
+        source = source_root / relative
+        expected = (item["bytes"], item["sha256"])
         destination = Path(str(item["server_target"]))
         if not destination.is_absolute() or not inside(destination, target_root):
             raise ValueError(f"fixture server_target 越出目标根: {fixture_id}")
         destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         reject_symlink_chain(destination.parent, "fixture 目标目录")
-        if destination.exists():
-            existing_size, existing_digest = hash_file(destination)
-            if (existing_size, existing_digest) != (size, digest):
-                raise ValueError(f"fixture 目标已存在不同内容: {fixture_id}")
-        else:
-            descriptor, name = tempfile.mkstemp(
-                prefix=f".{destination.name}.", dir=destination.parent
+        source_fd = open_regular_relative(source_root, relative, "fixture source")
+        try:
+            copy_fixture_snapshot(
+                source_fd,
+                source,
+                destination,
+                expected,
+                fixture_id,
+                _after_source_open,
             )
-            os.close(descriptor)
-            temporary = Path(name)
-            try:
-                shutil.copyfile(source, temporary)
-                os.chmod(temporary, 0o600)
-                os.replace(temporary, destination)
-            finally:
-                if temporary.exists():
-                    temporary.unlink()
+        finally:
+            os.close(source_fd)
         staged[fixture_id] = destination
     if set(staged) & set(missing):
         raise ValueError("fixture 不能同时声明为可用和缺失")
@@ -431,6 +511,7 @@ def smoke_facerec(
     number = "harness-" + uuid.uuid4().hex
     created = False
     primary_error: BaseException | None = None
+    result: dict[str, Any] | None = None
     try:
         created_body = require_http(
             http.post(
@@ -475,24 +556,41 @@ def smoke_facerec(
             }
         ):
             raise RuntimeError("FaceRec 实例 C 未查到实例 A 刚创建的人物")
-        return {"created": True, "recognized": True, "photo_saved": False, "cleanup": True}
+        result = {"created": True, "recognized": True, "photo_saved": False, "cleanup": True}
     except BaseException as exc:
         primary_error = exc
-        raise
-    finally:
-        if created:
-            try:
-                cleanup = require_http(
-                    http.request(
-                        "DELETE", manage_endpoint + "/persons/delete", json={"number": number}
-                    ),
-                    "FaceRec cleanup",
-                )
-                if cleanup.get("status_code") != 200:
-                    raise RuntimeError("FaceRec 测试人物清理失败")
-            except Exception:
-                if primary_error is None:
-                    raise
+    cleanup_error: BaseException | None = None
+    if created:
+        try:
+            cleanup = require_http(
+                http.request(
+                    "DELETE", manage_endpoint + "/persons/delete", json={"number": number}
+                ),
+                "FaceRec cleanup",
+            )
+            if cleanup.get("status_code") != 200:
+                raise RuntimeError("FaceRec 测试人物清理失败")
+            after_cleanup = require_http(
+                http.get(manage_endpoint + "/persons", params={"skip": 0, "limit": 100}),
+                "FaceRec cleanup verify",
+            )
+            people_data = after_cleanup.get("data")
+            people = people_data.get("persons") if isinstance(people_data, dict) else []
+            if isinstance(people, list) and number in {
+                item.get("number") for item in people if isinstance(item, dict)
+            }:
+                raise RuntimeError("FaceRec 测试人物清理后仍存在")
+        except BaseException as exc:
+            cleanup_error = exc
+    if primary_error is not None and cleanup_error is not None:
+        raise RuntimeError(f"{primary_error}；清理失败: {cleanup_error}")
+    if primary_error is not None:
+        raise primary_error
+    if cleanup_error is not None:
+        raise cleanup_error
+    if result is None:
+        raise RuntimeError("FaceRec Smoke 未产生结果")
+    return result
 
 
 def smoke_screen_det(
@@ -819,8 +917,10 @@ def main() -> int:
                         )
                     evidence_payload = {
                         "schema_version": 1,
+                        "evidence_type": "operator_smoke",
                         "operator_code": code,
-                        "status": "通过",
+                        "status": "PASS",
+                        "target": code,
                         "checks": case["checks"],
                         "summary": summary,
                         "mock": args.mock,
