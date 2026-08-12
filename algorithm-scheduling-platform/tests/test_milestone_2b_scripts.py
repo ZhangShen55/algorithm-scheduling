@@ -1437,6 +1437,65 @@ def test_restore_starts_only_the_exact_id_stopped_by_this_pause_run(
     _assert_archived_ledger(paused, [_pause_entry(original, "restored")])
 
 
+def test_restore_rejects_matching_alternate_ledger_before_lock_or_docker(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    original = _inspect_record()
+    snapshot = tmp_path / "snapshot.jsonl"
+    canonical = Path(f"{snapshot}.paused.jsonl")
+    alternate = tmp_path / "alternate.jsonl"
+    payload = json.dumps(_pause_entry(original, "stopped")) + "\n"
+    snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
+    canonical.write_text(payload, encoding="utf-8")
+    alternate.write_text(payload, encoding="utf-8")
+    environment = _base_environment(fake_bin)
+
+    completed = _run(
+        "restore-existing-containers", snapshot, alternate, environment=environment
+    )
+
+    assert completed.returncode != 0
+    assert "canonical" in completed.stderr
+    assert canonical.read_text(encoding="utf-8") == payload
+    assert _commands(environment) == []
+    assert not Path(f"{snapshot}.operation.lock").exists()
+
+
+def test_restore_accepts_relative_path_resolving_to_canonical_ledger(
+    fake_bin: Path
+) -> None:
+    original = _inspect_record()
+    relative_snapshot = Path(".pytest-relative-snapshot.jsonl")
+    relative_ledger = Path(f"{relative_snapshot}.paused.jsonl")
+    snapshot = PLATFORM_ROOT / relative_snapshot
+    ledger = PLATFORM_ROOT / relative_ledger
+    snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
+    ledger.write_text(json.dumps(_pause_entry(original, "restored")) + "\n", encoding="utf-8")
+    environment = _base_environment(
+        fake_bin,
+        DOCKER_INSPECT_FIXTURES=json.dumps(
+            {original["Id"]: original, original["Name"].removeprefix("/"): original}
+        ),
+    )
+
+    try:
+        completed = _run(
+            "restore-existing-containers",
+            relative_snapshot,
+            relative_ledger,
+            environment=environment,
+        )
+    finally:
+        snapshot.unlink(missing_ok=True)
+        ledger.unlink(missing_ok=True)
+        Path(f"{ledger}.archive.json").unlink(missing_ok=True)
+        Path(f"{snapshot}.operation.lock").unlink(missing_ok=True)
+        for archive in _ledger_archives(ledger):
+            archive.unlink()
+
+    assert completed.returncode == 0, completed.stderr
+
+
 @pytest.mark.parametrize("final_state", ["exited", "dead"])
 def test_restore_keeps_restoring_when_start_does_not_reach_running(
     fake_bin: Path, tmp_path: Path, final_state: str

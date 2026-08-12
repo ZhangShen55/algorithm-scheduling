@@ -507,8 +507,10 @@ def restore_original_policy(tool: str, entry: dict, current: dict | None = None)
 
 def restore_command(snapshot_argument: str, ledger_argument: str) -> None:
     tool = "restore"
-    snapshot, _, lock = paths(snapshot_argument)
+    snapshot, canonical_ledger, lock = paths(snapshot_argument)
     ledger = absolute(ledger_argument)
+    if ledger != canonical_ledger:
+        fail(tool, f"pause ledger must use canonical path: {canonical_ledger}")
     lock_fd = open_lock(tool, lock)
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
