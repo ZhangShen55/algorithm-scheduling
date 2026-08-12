@@ -29,9 +29,7 @@ RUN pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} && \
     -r requirements.txt
 
 COPY ./app ./app
-COPY ./config.toml ./config.toml
 COPY ./models ./models
-COPY ./models-encrypted ./models-encrypted
 COPY ./docker/start.sh ./docker/start.sh
 COPY ./scripts/build_cython_modules.py ./scripts/build_cython_modules.py
 

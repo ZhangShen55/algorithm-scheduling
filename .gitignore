@@ -45,6 +45,11 @@ Thumbs.db
 
 # Local data and generated results
 /data/
+/.model-assets-transaction.json
+/.model-assets.lock
+**/.model-stage-*/
+**/.*.model-stage-*/
+**/.*.model-backup-*/
 **/mnt/
 **/*.db
 **/*.sqlite

@@ -27,6 +27,7 @@ asr_stats.json
 asr_service.log
 
 # IDE / 本地配置
+config*.toml
 .idea/
 .vscode/
 .claude/

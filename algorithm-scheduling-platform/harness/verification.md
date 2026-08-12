@@ -16,6 +16,8 @@ MYPYPATH="$PWD" .venv/bin/python -m mypy packages scripts ../control_service/app
 docker compose -f deploy/docker-compose.infrastructure.yml config --quiet
 docker compose -f deploy/docker-compose.operators.yml config --quiet
 docker compose -f deploy/docker-compose.platform.yml config --quiet
+deploy/scripts/verify-operator-build-contexts
+.venv/bin/pytest -q tests/test_milestone_2b_model_assets.py tests/test_milestone_2b_image_build.py
 (cd ../control_service && ../algorithm-scheduling-platform/.venv/bin/python -m pytest -q)
 (cd ../orchestrator_service && ../algorithm-scheduling-platform/.venv/bin/python -m pytest -q)
 (cd ../vision_orchestrator_service && ../algorithm-scheduling-platform/.venv/bin/python -m pytest -q)
@@ -23,6 +25,20 @@ docker compose -f deploy/docker-compose.platform.yml config --quiet
 python -m pytest -q tests/test_ppt_slice_adapter.py tests/test_platform_compose.py
 conda run -n ppt_slice python -m unittest discover -s ../ppt_slice/tests -v
 ```
+
+里程碑 2B 模型资产验证只使用仓库外受控目录。先生成精确 manifest，再事务发布并校验：
+
+```bash
+ASSET_SOURCE=/root/workspace/.algorithm-scheduling-assets/v1.0_260812
+deploy/scripts/generate-model-asset-manifest --source "$ASSET_SOURCE" --workspace "$PWD/.."
+deploy/scripts/stage-model-assets --source "$ASSET_SOURCE" --workspace "$PWD/.."
+deploy/scripts/verify-model-assets --source "$ASSET_SOURCE" --workspace "$PWD/.."
+```
+
+命令输出只允许包含模型根、文件数和总字节数；不得把模型内容、逐文件哈希或任何密钥元数据写入
+Harness 报告。当前明文模式不要求 runtime secret。未来启用加密模型时，可单独运行
+`deploy/scripts/verify-runtime-secrets --secret ID=/run/secrets/TARGET=/host/path` 检查只读挂载前提；
+该检查不读取 secret 内容。
 
 算子本机真实运行的输入、环境、结果与缺口见
 `harness/scenarios/operator-local-runtime-validation.md`。该场景必须与课程 DAG 验收分开计数。

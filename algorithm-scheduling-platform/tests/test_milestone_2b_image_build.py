@@ -56,9 +56,15 @@ def _make_workspace(tmp_path: Path) -> Path:
     platform = workspace / "algorithm-scheduling-platform"
     scripts = platform / "deploy" / "scripts"
     scripts.mkdir(parents=True)
-    for name in ("build-images", "verify-operator-build-contexts"):
+    for name in (
+        "build-images",
+        "verify-operator-build-contexts",
+        "verify-model-assets",
+        "model_asset_transaction.py",
+    ):
         shutil.copy2(SCRIPTS_ROOT / name, scripts / name)
     shutil.copy2(DEPLOY_ROOT / "operator-images.tsv", platform / "deploy/operator-images.tsv")
+    shutil.copy2(DEPLOY_ROOT / "model-assets.json", platform / "deploy/model-assets.json")
     wheel_script = platform / "scripts/build_and_stage_operator_registry_wheel.py"
     wheel_script.parent.mkdir(parents=True)
     wheel_script.write_text("raise SystemExit('test stub must not execute')\n", encoding="utf-8")
@@ -153,6 +159,7 @@ def _environment(fake_bin: Path) -> dict[str, str]:
             "GIT_SHA": "a" * 40,
             "EXPECTED_GIT_SHA": "a" * 40,
             "MIN_ROOT_FREE_GIB": "100",
+            "MODEL_ASSET_SOURCE": str(fake_bin / "external-model-assets"),
         }
     )
     return environment
@@ -250,7 +257,10 @@ def test_build_images_runs_from_arbitrary_cwd_and_verifies_every_image(
 
     assert completed.returncode == 0, completed.stderr
     commands = _commands(environment)
-    assert commands[0] == ["python3", "scripts/build_and_stage_operator_registry_wheel.py"]
+    assert commands[0][0] == "python3"
+    assert commands[0][1].endswith("model_asset_transaction.py")
+    assert commands[0][2] == "verify"
+    assert commands[1] == ["python3", "scripts/build_and_stage_operator_registry_wheel.py"]
     builds = [command for command in commands if command[:2] == ["docker", "build"]]
     assert len(builds) == 8
     for build, (context, dockerfile, image) in zip(builds, EXPECTED_MATRIX, strict=True):
@@ -317,6 +327,21 @@ def test_build_images_requires_expected_git_sha(tmp_path: Path) -> None:
     assert completed.returncode != 0
     assert "EXPECTED_GIT_SHA" in completed.stderr
     assert _commands(environment) == []
+
+
+def test_build_images_requires_an_external_model_asset_source(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    _install_build_stubs(fake_bin)
+    environment = _environment(fake_bin)
+    environment.pop("MODEL_ASSET_SOURCE")
+
+    completed = _run_build(workspace, tmp_path, environment)
+
+    assert completed.returncode != 0
+    assert "MODEL_ASSET_SOURCE" in completed.stderr
+    assert not any(command[:2] == ["docker", "build"] for command in _commands(environment))
 
 
 def test_build_images_rejects_expected_git_sha_that_differs_from_head(
@@ -596,6 +621,25 @@ def test_git_input_gate_rejects_dirty_included_tracked_file(tmp_path: Path) -> N
     assert "asr_offline/app/main.py" in completed.stderr
 
 
+def test_git_input_gate_rejects_dirty_dockerfile_even_when_context_excludes_it(
+    tmp_path: Path,
+) -> None:
+    workspace = _make_workspace(tmp_path)
+    dockerfile = workspace / "asr_offline/docker/Dockerfile"
+    dockerignore = workspace / "asr_offline/.dockerignore"
+    dockerignore.write_text(
+        dockerignore.read_text(encoding="utf-8") + "docker/Dockerfile\n",
+        encoding="utf-8",
+    )
+    _initialize_git_workspace(workspace)
+    dockerfile.write_text("FROM scratch\n# dirty\n", encoding="utf-8")
+
+    completed = _run_gate(workspace, "--verify-git-clean-included")
+
+    assert completed.returncode != 0
+    assert "asr_offline/docker/Dockerfile" in completed.stderr
+
+
 def test_git_input_gate_allows_dirty_tracked_file_excluded_from_context(
     tmp_path: Path,
 ) -> None:
@@ -747,7 +791,7 @@ def test_real_facerec_and_ppt_contexts_exclude_private_or_large_local_inputs() -
     ppt_ignore = (workspace_root / "ppt_slice/.dockerignore").read_text(encoding="utf-8")
 
     assert "media/" in facerec_ignore
-    assert "config.toml" in facerec_ignore
+    assert "config*.toml" in facerec_ignore
     for entry in ("harness/", "openspec/", ".codex/"):
         assert entry in facerec_ignore
         assert entry in ppt_ignore
@@ -773,3 +817,75 @@ def test_all_real_contexts_only_reinclude_the_exact_registry_wheel() -> None:
             "!wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl"
             in dockerignore
         )
+
+
+def test_screen_det_image_contains_plain_models_but_excludes_encrypted_assets() -> None:
+    workspace_root = PLATFORM_ROOT.parent
+    dockerfile = (workspace_root / "screen_det/docker/Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    dockerignore = (workspace_root / "screen_det/.dockerignore").read_text(
+        encoding="utf-8"
+    )
+
+    assert "COPY model/ ./model/" in dockerfile
+    assert "model/" not in {
+        line.strip()
+        for line in dockerignore.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    assert "docker/models-encrypted/" in dockerignore
+    assert "*.key" in dockerignore
+
+
+def test_vbas_image_uses_only_plain_models_in_this_release() -> None:
+    workspace_root = PLATFORM_ROOT.parent
+    dockerfile = (workspace_root / "vbas/docker/Dockerfile").read_text(encoding="utf-8")
+    dockerignore = (workspace_root / "vbas/.dockerignore").read_text(encoding="utf-8")
+
+    assert "COPY ./models ./models" in dockerfile
+    assert "COPY ./models-encrypted" not in dockerfile
+    assert "!models-encrypted" not in dockerignore
+    assert "models-encrypted/" in dockerignore
+    assert "*.key" in dockerignore
+
+
+def test_all_operator_contexts_exclude_local_runtime_configs() -> None:
+    workspace_root = PLATFORM_ROOT.parent
+    for context_name, _, _ in EXPECTED_MATRIX:
+        dockerignore = (workspace_root / context_name / ".dockerignore").read_text(
+            encoding="utf-8"
+        )
+        lines = {
+            line.strip()
+            for line in dockerignore.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        assert "config*.toml" in lines, context_name
+        assert not any(line.startswith("!config") for line in lines), context_name
+
+
+def test_dockerfiles_do_not_copy_local_runtime_configs() -> None:
+    workspace_root = PLATFORM_ROOT.parent
+    for context_name, dockerfile_name, _ in EXPECTED_MATRIX:
+        source = (workspace_root / context_name / dockerfile_name).read_text(
+            encoding="utf-8"
+        )
+        assert "COPY config.toml" not in source, context_name
+        assert "COPY ./config.toml" not in source, context_name
+        assert "COPY . /" not in source, context_name
+
+
+def test_sensitive_local_content_remains_outside_operator_images() -> None:
+    workspace_root = PLATFORM_ROOT.parent
+    facerec_ignore = (workspace_root / "facerec/.dockerignore").read_text(
+        encoding="utf-8"
+    )
+    ppt_ignore = (workspace_root / "ppt_slice/.dockerignore").read_text(
+        encoding="utf-8"
+    )
+
+    assert "media/" in facerec_ignore
+    assert "harness/" in ppt_ignore
+    assert "test/" in ppt_ignore
+    assert "*.mp4" in ppt_ignore

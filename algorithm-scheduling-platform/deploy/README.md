@@ -118,11 +118,45 @@ After model assets have been staged through the separately controlled asset proc
 build and inspect all eight images from any working directory:
 
 ```bash
+ASSET_SOURCE=/root/workspace/.algorithm-scheduling-assets/v1.0_260812
+
+# Run once after controlled SCP creates or changes the external source.
+deploy/scripts/generate-model-asset-manifest \
+  --source "$ASSET_SOURCE" --workspace "$PWD/.."
+
+# Transactionally publish all six model roots into their build contexts.
+deploy/scripts/stage-model-assets \
+  --source "$ASSET_SOURCE" --workspace "$PWD/.."
+
+# Verify again immediately before a release build.
+deploy/scripts/verify-model-assets \
+  --source "$ASSET_SOURCE" --workspace "$PWD/.."
+
+EXPECTED_GIT_SHA="$(git -C .. rev-parse HEAD)" \
+MODEL_ASSET_SOURCE="$ASSET_SOURCE" \
 deploy/scripts/build-images                    # default: v1.0_260812
-deploy/scripts/build-images v1.0_260813        # one explicit release tag
 ```
 
-The build entrypoint stages the registry wheel first, checks root-disk free space
+The asset definition is `deploy/model-assets.json`: ASR Offline, ASR Online, OCR,
+VBas plain models, FaceRec and ScreenDet. PPT Slice and Text Analysis have no local
+model roots. The external manifest is an input artifact and must stay outside Git.
+The transaction rejects missing/extra files, path traversal, symlinks, special files,
+secret/encrypted paths and hash drift; it uses a private lock, durable journal, fsync,
+same-filesystem stage/backup directories and restart recovery so six roots cannot be
+published as a mixed release.
+
+Current VBas and ScreenDet deployment uses plain models. Their encrypted directories
+and keys are excluded from image contexts. If encrypted mode is introduced later, pass
+the key via a separate read-only `/run/secrets/*` mount and do not include plain weights
+in that encrypted image. `verify-runtime-secrets` validates only ID, container target,
+regular-file type, owner and exact `0600` mode; it never reads or reports secret content,
+size or hashes. ASR Online's current `.enc` implementation embeds its decryption material
+in source and is therefore an acknowledged risk, not a secure secret boundary.
+
+All eight runtime TOML files come from read-only Compose mounts under
+`deploy/config/operators/`; local `config*.toml` files are excluded from images.
+The build entrypoint verifies model assets, validates build inputs, stages the registry wheel,
+checks root-disk free space
 before the sequence and before every image, applies the fixed Git commit as the
 `org.opencontainers.image.revision` label, and verifies both image reference and
 revision through `docker image inspect`. It stops on the first failure and never

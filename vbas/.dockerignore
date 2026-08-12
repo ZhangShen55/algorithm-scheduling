@@ -24,8 +24,7 @@ tests/
 tests2/
 docs/
 openspec/
-**/config.toml
-!config.toml
+config*.toml
 **/*.pt
 **/*.pth
 **/*.onnx
@@ -35,9 +34,7 @@ openspec/
 !models/**
 !app/vendor/DirectMHP/models/
 !app/vendor/DirectMHP/models/**
-**/models-encrypted/
-!models-encrypted/
-!models-encrypted/**
+models-encrypted/
 *.key
 *.p12
 *.pfx

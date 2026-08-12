@@ -21,6 +21,20 @@ Kafka 部署 SHALL 分别为主机运行的开发环境和 Docker 网络内的�
 - **WHEN** 镜像构建完成
 - **THEN** 隔离容器能够导入注册客户端、启动算子并提供业务和运维路由
 
+### Requirement: 模型资产发布具有完整性和密钥边界
+部署流水线 SHALL 仅从 Git worktree 外的受控资产源发布六个实际明文模型根，并使用精确全量清单
+校验普通文件的相对路径、字节数和 SHA-256。六根切换 SHALL 使用互斥锁、持久 journal、fsync 和
+同文件系统原子重命名，任一失败或重启 SHALL NOT 留下可继续构建的新旧混合模型。密钥、加密目录、
+人脸原图、本地运行配置和 Harness 大文件 SHALL NOT 进入当前镜像或模型清单。
+
+#### Scenario: 模型发布在第二根切换时中断
+- **WHEN** 进程在 backup 重命名后、目标替换后或 journal 写入后中断并重新执行
+- **THEN** 发布器先恢复未提交事务，再完整发布六根；构建入口只有在工作区与外部清单完全一致后才允许执行 Docker build
+
+#### Scenario: 当前明文模式构建算子镜像
+- **WHEN** 构建 ScreenDet 与 VBas 的里程碑 2B 镜像
+- **THEN** ScreenDet 和 VBas 只包含各自明文模型根，不包含 `models-encrypted` 或密钥，运行配置由 Compose 只读挂载
+
 ### Requirement: 注册事实可持久保存
 Control-service SHALL 将注册、生命周期变化、心跳摘要和注销事件持久化到 PostgreSQL；Redis 继续作为当前 TTL 和原子租约的权威来源。
 

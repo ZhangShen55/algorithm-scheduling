@@ -47,12 +47,9 @@ RUN pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} && \
 FROM deps AS runtime
 WORKDIR /app
 
-# 拷贝源码与内置模型
-COPY . /app
-
-# 配置文件
-COPY config.toml /config.toml
-
+# 只拷贝运行源码、模型和入口；配置由 Compose 只读挂载。
+COPY app /app/app
+COPY model /app/model
 COPY docker/start.sh /app/start.sh
 
 # 权限

@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "target": "asr_offline/model",
+      "required_sentinels": [
+        "speech_fsmn_vad_zh-cn-16k-common-pytorch/model.pt"
+      ]
+    },
+    {
+      "target": "asr_online/model",
+      "required_sentinels": [
+        "speech_paraformer_asr_nat-zh-cn-16k-common-vocab8404-online/model.pt.enc"
+      ]
+    },
+    {
+      "target": "ocr/models",
+      "required_sentinels": [
+        "PP-OCRv6_medium_det/inference.pdiparams",
+        "PP-OCRv6_medium_rec/inference.pdiparams"
+      ]
+    },
+    {
+      "target": "vbas/models",
+      "required_sentinels": [
+        "teacher_behavior.pt",
+        "student.pt",
+        "person_count.pt"
+      ]
+    },
+    {
+      "target": "facerec/ai_models",
+      "required_sentinels": [
+        "shape_predictor_68_face_landmarks.dat",
+        "ms1mv3_arcface_r100.onnx"
+      ]
+    },
+    {
+      "target": "screen_det/model",
+      "required_sentinels": [
+        "screen.pt",
+        "occlusion.pt"
+      ]
+    }
+  ]
+}

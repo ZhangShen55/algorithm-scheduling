@@ -49,6 +49,7 @@ FROM runtime-base
 WORKDIR /app
 
 COPY --from=cython-builder /build/app ./app
+COPY model/ ./model/
 COPY docker/start.sh /usr/local/bin/start-screen-det
 
 RUN chmod 0755 /usr/local/bin/start-screen-det \

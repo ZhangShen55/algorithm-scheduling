@@ -10,6 +10,7 @@ __pycache__/
 .codex/
 harness/
 openspec/
+config*.toml
 .env
 *.pem
 *.key

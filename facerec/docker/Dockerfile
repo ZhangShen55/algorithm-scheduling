@@ -27,7 +27,9 @@ COPY wheel/${OPERATOR_REGISTRY_CLIENT_WHEEL} /tmp/wheels/${OPERATOR_REGISTRY_CLI
 RUN python3 -m pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} && \
     pip3 install --no-cache-dir -r requirements.txt
 
-COPY . /app/
+# 只打包运行源码与模型；配置由 Compose 只读挂载，media 只属于运行期数据。
+COPY app /app/app
+COPY ai_models /app/ai_models
 COPY docker/entrypoint.sh /usr/local/bin/facerec-entrypoint
 
 RUN chmod 0755 /usr/local/bin/facerec-entrypoint && \

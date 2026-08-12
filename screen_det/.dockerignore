@@ -11,8 +11,8 @@ venv/
 .git/
 test/
 tests/
-model/
-docker/models-encrypted/*
+config*.toml
+docker/models-encrypted/
 runs/
 scripts/
 nginx/

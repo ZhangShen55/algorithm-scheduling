@@ -19,6 +19,7 @@ README.md
 /Dockerfile
 /Dockerfile.cython
 .dockerignore
+config*.toml
 .env
 *.pem
 *.key

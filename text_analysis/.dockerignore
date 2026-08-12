@@ -16,6 +16,7 @@ test/
 env/
 .ai/
 config_bak.json
+config*.toml
 Dockerfile*
 .env
 *.pem

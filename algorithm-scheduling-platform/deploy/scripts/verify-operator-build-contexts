@@ -46,13 +46,10 @@ ALLOWED_REINCLUDES = {
     "ocr": {REGISTRY_WHEEL_REINCLUDE},
     "vbas": {
         REGISTRY_WHEEL_REINCLUDE,
-        "!config.toml",
         "!models/",
         "!models/**",
         "!app/vendor/DirectMHP/models/",
         "!app/vendor/DirectMHP/models/**",
-        "!models-encrypted/",
-        "!models-encrypted/**",
     },
     "facerec": {REGISTRY_WHEEL_REINCLUDE},
     "screen_det": {REGISTRY_WHEEL_REINCLUDE},
@@ -64,9 +61,9 @@ MODEL_ASSET_ROOTS = {
     "asr_offline": ("model",),
     "asr_online": ("model",),
     "ocr": ("models",),
-    "vbas": ("models", "models-encrypted", "app/vendor/DirectMHP/models"),
+    "vbas": ("models",),
     "facerec": ("ai_models",),
-    "screen_det": ("model", "docker/models-encrypted"),
+    "screen_det": ("model",),
 }
 
 DANGEROUS_MEDIA_SUFFIXES = frozenset(
@@ -330,6 +327,10 @@ def _included_operator_paths(
             relative_to_context = path.relative_to(context).as_posix()
             if not _is_ignored(relative_to_context, patterns):
                 included.add(path.relative_to(workspace_root).as_posix())
+    included.update(
+        f"{context_name}/{dockerfile_name}"
+        for context_name, dockerfile_name, _ in matrix
+    )
     return included
 
 
@@ -344,7 +345,7 @@ def _deleted_included_operator_paths(
         if not (workspace_root / path).exists()
     }
     included: set[str] = set()
-    for context_name, _, _ in matrix:
+    for context_name, dockerfile_name, _ in matrix:
         context_prefix = f"{context_name}/"
         patterns = _dockerignore_patterns(
             (workspace_root / context_name / ".dockerignore").read_text(encoding="utf-8")
@@ -353,7 +354,9 @@ def _deleted_included_operator_paths(
             if not path.startswith(context_prefix):
                 continue
             relative_to_context = path.removeprefix(context_prefix)
-            if not _is_ignored(relative_to_context, patterns):
+            if relative_to_context == dockerfile_name or not _is_ignored(
+                relative_to_context, patterns
+            ):
                 included.add(path)
     return included
 

@@ -90,13 +90,13 @@ def test_vbas_exposes_only_supported_dockerfiles() -> None:
     assert actual == set(SUPPORTED_VBAS_DOCKERFILES)
 
 
-def test_vbas_build_context_includes_canonical_image_inputs() -> None:
+def test_vbas_build_context_includes_only_plain_model_image_inputs() -> None:
     source = (ROOT / "vbas/.dockerignore").read_text(encoding="utf-8").splitlines()
 
-    assert "!config.toml" in source
     assert "!models/**" in source
-    assert "!models-encrypted/**" in source
-    encrypted_models_included_at = source.index("!models-encrypted/**")
+    assert "config*.toml" in source
+    assert "models-encrypted/" in source
+    assert "!models-encrypted/**" not in source
     secret_patterns = (
         "*.key",
         "**/tias_model_key",
@@ -107,9 +107,7 @@ def test_vbas_build_context_includes_canonical_image_inputs() -> None:
         ".env",
     )
     for secret_pattern in secret_patterns:
-        assert source.index(secret_pattern, encrypted_models_included_at + 1) > (
-            encrypted_models_included_at
-        )
+        assert secret_pattern in source
 
 
 def test_text_analysis_defaults_to_one_worker_on_python311() -> None:
