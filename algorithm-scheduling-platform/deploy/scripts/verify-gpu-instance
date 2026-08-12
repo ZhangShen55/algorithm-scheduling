@@ -446,32 +446,51 @@ def _redacted_command(argv: Sequence[str]) -> dict[str, Any]:
     return {"executable": Path(argv[0]).name, "argument_count": len(argv) - 1}
 
 
-def _terminate_process_group(process: subprocess.Popen[Any]) -> None:
-    if process.poll() is not None:
-        process.wait()
-        return
+def _process_group_exists(process_group_id: int) -> bool:
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        os.killpg(process_group_id, 0)
     except ProcessLookupError:
-        process.wait()
-        return
-    except PermissionError as error:
-        raise VerificationError("无权终止真实推理触发进程组") from error
+        return False
+    except PermissionError:
+        # Darwin may return EPERM for an already-empty orphaned process group.
+        # Same-UID trigger descendants are otherwise signalable by this verifier.
+        return False
+    return True
+
+
+def _wait_process_group_gone(process_group_id: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _process_group_exists(process_group_id):
+            return True
+        time.sleep(0.02)
+    return not _process_group_exists(process_group_id)
+
+
+def _terminate_process_group(
+    process: subprocess.Popen[Any], process_group_id: int
+) -> None:
+    process.poll()
+    if _process_group_exists(process_group_id):
+        try:
+            os.killpg(process_group_id, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except PermissionError as error:
+            raise VerificationError("无权终止真实推理触发进程组") from error
+    if not _wait_process_group_gone(process_group_id, 1.0):
+        try:
+            os.killpg(process_group_id, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except PermissionError as error:
+            raise VerificationError("无权强制终止真实推理触发进程组") from error
+        if not _wait_process_group_gone(process_group_id, 2.0):
+            raise VerificationError("真实推理触发进程组无法在有界时间内消失")
     try:
-        process.wait(timeout=5)
-        return
-    except subprocess.TimeoutExpired:
-        pass
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    except PermissionError as error:
-        raise VerificationError("无权强制终止真实推理触发进程组") from error
-    try:
-        process.wait(timeout=5)
+        process.wait(timeout=1)
     except subprocess.TimeoutExpired as error:
-        raise VerificationError("真实推理触发进程组无法在有界时间内回收") from error
+        raise VerificationError("真实推理触发 leader 无法在有界时间内回收") from error
 
 
 def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
@@ -496,6 +515,7 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
+    trigger_process_group_id = trigger.pid
     samples: list[dict[str, Any]] = []
     deadline = time.monotonic() + arguments.sample_window
     try:
@@ -538,7 +558,7 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
         if return_code != 0:
             raise VerificationError(f"真实推理触发命令失败，退出码 {return_code}")
     finally:
-        _terminate_process_group(trigger)
+        _terminate_process_group(trigger, trigger_process_group_id)
     if not samples:
         raise VerificationError("真实推理期间未获得目标 CUDA PID 同步采样")
     final_inspect = _inspect(arguments.container)

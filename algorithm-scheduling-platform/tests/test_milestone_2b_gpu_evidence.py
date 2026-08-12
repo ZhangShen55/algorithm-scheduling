@@ -731,11 +731,11 @@ def test_verifier_kills_trigger_process_group_when_helper_command_fails(
             "CHILD_PID_FILE": str(child_pid_file),
             "PARENT_PID_FILE": str(parent_pid_file),
             "CHILD_SCRIPT": str(child),
-            "FAKE_DOCKER_TOP_DELAY": "1",
+            "FAKE_DOCKER_TOP_DELAY": "1.5",
         }
     )
 
-    completed = _run(gpu_runtime, "--command-timeout", "0.3")
+    completed = _run(gpu_runtime, "--command-timeout", "0.6")
 
     assert completed.returncode != 0
     assert "超时" in _report(gpu_runtime)["reason"]
@@ -745,3 +745,55 @@ def test_verifier_kills_trigger_process_group_when_helper_command_fails(
     _wait_process_gone(child_pid)
     with pytest.raises(ProcessLookupError):
         os.killpg(parent_pid, signal.SIGTERM)
+
+
+@pytest.mark.parametrize("child_ignores_sigterm", [False, True])
+def test_cleanup_kills_process_group_after_trigger_leader_exits(
+    gpu_runtime: dict[str, Any], child_ignores_sigterm: bool
+) -> None:
+    child_pid_file = gpu_runtime["tmp_path"] / "orphan-child.pid"
+    parent_pid_file = gpu_runtime["tmp_path"] / "exited-parent.pid"
+    child = gpu_runtime["tmp_path"] / "orphan-child.py"
+    signal_setup = (
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        if child_ignores_sigterm
+        else ""
+    )
+    child.write_text(
+        "import os,signal,time\n"
+        + signal_setup
+        + "open(os.environ['CHILD_PID_FILE'],'w').write(str(os.getpid()))\n"
+        + "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    parent = gpu_runtime["tmp_path"] / "exited-parent.py"
+    parent.write_text(
+        "import os,subprocess,sys,time\n"
+        "open(os.environ['PARENT_PID_FILE'],'w').write(str(os.getpid()))\n"
+        "subprocess.Popen([sys.executable,os.environ['CHILD_SCRIPT']])\n"
+        "deadline=time.monotonic()+2\n"
+        "while not os.path.exists(os.environ['CHILD_PID_FILE']):\n"
+        "  assert time.monotonic()<deadline\n"
+        "  time.sleep(.01)\n",
+        encoding="utf-8",
+    )
+    gpu_runtime["trigger_file"].write_text(
+        json.dumps([sys.executable, str(parent)]), encoding="utf-8"
+    )
+    gpu_runtime["env"].update(
+        {
+            "CHILD_PID_FILE": str(child_pid_file),
+            "PARENT_PID_FILE": str(parent_pid_file),
+            "CHILD_SCRIPT": str(child),
+        }
+    )
+
+    completed = _run(gpu_runtime)
+
+    assert completed.returncode != 0
+    parent_pid = int(parent_pid_file.read_text(encoding="utf-8"))
+    child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+    _wait_process_gone(parent_pid)
+    _wait_process_gone(child_pid)
+    with pytest.raises(ProcessLookupError):
+        os.killpg(parent_pid, 0)
