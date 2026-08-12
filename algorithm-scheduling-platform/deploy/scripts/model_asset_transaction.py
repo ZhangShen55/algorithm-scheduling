@@ -66,9 +66,11 @@ def _remove_tree(path: Path) -> None:
 def _safe_relative_path(value: Any, *, field: str) -> PurePosixPath:
     if not isinstance(value, str) or not value:
         raise AssetError(f"{field} must be a non-empty string")
+    if "\\" in value or any(part in {"", ".", ".."} for part in value.split("/")):
+        raise AssetError(f"{field} must use canonical POSIX path text")
     path = PurePosixPath(value)
-    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
-        raise AssetError(f"{field} contains path traversal")
+    if path.is_absolute() or path.as_posix() != value:
+        raise AssetError(f"{field} must use canonical POSIX path text")
     lowered = {part.lower() for part in path.parts}
     if lowered.intersection(FORBIDDEN_PARTS) or path.suffix.lower() in FORBIDDEN_SUFFIXES:
         raise AssetError(f"{field} refers to forbidden encrypted or secret material")

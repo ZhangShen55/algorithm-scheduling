@@ -361,6 +361,75 @@ def test_manifest_rejects_secret_or_encrypted_asset_metadata(
     assert _sha256(payload) not in combined
 
 
+@pytest.mark.parametrize(
+    "noncanonical_path",
+    [
+        "/nested/model.bin",
+        "nested/../model.bin",
+        "nested//model.bin",
+        "nested/./model.bin",
+        r"nested\model.bin",
+        "nested/model.bin/",
+    ],
+)
+def test_manifest_rejects_noncanonical_path_text(
+    tmp_path: Path, noncanonical_path: str
+) -> None:
+    source = tmp_path / "external-assets"
+    _write_asset_source(source)
+    manifest_path = source / "model-assets.manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["assets"][0]["files"].append(
+        {"path": noncanonical_path, "bytes": 1, "sha256": _sha256(b"x")}
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    workspace = _make_workspace(tmp_path)
+
+    completed = _run("stage-model-assets", source, workspace)
+
+    assert completed.returncode != 0
+    assert "canonical" in completed.stderr.lower()
+
+
+def test_manifest_rejects_duplicate_file_through_noncanonical_alias(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "external-assets"
+    _write_asset_source(source)
+    manifest_path = source / "model-assets.manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    first = manifest["assets"][0]["files"][0]
+    alias = dict(first)
+    alias["path"] = str(first["path"]).replace("/", "//", 1)
+    manifest["assets"][0]["files"].append(alias)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    workspace = _make_workspace(tmp_path)
+
+    completed = _run("stage-model-assets", source, workspace)
+
+    assert completed.returncode != 0
+    assert "canonical" in completed.stderr.lower()
+
+
+def test_manifest_allows_canonical_chinese_and_space_path(tmp_path: Path) -> None:
+    source = tmp_path / "external-assets"
+    _write_asset_source(source)
+    (source / "model-assets.manifest.json").unlink()
+    extra = source / "ocr/models/中文 目录/模型 权重.bin"
+    extra.parent.mkdir(parents=True)
+    extra.write_bytes(b"model")
+    workspace = _make_workspace(tmp_path)
+
+    generated = _run_manifest_generator(source, workspace)
+    staged = _run("stage-model-assets", source, workspace)
+    verified = _run("verify-model-assets", source, workspace)
+
+    assert generated.returncode == 0, generated.stderr
+    assert staged.returncode == 0, staged.stderr
+    assert verified.returncode == 0, verified.stderr
+    assert (workspace / "ocr/models/中文 目录/模型 权重.bin").read_bytes() == b"model"
+
+
 @pytest.mark.parametrize("interrupt_stage", ["after_backup", "after_replace", "after_journal"])
 def test_interrupted_switch_recovers_without_mixed_model_roots(
     tmp_path: Path, interrupt_stage: str
