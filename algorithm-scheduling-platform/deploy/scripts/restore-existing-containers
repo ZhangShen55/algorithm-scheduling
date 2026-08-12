@@ -1,125 +1,193 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "$#" -ne 2 ]]; then
-  printf 'usage: %s SNAPSHOT_JSONL PAUSE_RECORD_JSONL\n' "$0" >&2
-  exit 64
-fi
-
-snapshot_path="$1"
-pause_record_path="$2"
-[[ -f "$snapshot_path" ]] || { printf 'restore: snapshot not found: %s\n' "$snapshot_path" >&2; exit 1; }
-[[ -f "$pause_record_path" ]] || { printf 'restore: pause record not found: %s\n' "$pause_record_path" >&2; exit 1; }
-restore_plan="$(mktemp "${TMPDIR:-/tmp}/restore-plan.XXXXXX")"
-trap 'rm -f "$restore_plan"' EXIT
-
-python3 - "$snapshot_path" "$pause_record_path" >"$restore_plan" <<'PY'
+python3 - "$@" <<'PY'
+import fcntl
+import hashlib
 import json
+import os
 import re
+import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
+
+def fail(message: str) -> None:
+    raise SystemExit(f"restore: {message}")
+
+
+def canonical(value: dict) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+
+
+def atomic_write(path: Path, records: list[dict]) -> None:
+    if path.is_symlink():
+        fail(f"refusing symlink ledger: {path}")
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            for record in records:
+                stream.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def read_jsonl(path: Path, kind: str) -> list[dict]:
+    if path.is_symlink() or not path.is_file():
+        fail(f"{kind} must be a regular file: {path}")
+    records = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as error:
+            fail(f"malformed {kind} line {number}: {error}")
+        if not isinstance(record, dict):
+            fail(f"invalid {kind} line {number}")
+        records.append(record)
+    return records
+
+
+def inspect(selector: str) -> dict:
+    completed = subprocess.run(
+        ["docker", "inspect", selector], text=True, capture_output=True, check=False
+    )
+    if completed.returncode:
+        fail(f"container no longer exists: {selector}")
+    values = json.loads(completed.stdout)
+    if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], dict):
+        fail("docker inspect returned an unexpected payload")
+    return values[0]
+
+
+def current_binding(item: dict, snapshot_state: str) -> dict:
+    labels = item.get("Config", {}).get("Labels") or {}
+    return {
+        "container_id": item.get("Id"),
+        "name": item.get("Name", "").removeprefix("/"),
+        "image_ref": item.get("Config", {}).get("Image"),
+        "image_id": item.get("Image"),
+        "state": snapshot_state,
+        "labels": labels,
+        "ports": item.get("HostConfig", {}).get("PortBindings") or {},
+        "mounts": [
+            {
+                "type": mount.get("Type"), "source": mount.get("Source"),
+                "destination": mount.get("Destination"), "mode": mount.get("Mode"),
+                "rw": mount.get("RW"), "propagation": mount.get("Propagation"),
+            }
+            for mount in item.get("Mounts", [])
+        ],
+        "restart_policy": item.get("HostConfig", {}).get("RestartPolicy") or {},
+        "compose_project": labels.get("com.docker.compose.project", ""),
+    }
+
+
+def verify(entry: dict) -> str:
+    expected = entry["binding"]
+    by_id = inspect(entry["container_id"])
+    by_name = inspect(entry["name"])
+    if by_name.get("Id") != entry["container_id"]:
+        fail(f"{entry['name']}: name reuse detected")
+    current = current_binding(by_id, expected["state"])
+    for attribute in expected:
+        if current.get(attribute) != expected[attribute]:
+            fail(f"{entry['name']}: {attribute} changed")
+    return by_id.get("State", {}).get("Status", "")
+
+
+if len(sys.argv) != 3:
+    fail(f"usage: {sys.argv[0]} SNAPSHOT_JSONL PAUSE_RECORD_JSONL")
+snapshot_path = Path(sys.argv[1])
+ledger_path = Path(sys.argv[2])
+snapshots = read_jsonl(snapshot_path, "snapshot")
+ledger = read_jsonl(ledger_path, "pause ledger")
 snapshot_required = {
     "container_id", "name", "image_ref", "image_id", "state", "labels", "ports",
     "mounts", "restart_policy", "compose_project",
 }
-pause_required = {"container_id", "name", "action"}
+for number, record in enumerate(snapshots, 1):
+    if not snapshot_required.issubset(record):
+        fail(f"incomplete snapshot line {number}")
+    if not re.fullmatch(r"[0-9a-f]{12,64}", record["container_id"]):
+        fail(f"invalid container ID on snapshot line {number}")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", record["name"]):
+        fail(f"invalid container name on snapshot line {number}")
+    labels = record.get("labels") or {}
+    if record.get("compose_project") != labels.get("com.docker.compose.project", ""):
+        fail(f"compose_project mismatch on snapshot line {number}")
+snapshot_by_id = {record.get("container_id"): record for record in snapshots}
+required = {"version", "status", "container_id", "name", "snapshot_sha256", "binding"}
+allowed = {"pending_stop", "stopped", "restoring", "restored", "not_stopped"}
+for number, entry in enumerate(ledger, 1):
+    if not required.issubset(entry) or entry["version"] != 1 or entry["status"] not in allowed:
+        fail(f"incomplete pause ledger line {number}")
+    if not re.fullmatch(r"[0-9a-f]{12,64}", entry["container_id"]):
+        fail(f"invalid container ID on pause ledger line {number}")
+    binding = entry["binding"]
+    if binding != snapshot_by_id.get(entry["container_id"]):
+        fail(f"ledger binding differs from snapshot on line {number}")
+    if entry["name"] != binding.get("name"):
+        fail(f"ledger name differs from binding on line {number}")
+    if entry["snapshot_sha256"] != hashlib.sha256(canonical(binding)).hexdigest():
+        fail(f"snapshot hash mismatch on pause ledger line {number}")
+    if binding.get("state") != "running":
+        fail(f"refusing originally non-running container on line {number}")
+    labels = binding.get("labels") or {}
+    if binding.get("compose_project") != labels.get("com.docker.compose.project", ""):
+        fail(f"compose_project mismatch on pause ledger line {number}")
 
-def read_jsonl(path: str, required: set[str], kind: str) -> list[dict]:
-    records = []
-    with open(path, encoding="utf-8") as stream:
-        for line_number, line in enumerate(stream, 1):
-            if not line.strip():
-                raise SystemExit(f"restore: blank {kind} line {line_number}")
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError as error:
-                raise SystemExit(f"restore: malformed {kind} line {line_number}: {error}") from error
-            if not isinstance(record, dict) or not required.issubset(record):
-                raise SystemExit(f"restore: incomplete {kind} line {line_number}")
-            if not re.fullmatch(r"[0-9a-f]{12,64}", record["container_id"]):
-                raise SystemExit(f"restore: invalid container ID on {kind} line {line_number}")
-            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", record["name"]):
-                raise SystemExit(f"restore: invalid container name on {kind} line {line_number}")
-            records.append(record)
-    return records
-
-snapshots = read_jsonl(sys.argv[1], snapshot_required, "snapshot")
-pauses = read_jsonl(sys.argv[2], pause_required, "pause record")
-by_id = {record["container_id"]: record for record in snapshots}
-if len(by_id) != len(snapshots):
-    raise SystemExit("restore: duplicate container ID in snapshot")
-seen = set()
-for pause in pauses:
-    container_id = pause["container_id"]
-    if container_id in seen:
-        raise SystemExit(f"restore: duplicate pause record: {container_id}")
-    seen.add(container_id)
-    snapshot = by_id.get(container_id)
-    if snapshot is None or pause["name"] != snapshot["name"] or pause["action"] != "stopped":
-        raise SystemExit(f"restore: pause record is not bound to the snapshot: {container_id}")
-    if snapshot["state"] != "running":
-        raise SystemExit(f"restore: refusing to start originally non-running container: {container_id}")
-    print(json.dumps(snapshot, sort_keys=True, separators=(",", ":")))
+lock_path = Path(os.environ.get("DEPLOY_OPERATION_LOCK", ledger_path.parent / ".container-protection.lock"))
+if lock_path.is_symlink():
+    fail(f"refusing symlink operation lock: {lock_path}")
+with lock_path.open("a+", encoding="utf-8") as lock:
+    os.chmod(lock_path, 0o600)
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    # There is an unavoidable external-concurrency window around Docker actions.
+    for entry in ledger:
+        status = entry["status"]
+        state = verify(entry)
+        if status == "not_stopped":
+            if state != "running":
+                fail(f"{entry['name']}: not_stopped container state changed")
+            print(f"restore: {entry['name']}: not_stopped; no start required")
+            continue
+        if status == "restored":
+            if state != "running":
+                fail(f"{entry['name']}: restored container is not running")
+            print(f"restore: {entry['name']}: already restored")
+            continue
+        if status == "pending_stop" and state == "running":
+            entry["status"] = "not_stopped"
+            atomic_write(ledger_path, ledger)
+            print(f"restore: {entry['name']}: not_stopped; pending stop did not execute")
+            continue
+        if status == "restoring" and state == "running":
+            entry["status"] = "restored"
+            atomic_write(ledger_path, ledger)
+            print(f"restore: {entry['name']}: already restored after interrupted update")
+            continue
+        if state != "exited":
+            fail(f"{entry['name']}: state {state} is not safe to restore")
+        recovered_pending = status == "pending_stop"
+        entry["status"] = "restoring"
+        atomic_write(ledger_path, ledger)
+        completed = subprocess.run(["docker", "start", entry["container_id"]], check=False)
+        if completed.returncode:
+            fail(f"{entry['name']}: docker start failed; restoring state preserved")
+        entry["status"] = "restored"
+        atomic_write(ledger_path, ledger)
+        suffix = " recovered_from_pending" if recovered_pending else ""
+        print(f"restore: {entry['name']} ({entry['container_id']}): started{suffix}")
+print("restore: complete")
 PY
-
-while IFS= read -r expected_record; do
-  [[ -n "$expected_record" ]] || continue
-  container_id="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["container_id"])' <<<"$expected_record")"
-  container_name="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["name"])' <<<"$expected_record")"
-  inspect_by_id="$(docker inspect "$container_id")" || {
-    printf 'restore: %s: container ID no longer exists\n' "$container_id" >&2
-    exit 1
-  }
-  inspect_by_name="$(docker inspect "$container_name")" || {
-    printf 'restore: %s: container name no longer exists\n' "$container_name" >&2
-    exit 1
-  }
-  python3 - "$expected_record" "$inspect_by_id" "$inspect_by_name" <<'PY'
-import json
-import sys
-
-expected = json.loads(sys.argv[1])
-
-def inspect_record(payload: str) -> dict:
-    values = json.loads(payload)
-    if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], dict):
-        raise SystemExit("restore: docker inspect returned an unexpected payload")
-    return values[0]
-
-by_id = inspect_record(sys.argv[2])
-by_name = inspect_record(sys.argv[3])
-if by_name.get("Id") != expected["container_id"]:
-    raise SystemExit(f"restore: {expected['name']}: name reuse detected")
-if by_id.get("Id") != expected["container_id"] or by_id.get("Name", "").removeprefix("/") != expected["name"]:
-    raise SystemExit(f"restore: {expected['name']}: ID or name changed")
-current_mounts = [
-    {
-        "type": mount.get("Type"), "source": mount.get("Source"),
-        "destination": mount.get("Destination"), "mode": mount.get("Mode"),
-        "rw": mount.get("RW"), "propagation": mount.get("Propagation"),
-    }
-    for mount in by_id.get("Mounts", [])
-]
-checks = {
-    "state": by_id.get("State", {}).get("Status") == "exited",
-    "image": by_id.get("Image") == expected["image_id"] and by_id.get("Config", {}).get("Image") == expected["image_ref"],
-    "ports": (by_id.get("HostConfig", {}).get("PortBindings") or {}) == expected["ports"],
-    "mounts": current_mounts == expected["mounts"],
-    "labels": (by_id.get("Config", {}).get("Labels") or {}) == expected["labels"],
-    "restart_policy": (by_id.get("HostConfig", {}).get("RestartPolicy") or {}) == expected["restart_policy"],
-}
-for attribute, unchanged in checks.items():
-    if not unchanged:
-        raise SystemExit(f"restore: {expected['name']}: {attribute} changed")
-PY
-done <"$restore_plan"
-
-while IFS= read -r expected_record; do
-  [[ -n "$expected_record" ]] || continue
-  container_id="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["container_id"])' <<<"$expected_record")"
-  container_name="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["name"])' <<<"$expected_record")"
-  docker start "$container_id" >/dev/null
-  printf 'restore: %s (%s): started\n' "$container_name" "$container_id"
-done <"$restore_plan"
-
-printf 'restore: complete\n'

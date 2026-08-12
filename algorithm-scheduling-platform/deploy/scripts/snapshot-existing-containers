@@ -8,8 +8,13 @@ fi
 
 output_path="$1"
 output_directory="$(dirname "$output_path")"
+[[ ! -L "$output_path" ]] || {
+  printf 'snapshot: refusing symlink output: %s\n' "$output_path" >&2
+  exit 1
+}
 mkdir -p "$output_directory"
 temporary_path="$(mktemp "${output_directory}/.existing-containers.XXXXXX")"
+chmod 600 "$temporary_path"
 trap 'rm -f "$temporary_path"' EXIT
 container_ids="$(docker ps -aq)" || {
   printf 'snapshot: failed to list containers\n' >&2
@@ -60,6 +65,23 @@ print(json.dumps(record, sort_keys=True, separators=(",", ":")))
   printf 'snapshot: %s: recorded\n' "$container_id"
 done <<<"$container_ids"
 
-mv "$temporary_path" "$output_path"
+python3 - "$temporary_path" "$output_path" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+target = Path(sys.argv[2])
+if target.is_symlink():
+    raise SystemExit(f"snapshot: refusing symlink output: {target}")
+with source.open("rb") as stream:
+    os.fsync(stream.fileno())
+os.replace(source, target)
+directory_fd = os.open(target.parent, os.O_RDONLY)
+try:
+    os.fsync(directory_fd)
+finally:
+    os.close(directory_fd)
+PY
 trap - EXIT
 printf 'snapshot: complete: %s\n' "$output_path"

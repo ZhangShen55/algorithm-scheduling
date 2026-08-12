@@ -59,7 +59,10 @@ printf 'preflight: OK: course and result directories are writable\n'
 required_ports="${REQUIRED_PORTS:-5432 6379 9092 27017 18100 18101 18102 18103 18083 28083 38083 18084 28084 38084 18866 28866 38866 18981 28981 38981 18003 28003 38003 18880 28880 38880 19001 29001 39001 18000 28000 38000}"
 authorized_ports="${AUTHORIZED_OCCUPIED_PORTS:-}"
 read -r -a authorized_port_array <<<"$authorized_ports"
-socket_output="$(ss -H -ltn 2>/dev/null || true)"
+command -v ss >/dev/null 2>&1 || fail "ss socket inspection command is unavailable"
+if ! socket_output="$(ss -H -ltn 2>/dev/null)"; then
+  fail "ss socket inspection failed"
+fi
 for required_port in $required_ports; do
   [[ "$required_port" =~ ^[0-9]+$ ]] || fail "invalid required port: ${required_port}"
   if printf '%s\n' "$socket_output" | awk -v port="$required_port" \
@@ -72,7 +75,15 @@ printf 'preflight: OK: required ports have no unauthorized occupants\n'
 
 [[ -z "$(git status --porcelain)" ]] || fail "Git working tree is not clean"
 current_git_sha="$(git rev-parse HEAD)"
-if [[ -n "${EXPECTED_GIT_SHA:-}" && "$current_git_sha" != "$EXPECTED_GIT_SHA" ]]; then
+if [[ -z "${EXPECTED_GIT_SHA:-}" ]]; then
+  if [[ "${ALLOW_UNPINNED_GIT:-false}" == "true" ]]; then
+    printf 'preflight: WARNING: ALLOW_UNPINNED_GIT=true; Git revision is not pinned\n' >&2
+  else
+    fail "EXPECTED_GIT_SHA is required and must be a full 40-character hex SHA"
+  fi
+elif [[ ! "$EXPECTED_GIT_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  fail "EXPECTED_GIT_SHA must be a full 40-character hex SHA"
+elif [[ "$current_git_sha" != "$EXPECTED_GIT_SHA" ]]; then
   fail "current Git SHA ${current_git_sha} does not match EXPECTED_GIT_SHA ${EXPECTED_GIT_SHA}"
 fi
 printf 'preflight: OK: Git state %s\n' "$current_git_sha"

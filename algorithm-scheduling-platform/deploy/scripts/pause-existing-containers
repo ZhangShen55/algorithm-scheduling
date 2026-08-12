@@ -1,141 +1,176 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "$#" -lt 2 ]]; then
-  printf 'usage: %s SNAPSHOT_JSONL CONTAINER_ID_OR_NAME [...]\n' "$0" >&2
-  exit 64
-fi
-
-snapshot_path="$1"
-shift
-[[ -f "$snapshot_path" ]] || { printf 'pause: snapshot not found: %s\n' "$snapshot_path" >&2; exit 1; }
-pause_record_path="${PAUSE_RECORD_PATH:-${snapshot_path}.paused.jsonl}"
-record_directory="$(dirname "$pause_record_path")"
-mkdir -p "$record_directory"
-[[ ! -e "$pause_record_path" ]] || {
-  printf 'pause: refusing to overwrite existing pause record: %s\n' "$pause_record_path" >&2
-  exit 1
-}
-temporary_record="$(mktemp "${record_directory}/.paused-containers.XXXXXX")"
-validation_plan="$(mktemp "${TMPDIR:-/tmp}/pause-plan.XXXXXX")"
-trap 'rm -f "$temporary_record" "$validation_plan"' EXIT
-
-python3 - "$snapshot_path" "$@" >"$validation_plan" <<'PY'
+python3 - "$@" <<'PY'
+import fcntl
+import hashlib
 import json
+import os
 import re
+import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
-required = {
-    "container_id", "name", "image_ref", "image_id", "state", "labels", "ports",
-    "mounts", "restart_policy", "compose_project",
-}
-snapshot_path, *selectors = sys.argv[1:]
-records = []
-with open(snapshot_path, encoding="utf-8") as stream:
-    for line_number, line in enumerate(stream, 1):
-        if not line.strip():
-            raise SystemExit(f"pause: blank snapshot line {line_number}")
+
+def fail(message: str) -> None:
+    raise SystemExit(f"pause: {message}")
+
+
+def canonical(value: dict) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+
+
+def atomic_write(path: Path, records: list[dict]) -> None:
+    if path.is_symlink():
+        fail(f"refusing symlink ledger: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            for record in records:
+                stream.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def read_snapshot(path: Path) -> list[dict]:
+    if path.is_symlink() or not path.is_file():
+        fail(f"snapshot must be a regular file: {path}")
+    required = {
+        "container_id", "name", "image_ref", "image_id", "state", "labels", "ports",
+        "mounts", "restart_policy", "compose_project",
+    }
+    records = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         try:
             record = json.loads(line)
         except json.JSONDecodeError as error:
-            raise SystemExit(f"pause: malformed snapshot line {line_number}: {error}") from error
+            fail(f"malformed snapshot line {number}: {error}")
         if not isinstance(record, dict) or not required.issubset(record):
-            raise SystemExit(f"pause: incomplete snapshot line {line_number}")
+            fail(f"incomplete snapshot line {number}")
         if not re.fullmatch(r"[0-9a-f]{12,64}", record["container_id"]):
-            raise SystemExit(f"pause: invalid container ID on snapshot line {line_number}")
+            fail(f"invalid container ID on snapshot line {number}")
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", record["name"]):
-            raise SystemExit(f"pause: invalid container name on snapshot line {line_number}")
+            fail(f"invalid container name on snapshot line {number}")
+        label_project = (record["labels"] or {}).get("com.docker.compose.project", "")
+        if record["compose_project"] != label_project:
+            fail(f"compose_project mismatch on snapshot line {number}")
         records.append(record)
+    return records
 
+
+def inspect(selector: str) -> dict:
+    completed = subprocess.run(
+        ["docker", "inspect", selector], text=True, capture_output=True, check=False
+    )
+    if completed.returncode:
+        fail(f"container no longer exists: {selector}")
+    values = json.loads(completed.stdout)
+    if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], dict):
+        fail("docker inspect returned an unexpected payload")
+    return values[0]
+
+
+def current_binding(item: dict) -> dict:
+    labels = item.get("Config", {}).get("Labels") or {}
+    return {
+        "container_id": item.get("Id"),
+        "name": item.get("Name", "").removeprefix("/"),
+        "image_ref": item.get("Config", {}).get("Image"),
+        "image_id": item.get("Image"),
+        "state": item.get("State", {}).get("Status"),
+        "labels": labels,
+        "ports": item.get("HostConfig", {}).get("PortBindings") or {},
+        "mounts": [
+            {
+                "type": mount.get("Type"), "source": mount.get("Source"),
+                "destination": mount.get("Destination"), "mode": mount.get("Mode"),
+                "rw": mount.get("RW"), "propagation": mount.get("Propagation"),
+            }
+            for mount in item.get("Mounts", [])
+        ],
+        "restart_policy": item.get("HostConfig", {}).get("RestartPolicy") or {},
+        "compose_project": labels.get("com.docker.compose.project", ""),
+    }
+
+
+def verify(expected: dict) -> None:
+    by_id = inspect(expected["container_id"])
+    by_name = inspect(expected["name"])
+    if by_name.get("Id") != expected["container_id"]:
+        fail(f"{expected['name']}: name reuse detected")
+    current = current_binding(by_id)
+    for attribute in expected:
+        if current.get(attribute) != expected[attribute]:
+            fail(f"{expected['name']}: {attribute} changed")
+
+
+if len(sys.argv) < 3:
+    fail(f"usage: {sys.argv[0]} SNAPSHOT_JSONL CONTAINER_ID_OR_NAME [...]")
+snapshot_path = Path(sys.argv[1])
+ledger_path = Path(os.environ.get("PAUSE_RECORD_PATH", f"{snapshot_path}.paused.jsonl"))
+if ledger_path.is_symlink() or ledger_path.exists():
+    fail(f"refusing existing or symlink ledger: {ledger_path}")
+records = read_snapshot(snapshot_path)
 by_id = {record["container_id"]: record for record in records}
 by_name = {record["name"]: record for record in records}
 if len(by_id) != len(records) or len(by_name) != len(records):
-    raise SystemExit("pause: duplicate container ID or name in snapshot")
+    fail("duplicate container ID or name in snapshot")
 selected = []
 seen = set()
-for selector in selectors:
+for selector in sys.argv[2:]:
     record = by_id.get(selector) or by_name.get(selector)
     if record is None:
-        raise SystemExit(f"pause: selector is not present in snapshot: {selector}")
+        fail(f"selector is not present in snapshot: {selector}")
     if record["container_id"] in seen:
-        raise SystemExit(f"pause: duplicate selector for container: {selector}")
+        fail(f"duplicate selector: {selector}")
     seen.add(record["container_id"])
     selected.append(record)
-for record in selected:
-    print(json.dumps(record, sort_keys=True, separators=(",", ":")))
+
+lock_path = Path(os.environ.get("DEPLOY_OPERATION_LOCK", ledger_path.parent / ".container-protection.lock"))
+if lock_path.is_symlink():
+    fail(f"refusing symlink operation lock: {lock_path}")
+lock_path.parent.mkdir(parents=True, exist_ok=True)
+with lock_path.open("a+", encoding="utf-8") as lock:
+    os.chmod(lock_path, 0o600)
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    # This lock serializes this tool only; external Docker operations remain outside its control.
+    for record in selected:
+        if record["state"] == "running":
+            verify(record)
+    ledger = []
+    atomic_write(ledger_path, ledger)
+    for record in selected:
+        if record["state"] != "running":
+            print(f"pause: {record['name']} ({record['container_id']}): unchanged (snapshot state {record['state']})")
+            continue
+        verify(record)
+        entry = {
+            "version": 1,
+            "status": "pending_stop",
+            "container_id": record["container_id"],
+            "name": record["name"],
+            "snapshot_sha256": hashlib.sha256(canonical(record)).hexdigest(),
+            "binding": record,
+        }
+        ledger.append(entry)
+        atomic_write(ledger_path, ledger)
+        completed = subprocess.run(["docker", "stop", record["container_id"]], check=False)
+        if completed.returncode:
+            fail(f"{record['name']}: docker stop failed; pending_stop intent preserved")
+        entry["status"] = "stopped"
+        atomic_write(ledger_path, ledger)
+        print(f"pause: {record['name']} ({record['container_id']}): stopped")
+print(f"pause: complete: {ledger_path}")
 PY
-
-while IFS= read -r expected_record; do
-  [[ -n "$expected_record" ]] || continue
-  container_id="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["container_id"])' <<<"$expected_record")"
-  container_name="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["name"])' <<<"$expected_record")"
-  inspect_by_id="$(docker inspect "$container_id")" || {
-    printf 'pause: %s: container ID no longer exists\n' "$container_id" >&2
-    exit 1
-  }
-  inspect_by_name="$(docker inspect "$container_name")" || {
-    printf 'pause: %s: container name no longer exists\n' "$container_name" >&2
-    exit 1
-  }
-  python3 - "$expected_record" "$inspect_by_id" "$inspect_by_name" <<'PY'
-import json
-import sys
-
-expected = json.loads(sys.argv[1])
-
-def inspect_record(payload: str) -> dict:
-    values = json.loads(payload)
-    if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], dict):
-        raise SystemExit("pause: docker inspect returned an unexpected payload")
-    return values[0]
-
-by_id = inspect_record(sys.argv[2])
-by_name = inspect_record(sys.argv[3])
-if by_name.get("Id") != expected["container_id"]:
-    raise SystemExit(f"pause: {expected['name']}: name reuse detected")
-if by_id.get("Id") != expected["container_id"] or by_id.get("Name", "").removeprefix("/") != expected["name"]:
-    raise SystemExit(f"pause: {expected['name']}: ID or name changed")
-current_mounts = [
-    {
-        "type": mount.get("Type"), "source": mount.get("Source"),
-        "destination": mount.get("Destination"), "mode": mount.get("Mode"),
-        "rw": mount.get("RW"), "propagation": mount.get("Propagation"),
-    }
-    for mount in by_id.get("Mounts", [])
-]
-checks = {
-    "state": by_id.get("State", {}).get("Status") == expected["state"],
-    "image": by_id.get("Image") == expected["image_id"] and by_id.get("Config", {}).get("Image") == expected["image_ref"],
-    "ports": (by_id.get("HostConfig", {}).get("PortBindings") or {}) == expected["ports"],
-    "mounts": current_mounts == expected["mounts"],
-    "labels": (by_id.get("Config", {}).get("Labels") or {}) == expected["labels"],
-    "restart_policy": (by_id.get("HostConfig", {}).get("RestartPolicy") or {}) == expected["restart_policy"],
-}
-for attribute, unchanged in checks.items():
-    if not unchanged:
-        raise SystemExit(f"pause: {expected['name']}: {attribute} changed")
-PY
-done <"$validation_plan"
-
-mv "$temporary_record" "$pause_record_path"
-while IFS= read -r expected_record; do
-  [[ -n "$expected_record" ]] || continue
-  container_id="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["container_id"])' <<<"$expected_record")"
-  container_name="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["name"])' <<<"$expected_record")"
-  original_state="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["state"])' <<<"$expected_record")"
-  if [[ "$original_state" == "running" ]]; then
-    docker stop "$container_id" >/dev/null
-    python3 - "$container_id" "$container_name" <<'PY' >>"$pause_record_path"
-import json
-import sys
-print(json.dumps({"container_id": sys.argv[1], "name": sys.argv[2], "action": "stopped"}, sort_keys=True, separators=(",", ":")))
-PY
-    printf 'pause: %s (%s): stopped\n' "$container_name" "$container_id"
-  else
-    printf 'pause: %s (%s): unchanged (snapshot state %s)\n' "$container_name" "$container_id" "$original_state"
-  fi
-done <"$validation_plan"
-
-trap - EXIT
-rm -f "$validation_plan"
-printf 'pause: complete: %s\n' "$pause_record_path"
