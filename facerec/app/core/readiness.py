@@ -8,6 +8,7 @@ class FaceRecReadiness:
         database: Any,
         embedding_model: Any,
         *,
+        dlib_workers_ready: bool = False,
         timeout_seconds: float = 2.0,
     ) -> None:
         self._database = database
@@ -15,6 +16,7 @@ class FaceRecReadiness:
         self._timeout_seconds = timeout_seconds
         self._database_ready = False
         self._embedding_model_ready = False
+        self._dlib_workers_ready = dlib_workers_ready
         self._ready = False
 
     async def check(self) -> bool:
@@ -31,7 +33,11 @@ class FaceRecReadiness:
             self._database_ready = True
         except Exception:
             self._database_ready = False
-        self._ready = self._database_ready and self._embedding_model_ready
+        self._ready = (
+            self._database_ready
+            and self._embedding_model_ready
+            and self._dlib_workers_ready
+        )
         return self._ready
 
     def model_ready(self) -> bool:
@@ -42,3 +48,11 @@ class FaceRecReadiness:
 
     def embedding_model_ready(self) -> bool:
         return self._embedding_model_ready
+
+    def set_dlib_workers_ready(self, ready: bool) -> None:
+        self._dlib_workers_ready = ready
+        if not ready:
+            self._ready = False
+
+    def dlib_workers_ready(self) -> bool:
+        return self._dlib_workers_ready

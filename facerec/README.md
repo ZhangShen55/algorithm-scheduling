@@ -115,6 +115,12 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 1
 
 Swagger UI: `http://localhost:8003/docs`
 
+启动时会预热配置数量的全部 Dlib worker，并等待每个 worker 成功加载 detector
+和 shape predictor。`/ops/health` 保持 HTTP 200 兼容；只有 MongoDB、ArcFace 和
+全部 Dlib worker 均就绪时才返回 `status=healthy`，注册状态才报告
+`model_ready=true`。任一 worker 预热失败时服务保留运维接口并报告 `degraded`，
+不会把该实例作为可用识别算子注册。
+
 ## API 速览
 
 | 方法 | 路径 | 说明 |

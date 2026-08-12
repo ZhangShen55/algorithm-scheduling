@@ -1,14 +1,17 @@
 # app/ai_engine.py
-from typing import Optional, Tuple, List
-from pathlib import Path
-from bson.binary import Binary
 import asyncio
 import os
+import queue
+import time
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
+
 import cv2
 import dlib
-import numpy as np
 import fastdeploy as fd
-from concurrent.futures import ProcessPoolExecutor
+import numpy as np
+from bson.binary import Binary
+
 from app.core.config import settings
 from app.core.logger import get_logger
 from app.core.runtime_device import configure_runtime_option
@@ -16,22 +19,26 @@ from app.core.runtime_device import configure_runtime_option
 logger = get_logger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_SHAPE_PREDICTOR_PATH = str(PROJECT_ROOT / 'ai_models' / 'shape_predictor_68_face_landmarks.dat')
+_SHAPE_PREDICTOR_PATH = str(
+    PROJECT_ROOT / "ai_models" / "shape_predictor_68_face_landmarks.dat"
+)
 
 # embadding模型全局加载加载
 option = fd.RuntimeOption()
 configure_runtime_option(option, settings.gpu.device)
-embedding_model = fd.vision.faceid.ArcFace(str(PROJECT_ROOT / 'ai_models' / 'ms1mv3_arcface_r100.onnx'),
-                                           runtime_option=option)
+embedding_model = fd.vision.faceid.ArcFace(
+    str(PROJECT_ROOT / "ai_models" / "ms1mv3_arcface_r100.onnx"),
+    runtime_option=option,
+)
 
 # 定义全局变量，会被main.py初始化
-GLOBAL_PROCESS_POOL: Optional[ProcessPoolExecutor] = None
+GLOBAL_PROCESS_POOL: ProcessPoolExecutor | None = None
 
 # 定义子进程的全局变量
 _mp_detector = None
 _mp_predictor = None
 
-def _init_dlib_worker():
+def _init_dlib_worker(status_queue, startup_gate=None):
     """
     子进程的初始化函数。
     当 ProcessPoolExecutor 创建一个新的子进程时，会立刻运行这个函数。
@@ -44,10 +51,48 @@ def _init_dlib_worker():
         _mp_predictor = dlib.shape_predictor(_SHAPE_PREDICTOR_PATH)
         logger.info(f"[Worker PID: {os.getpid()}] Dlib 模型加载完成")
     except Exception as e:
-        logger.info(f"[Worker PID: {os.getpid()}] 模型加载失败: {e}")
+        status_queue.put((os.getpid(), False, str(e)))
+        logger.exception(f"[Worker PID: {os.getpid()}] 模型加载失败: {e}")
+        raise
+    status_queue.put((os.getpid(), True, None))
+    if startup_gate is not None:
+        startup_gate.wait()
 
 
-def _dlib_task_implementation(image: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[dict]]:
+def _collect_dlib_worker_status(
+    status_queue,
+    *,
+    expected_workers: int,
+    timeout_seconds: float,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    ready_pids: set[int] = set()
+    while len(ready_pids) < expected_workers:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(
+                f"Dlib worker 预热超时: {len(ready_pids)}/{expected_workers} 已就绪"
+            )
+        try:
+            pid, ready, error = status_queue.get(timeout=remaining)
+        except queue.Empty as exc:
+            raise RuntimeError(
+                f"Dlib worker 预热超时: {len(ready_pids)}/{expected_workers} 已就绪"
+            ) from exc
+        if not ready:
+            raise RuntimeError(f"Dlib worker {pid} 初始化失败: {error}")
+        if pid in ready_pids:
+            raise RuntimeError(f"Dlib worker {pid} 重复上报初始化状态")
+        ready_pids.add(pid)
+
+
+def _dlib_worker_self_check() -> int:
+    if _mp_detector is None or _mp_predictor is None:
+        raise RuntimeError("Dlib worker 模型未初始化")
+    return os.getpid()
+
+
+def _dlib_task_implementation(image: np.ndarray) -> tuple[np.ndarray | None, dict | None]:
     """
     真实的dlib计算的函数的，运行在子进程中。
     """
@@ -144,7 +189,7 @@ def _five_from_68(landmarks68: np.ndarray) -> np.ndarray:
     right_mouth = landmarks68[54]
     return np.stack([left_eye, right_eye, nose, left_mouth, right_mouth]).astype(np.float32)
 
-def _align_by_5pts(img: np.ndarray, pts: np.ndarray, size: Tuple[int,int]=(112,112)) -> np.ndarray:
+def _align_by_5pts(img: np.ndarray, pts: np.ndarray, size: tuple[int,int]=(112,112)) -> np.ndarray:
     """
     5点对齐
     """
@@ -175,7 +220,10 @@ def get_embedding_sync(face_aligned: np.ndarray) -> np.ndarray:
     emb = emb / n
     return emb
 
-def find_best_match_embedding(emb_q: np.ndarray, candidate_docs: List[dict]) -> Tuple[float, Optional[dict]]:
+def find_best_match_embedding(
+    emb_q: np.ndarray,
+    candidate_docs: list[dict],
+) -> tuple[float, dict | None]:
     """
     在候选文档列表中寻找最大相似度
     返回: (最佳相似度, 最佳匹配文档)
@@ -185,14 +233,16 @@ def find_best_match_embedding(emb_q: np.ndarray, candidate_docs: List[dict]) -> 
 
     for d in candidate_docs:
         e = d.get("embedding")
-        if e is None: continue
+        if e is None:
+            continue
 
         # BSON Binary -> bytes -> numpy
         if isinstance(e, Binary):
             e = bytes(e)
         vec = np.frombuffer(e, dtype=np.float32)
 
-        if vec.size != 512: continue
+        if vec.size != 512:
+            continue
 
         # 归一化
         n = np.linalg.norm(vec) + 1e-12
@@ -212,7 +262,12 @@ def find_best_match_embedding(emb_q: np.ndarray, candidate_docs: List[dict]) -> 
     return best_sim, valid_docs[best_idx]
 
 
-def find_top_matches(emb_q: np.ndarray, candidate_docs: List[dict], top_k: int = 3, min_threshold: float = 0.0):
+def find_top_matches(
+    emb_q: np.ndarray,
+    candidate_docs: list[dict],
+    top_k: int = 3,
+    min_threshold: float = 0.0,
+):
     """
     在候选文档列表中寻找相似度最高的 top_k 个匹配
 
@@ -268,4 +323,3 @@ def find_top_matches(emb_q: np.ndarray, candidate_docs: List[dict], top_k: int =
     results = [(float(sims[idx]), valid_docs[idx]) for idx in top_indices]
 
     return results
-

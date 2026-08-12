@@ -1,22 +1,22 @@
 # app/main.py
-import os
-from pathlib import Path
-from contextlib import asynccontextmanager
+import asyncio
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
-from contextvars import ContextVar
+from contextlib import asynccontextmanager
+from pathlib import Path
+
 from fastapi import FastAPI, Request
-from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.core import ai_engine
 from app.core.config import settings
-from app.core.logger import get_logger
+from app.core.logger import get_logger, new_request_id, request_id_ctx
 from app.core.runtime_paths import ensure_runtime_directories
-from app.router import faces, persons, web, ops
-from app.core.logger import request_id_ctx, new_request_id
 from app.middleware import APIStatsMiddleware
-from app.models.api_response import StatusCode, ApiResponse
+from app.models.api_response import StatusCode
+from app.router import faces, ops, persons, web
 from packages.operator_registry_client import install_operator_runtime
 
 logger = get_logger(__name__)
@@ -32,22 +32,49 @@ async def lifespan(app: FastAPI):
     # ================= 启动 (Startup) =================
     logger.info("System Startup: Initializing resources...")
 
-    try:
-        if not await ops.readiness.check():
-            raise RuntimeError("MongoDB 或 ArcFace 模型未就绪")
-        logger.debug("MongoDB ping ok")
-    except Exception as e:
-        logger.exception("MongoDB ping failed: %s", e)
-
     # 2. Dlib 进程池初始化 (注入到 ai_engine)
     # 确保 max_workers 设置合理 (建议 1 或 2，防止内存爆炸)
     # 当前 settings.thread.max_workers 建议设置为 2
     logger.info(f"Initializing Dlib Process Pool with {MAX_WORKERS} workers...")
-    pool = ProcessPoolExecutor(
-        max_workers=MAX_WORKERS,
-        initializer=ai_engine._init_dlib_worker
-    )
-    ai_engine.GLOBAL_PROCESS_POOL = pool
+    pool = None
+    startup_gate = None
+    try:
+        process_context = multiprocessing.get_context()
+        status_queue = process_context.Queue()
+        startup_gate = process_context.Event()
+        pool = ProcessPoolExecutor(
+            max_workers=MAX_WORKERS,
+            mp_context=process_context,
+            initializer=ai_engine._init_dlib_worker,
+            initargs=(status_queue, startup_gate),
+        )
+        self_checks = [
+            pool.submit(ai_engine._dlib_worker_self_check)
+            for _ in range(MAX_WORKERS)
+        ]
+        await asyncio.to_thread(
+            ai_engine._collect_dlib_worker_status,
+            status_queue,
+            expected_workers=MAX_WORKERS,
+            timeout_seconds=30.0,
+        )
+        startup_gate.set()
+        await asyncio.gather(*(asyncio.wrap_future(check) for check in self_checks))
+        ai_engine.GLOBAL_PROCESS_POOL = pool
+        ops.readiness.set_dlib_workers_ready(True)
+        logger.info("全部 Dlib worker 预热完成")
+    except Exception as e:
+        logger.exception("Dlib worker 预热失败: %s", e)
+        ops.readiness.set_dlib_workers_ready(False)
+        ai_engine.GLOBAL_PROCESS_POOL = None
+        if startup_gate is not None:
+            startup_gate.set()
+        if pool is not None:
+            pool.shutdown(wait=True, cancel_futures=True)
+            pool = None
+
+    if not await ops.readiness.check():
+        logger.error("MongoDB、ArcFace 或 Dlib worker 未就绪")
 
     yield  # 应用运行中...
 
@@ -55,8 +82,10 @@ async def lifespan(app: FastAPI):
     logger.info("系统关闭: 释放资源...")
 
     # 3. 资源清理
-    pool.shutdown(wait=True)
+    if pool is not None:
+        pool.shutdown(wait=True)
     ai_engine.GLOBAL_PROCESS_POOL = None
+    ops.readiness.set_dlib_workers_ready(False)
     logger.info("Dlib 进程池关闭成功.")
 
 
@@ -140,48 +169,7 @@ install_operator_runtime(
     model_ready_provider=ops.readiness.model_ready,
 )
 
-# ---------------- 调试入口 ----------------
 if __name__ == "__main__":
     import uvicorn
 
-    # 开发环境调试用
     uvicorn.run(app, host="0.0.0.0", port=8003, reload=False)
-    # PYTHONPATH=/root/workspace/FaceRecAPI_DEV OMP_NUM_THREADS=1 uvicorn app.main:app --host 0.0.0.0 --port 8003 --workers 4 --env-file .env
-
-
-    # cd app
-    # PYTHONPATH=/root/workspace/FaceRecAPI_DEV OMP_NUM_THREADS=1 uvicorn app.main:app --host 0.0.0.0 --port 8003  --env-file .env --workers 1
-
-    # ============ 后台启动命令 ============
-    # conda activate facerecapi
-    # cd /root/workspace/FaceRecAPI_DEV/app
-    # nohup env PYTHONPATH=/root/workspace/FaceRecAPI_DEV OMP_NUM_THREADS=1 uvicorn app.main:app --host 0.0.0.0 --port 8003 --env-file .env --workers 1 > /root/workspace/FaceRecAPI_DEV/app/logs/facerec_server_uvicorn.log 2>&1 & echo $! > /root/workspace/FaceRecAPI_DEV/app/logs/facerec_server_uvicorn.pid
-
-    # ============ 查看运行状态 ============
-    # ps aux | grep "facerec_server_uvicorn app.main:app"
-    # tail -f /root/workspace/FaceRecAPI_DEV/app/logs/facerec_server_uvicorn.log
-
-    # ============ 关闭服务 ============
-    # 方法1: 使用 PID 文件关闭（推荐，带进程检查）
-    # PID_FILE=/root/workspace/FaceRecAPI_DEV/app/logs/facerec_server_uvicorn.pid
-    # if [ -f $PID_FILE ]; then
-    #     PID=$(cat $PID_FILE)
-    #     if ps -p $PID > /dev/null 2>&1; then
-    #         kill $PID && echo "进程 $PID 已终止"
-    #     else
-    #         echo "进程 $PID 不存在，可能已经停止"
-    #     fi
-    #     rm $PID_FILE
-    # else
-    #     echo "PID 文件不存在"
-    # fi
-
-    # 方法2: 简单关闭（不检查进程是否存在）
-    # kill $(cat /root/workspace/FaceRecAPI_DEV/app/logs/facerec_server_uvicorn.pid) 2>/dev/null
-    # rm /root/workspace/FaceRecAPI_DEV/app/logs/facerec_server_uvicorn.pid 2>/dev/null
-
-    # 方法3: 查找进程并关闭
-    # ps aux | grep "facerec_server_uvicorn app.main:app" | grep -v grep | awk '{print $2}' | xargs kill
-
-    # 方法4: 强制关闭 (慎用)
-    # ps aux | grep "facerec_server_uvicorn app.main:app" | grep -v grep | awk '{print $2}' | xargs kill -9

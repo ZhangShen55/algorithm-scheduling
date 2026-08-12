@@ -110,7 +110,7 @@ def load_config():
     with open(config_path, "rb") as f:
         config_data = tomli.load(f)
 
-    logger.debug(f"Config loaded: {config_data}")
+    logger.debug("Config loaded successfully from %s", config_path)
 
     return Settings(
         db=DBSettings(**apply_db_environment(config_data["db"])),

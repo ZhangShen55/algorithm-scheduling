@@ -32,7 +32,12 @@ class FakeEmbeddingModel:
 
 def test_readiness_requires_mongodb_and_existing_arcface_model() -> None:
     database = FakeDatabase()
-    readiness = _readiness(database, FakeEmbeddingModel(), timeout_seconds=0.1)
+    readiness = _readiness(
+        database,
+        FakeEmbeddingModel(),
+        dlib_workers_ready=True,
+        timeout_seconds=0.1,
+    )
 
     assert asyncio.run(readiness.check()) is True
     assert readiness.model_ready() is True
@@ -43,6 +48,7 @@ def test_readiness_is_false_when_mongodb_ping_fails() -> None:
     readiness = _readiness(
         FakeDatabase(RuntimeError("MongoDB 密码错误")),
         FakeEmbeddingModel(),
+        dlib_workers_ready=True,
         timeout_seconds=0.1,
     )
 
@@ -54,8 +60,27 @@ def test_readiness_is_false_when_arcface_model_is_unavailable() -> None:
     readiness = _readiness(
         FakeDatabase(),
         FakeEmbeddingModel(initialized=False),
+        dlib_workers_ready=True,
         timeout_seconds=0.1,
     )
 
     assert asyncio.run(readiness.check()) is False
     assert readiness.model_ready() is False
+
+
+def test_readiness_is_false_until_all_dlib_workers_are_ready() -> None:
+    readiness = _readiness(
+        FakeDatabase(),
+        FakeEmbeddingModel(),
+        dlib_workers_ready=False,
+        timeout_seconds=0.1,
+    )
+
+    assert asyncio.run(readiness.check()) is False
+    assert readiness.model_ready() is False
+    assert readiness.dlib_workers_ready() is False
+
+    readiness.set_dlib_workers_ready(True)
+
+    assert asyncio.run(readiness.check()) is True
+    assert readiness.model_ready() is True

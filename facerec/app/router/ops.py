@@ -3,23 +3,23 @@
 运维管理接口路由
 提供系统监控、统计查询等功能
 """
-from typing import List
-from fastapi import APIRouter, Query, HTTPException
 from datetime import datetime
+
 import psutil
+from fastapi import APIRouter, HTTPException, Query
 
 from app.core import ai_engine
 from app.core.database import db
 from app.core.logger import get_logger
 from app.core.readiness import FaceRecReadiness
-from app.services import ops_stats
 from app.models.response.ops_interface_rep import (
     APICallLogResponse,
     APIStatsHourlyResponse,
     APIStatsSummaryResponse,
     HealthCheckResponse,
-    SystemMetricsResponse
+    SystemMetricsResponse,
 )
+from app.services import ops_stats
 
 logger = get_logger(__name__)
 
@@ -56,6 +56,9 @@ async def health_check():
 
     components["arcface"] = {
         "status": "up" if readiness.embedding_model_ready() else "down"
+    }
+    components["dlib_workers"] = {
+        "status": "up" if readiness.dlib_workers_ready() else "down"
     }
 
     # 2. 检查存储空间
@@ -113,10 +116,10 @@ async def get_system_metrics():
         }
     except Exception as e:
         logger.error(f"[Metrics] Failed to get metrics: {e}")
-        raise HTTPException(status_code=500, detail=f"获取指标失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取指标失败: {str(e)}") from e
 
 
-@router.get("/stats/api-calls", response_model=List[APICallLogResponse])
+@router.get("/stats/api-calls", response_model=list[APICallLogResponse])
 async def get_api_call_logs(
     start_date: str = Query(None, description="开始日期 YYYY-MM-DD"),
     end_date: str = Query(None, description="结束日期 YYYY-MM-DD"),
@@ -145,10 +148,10 @@ async def get_api_call_logs(
         return logs
     except Exception as e:
         logger.error(f"[Stats] Failed to get API call logs: {e}")
-        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}") from e
 
 
-@router.get("/stats/hourly", response_model=List[APIStatsHourlyResponse])
+@router.get("/stats/hourly", response_model=list[APIStatsHourlyResponse])
 async def get_hourly_stats(
     start_date: str = Query(None, description="开始日期 YYYY-MM-DD"),
     end_date: str = Query(None, description="结束日期 YYYY-MM-DD"),
@@ -175,7 +178,7 @@ async def get_hourly_stats(
         return stats
     except Exception as e:
         logger.error(f"[Stats] Failed to get hourly stats: {e}")
-        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}") from e
 
 
 @router.get("/stats/summary", response_model=APIStatsSummaryResponse)
@@ -205,4 +208,4 @@ async def get_stats_summary(
         return summary
     except Exception as e:
         logger.error(f"[Stats] Failed to get summary: {e}")
-        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}") from e
