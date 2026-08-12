@@ -3,9 +3,17 @@
 该目录可独立构建为 `algorithm-operator-registry-client` wheel，支持 Python 3.10 及以上版本。它只包含算子运行面、注册、心跳和排空逻辑，不依赖平台的 PostgreSQL、Redis、Kafka、仓储或状态机包。
 
 ```bash
-python -m pip wheel --no-deps --wheel-dir dist .
-python -m pip install dist/algorithm_operator_registry_client-0.1.0-py3-none-any.whl
+cd ../..
+python scripts/build_and_stage_operator_registry_wheel.py
+python -m pip install \
+  packages/operator_registry_client/dist/algorithm_operator_registry_client-0.1.0-py3-none-any.whl
 ```
+
+构建脚本使用当前 Python 环境中已安装的构建后端，以 `--no-deps --no-build-isolation
+--no-index` 在受控临时 wheelhouse 中生成制品。脚本校验固定文件名、Name、Version、
+Requires-Python 和包内容后，才原子更新本目录的 `dist/`，并将同一字节分发到八个算子
+项目的 `wheel/` 构建上下文。任一目标发布或最终 SHA-256 校验失败时恢复全部旧版本，
+不会留下混合制品。
 
 各算子的 `requirements.txt` 显式固定 `algorithm-operator-registry-client==0.1.0`。
 内部 PyPI 尚未建立时，先安装或暂存上述 wheel，再安装算子 requirements；不得从公网查找同名私有包。

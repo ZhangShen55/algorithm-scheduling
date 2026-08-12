@@ -124,23 +124,14 @@ def test_all_canonical_operator_images_install_staged_registry_wheel() -> None:
             assert "pip install --no-deps" in source, (project, relative_path)
 
 
-def test_registry_wheel_staging_covers_all_operator_projects() -> None:
+def test_registry_wheel_staging_entrypoint_always_rebuilds_before_staging() -> None:
     source = (
         WORKSPACE_ROOT
         / "algorithm-scheduling-platform/scripts/stage_operator_registry_wheel.py"
     ).read_text(encoding="utf-8")
 
-    for project in (
-        "asr_offline",
-        "asr_online",
-        "ppt_slice",
-        "ocr",
-        "text_analysis",
-        "vbas",
-        "facerec",
-        "screen_det",
-    ):
-        assert f'"{project}"' in source
+    assert "build_and_stage_registry_wheel" in source
+    assert "shutil.copy2" not in source
 
 
 def test_operator_business_routes_and_default_ports_remain_compatible() -> None:

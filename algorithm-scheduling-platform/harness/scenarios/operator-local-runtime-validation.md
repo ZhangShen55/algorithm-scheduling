@@ -40,7 +40,9 @@ wheel 的 `Requires-Python` 为 `>=3.10`，运行依赖只有 FastAPI、HTTPX �
 默认关闭主动注册；设置 `PLATFORM_REGISTRATION_ENABLED=true` 后才连接 `control-service`。
 
 八个算子的运行依赖文件统一固定 `algorithm-operator-registry-client==0.1.0`。内部 PyPI 尚未建立时，
-由 `scripts/stage_operator_registry_wheel.py` 将同一个已构建 wheel 暂存到各算子的 Git 忽略目录，
+由 `scripts/build_and_stage_operator_registry_wheel.py` 在临时 wheelhouse 离线构建并校验固定制品，
+再原子发布到 `dist` 并将同一 SHA-256 的字节暂存到各算子的 Git 忽略目录。旧的
+`scripts/stage_operator_registry_wheel.py` 委托同一流程，不再复制可能陈旧的现存 wheel。
 镜像先安装该 wheel 再解析其余 requirements，避免从公网误解析私有包。
 
 ## 未完成项

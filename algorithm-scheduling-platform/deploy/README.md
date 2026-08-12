@@ -80,19 +80,22 @@ quality instances.
 
 Every image used by this compose file must include the lightweight
 `algorithm-operator-registry-client` distribution so that the operator can import
-`packages.operator_registry_client`. Build it once and install the wheel into local
-operator environments:
+`packages.operator_registry_client`. Rebuild, validate and stage the exact wheel into
+all eight operator build contexts with the repository pipeline:
 
 ```bash
-cd packages/operator_registry_client
-python -m pip wheel --no-deps --wheel-dir dist .
-python -m pip install dist/algorithm_operator_registry_client-0.1.0-py3-none-any.whl
+python scripts/build_and_stage_operator_registry_wheel.py
+python -m pip install \
+  packages/operator_registry_client/dist/algorithm_operator_registry_client-0.1.0-py3-none-any.whl
 ```
 
 All eight operator projects declare `algorithm-operator-registry-client==0.1.0` in
 their runtime requirements. Their Dockerfiles consume the same versioned artifact
-from an ignored `wheel/` build-context directory. Stage the generated wheel into all
-operator projects before building:
+from an ignored `wheel/` build-context directory. The command above builds without an
+index, validates the fixed filename and metadata, atomically publishes `dist`, and
+stages byte-identical copies with SHA-256 verification. Run it before building images.
+The legacy command remains an alias for the same rebuild-and-stage pipeline and never
+copies a previously built wheel without rebuilding:
 
 ```bash
 python scripts/stage_operator_registry_wheel.py
