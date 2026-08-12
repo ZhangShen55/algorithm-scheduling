@@ -45,3 +45,6 @@ asr_service.log
 
 # 文档与杂项（非运行必需，可按需保留 README）
 # README.md
+model/speaker-diarization-3.1/
+model/segmentation-3.0/
+model/wespeaker-voxceleb-resnet34-LM/

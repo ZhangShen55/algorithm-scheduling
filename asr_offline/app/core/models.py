@@ -6,7 +6,6 @@ import torch
 import torch.nn.functional as F
 from faster_whisper import WhisperModel
 from funasr import AutoModel
-from pyannote.audio import Pipeline as PyannotePipeline
 from transformers import BertForSequenceClassification, BertTokenizer
 
 from app.core.config import settings
@@ -16,7 +15,6 @@ from app.utils.feature_utils import id2label
 _model_asr = None
 _model_emotion = None
 _model_whisper = None
-_model_speaker = None
 
 # 五何
 _model_bert = None
@@ -72,7 +70,7 @@ async def load_models_if_needed():
     """
     根据配置开关懒加载模型。
     """
-    global _model_asr, _model_emotion, _model_whisper, _model_speaker
+    global _model_asr, _model_emotion, _model_whisper
 
     async with _model_lock:
         runtime_device = resolve_runtime_device()
@@ -110,9 +108,6 @@ async def load_models_if_needed():
                 device_index=runtime_device.index or 0,
             )
 
-        if settings.open_mul_spk and _model_speaker is None:
-            _model_speaker = PyannotePipeline.from_pretrained(settings.pyannote_model_yml)
-            _model_speaker.to(runtime_device)
 
 def get_asr_model():
     return _model_asr
@@ -124,10 +119,6 @@ def get_emotion_model():
 
 def get_whisper_model():
     return _model_whisper
-
-
-def get_speaker_model():
-    return _model_speaker
 
 
 # ---------- 五何分类 ----------

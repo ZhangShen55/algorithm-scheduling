@@ -13,7 +13,6 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
         models._model_asr = None
         models._model_emotion = None
         models._model_whisper = None
-        models._model_speaker = None
         models._model_bert = None
         models._tokenizer = None
 
@@ -70,7 +69,6 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "open_spk": True,
             "open_emotion": True,
             "open_mul_lang": True,
-            "open_mul_spk": True,
             "open_fivewh": True,
         }
 
@@ -79,7 +77,6 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(self.models.torch.cuda, "is_available", return_value=False),
             patch.object(self.models, "AutoModel") as auto_model,
             patch.object(self.models, "WhisperModel") as whisper_model,
-            patch.object(self.models.PyannotePipeline, "from_pretrained") as pyannote,
             patch.object(self.models.BertForSequenceClassification, "from_pretrained") as bert,
             self.assertRaisesRegex(RuntimeError, "CUDA 不可用"),
         ):
@@ -87,7 +84,6 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         auto_model.assert_not_called()
         whisper_model.assert_not_called()
-        pyannote.assert_not_called()
         bert.assert_not_called()
 
     async def test_ctranslate2_gpu_failure_precedes_whisper_constructor(self) -> None:
@@ -96,7 +92,6 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "open_spk": False,
             "open_emotion": False,
             "open_mul_lang": True,
-            "open_mul_spk": False,
             "open_fivewh": False,
         }
 
@@ -111,6 +106,50 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
             await self.models.load_models_if_needed()
 
         whisper_model.assert_not_called()
+
+    async def test_startup_loads_retained_models_and_keeps_fivewh_lazy(self) -> None:
+        self._configure_gpu(device="cpu", ngpu=0)
+        self.models.settings._cfg["features"] = {
+            "open_spk": True,
+            "open_emotion": True,
+            "open_mul_lang": True,
+            "open_fivewh": True,
+        }
+
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch.object(self.models, "AutoModel") as auto_model,
+            patch.object(self.models, "WhisperModel") as whisper_model,
+            patch.object(
+                self.models.BertForSequenceClassification,
+                "from_pretrained",
+            ) as bert,
+            patch.object(self.models.BertTokenizer, "from_pretrained") as tokenizer,
+        ):
+            await self.models.load_models_if_needed()
+
+        self.assertEqual(auto_model.call_count, 2)
+        paraformer_call, emotion_call = auto_model.call_args_list
+        self.assertEqual(
+            paraformer_call.kwargs["model"],
+            self.models.settings.asr_model_dir,
+        )
+        self.assertEqual(
+            paraformer_call.kwargs["spk_model"],
+            self.models.settings.spk_model_dir,
+        )
+        self.assertEqual(
+            emotion_call.kwargs["model"],
+            self.models.settings.emotion_model_dir,
+        )
+        whisper_model.assert_called_once_with(
+            self.models.settings.whisper_model_dir,
+            compute_type=self.models.settings.compute_type,
+            device="cpu",
+            device_index=0,
+        )
+        bert.assert_not_called()
+        tokenizer.assert_not_called()
 
     def test_bert_guard_runs_before_bert_constructor(self) -> None:
         self._configure_gpu()

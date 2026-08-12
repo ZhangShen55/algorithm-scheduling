@@ -35,9 +35,9 @@ def test_all_gpu_instances_require_gpu_and_cpu_instances_do_not() -> None:
             assert "REQUIRE_GPU" not in environment
 
 
-def test_offline_asr_gpu_instances_enable_trusted_pyannote_compatibility() -> None:
+def test_offline_asr_gpu_instances_omit_retired_pyannote_compatibility() -> None:
     services = _load_services()
 
     for index in range(3):
         environment = services[f"asr-offline-gpu{index}"]["environment"]
-        assert environment["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] == "1"
+        assert "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD" not in environment

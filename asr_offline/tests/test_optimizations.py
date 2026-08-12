@@ -265,6 +265,53 @@ class RequirementsPinningTests(unittest.TestCase):
                         msg=f"{filename} has an unpinned requirement: {requirement}",
                     )
 
+    def test_pyannote_dependency_is_absent(self):
+        for filename in ("requirements.txt", "requirements-pip.txt"):
+            with self.subTest(filename=filename):
+                source = Path(filename).read_text(encoding="utf-8")
+                self.assertNotIn("pyannote.audio", source)
+
+    def test_pyannote_runtime_code_is_absent(self):
+        models_source = Path("app/core/models.py").read_text(encoding="utf-8")
+        config_source = Path("app/core/config.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("PyannotePipeline", models_source)
+        self.assertNotIn("_model_speaker", models_source)
+        self.assertNotIn("get_speaker_model", models_source)
+        self.assertNotIn("pyannote_model_yml", config_source)
+        self.assertNotIn("open_mul_spk", config_source)
+        self.assertFalse(Path("app/utils/pynanote_speaker.py").exists())
+
+    def test_pyannote_config_keys_are_absent(self):
+        source = Path("config.toml").read_text(encoding="utf-8")
+
+        self.assertNotIn("pyannote_model_yml", source)
+        self.assertNotIn("open_mul_spk", source)
+
+    def test_dockerfile_has_no_pyannote_model_rewrite(self):
+        source = Path("docker/Dockerfile").read_text(encoding="utf-8")
+
+        self.assertNotIn("speaker-diarization-3.1", source)
+
+    def test_dockerignore_excludes_only_retired_pyannote_model_assets(self):
+        source = Path(".dockerignore").read_text(encoding="utf-8")
+        entries = {
+            line.strip()
+            for line in source.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        expected = {
+            "model/speaker-diarization-3.1/",
+            "model/segmentation-3.0/",
+            "model/wespeaker-voxceleb-resnet34-LM/",
+        }
+
+        self.assertTrue(expected.issubset(entries))
+        self.assertNotIn("model/", entries)
+        self.assertNotIn("model/*", entries)
+        self.assertNotIn("model/**", entries)
+        self.assertNotIn("model/**/*", entries)
+
 
 class ConfigTimeoutTests(unittest.TestCase):
     def test_gpu_slot_timeout_is_declared_in_runtime_configs(self):

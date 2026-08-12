@@ -79,13 +79,7 @@ COPY model/ model/
 RUN chmod +x ./start.sh && \
     mkdir -p /var/model_zoo && \
     ln -sfnT /app/model /model && \
-    ln -sfnT /app/model /var/model_zoo/model_asr && \
-    if [ -f /app/model/speaker-diarization-3.1/config.yaml ]; then \
-      sed -i \
-        -e 's#/root/workspace/asr_offline/model#/app/model#g' \
-        -e 's#/var/model_zoo/model_asr#/app/model#g' \
-        /app/model/speaker-diarization-3.1/config.yaml; \
-    fi
+    ln -sfnT /app/model /var/model_zoo/model_asr
 
 EXPOSE 8083
 CMD ["/bin/bash", "-c", "./start.sh"]
