@@ -121,6 +121,10 @@ Swagger UI: `http://localhost:8003/docs`
 `model_ready=true`。任一 worker 预热失败时服务保留运维接口并报告 `degraded`，
 不会把该实例作为可用识别算子注册。
 
+已知限制：服务成功启动后如果进程池进入 `BrokenProcessPool` 状态，当前请求会降级
+为识别失败，但不会自动重建进程池或联动更新就绪状态。自动恢复与就绪状态切换留作后续
+工作。
+
 ## API 速览
 
 | 方法 | 路径 | 说明 |

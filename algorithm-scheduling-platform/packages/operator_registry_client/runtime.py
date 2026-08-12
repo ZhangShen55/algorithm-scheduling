@@ -19,6 +19,7 @@ from packages.operator_registry_client.ops import OperatorOpsStatus
 
 ModelReadyProvider = Callable[[], bool]
 InflightProvider = Callable[[], int]
+BeforeRegistryShutdown = Callable[[], None]
 
 
 class OperatorRuntime:
@@ -111,6 +112,7 @@ def install_operator_runtime(
     declared_capacity: int = 1,
     model_ready_provider: ModelReadyProvider = lambda: True,
     inflight_provider: InflightProvider | None = None,
+    before_registry_shutdown: BeforeRegistryShutdown | None = None,
     registration_enabled: bool | None = None,
 ) -> OperatorRuntime:
     if not operator_code or not capabilities:
@@ -160,7 +162,11 @@ def install_operator_runtime(
             ),
             status_provider=runtime.heartbeat_status,
         )
-        _wrap_lifespan(app, registry_client)
+        _wrap_lifespan(
+            app,
+            registry_client,
+            before_registry_shutdown=before_registry_shutdown,
+        )
     app.state.operator_runtime = runtime
     return runtime
 
@@ -191,7 +197,12 @@ def _add_missing_ops_routes(app: FastAPI, runtime: OperatorRuntime) -> None:
             return runtime.status()
 
 
-def _wrap_lifespan(app: FastAPI, registry_client: OperatorRegistryClient) -> None:
+def _wrap_lifespan(
+    app: FastAPI,
+    registry_client: OperatorRegistryClient,
+    *,
+    before_registry_shutdown: BeforeRegistryShutdown | None = None,
+) -> None:
     original_lifespan = app.router.lifespan_context
 
     @asynccontextmanager
@@ -201,8 +212,12 @@ def _wrap_lifespan(app: FastAPI, registry_client: OperatorRegistryClient) -> Non
             try:
                 yield
             finally:
-                await registry_client.stop()
-                await registry_client.aclose()
+                if before_registry_shutdown is not None:
+                    before_registry_shutdown()
+                try:
+                    await registry_client.stop()
+                finally:
+                    await registry_client.aclose()
 
     app.router.lifespan_context = combined_lifespan
 

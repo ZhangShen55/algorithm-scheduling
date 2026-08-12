@@ -1,6 +1,8 @@
 # app/main.py
 import asyncio
 import multiprocessing
+import threading
+import time
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -10,7 +12,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.core import ai_engine
+from app.core import ai_engine, dlib_worker
 from app.core.config import settings
 from app.core.logger import get_logger, new_request_id, request_id_ctx
 from app.core.runtime_paths import ensure_runtime_directories
@@ -26,6 +28,36 @@ PROJECT_ROOT = APP_DIR.parent
 MAX_WORKERS = settings.thread.max_workers
 ensure_runtime_directories(PROJECT_ROOT)
 
+
+def _shutdown_process_pool(pool: ProcessPoolExecutor, *, timeout_seconds: float) -> None:
+    processes = list(pool._processes.values())
+    shutdown_thread = threading.Thread(
+        target=pool.shutdown,
+        kwargs={"wait": True, "cancel_futures": True},
+        daemon=True,
+    )
+    shutdown_thread.start()
+    shutdown_thread.join(timeout_seconds)
+    if not shutdown_thread.is_alive():
+        return
+
+    deadline = time.monotonic() + 2.0
+    for process in processes:
+        if process.is_alive():
+            process.terminate()
+    for process in processes:
+        process.join(max(0.0, deadline - time.monotonic()))
+    for process in processes:
+        if process.is_alive():
+            process.kill()
+            process.join(1.0)
+
+
+def _begin_dlib_shutdown() -> None:
+    ops.readiness.set_dlib_workers_ready(False)
+    ai_engine.GLOBAL_PROCESS_POOL = None
+
+
 # ---------------- 生命周期管理 (核心) ----------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -39,27 +71,32 @@ async def lifespan(app: FastAPI):
     pool = None
     startup_gate = None
     try:
-        process_context = multiprocessing.get_context()
+        process_context = multiprocessing.get_context("spawn")
         status_queue = process_context.Queue()
         startup_gate = process_context.Event()
         pool = ProcessPoolExecutor(
             max_workers=MAX_WORKERS,
             mp_context=process_context,
-            initializer=ai_engine._init_dlib_worker,
-            initargs=(status_queue, startup_gate),
+            initializer=dlib_worker.init_worker,
+            initargs=(status_queue, startup_gate, ai_engine._SHAPE_PREDICTOR_PATH),
         )
         self_checks = [
-            pool.submit(ai_engine._dlib_worker_self_check)
+            pool.submit(dlib_worker.self_check)
             for _ in range(MAX_WORKERS)
         ]
-        await asyncio.to_thread(
-            ai_engine._collect_dlib_worker_status,
+        worker_statuses = await asyncio.to_thread(
+            dlib_worker.collect_startup_status,
             status_queue,
             expected_workers=MAX_WORKERS,
             timeout_seconds=30.0,
         )
         startup_gate.set()
         await asyncio.gather(*(asyncio.wrap_future(check) for check in self_checks))
+        if any(
+            status["fastdeploy_loaded"] or status["ai_engine_loaded"]
+            for status in worker_statuses
+        ):
+            raise RuntimeError("Dlib worker 错误加载了 ArcFace 运行时")
         ai_engine.GLOBAL_PROCESS_POOL = pool
         ops.readiness.set_dlib_workers_ready(True)
         logger.info("全部 Dlib worker 预热完成")
@@ -70,23 +107,24 @@ async def lifespan(app: FastAPI):
         if startup_gate is not None:
             startup_gate.set()
         if pool is not None:
-            pool.shutdown(wait=True, cancel_futures=True)
+            _shutdown_process_pool(pool, timeout_seconds=10.0)
             pool = None
 
     if not await ops.readiness.check():
         logger.error("MongoDB、ArcFace 或 Dlib worker 未就绪")
 
-    yield  # 应用运行中...
-
-    # ================= 关闭 (Shutdown) =================
-    logger.info("系统关闭: 释放资源...")
-
-    # 3. 资源清理
-    if pool is not None:
-        pool.shutdown(wait=True)
-    ai_engine.GLOBAL_PROCESS_POOL = None
-    ops.readiness.set_dlib_workers_ready(False)
-    logger.info("Dlib 进程池关闭成功.")
+    try:
+        yield
+    finally:
+        logger.info("系统关闭: 释放资源...")
+        _begin_dlib_shutdown()
+        if pool is not None:
+            await asyncio.to_thread(
+                _shutdown_process_pool,
+                pool,
+                timeout_seconds=10.0,
+            )
+        logger.info("Dlib 进程池关闭成功.")
 
 
 # ---------------- App 初始化 ----------------
@@ -167,6 +205,7 @@ install_operator_runtime(
     capabilities=["recognize"],
     default_port=8003,
     model_ready_provider=ops.readiness.model_ready,
+    before_registry_shutdown=_begin_dlib_shutdown,
 )
 
 if __name__ == "__main__":

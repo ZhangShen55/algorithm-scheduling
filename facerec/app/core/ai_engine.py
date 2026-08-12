@@ -1,17 +1,13 @@
 # app/ai_engine.py
 import asyncio
-import os
-import queue
-import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-import cv2
-import dlib
 import fastdeploy as fd
 import numpy as np
 from bson.binary import Binary
 
+from app.core import dlib_worker
 from app.core.config import settings
 from app.core.logger import get_logger
 from app.core.runtime_device import configure_runtime_option
@@ -34,114 +30,10 @@ embedding_model = fd.vision.faceid.ArcFace(
 # 定义全局变量，会被main.py初始化
 GLOBAL_PROCESS_POOL: ProcessPoolExecutor | None = None
 
-# 定义子进程的全局变量
-_mp_detector = None
-_mp_predictor = None
-
-def _init_dlib_worker(status_queue, startup_gate=None):
-    """
-    子进程的初始化函数。
-    当 ProcessPoolExecutor 创建一个新的子进程时，会立刻运行这个函数。
-    在这里加载模型，确保每个进程有一份独立的模型，互不干扰。
-    """
-    global _mp_detector, _mp_predictor
-    logger.info(f"[Worker PID: {os.getpid()}] 正在加载 Dlib 模型...")
-    try:
-        _mp_detector = dlib.get_frontal_face_detector()
-        _mp_predictor = dlib.shape_predictor(_SHAPE_PREDICTOR_PATH)
-        logger.info(f"[Worker PID: {os.getpid()}] Dlib 模型加载完成")
-    except Exception as e:
-        status_queue.put((os.getpid(), False, str(e)))
-        logger.exception(f"[Worker PID: {os.getpid()}] 模型加载失败: {e}")
-        raise
-    status_queue.put((os.getpid(), True, None))
-    if startup_gate is not None:
-        startup_gate.wait()
-
-
-def _collect_dlib_worker_status(
-    status_queue,
-    *,
-    expected_workers: int,
-    timeout_seconds: float,
-) -> None:
-    deadline = time.monotonic() + timeout_seconds
-    ready_pids: set[int] = set()
-    while len(ready_pids) < expected_workers:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise RuntimeError(
-                f"Dlib worker 预热超时: {len(ready_pids)}/{expected_workers} 已就绪"
-            )
-        try:
-            pid, ready, error = status_queue.get(timeout=remaining)
-        except queue.Empty as exc:
-            raise RuntimeError(
-                f"Dlib worker 预热超时: {len(ready_pids)}/{expected_workers} 已就绪"
-            ) from exc
-        if not ready:
-            raise RuntimeError(f"Dlib worker {pid} 初始化失败: {error}")
-        if pid in ready_pids:
-            raise RuntimeError(f"Dlib worker {pid} 重复上报初始化状态")
-        ready_pids.add(pid)
-
-
-def _dlib_worker_self_check() -> int:
-    if _mp_detector is None or _mp_predictor is None:
-        raise RuntimeError("Dlib worker 模型未初始化")
-    return os.getpid()
-
-
-def _dlib_task_implementation(image: np.ndarray) -> tuple[np.ndarray | None, dict | None]:
-    """
-    真实的dlib计算的函数的，运行在子进程中。
-    """
-    import time
-    t_start = time.time()
-
-    # 使用子进程局部的模型
-    global _mp_detector, _mp_predictor
-    tip = "人脸特征像素正常，可以使用" # 图像质量提示信息
-    if _mp_detector is None or _mp_predictor is None:
-        logger.error(f"[Worker PID: {os.getpid()}] Dlib 模型未加载，请检查是否子进程初始化失败")
-        return None, None, None
-
-    # 转灰度cpu计算
-    t0 = time.time()
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    logger.info(f"[性能] 灰度转换耗时: {(time.time()-t0)*1000:.2f}ms")
-
-    # 1. 检测人脸cpu计算（upsample=0 避免无人脸时过多上采样导致响应缓慢）
-    t1 = time.time()
-    faces = _mp_detector(gray, 1)
-    logger.info(f"[性能] 人脸检测耗时: {(time.time()-t1)*1000:.2f}ms, 检测到{len(faces)}张人脸")
-
-    if not faces:
-        logger.info(f"[性能] 总耗时(无人脸): {(time.time()-t_start)*1000:.2f}ms")
-        return None, None, None
-
-    # 选择最大人脸
-    face = max(faces, key=lambda r: r.width() * r.height())
-    (x, y, w, h) = (face.left(), face.top(), face.width(), face.height())
-
-    if w < 200 or h < 200:
-        tip = "人脸特征像素过低，或影响检测效果"
-
-    logger.info(f"[dlib] 人脸像素大小: {w}x{h}")
-    # 2. 关键点
-    shape = _mp_predictor(gray, face)
-
-    # _shape_to_np, _five_from_68, _align_by_5pts 应为纯函数
-    lm68 = _shape_to_np(shape)
-    lm5 = _five_from_68(lm68)
-    aligned = _align_by_5pts(image, lm5, (112, 112))
-
-    if not aligned.flags['C_CONTIGUOUS']:
-        aligned = np.ascontiguousarray(aligned)
-
-    bbox = {"x": int(x), "y": int(max(0, int(y - h * 0.4))), "w": int(w), "h": int(h)}
-
-    return aligned, bbox, tip
+_init_dlib_worker = dlib_worker.init_worker
+_collect_dlib_worker_status = dlib_worker.collect_startup_status
+_dlib_worker_self_check = dlib_worker.self_check
+_dlib_task_implementation = dlib_worker.detect_and_align
 
 
 async def detect_and_extract_face(image: np.ndarray):
@@ -159,44 +51,13 @@ async def detect_and_extract_face(image: np.ndarray):
         # 提交给进程池
         return await loop.run_in_executor(
             GLOBAL_PROCESS_POOL,
-            _dlib_task_implementation,
+            dlib_worker.detect_and_align,
             image
         )
     except Exception as e:
         print(f"Process Pool Error: {e}")
         return None, None, None
 
-
-# ArcFace 常用 5点模板（112x112）
-_ARCFACE_5PTS = np.array([
-    [38.2946, 51.6963],  # 左眼
-    [73.5318, 51.5014],  # 右眼
-    [56.0252, 71.7366],  # 鼻子
-    [41.5493, 92.3655],  # 左嘴角
-    [70.7299, 92.2041],  # 右嘴角
-], dtype=np.float32)
-
-
-def _shape_to_np(shape: dlib.full_object_detection) -> np.ndarray:
-    return np.array([(shape.part(i).x, shape.part(i).y) for i in range(68)], dtype=np.float32)
-
-def _five_from_68(landmarks68: np.ndarray) -> np.ndarray:
-    # 人脸68点
-    left_eye = landmarks68[36:42].mean(axis=0)
-    right_eye = landmarks68[42:48].mean(axis=0)
-    nose = landmarks68[30]
-    left_mouth = landmarks68[48]
-    right_mouth = landmarks68[54]
-    return np.stack([left_eye, right_eye, nose, left_mouth, right_mouth]).astype(np.float32)
-
-def _align_by_5pts(img: np.ndarray, pts: np.ndarray, size: tuple[int,int]=(112,112)) -> np.ndarray:
-    """
-    5点对齐
-    """
-    dst = _ARCFACE_5PTS
-    M = cv2.estimateAffinePartial2D(pts, dst, method=cv2.LMEDS)[0]
-    aligned = cv2.warpAffine(img, M, size, flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
-    return aligned
 
 # 异步获取特征向量
 async def get_embedding(face_aligned: np.ndarray) -> np.ndarray:

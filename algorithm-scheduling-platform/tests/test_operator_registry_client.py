@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Iterator
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
 
 import httpx
@@ -14,6 +14,7 @@ from packages.operator_registry_client.client import (
     OperatorRegistryClientConfig,
     OperatorRuntimeStatus,
 )
+from packages.operator_registry_client.runtime import _wrap_lifespan
 
 
 @pytest.fixture
@@ -104,6 +105,50 @@ def test_runtime_uses_configured_capacity_and_background_inflight_provider(
     assert runtime.status().declared_capacity == 15
     assert runtime.status().inflight == 3
     assert runtime.heartbeat_status().inflight == 3
+
+
+@pytest.mark.asyncio
+async def test_registry_wrapper_runs_pre_shutdown_hook_before_network_stop() -> None:
+    events: list[str] = []
+    app = FastAPI()
+
+    @asynccontextmanager
+    async def service_lifespan(_: FastAPI):  # type: ignore[no-untyped-def]
+        events.append("service-start")
+        try:
+            yield
+        finally:
+            events.append("service-stop")
+
+    class RegistryClient:
+        async def start(self) -> None:
+            events.append("registry-start")
+
+        async def stop(self) -> None:
+            events.append("registry-stop")
+
+        async def aclose(self) -> None:
+            events.append("registry-close")
+
+    app.router.lifespan_context = service_lifespan
+    _wrap_lifespan(
+        app,
+        RegistryClient(),  # type: ignore[arg-type]
+        before_registry_shutdown=lambda: events.append("pre-shutdown"),
+    )
+
+    async with app.router.lifespan_context(app):
+        events.append("application")
+
+    assert events == [
+        "service-start",
+        "registry-start",
+        "application",
+        "pre-shutdown",
+        "registry-stop",
+        "registry-close",
+        "service-stop",
+    ]
 
 
 @pytest.mark.asyncio
