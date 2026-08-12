@@ -137,6 +137,28 @@ MODEL_ASSET_SOURCE="$ASSET_SOURCE" \
 deploy/scripts/build-images                    # default: v1.0_260812
 ```
 
+Before collecting milestone 2B runtime evidence, initialize the release/SHA archive:
+
+```bash
+RELEASE_TAG=v1.0_260812
+RELEASE_GIT_SHA="$(git -C .. rev-parse HEAD)"
+RESTRICTED_REPORT_ROOT=/root/workspace/.algorithm-scheduling-restricted-reports
+
+deploy/scripts/prepare-report-directory \
+  --release-tag "$RELEASE_TAG" \
+  --git-sha "$RELEASE_GIT_SHA" \
+  --reports-root "$PWD/deploy/reports" \
+  --restricted-root "$RESTRICTED_REPORT_ROOT" \
+  --external-manifest "$ASSET_SOURCE/model-assets.manifest.json"
+```
+
+Normal evidence is written beneath
+`deploy/reports/milestone-2b/releases/{release_tag}/{git_sha}` and is ignored by Git.
+The external per-file model manifest is copied only to the Git-external restricted root.
+Both roots use release tag and full commit SHA so evidence from different builds cannot be
+silently combined. See `deploy/reports/README.md` for categories, permissions and the
+redaction boundary.
+
 The asset definition is `deploy/model-assets.json`: ASR Offline, ASR Online, OCR,
 VBas plain models, FaceRec and ScreenDet. PPT Slice and Text Analysis have no local
 model roots. The external manifest is an input artifact and must stay outside Git.

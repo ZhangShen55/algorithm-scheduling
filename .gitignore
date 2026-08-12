@@ -114,3 +114,11 @@ Thumbs.db
 # Local generated architecture/PDF render output only; source docs stay tracked
 /algorithm-scheduling-platform/algorithm_scheduling_platform.egg-info/
 /algorithm-scheduling-platform/harness/reports/
+
+# Milestone 2B deployment evidence is runtime-only; retain only the directory contract.
+/algorithm-scheduling-platform/deploy/reports/*
+!/algorithm-scheduling-platform/deploy/reports/.gitkeep
+!/algorithm-scheduling-platform/deploy/reports/README.md
+!/algorithm-scheduling-platform/deploy/reports/milestone-2b/
+/algorithm-scheduling-platform/deploy/reports/milestone-2b/*
+!/algorithm-scheduling-platform/deploy/reports/milestone-2b/.gitkeep

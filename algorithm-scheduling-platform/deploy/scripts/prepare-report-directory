@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import stat
+import sys
+from pathlib import Path
+
+EVIDENCE_CATEGORIES = (
+    "preflight",
+    "container-maintenance",
+    "image-build",
+    "gpu-instances",
+    "registration",
+    "smoke",
+    "negative",
+    "load",
+    "recovery",
+    "summary",
+)
+RELEASE_TAG_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+GIT_SHA_PATTERN = re.compile(r"[0-9a-fA-F]{40}")
+WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="初始化里程碑 2B 私有报告归档目录")
+    parser.add_argument("--release-tag", required=True)
+    parser.add_argument("--git-sha", required=True)
+    parser.add_argument("--reports-root", type=Path, required=True)
+    parser.add_argument("--restricted-root", type=Path, required=True)
+    parser.add_argument("--external-manifest", type=Path)
+    return parser.parse_args()
+
+
+def _validate_component(value: str, pattern: re.Pattern[str], name: str) -> str:
+    if value in {".", ".."} or pattern.fullmatch(value) is None:
+        raise ValueError(f"{name} 不是安全的单路径段")
+    return value
+
+
+def _reject_traversal(path: Path, name: str) -> None:
+    if ".." in path.parts:
+        raise ValueError(f"{name} 不能包含父目录穿越")
+
+
+def _reject_symlink_components(path: Path, name: str) -> None:
+    absolute = path.absolute()
+    for component in reversed(absolute.parents):
+        if component == Path(component.anchor):
+            continue
+        try:
+            metadata = os.lstat(component)
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(metadata.st_mode):
+            raise ValueError(f"{name} 的父路径不能包含软链接: {component}")
+
+
+def _require_private_root(path: Path, name: str) -> Path:
+    _reject_traversal(path, name)
+    _reject_symlink_components(path, name)
+    absolute = path.absolute()
+    try:
+        metadata = os.lstat(absolute)
+    except FileNotFoundError:
+        absolute.mkdir(mode=0o700, parents=False)
+        metadata = os.lstat(absolute)
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise ValueError(f"{name} 必须是直接目录且不能是软链接")
+    os.chmod(absolute, 0o700)
+    return absolute
+
+
+def _ensure_private_tree(root: Path, *components: str) -> Path:
+    current = root
+    for component in components:
+        current = current / component
+        try:
+            metadata = os.lstat(current)
+        except FileNotFoundError:
+            current.mkdir(mode=0o700)
+            metadata = os.lstat(current)
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError(f"归档路径组件不安全: {current}")
+        os.chmod(current, 0o700)
+    return current
+
+
+def _paths_overlap(first: Path, second: Path) -> bool:
+    first_resolved = first.resolve(strict=False)
+    second_resolved = second.resolve(strict=False)
+    common = Path(os.path.commonpath((first_resolved, second_resolved)))
+    return common in {first_resolved, second_resolved}
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    resolved_path = path.resolve(strict=False)
+    resolved_root = root.resolve(strict=False)
+    return resolved_path == resolved_root or resolved_root in resolved_path.parents
+
+
+def _copy_manifest_once(source: Path, destination: Path) -> None:
+    _reject_traversal(source, "外部模型 manifest")
+    _reject_symlink_components(source, "外部模型 manifest")
+    metadata = os.lstat(source)
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise ValueError("外部模型 manifest 必须是普通文件且不能是软链接")
+    source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        source_bytes = bytearray()
+        while chunk := os.read(source_fd, 1024 * 1024):
+            source_bytes.extend(chunk)
+    finally:
+        os.close(source_fd)
+
+    if destination.exists():
+        destination_metadata = os.lstat(destination)
+        if stat.S_ISLNK(destination_metadata.st_mode) or not stat.S_ISREG(
+            destination_metadata.st_mode
+        ):
+            raise ValueError("已归档 manifest 不是安全的普通文件")
+        destination_fd = os.open(destination, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            archived = bytearray()
+            while chunk := os.read(destination_fd, 1024 * 1024):
+                archived.extend(chunk)
+        finally:
+            os.close(destination_fd)
+        if archived != source_bytes:
+            raise ValueError("同一 release tag 与 Git SHA 已存在不同的模型 manifest")
+        os.chmod(destination, 0o600)
+        return
+
+    destination_fd = os.open(
+        destination,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+    )
+    try:
+        view = memoryview(source_bytes)
+        while view:
+            written = os.write(destination_fd, view)
+            view = view[written:]
+        os.fsync(destination_fd)
+    finally:
+        os.close(destination_fd)
+    os.chmod(destination, 0o600)
+
+
+def main() -> int:
+    arguments = _parse_args()
+    try:
+        release_tag = _validate_component(
+            arguments.release_tag, RELEASE_TAG_PATTERN, "release tag"
+        )
+        git_sha = _validate_component(arguments.git_sha, GIT_SHA_PATTERN, "Git SHA")
+        restricted_candidate = arguments.restricted_root.absolute()
+        if _is_within(restricted_candidate, WORKSPACE_ROOT):
+            raise ValueError("restricted root 必须位于 Git 工作树外")
+        reports_root = _require_private_root(arguments.reports_root, "reports root")
+        restricted_root = _require_private_root(
+            restricted_candidate, "restricted root"
+        )
+        if _paths_overlap(reports_root, restricted_root):
+            raise ValueError("reports root 与 restricted root 不能互相包含")
+
+        release_root = _ensure_private_tree(
+            reports_root, "milestone-2b", "releases", release_tag, git_sha
+        )
+        for category in EVIDENCE_CATEGORIES:
+            _ensure_private_tree(release_root, category)
+
+        restricted_release = _ensure_private_tree(
+            restricted_root, "milestone-2b", "releases", release_tag, git_sha
+        )
+        if arguments.external_manifest is not None:
+            _copy_manifest_once(
+                arguments.external_manifest.absolute(),
+                restricted_release / "model-assets.manifest.json",
+            )
+    except (OSError, ValueError) as error:
+        print(f"准备报告目录失败: {error}", file=sys.stderr)
+        return 2
+
+    print(f"报告目录已准备: {release_root}")
+    print(f"受限归档目录已准备: {restricted_release}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
