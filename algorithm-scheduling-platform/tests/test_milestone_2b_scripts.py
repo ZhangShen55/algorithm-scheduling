@@ -881,6 +881,152 @@ def test_container_protection_rejects_a_symlink_lock_directory(
     assert _commands(environment) == []
 
 
+def test_restore_waits_for_pause_then_reads_and_restores_the_complete_ledger(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    first = _inspect_record()
+    second = _inspect_record(container_id="b" * 64, name="existing-worker")
+    snapshot = tmp_path / "snapshot.jsonl"
+    ledger = tmp_path / "paused.jsonl"
+    lock = tmp_path / "protection.lock"
+    entered = tmp_path / "first-stop-entered"
+    release = tmp_path / "first-stop-release"
+    snapshot.write_text(
+        "\n".join(json.dumps(_snapshot_record(item)) for item in (first, second)) + "\n",
+        encoding="utf-8",
+    )
+    fixtures = {
+        first["Id"]: first,
+        first["Name"].removeprefix("/"): first,
+        second["Id"]: second,
+        second["Name"].removeprefix("/"): second,
+    }
+    pause_environment = _base_environment(
+        fake_bin,
+        PAUSE_RECORD_PATH=str(ledger),
+        DEPLOY_OPERATION_LOCK=str(lock),
+        BLOCK_STOP_ID=first["Id"],
+        STOP_ENTERED_PATH=str(entered),
+        STOP_RELEASE_PATH=str(release),
+        DOCKER_INSPECT_FIXTURES=json.dumps(fixtures),
+    )
+    restore_environment = pause_environment.copy()
+    restore_environment.pop("BLOCK_STOP_ID")
+    restore_environment.pop("STOP_ENTERED_PATH")
+    restore_environment.pop("STOP_RELEASE_PATH")
+    pause_command = [
+        str(SCRIPTS / "pause-existing-containers"),
+        str(snapshot),
+        first["Id"],
+        second["Id"],
+    ]
+    restore_command = [
+        str(SCRIPTS / "restore-existing-containers"),
+        str(snapshot),
+        str(ledger),
+    ]
+
+    pause = subprocess.Popen(
+        pause_command,
+        cwd=PLATFORM_ROOT,
+        env=pause_environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        _wait_for_path(entered, pause)
+        assert len(_ledger(ledger)) == 1
+        restore = subprocess.Popen(
+            restore_command,
+            cwd=PLATFORM_ROOT,
+            env=restore_environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        time.sleep(0.2)
+        assert restore.poll() is None, restore.communicate()
+        release.write_text("release", encoding="utf-8")
+        pause_stdout, pause_stderr = pause.communicate(timeout=10)
+        restore_stdout, restore_stderr = restore.communicate(timeout=10)
+    finally:
+        if pause.poll() is None:
+            pause.kill()
+            pause.wait()
+
+    assert pause.returncode == 0, (pause_stdout, pause_stderr)
+    assert restore.returncode == 0, (restore_stdout, restore_stderr)
+    starts = [command for command in _commands(pause_environment) if command[1] == "start"]
+    assert starts == [
+        ["docker", "start", first["Id"]],
+        ["docker", "start", second["Id"]],
+    ]
+    assert _ledger(ledger) == [_pause_entry(first, "restored"), _pause_entry(second, "restored")]
+
+
+def test_restore_reads_snapshot_after_waiting_for_lock_and_rejects_changed_binding(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    original = _inspect_record(state="exited")
+    running_snapshot = _inspect_record()
+    snapshot = tmp_path / "snapshot.jsonl"
+    ledger = tmp_path / "paused.jsonl"
+    lock = tmp_path / "protection.lock"
+    snapshot.write_text(json.dumps(_snapshot_record(running_snapshot)) + "\n", encoding="utf-8")
+    ledger.write_text(
+        json.dumps(_pause_entry(running_snapshot, "stopped")) + "\n", encoding="utf-8"
+    )
+    environment = _base_environment(
+        fake_bin,
+        DEPLOY_OPERATION_LOCK=str(lock),
+        DOCKER_INSPECT_FIXTURES=json.dumps(
+            {original["Id"]: original, original["Name"].removeprefix("/"): original}
+        ),
+    )
+    lock_holder = subprocess.Popen(
+        [
+            os.environ.get("PYTHON", str(PLATFORM_ROOT / ".venv/bin/python")),
+            "-c",
+            (
+                "import fcntl,os,sys,time; "
+                "fd=os.open(sys.argv[1],os.O_RDWR|os.O_CREAT,0o600); "
+                "fcntl.flock(fd,fcntl.LOCK_EX); open(sys.argv[2],'w').write('locked'); "
+                "time.sleep(10)"
+            ),
+            str(lock),
+            str(tmp_path / "lock-held"),
+        ],
+        text=True,
+    )
+    try:
+        _wait_for_path(tmp_path / "lock-held", lock_holder)
+        restore = subprocess.Popen(
+            [str(SCRIPTS / "restore-existing-containers"), str(snapshot), str(ledger)],
+            cwd=PLATFORM_ROOT,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        time.sleep(0.2)
+        assert restore.poll() is None, restore.communicate()
+        changed = _snapshot_record(running_snapshot)
+        changed["image_id"] = "sha256:changed-while-waiting"
+        snapshot.write_text(json.dumps(changed) + "\n", encoding="utf-8")
+        lock_holder.terminate()
+        lock_holder.wait(timeout=10)
+        restore_stdout, restore_stderr = restore.communicate(timeout=10)
+    finally:
+        if lock_holder.poll() is None:
+            lock_holder.kill()
+            lock_holder.wait()
+
+    assert restore.returncode != 0, restore_stdout
+    assert "binding" in restore_stderr or "hash" in restore_stderr
+    assert not any(command[1] == "start" for command in _commands(environment))
+
+
 @pytest.mark.parametrize("changed_attribute", ["image", "ports", "mounts"])
 def test_pause_rejects_critical_container_drift(
     fake_bin: Path, tmp_path: Path, changed_attribute: str

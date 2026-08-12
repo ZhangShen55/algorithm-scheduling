@@ -128,51 +128,43 @@ def verify(entry: dict) -> str:
     return by_id.get("State", {}).get("Status", "")
 
 
-if len(sys.argv) != 3:
-    fail(f"usage: {sys.argv[0]} SNAPSHOT_JSONL PAUSE_RECORD_JSONL")
-snapshot_path = Path(sys.argv[1])
-ledger_path = Path(sys.argv[2])
-snapshots = read_jsonl(snapshot_path, "snapshot")
-ledger = read_jsonl(ledger_path, "pause ledger")
-snapshot_required = {
-    "container_id", "name", "image_ref", "image_id", "state", "labels", "ports",
-    "mounts", "restart_policy", "compose_project",
-}
-for number, record in enumerate(snapshots, 1):
-    if not snapshot_required.issubset(record):
-        fail(f"incomplete snapshot line {number}")
-    if not re.fullmatch(r"[0-9a-f]{12,64}", record["container_id"]):
-        fail(f"invalid container ID on snapshot line {number}")
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", record["name"]):
-        fail(f"invalid container name on snapshot line {number}")
-    labels = record.get("labels") or {}
-    if record.get("compose_project") != labels.get("com.docker.compose.project", ""):
-        fail(f"compose_project mismatch on snapshot line {number}")
-snapshot_by_id = {record.get("container_id"): record for record in snapshots}
-required = {"version", "status", "container_id", "name", "snapshot_sha256", "binding"}
-allowed = {"pending_stop", "stopped", "restoring", "restored", "not_stopped"}
-for number, entry in enumerate(ledger, 1):
-    if not required.issubset(entry) or entry["version"] != 1 or entry["status"] not in allowed:
-        fail(f"incomplete pause ledger line {number}")
-    if not re.fullmatch(r"[0-9a-f]{12,64}", entry["container_id"]):
-        fail(f"invalid container ID on pause ledger line {number}")
-    binding = entry["binding"]
-    if binding != snapshot_by_id.get(entry["container_id"]):
-        fail(f"ledger binding differs from snapshot on line {number}")
-    if entry["name"] != binding.get("name"):
-        fail(f"ledger name differs from binding on line {number}")
-    if entry["snapshot_sha256"] != hashlib.sha256(canonical(binding)).hexdigest():
-        fail(f"snapshot hash mismatch on pause ledger line {number}")
-    if binding.get("state") != "running":
-        fail(f"refusing originally non-running container on line {number}")
-    labels = binding.get("labels") or {}
-    if binding.get("compose_project") != labels.get("com.docker.compose.project", ""):
-        fail(f"compose_project mismatch on pause ledger line {number}")
-
-lock_path = Path(os.environ.get("DEPLOY_OPERATION_LOCK", ledger_path.parent / ".container-protection.lock"))
-lock_fd = open_operation_lock(lock_path)
-try:
-    fcntl.flock(lock_fd, fcntl.LOCK_EX)
+def restore_under_lock(snapshot_path: Path, ledger_path: Path) -> None:
+    snapshots = read_jsonl(snapshot_path, "snapshot")
+    ledger = read_jsonl(ledger_path, "pause ledger")
+    snapshot_required = {
+        "container_id", "name", "image_ref", "image_id", "state", "labels", "ports",
+        "mounts", "restart_policy", "compose_project",
+    }
+    for number, record in enumerate(snapshots, 1):
+        if not snapshot_required.issubset(record):
+            fail(f"incomplete snapshot line {number}")
+        if not re.fullmatch(r"[0-9a-f]{12,64}", record["container_id"]):
+            fail(f"invalid container ID on snapshot line {number}")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", record["name"]):
+            fail(f"invalid container name on snapshot line {number}")
+        labels = record.get("labels") or {}
+        if record.get("compose_project") != labels.get("com.docker.compose.project", ""):
+            fail(f"compose_project mismatch on snapshot line {number}")
+    snapshot_by_id = {record.get("container_id"): record for record in snapshots}
+    required = {"version", "status", "container_id", "name", "snapshot_sha256", "binding"}
+    allowed = {"pending_stop", "stopped", "restoring", "restored", "not_stopped"}
+    for number, entry in enumerate(ledger, 1):
+        if not required.issubset(entry) or entry["version"] != 1 or entry["status"] not in allowed:
+            fail(f"incomplete pause ledger line {number}")
+        if not re.fullmatch(r"[0-9a-f]{12,64}", entry["container_id"]):
+            fail(f"invalid container ID on pause ledger line {number}")
+        binding = entry["binding"]
+        if binding != snapshot_by_id.get(entry["container_id"]):
+            fail(f"ledger binding differs from snapshot on line {number}")
+        if entry["name"] != binding.get("name"):
+            fail(f"ledger name differs from binding on line {number}")
+        if entry["snapshot_sha256"] != hashlib.sha256(canonical(binding)).hexdigest():
+            fail(f"snapshot hash mismatch on pause ledger line {number}")
+        if binding.get("state") != "running":
+            fail(f"refusing originally non-running container on line {number}")
+        labels = binding.get("labels") or {}
+        if binding.get("compose_project") != labels.get("com.docker.compose.project", ""):
+            fail(f"compose_project mismatch on pause ledger line {number}")
     # There is an unavoidable external-concurrency window around Docker actions.
     for entry in ledger:
         status = entry["status"]
@@ -209,6 +201,17 @@ try:
         atomic_write(ledger_path, ledger)
         suffix = " recovered_from_pending" if recovered_pending else ""
         print(f"restore: {entry['name']} ({entry['container_id']}): started{suffix}")
+
+
+if len(sys.argv) != 3:
+    fail(f"usage: {sys.argv[0]} SNAPSHOT_JSONL PAUSE_RECORD_JSONL")
+snapshot_path = Path(sys.argv[1])
+ledger_path = Path(sys.argv[2])
+lock_path = Path(os.environ.get("DEPLOY_OPERATION_LOCK", ledger_path.parent / ".container-protection.lock"))
+lock_fd = open_operation_lock(lock_path)
+try:
+    fcntl.flock(lock_fd, fcntl.LOCK_EX)
+    restore_under_lock(snapshot_path, ledger_path)
 finally:
     os.close(lock_fd)
 print("restore: complete")
