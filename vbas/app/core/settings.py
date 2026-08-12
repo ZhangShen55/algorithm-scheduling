@@ -1,13 +1,16 @@
 # app/core/settings.py
 import os
 from pathlib import Path
-from ultralytics import YOLO
+from typing import Any, Dict, Union
+
 import torch
 from pydantic import Field
 from pydantic_settings import BaseSettings
-from typing import Any, Dict, Union
+from ultralytics import YOLO
+
 from .config_loader import load_config
 from .model_protection import ModelPathResolver, ModelProtectionConfig
+from .runtime_device import resolve_runtime_device
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = os.getenv("CONFIG_PATH", str(PROJECT_ROOT / "config.toml"))
@@ -88,15 +91,7 @@ _cfg = {
 }
 settings = Settings(**_cfg)
 
-if str(settings.GPU_ID).lower() == "cpu":
-    os.environ["CUDA_VISIBLE_DEVICES"] = ""
-    device = torch.device("cpu")
-else:
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(settings.GPU_ID)
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    # if device.type == "cuda":
-    #     torch.backends.cudnn.benchmark = True
-    #     torch.backends.cudnn.deterministic = False
+device = resolve_runtime_device(settings.GPU_ID, torch_module=torch)
 # use_half = device.type == "cuda"  # 仅在 CUDA 场景启用 FP16
 use_half = False  # 优先精准度，所以开启 fp32。20251205
 
@@ -111,12 +106,22 @@ FACE_MODEL_PATH = PROJECT_ROOT / 'models' / 'face_count.pt'
 STUDENT_MODEL_PATH = PROJECT_ROOT / 'models' / 'student.pt'
 TEACHER_BEHAVIOR_MODEL_PATH = PROJECT_ROOT / 'models' / 'teacher_behavior.pt'
 
-model_protection_config = ModelProtectionConfig.from_mapping(getattr(settings, "ModelProtection", {}))
+model_protection_config = ModelProtectionConfig.from_mapping(
+    getattr(settings, "ModelProtection", {})
+)
 model_path_resolver = ModelPathResolver(model_protection_config)
 
-yolo_person_model = YOLO(str(model_path_resolver.prepare_model_path(PERSON_MODEL_PATH))).to(device)
-yolo_face_model = YOLO(str(model_path_resolver.prepare_model_path(FACE_MODEL_PATH))).to(device)
-yolo_student_model = YOLO(str(model_path_resolver.prepare_model_path(STUDENT_MODEL_PATH))).to(device)
-yolo_teacher_behavior_model = YOLO(str(model_path_resolver.prepare_model_path(TEACHER_BEHAVIOR_MODEL_PATH))).to(device)
+yolo_person_model = YOLO(
+    str(model_path_resolver.prepare_model_path(PERSON_MODEL_PATH))
+).to(device)
+yolo_face_model = YOLO(
+    str(model_path_resolver.prepare_model_path(FACE_MODEL_PATH))
+).to(device)
+yolo_student_model = YOLO(
+    str(model_path_resolver.prepare_model_path(STUDENT_MODEL_PATH))
+).to(device)
+yolo_teacher_behavior_model = YOLO(
+    str(model_path_resolver.prepare_model_path(TEACHER_BEHAVIOR_MODEL_PATH))
+).to(device)
 if model_protection_config.cleanup_after_load:
     model_path_resolver.cleanup()

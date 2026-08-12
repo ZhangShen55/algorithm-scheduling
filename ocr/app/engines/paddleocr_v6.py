@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
 import logging
 import math
+import os
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
 import numpy as np
@@ -15,7 +16,6 @@ from app.core.model_verification import (
 )
 from app.core.settings import OCRSettings, parse_device, to_paddle_device
 from app.engines.base import EngineResult
-
 
 LOGGER = logging.getLogger(__name__)
 
@@ -106,6 +106,14 @@ class PaddleOCRV6Engine:
     def _validate_device(self, paddle_module: Any) -> None:
         kind, index = parse_device(self.device)
         if kind == "cpu":
+            if os.getenv("REQUIRE_GPU", "false").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }:
+                raise ConfigurationError(
+                    "部署要求使用 GPU，但 OCR 配置不是 cuda:<index>"
+                )
             return
 
         if kind == "cuda":

@@ -1,10 +1,13 @@
 import asyncio
+import os
+
+import ctranslate2
 import torch
 import torch.nn.functional as F
-from transformers import BertTokenizer, BertForSequenceClassification
 from faster_whisper import WhisperModel
 from funasr import AutoModel
 from pyannote.audio import Pipeline as PyannotePipeline
+from transformers import BertForSequenceClassification, BertTokenizer
 
 from app.core.config import settings
 from app.utils.feature_utils import id2label
@@ -23,8 +26,46 @@ _tokenizer = None
 _model_lock = asyncio.Lock()
 
 
+def require_gpu_enabled() -> bool:
+    return os.getenv("REQUIRE_GPU", "false").strip().lower() in {"1", "true", "yes"}
+
+
+def resolve_runtime_device() -> torch.device:
+    configured = settings.device.strip().lower()
+    if configured == "cpu":
+        if require_gpu_enabled():
+            raise RuntimeError("部署要求使用 GPU，但算子配置不是 cuda:<index>")
+        return torch.device("cpu")
+    if not configured.startswith("cuda:") or not configured[5:].isdigit():
+        raise RuntimeError("ASR device 必须是 cpu 或 cuda:<index>")
+
+    index = int(configured[5:])
+    if settings.ngpu != 1:
+        raise RuntimeError("ASR 使用 CUDA 时 ngpu 必须为 1")
+    if not torch.cuda.is_available():
+        raise RuntimeError(f"算子要求使用 GPU {configured}，但 CUDA 不可用")
+    visible_count = torch.cuda.device_count()
+    if index >= visible_count:
+        raise RuntimeError(
+            f"GPU 设备 {configured} 索引越界，可见 CUDA 设备数量为 {visible_count}"
+        )
+    return torch.device(configured)
+
+
+def _validate_ctranslate2_cuda(runtime_device: torch.device) -> None:
+    if runtime_device.type != "cuda":
+        return
+    index = runtime_device.index or 0
+    available_count = ctranslate2.get_cuda_device_count()
+    if index >= available_count:
+        raise RuntimeError(
+            "Faster Whisper 要求使用 CTranslate2 CUDA "
+            f"设备 cuda:{index}，但可见设备数量为 {available_count}"
+        )
+
+
 def device() -> torch.device:
-    return torch.device(settings.device if torch.cuda.is_available() else "cpu")
+    return resolve_runtime_device()
 
 
 async def load_models_if_needed():
@@ -34,6 +75,10 @@ async def load_models_if_needed():
     global _model_asr, _model_emotion, _model_whisper, _model_speaker
 
     async with _model_lock:
+        runtime_device = resolve_runtime_device()
+        if settings.open_mul_lang:
+            _validate_ctranslate2_cuda(runtime_device)
+
         if settings.open_spk and _model_asr is None:
             _model_asr = AutoModel(
                 model=settings.asr_model_dir,
@@ -61,13 +106,13 @@ async def load_models_if_needed():
             _model_whisper = WhisperModel(
                 settings.whisper_model_dir,
                 compute_type=settings.compute_type,
-                device="cuda" if torch.cuda.is_available() else "cpu",
-                device_index=int(settings.device.split(":")[-1]) if ":" in settings.device else 0
+                device=runtime_device.type,
+                device_index=runtime_device.index or 0,
             )
 
         if settings.open_mul_spk and _model_speaker is None:
             _model_speaker = PyannotePipeline.from_pretrained(settings.pyannote_model_yml)
-            _model_speaker.to(device())
+            _model_speaker.to(runtime_device)
 
 def get_asr_model():
     return _model_asr
@@ -89,9 +134,10 @@ def get_speaker_model():
 def _ensure_bert_loaded():
     global _model_bert, _tokenizer
     if _model_bert is None or _tokenizer is None:
+        runtime_device = resolve_runtime_device()
         _model_bert = BertForSequenceClassification.from_pretrained(
             pretrained_model_name_or_path=settings.bert_model_dir
-        ).to(device()).eval()
+        ).to(runtime_device).eval()
         _tokenizer = BertTokenizer.from_pretrained(
             pretrained_model_name_or_path=settings.bert_model_tokenizer
         )
@@ -102,7 +148,13 @@ def predict_fivewh(text: str) -> tuple[str, int, float]:
     教师提问5何（是何、为何、若何、由何、如何、非提问） bert预测（中文）
     """
     _ensure_bert_loaded()
-    inputs = _tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=128).to(device())
+    inputs = _tokenizer(
+        text,
+        return_tensors="pt",
+        truncation=True,
+        padding=True,
+        max_length=128,
+    ).to(device())
     with torch.no_grad():
         logits = _model_bert(**inputs).logits
         probs = F.softmax(logits, dim=1)

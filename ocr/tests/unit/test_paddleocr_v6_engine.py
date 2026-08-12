@@ -4,7 +4,6 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-
 from app.core.exceptions import ConfigurationError
 from app.core.settings import load_settings
 from app.engines.paddleocr_v6 import PaddleOCRV6Engine
@@ -290,3 +289,20 @@ def test_engine_accepts_available_accelerator(
 
     assert engine.device == device
     assert captured["device"] == paddle_device
+
+
+def test_required_gpu_rejects_cpu_before_pipeline_construction(
+    settings_file, monkeypatch
+):
+    settings = load_engine_settings(settings_file)
+    calls = []
+    monkeypatch.setenv("REQUIRE_GPU", "true")
+
+    with pytest.raises(ConfigurationError, match="部署要求使用 GPU.*cuda:<index>"):
+        PaddleOCRV6Engine(
+            settings,
+            pipeline_factory=lambda **kwargs: calls.append(kwargs) or object(),
+            paddle_module=fake_paddle(),
+        )
+
+    assert calls == []

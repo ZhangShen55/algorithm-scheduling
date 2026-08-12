@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from scripts.check_tias_runtime_image import (
@@ -212,6 +213,66 @@ printf '%s\n' '[]'
                 ),
             ):
                 inspect_image_config("vbas:test")
+
+
+class GpuRuntimeGuardTest(unittest.TestCase):
+    def test_required_gpu_rejects_cpu_configuration(self):
+        from app.core.runtime_device import resolve_runtime_device
+
+        fake_torch = SimpleNamespace(
+            cuda=SimpleNamespace(is_available=lambda: True, device_count=lambda: 1),
+            device=lambda value: value,
+        )
+        with (
+            patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False),
+            self.assertRaisesRegex(RuntimeError, "部署要求使用 GPU.*GPU_ID"),
+        ):
+            resolve_runtime_device("cpu", torch_module=fake_torch)
+
+    def test_required_gpu_rejects_unavailable_cuda(self):
+        from app.core.runtime_device import resolve_runtime_device
+
+        fake_torch = SimpleNamespace(
+            cuda=SimpleNamespace(is_available=lambda: False, device_count=lambda: 0),
+            device=lambda value: value,
+        )
+        with (
+            patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False),
+            self.assertRaisesRegex(RuntimeError, "要求使用 GPU.*CUDA 不可用"),
+        ):
+            resolve_runtime_device(0, torch_module=fake_torch)
+
+    def test_container_gpu_configuration_resolves_to_cuda_zero(self):
+        from app.core.runtime_device import resolve_runtime_device
+
+        fake_torch = SimpleNamespace(
+            cuda=SimpleNamespace(is_available=lambda: True, device_count=lambda: 1),
+            device=lambda value: value,
+        )
+        with patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False):
+            self.assertEqual("cuda:0", resolve_runtime_device(0, torch_module=fake_torch))
+
+    def test_local_cpu_mode_is_preserved_without_deployment_switch(self):
+        from app.core.runtime_device import resolve_runtime_device
+
+        fake_torch = SimpleNamespace(
+            cuda=SimpleNamespace(is_available=lambda: False, device_count=lambda: 0),
+            device=lambda value: value,
+        )
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual("cpu", resolve_runtime_device("cpu", torch_module=fake_torch))
+
+    def test_guard_precedes_all_four_yolo_constructors(self):
+        source = (Path(__file__).resolve().parents[1] / "app/core/settings.py").read_text(
+            encoding="utf-8"
+        )
+
+        guard_offset = source.index("resolve_runtime_device(")
+        first_yolo_offset = source.index("YOLO(")
+
+        self.assertLess(guard_offset, first_yolo_offset)
+        self.assertEqual(4, source.count("YOLO("))
+        self.assertNotIn("CUDA_VISIBLE_DEVICES", source)
 
 
 if __name__ == "__main__":

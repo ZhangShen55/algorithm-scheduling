@@ -119,6 +119,8 @@ services:
       PORT: "8083"
       CONFIG_PATH: /config.toml
       UVICORN_WORKERS: "1"
+      REQUIRE_GPU: "true"
+      TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD: "1"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
       PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
@@ -139,6 +141,8 @@ services:
       PORT: "8083"
       CONFIG_PATH: /config.toml
       UVICORN_WORKERS: "1"
+      REQUIRE_GPU: "true"
+      TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD: "1"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
       PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
@@ -159,6 +163,8 @@ services:
       PORT: "8083"
       CONFIG_PATH: /config.toml
       UVICORN_WORKERS: "1"
+      REQUIRE_GPU: "true"
+      TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD: "1"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
       PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
@@ -179,6 +185,7 @@ services:
       PORT: "8084"
       CONFIG_PATH: /config.toml
       UVICORN_WORKERS: "1"
+      REQUIRE_GPU: "true"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
       PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
@@ -199,6 +206,7 @@ services:
       PORT: "8084"
       CONFIG_PATH: /config.toml
       UVICORN_WORKERS: "1"
+      REQUIRE_GPU: "true"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
       PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
@@ -219,6 +227,7 @@ services:
       PORT: "8084"
       CONFIG_PATH: /config.toml
       UVICORN_WORKERS: "1"
+      REQUIRE_GPU: "true"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
       PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
@@ -238,6 +247,7 @@ services:
       OPERATOR_PORT: "8866"
       CONFIG_PATH: /app/config.toml
       UVICORN_WORKERS: "1"
+      REQUIRE_GPU: "true"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
       PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
@@ -257,6 +267,7 @@ services:
       OPERATOR_PORT: "8866"
       CONFIG_PATH: /app/config.toml
       UVICORN_WORKERS: "1"
+      REQUIRE_GPU: "true"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
       PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
@@ -276,6 +287,7 @@ services:
       OPERATOR_PORT: "8866"
       CONFIG_PATH: /app/config.toml
       UVICORN_WORKERS: "1"
+      REQUIRE_GPU: "true"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
       PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
@@ -295,6 +307,7 @@ services:
       OPERATOR_PORT: "8981"
       CONFIG_PATH: /workspace/config.toml
       UVICORN_WORKERS: "1"
+      REQUIRE_GPU: "true"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
       PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
@@ -314,6 +327,7 @@ services:
       OPERATOR_PORT: "8981"
       CONFIG_PATH: /workspace/config.toml
       UVICORN_WORKERS: "1"
+      REQUIRE_GPU: "true"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
       PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
@@ -333,6 +347,7 @@ services:
       OPERATOR_PORT: "8981"
       CONFIG_PATH: /workspace/config.toml
       UVICORN_WORKERS: "1"
+      REQUIRE_GPU: "true"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
       PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
@@ -354,6 +369,7 @@ services:
       FACEREC_MONGO_USERNAME: ${MONGO_ROOT_USERNAME:-root}
       FACEREC_MONGO_PASSWORD: ${MONGO_ROOT_PASSWORD:-root}
       UVICORN_WORKERS: "1"
+      REQUIRE_GPU: "true"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
       PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
@@ -375,6 +391,7 @@ services:
       FACEREC_MONGO_USERNAME: ${MONGO_ROOT_USERNAME:-root}
       FACEREC_MONGO_PASSWORD: ${MONGO_ROOT_PASSWORD:-root}
       UVICORN_WORKERS: "1"
+      REQUIRE_GPU: "true"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
       PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
@@ -396,6 +413,7 @@ services:
       FACEREC_MONGO_USERNAME: ${MONGO_ROOT_USERNAME:-root}
       FACEREC_MONGO_PASSWORD: ${MONGO_ROOT_PASSWORD:-root}
       UVICORN_WORKERS: "1"
+      REQUIRE_GPU: "true"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
       PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
@@ -415,6 +433,7 @@ services:
       OPERATOR_PORT: "8880"
       CONFIG_PATH: /app/config.toml
       UVICORN_WORKERS: "1"
+      REQUIRE_GPU: "true"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
       PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
@@ -434,6 +453,7 @@ services:
       OPERATOR_PORT: "8880"
       CONFIG_PATH: /app/config.toml
       UVICORN_WORKERS: "1"
+      REQUIRE_GPU: "true"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
       PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
@@ -453,6 +473,7 @@ services:
       OPERATOR_PORT: "8880"
       CONFIG_PATH: /app/config.toml
       UVICORN_WORKERS: "1"
+      REQUIRE_GPU: "true"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
       PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"

@@ -21,7 +21,7 @@ _SHAPE_PREDICTOR_PATH = str(
 
 # embadding模型全局加载加载
 option = fd.RuntimeOption()
-configure_runtime_option(option, settings.gpu.device)
+configure_runtime_option(option, settings.gpu.device, fastdeploy_module=fd)
 embedding_model = fd.vision.faceid.ArcFace(
     str(PROJECT_ROOT / "ai_models" / "ms1mv3_arcface_r100.onnx"),
     runtime_option=option,

@@ -4,12 +4,10 @@ import unittest
 from dataclasses import replace
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
-
-from app.core.config import StartupConfigChangedError, reload_settings
-from app.core.config import get_settings
-from app.main import app
 import app.services.screen_detector as screen_detector
+from app.core.config import StartupConfigChangedError, get_settings, reload_settings
+from app.main import app
+from fastapi.testclient import TestClient
 
 
 class UnifiedYoloConfigTests(unittest.TestCase):
@@ -75,3 +73,13 @@ class YoloDeviceResolutionTests(unittest.TestCase):
     def test_invalid_device_format_raises(self) -> None:
         with self.assertRaises(ValueError):
             screen_detector.resolve_yolo_device("gpu")
+
+    def test_required_gpu_rejects_cpu(self) -> None:
+        with patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False):
+            with self.assertRaisesRegex(RuntimeError, "部署要求使用 GPU.*cuda:<index>"):
+                screen_detector.resolve_yolo_device("cpu")
+
+    def test_required_gpu_rejects_mps(self) -> None:
+        with patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False):
+            with self.assertRaisesRegex(RuntimeError, "部署要求使用 GPU.*cuda:<index>"):
+                screen_detector.resolve_yolo_device("mps")

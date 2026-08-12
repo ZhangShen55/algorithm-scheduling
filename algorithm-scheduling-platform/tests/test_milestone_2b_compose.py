@@ -65,6 +65,7 @@ def assert_operator_compose_matrix(compose: dict[str, Any]) -> None:
             assert environment["PLATFORM_GPU_ID"] == str(gpu_index)
             assert environment["GPU_PROCESS_NAME"] == process_name
             assert environment["UVICORN_WORKERS"] == "1"
+            assert environment["REQUIRE_GPU"] == "true"
             assert environment["NVIDIA_VISIBLE_DEVICES"] == str(gpu_index)
             if operator == "facerec":
                 assert environment["CONFIG_PATH"] == "/config/config.toml"
@@ -120,6 +121,7 @@ def assert_operator_compose_matrix(compose: dict[str, Any]) -> None:
             assert environment["UVICORN_WORKERS"] == "1"
             assert "PLATFORM_GPU_ID" not in environment
             assert "GPU_PROCESS_NAME" not in environment
+            assert "REQUIRE_GPU" not in environment
             assert "deploy" not in service
             volumes = _volume_sources(service)
             assert volumes["/data/course"][0] == "${COURSE_ROOT:-/data/course}"

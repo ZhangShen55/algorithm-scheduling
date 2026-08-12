@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -8,11 +9,10 @@ from pathlib import Path
 
 import numpy as np
 
-from app.core.config import BASE_DIR, ScreenDetectionConfig, get_settings
+from app.core.config import BASE_DIR, get_settings
 from app.core.model_protection import materialize_model_path
 from app.services.tilt_detector import decode_base64_image
 from app.services.yolo_compat import patch_legacy_aattn
-
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,13 @@ ALLOWED_LABELS = frozenset({0, 1, 2, 3})
 
 def resolve_yolo_device(device: str) -> str:
     value = str(device).strip().lower()
+    require_gpu = os.getenv("REQUIRE_GPU", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if require_gpu and not value.startswith("cuda:"):
+        raise RuntimeError("部署要求使用 GPU，但 YOLO 配置不是 cuda:<index>")
     if value == "cpu":
         return value
 
@@ -203,8 +210,6 @@ def detect_screen_from_base64_list(
     runtime = settings.runtime
     conf_used = screen_cfg.conf if conf is None else conf
     iou_used = screen_cfg.iou if iou is None else iou
-    allowed = frozenset(screen_cfg.allowed_class_ids)
-
     if len(images_base64) > screen_cfg.max_batch_size:
         raise ValueError(
             f"Too many images: {len(images_base64)} > max_batch_size={screen_cfg.max_batch_size}"
