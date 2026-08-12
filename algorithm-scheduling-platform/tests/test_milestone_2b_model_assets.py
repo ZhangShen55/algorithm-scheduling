@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import signal
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -77,6 +78,8 @@ def _write_asset_source(
         json.dumps({"schema_version": 1, "assets": assets}, ensure_ascii=False),
         encoding="utf-8",
     )
+    source.chmod(0o700)
+    (source / "model-assets.manifest.json").chmod(0o600)
     return payloads
 
 
@@ -199,6 +202,8 @@ def test_manifest_generator_freezes_all_external_regular_files(tmp_path: Path) -
     assert actual == {
         path: (len(payload), _sha256(payload)) for path, payload in expected.items()
     }
+    assert stat.S_IMODE(source.stat().st_mode) == 0o700
+    assert stat.S_IMODE((source / "model-assets.manifest.json").stat().st_mode) == 0o600
     assert "sha256" not in completed.stdout.lower()
 
 

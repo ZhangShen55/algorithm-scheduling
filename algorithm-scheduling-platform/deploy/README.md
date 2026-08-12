@@ -119,6 +119,7 @@ build and inspect all eight images from any working directory:
 
 ```bash
 ASSET_SOURCE=/root/workspace/.algorithm-scheduling-assets/v1.0_260812
+install -d -m 0700 "$ASSET_SOURCE"
 
 # Run once after controlled SCP creates or changes the external source.
 deploy/scripts/generate-model-asset-manifest \
@@ -162,6 +163,10 @@ redaction boundary.
 The asset definition is `deploy/model-assets.json`: ASR Offline, ASR Online, OCR,
 VBas plain models, FaceRec and ScreenDet. PPT Slice and Text Analysis have no local
 model roots. The external manifest is an input artifact and must stay outside Git.
+The external asset root must be owned by the execution user, contain no symlink in its
+path and have exact `0700` mode. The generator atomically creates the manifest with exact
+`0600` mode. Report archival validates the same ownership, mode, worktree and no-follow
+boundary before creating any release directories; it never repairs an insecure source.
 The transaction rejects missing/extra files, path traversal, symlinks, special files,
 secret/encrypted paths, duplicate JSON keys and hash drift. Before creating any stage
 directory it fsyncs a `preparing` journal containing all six exact stage/backup paths;

@@ -102,19 +102,60 @@ def _is_within(path: Path, root: Path) -> bool:
     return resolved_path == resolved_root or resolved_root in resolved_path.parents
 
 
-def _copy_manifest_once(source: Path, destination: Path) -> None:
+def _inside_any_git_worktree(path: Path) -> bool:
+    current = path.absolute()
+    while True:
+        if (current / ".git").exists():
+            return True
+        if current.parent == current:
+            return False
+        current = current.parent
+
+
+def _read_private_manifest(source: Path) -> bytes:
     _reject_traversal(source, "外部模型 manifest")
     _reject_symlink_components(source, "外部模型 manifest")
-    metadata = os.lstat(source)
-    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-        raise ValueError("外部模型 manifest 必须是普通文件且不能是软链接")
-    source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+    absolute = source.absolute()
+    if _inside_any_git_worktree(absolute):
+        raise ValueError("外部模型 manifest 必须位于所有 Git 工作树外")
+    parent_fd = os.open(
+        absolute.parent,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
+    )
     try:
-        source_bytes = bytearray()
-        while chunk := os.read(source_fd, 1024 * 1024):
-            source_bytes.extend(chunk)
+        parent_metadata = os.fstat(parent_fd)
+        if (
+            not stat.S_ISDIR(parent_metadata.st_mode)
+            or parent_metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(parent_metadata.st_mode) != 0o700
+        ):
+            raise ValueError("外部模型 manifest 直接父目录必须由当前用户拥有且权限为 0700")
+        source_fd = os.open(
+            absolute.name,
+            os.O_RDONLY | os.O_NOFOLLOW,
+            dir_fd=parent_fd,
+        )
+        try:
+            metadata = os.fstat(source_fd)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+            ):
+                raise ValueError(
+                    "外部模型 manifest 必须是当前用户拥有且权限为 0600 的普通文件"
+                )
+            source_bytes = bytearray()
+            while chunk := os.read(source_fd, 1024 * 1024):
+                source_bytes.extend(chunk)
+        finally:
+            os.close(source_fd)
     finally:
-        os.close(source_fd)
+        os.close(parent_fd)
+    return bytes(source_bytes)
+
+
+def _copy_manifest_once(source_bytes: bytes, destination: Path) -> None:
 
     if destination.exists():
         destination_metadata = os.lstat(destination)
@@ -157,6 +198,11 @@ def main() -> int:
             arguments.release_tag, RELEASE_TAG_PATTERN, "release tag"
         )
         git_sha = _validate_component(arguments.git_sha, GIT_SHA_PATTERN, "Git SHA")
+        manifest_bytes = (
+            _read_private_manifest(arguments.external_manifest)
+            if arguments.external_manifest is not None
+            else None
+        )
         restricted_candidate = arguments.restricted_root.absolute()
         if _is_within(restricted_candidate, WORKSPACE_ROOT):
             raise ValueError("restricted root 必须位于 Git 工作树外")
@@ -176,9 +222,9 @@ def main() -> int:
         restricted_release = _ensure_private_tree(
             restricted_root, "milestone-2b", "releases", release_tag, git_sha
         )
-        if arguments.external_manifest is not None:
+        if manifest_bytes is not None:
             _copy_manifest_once(
-                arguments.external_manifest.absolute(),
+                manifest_bytes,
                 restricted_release / "model-assets.manifest.json",
             )
     except (OSError, ValueError) as error:

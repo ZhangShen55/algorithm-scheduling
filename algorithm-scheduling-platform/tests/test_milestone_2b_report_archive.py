@@ -63,6 +63,15 @@ def _git_check_ignore(path: str) -> bool:
     return completed.returncode == 0
 
 
+def _private_manifest(root: Path, content: str = '{"schema_version": 1}\n') -> Path:
+    root.mkdir(mode=0o700)
+    root.chmod(0o700)
+    manifest = root / "model-assets.manifest.json"
+    manifest.write_text(content, encoding="utf-8")
+    manifest.chmod(0o600)
+    return manifest
+
+
 def test_empty_clone_keeps_report_directory_structure() -> None:
     expected = {
         "algorithm-scheduling-platform/deploy/reports/.gitkeep",
@@ -281,8 +290,7 @@ def test_prepare_archives_external_manifest_as_private_file(tmp_path: Path) -> N
     restricted_root = tmp_path / "restricted"
     reports_root.mkdir()
     restricted_root.mkdir()
-    manifest = tmp_path / "model-assets.manifest.json"
-    manifest.write_text('{"schema_version": 1}\n', encoding="utf-8")
+    manifest = _private_manifest(tmp_path / "asset-source")
 
     completed = _run_prepare(
         reports_root,
@@ -311,10 +319,12 @@ def test_prepare_does_not_overwrite_a_different_archived_manifest(
     restricted_root = tmp_path / "restricted"
     reports_root.mkdir()
     restricted_root.mkdir()
-    original = tmp_path / "original.json"
-    original.write_text('{"release": "first"}\n', encoding="utf-8")
-    replacement = tmp_path / "replacement.json"
-    replacement.write_text('{"release": "second"}\n', encoding="utf-8")
+    original = _private_manifest(
+        tmp_path / "original-source", '{"release": "first"}\n'
+    )
+    replacement = _private_manifest(
+        tmp_path / "replacement-source", '{"release": "second"}\n'
+    )
     first = _run_prepare(
         reports_root,
         restricted_root,
@@ -346,8 +356,7 @@ def test_prepare_rejects_symlink_manifest(tmp_path: Path) -> None:
     restricted_root = tmp_path / "restricted"
     reports_root.mkdir()
     restricted_root.mkdir()
-    manifest = tmp_path / "manifest.json"
-    manifest.write_text("{}\n", encoding="utf-8")
+    manifest = _private_manifest(tmp_path / "asset-source", "{}\n")
     symlink = tmp_path / "manifest-link.json"
     symlink.symlink_to(manifest)
 
@@ -366,6 +375,97 @@ def test_prepare_rejects_symlink_manifest(tmp_path: Path) -> None:
         / GIT_SHA
         / "model-assets.manifest.json"
     ).exists()
+
+
+def test_prepare_rejects_external_manifest_inside_git_worktree(tmp_path: Path) -> None:
+    reports_root = tmp_path / "reports"
+    restricted_root = tmp_path / "restricted"
+    reports_root.mkdir()
+    restricted_root.mkdir()
+    source_root = PLATFORM_ROOT / "deploy/reports/manifest-source-test"
+    manifest = _private_manifest(source_root)
+
+    try:
+        completed = _run_prepare(
+            reports_root,
+            restricted_root,
+            "--external-manifest",
+            str(manifest),
+        )
+    finally:
+        manifest.unlink()
+        source_root.rmdir()
+
+    assert completed.returncode != 0
+    assert not (reports_root / "milestone-2b").exists()
+    assert not (restricted_root / "milestone-2b").exists()
+
+
+def test_prepare_rejects_external_manifest_mode_0644(tmp_path: Path) -> None:
+    reports_root = tmp_path / "reports"
+    restricted_root = tmp_path / "restricted"
+    reports_root.mkdir()
+    restricted_root.mkdir()
+    manifest = _private_manifest(tmp_path / "asset-source")
+    manifest.chmod(0o644)
+
+    completed = _run_prepare(
+        reports_root,
+        restricted_root,
+        "--external-manifest",
+        str(manifest),
+    )
+
+    assert completed.returncode != 0
+    assert not (restricted_root / "milestone-2b").exists()
+
+
+@pytest.mark.parametrize("parent_mode", (0o755, 0o777))
+def test_prepare_rejects_non_private_manifest_parent(
+    tmp_path: Path, parent_mode: int
+) -> None:
+    reports_root = tmp_path / "reports"
+    restricted_root = tmp_path / "restricted"
+    reports_root.mkdir()
+    restricted_root.mkdir()
+    source_root = tmp_path / "asset-source"
+    manifest = _private_manifest(source_root)
+    source_root.chmod(parent_mode)
+
+    completed = _run_prepare(
+        reports_root,
+        restricted_root,
+        "--external-manifest",
+        str(manifest),
+    )
+
+    assert completed.returncode != 0
+    assert not (restricted_root / "milestone-2b").exists()
+
+
+def test_prepare_rejects_symlink_in_manifest_parent_chain(tmp_path: Path) -> None:
+    reports_root = tmp_path / "reports"
+    restricted_root = tmp_path / "restricted"
+    reports_root.mkdir()
+    restricted_root.mkdir()
+    actual_parent = tmp_path / "actual-parent"
+    actual_parent.mkdir(mode=0o700)
+    actual_parent.chmod(0o700)
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(actual_parent, target_is_directory=True)
+    manifest = linked_parent / "model-assets.manifest.json"
+    manifest.write_text("{}\n", encoding="utf-8")
+    manifest.chmod(0o600)
+
+    completed = _run_prepare(
+        reports_root,
+        restricted_root,
+        "--external-manifest",
+        str(manifest),
+    )
+
+    assert completed.returncode != 0
+    assert not (restricted_root / "milestone-2b").exists()
 
 
 def test_prepare_rejects_restricted_archive_inside_git_worktree(

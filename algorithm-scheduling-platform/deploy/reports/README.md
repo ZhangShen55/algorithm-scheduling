@@ -39,6 +39,11 @@ deploy/reports/milestone-2b/releases/{release_tag}/{git_sha}/
 初始化器可将其复制到 `{restricted_root}/milestone-2b/releases/{release_tag}/{git_sha}/`，目录权限
 为 `0700`、文件权限为 `0600`。受限根不得设置在本 Git 工作树内。
 
+外部 manifest 的直接父目录必须由当前执行用户拥有且精确为 `0700`，文件必须是同一用户拥有的
+普通文件且精确为 `0600`；源路径的任一父级不得是软链接，源文件不得位于任何 Git worktree。
+`generate-model-asset-manifest` 以原子方式创建 `0600` manifest，但资产源根必须由交付人员预先
+创建为 `0700`。初始化器只验证并拒绝不安全来源，不会自动收紧源权限后继续。
+
 `summary` 只能记录模型根名称、文件总数和总字节数，不得包含逐文件路径、逐文件哈希、密钥内容、
 密钥大小、密钥摘要、人脸原图或服务器认证信息。真实 JSON、日志、快照、暂停账本、模型 manifest
 和任何 secret metadata 都是运行证据，不得强制加入 Git。

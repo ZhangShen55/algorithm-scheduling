@@ -57,12 +57,19 @@ def _fsync_directory(path: Path) -> None:
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    with temporary.open("w", encoding="utf-8") as stream:
+    descriptor = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
         json.dump(value, stream, ensure_ascii=False, sort_keys=True)
         stream.write("\n")
         stream.flush()
         os.fsync(stream.fileno())
     os.replace(temporary, path)
+    os.chmod(path, 0o600)
     _fsync_directory(path.parent)
 
 
@@ -232,13 +239,25 @@ def _verify_tree(root: Path, expected: dict[str, tuple[int, str]]) -> tuple[int,
 
 
 def _source_outside_worktree(source: Path) -> None:
+    source = source.absolute()
     current = source
     while True:
+        try:
+            metadata = os.lstat(current)
+        except FileNotFoundError:
+            raise AssetError("model source path does not exist") from None
+        if stat.S_ISLNK(metadata.st_mode):
+            raise AssetError("model source path must not contain symlinks")
         if (current / ".git").exists():
             raise AssetError("model source must be outside every Git worktree")
         if current.parent == current:
-            return
+            break
         current = current.parent
+    metadata = os.lstat(source)
+    if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid():
+        raise AssetError("model source must be a directory owned by the current user")
+    if stat.S_IMODE(metadata.st_mode) != 0o700:
+        raise AssetError("model source directory must have exact 0700 permissions")
 
 
 def _journal_path(workspace: Path) -> Path:
