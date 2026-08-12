@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import stat
 import sys
@@ -43,6 +44,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fixture-manifest", type=Path, required=True)
     parser.add_argument("--external-fixture-root", type=Path, required=True)
     parser.add_argument("--fixture-target-root", type=Path, required=True)
+    parser.add_argument("--result-root", type=Path, required=True)
+    parser.add_argument("--callback-listen-host", default="0.0.0.0")
+    parser.add_argument("--callback-advertise-base-url", required=True)
     parser.add_argument("--endpoints-json", required=True)
     parser.add_argument("--cases", default="all")
     parser.add_argument("--case-manifest", type=Path, default=DEFAULT_CASES)
@@ -238,7 +242,7 @@ def data_url(path: Path) -> str:
 
 
 class CallbackCapture:
-    def __init__(self) -> None:
+    def __init__(self, *, listen_host: str, advertise_base_url: str) -> None:
         self.payload: dict[str, Any] | None = None
         self.event = threading.Event()
         owner = self
@@ -261,7 +265,17 @@ class CallbackCapture:
             def log_message(self, *_: object) -> None:
                 return
 
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        parsed = urlsplit(advertise_base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("callback advertise base URL 必须是 HTTP(S) URL")
+        if parsed.hostname in {"0.0.0.0", "127.0.0.1", "localhost", "::1"}:
+            raise ValueError("callback advertise base URL 必须可由算子容器访问")
+        if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+            raise ValueError("callback advertise base URL 不能包含路径、查询或片段")
+        self.advertise_scheme = parsed.scheme
+        self.advertise_host = parsed.hostname
+        self.advertise_port = parsed.port
+        self.server = ThreadingHTTPServer((listen_host, 0), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
     def __enter__(self) -> CallbackCapture:
@@ -271,9 +285,8 @@ class CallbackCapture:
     @property
     def url(self) -> str:
         address = self.server.server_address
-        host = str(address[0])
-        port = int(address[1])
-        return f"http://{host}:{port}/terminal"
+        port = self.advertise_port or int(address[1])
+        return f"{self.advertise_scheme}://{self.advertise_host}:{port}/terminal"
 
     def __exit__(self, *_: object) -> None:
         self.server.shutdown()
@@ -374,23 +387,40 @@ def smoke_vbas(
             http.post(endpoint.rstrip("/") + f"/ImageDetect/{role}/v1.0.0", json=payload),
             f"VBas {role}",
         )
-        if not isinstance(body.get("DataList"), list):
-            raise RuntimeError(f"VBas {role} 未返回 DataList")
-        checks[role] = len(body["DataList"])
+        status = body.get("StatusObject")
+        data = body.get("DataList")
+        if not isinstance(status, dict) or status.get("StatusCode") != 0:
+            raise RuntimeError(f"VBas {role} 顶层 StatusCode 不是 0")
+        if not isinstance(data, list) or len(data) != 1:
+            raise RuntimeError(f"VBas {role} DataList 未映射输入图片")
+        image_status = data[0].get("StatusObject") if isinstance(data[0], dict) else None
+        if (
+            not isinstance(image_status, dict)
+            or image_status.get("StatusCode") != 0
+            or image_status.get("ImageId") != "smoke-frame"
+        ):
+            raise RuntimeError(f"VBas {role} 图片 StatusCode 或 ImageId 不匹配")
+        checks[role] = len(data)
     return checks
 
 
 def smoke_facerec(
     http: httpx.Client, endpoint: str, fixtures: dict[str, Path], _: float
 ) -> dict[str, Any]:
+    endpoints = json.loads(endpoint)
+    if not isinstance(endpoints, list) or len(endpoints) != 3 or len(set(endpoints)) != 3:
+        raise RuntimeError("FaceRec Smoke 必须配置三个不同实例")
+    create_endpoint, recognize_endpoint, manage_endpoint = [
+        str(item).rstrip("/") for item in endpoints
+    ]
     image = data_url(fixtures["facerec_image"])
-    number = "harness-person"
+    number = "harness-" + uuid.uuid4().hex
     created = False
-    cleanup_ok = False
+    primary_error: BaseException | None = None
     try:
         created_body = require_http(
             http.post(
-                endpoint.rstrip("/") + "/persons",
+                create_endpoint + "/persons",
                 json={"photo": image, "name": "Harness", "number": number},
             ),
             "FaceRec persons",
@@ -403,24 +433,43 @@ def smoke_facerec(
         created = True
         recognized = require_http(
             http.post(
-                endpoint.rstrip("/") + "/recognize", json={"photo": image, "targets": [number]}
+                recognize_endpoint + "/recognize", json={"photo": image, "targets": [number]}
             ),
             "FaceRec recognize",
         )
-        if recognized.get("status_code") != 200:
-            raise RuntimeError("FaceRec 未识别到已创建人物")
+        matches = (recognized.get("data") or {}).get("match")
+        if (
+            recognized.get("status_code") != 200
+            or not isinstance(matches, list)
+            or number not in {
+                item.get("number") for item in matches if isinstance(item, dict)
+            }
+        ):
+            raise RuntimeError("FaceRec 实例 B 未精确匹配实例 A 刚创建的人物")
+        listed = require_http(
+            http.get(manage_endpoint + "/persons", params={"skip": 0, "limit": 100}),
+            "FaceRec shared Mongo query",
+        )
+        if listed.get("status_code") != 200:
+            raise RuntimeError("FaceRec 实例 C 无法查询共享 Mongo 人物")
         return {"created": True, "recognized": True, "photo_saved": False, "cleanup": True}
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
         if created:
-            cleanup = require_http(
-                http.request(
-                    "DELETE", endpoint.rstrip("/") + "/persons/delete", json={"number": number}
-                ),
-                "FaceRec cleanup",
-            )
-            cleanup_ok = cleanup.get("status_code") == 200
-            if not cleanup_ok:
-                raise RuntimeError("FaceRec 测试人物清理失败")
+            try:
+                cleanup = require_http(
+                    http.request(
+                        "DELETE", manage_endpoint + "/persons/delete", json={"number": number}
+                    ),
+                    "FaceRec cleanup",
+                )
+                if cleanup.get("status_code") != 200:
+                    raise RuntimeError("FaceRec 测试人物清理失败")
+            except Exception:
+                if primary_error is None:
+                    raise
 
 
 def smoke_screen_det(
@@ -433,8 +482,18 @@ def smoke_screen_det(
         ),
         "ScreenDet",
     )
-    if body.get("code") != 200 or not isinstance(body.get("executed_modules"), list):
+    required = {"tilt", "screen", "quality_abnormal", "occlusion"}
+    executed = body.get("executed_modules")
+    if body.get("code") != 200 or not isinstance(executed, list):
         raise RuntimeError("ScreenDet detect_all 响应合同失败")
+    if body.get("failed_modules") != []:
+        raise RuntimeError("ScreenDet failed_modules 必须为空")
+    if set(executed) != required:
+        raise RuntimeError("ScreenDet 未执行全部要求模块")
+    for module in sorted(required):
+        part = body.get(module)
+        if not isinstance(part, dict) or part.get("code") != 200:
+            raise RuntimeError(f"ScreenDet 模块 {module} 未成功")
     return {
         "executed_modules": body["executed_modules"],
         "failed_module_count": len(body.get("failed_modules") or []),
@@ -442,10 +501,20 @@ def smoke_screen_det(
 
 
 def smoke_ppt(
-    http: httpx.Client, endpoint: str, fixtures: dict[str, Path], timeout: float
+    http: httpx.Client,
+    endpoint: str,
+    fixtures: dict[str, Path],
+    timeout: float,
+    *,
+    callback_listen_host: str,
+    callback_advertise_base_url: str,
+    result_root: Path,
 ) -> dict[str, Any]:
     operator_task_id = "smoke-ppt-" + uuid.uuid4().hex
-    with CallbackCapture() as callback:
+    with CallbackCapture(
+        listen_host=callback_listen_host,
+        advertise_base_url=callback_advertise_base_url,
+    ) as callback:
         accepted = require_http(
             http.post(
                 endpoint.rstrip("/") + "/LocalVideoPPTSliceTasks/v1.0.0",
@@ -467,17 +536,29 @@ def smoke_ppt(
         if terminal.get("status") != 60 or terminal.get("operator_task_id") != operator_task_id:
             raise RuntimeError("PPT Slice 终态回调不是成功终态")
         manifest = Path(str(terminal.get("manifest_path", "")))
+        if not inside(manifest, result_root):
+            raise RuntimeError("PPT manifest 越出受控 result root")
         reject_symlink_chain(manifest, "PPT manifest")
         payload = json.loads(manifest.read_text(encoding="utf-8"))
         count = terminal.get("count")
-        slides = payload.get("slides") if isinstance(payload, dict) else None
+        images = payload.get("images") if isinstance(payload, dict) else None
         if (
             not isinstance(count, int)
             or count < 0
-            or not isinstance(slides, list)
-            or len(slides) != count
+            or not isinstance(images, list)
+            or len(images) != count
         ):
-            raise RuntimeError("PPT manifest 与终态 count 不一致")
+            raise RuntimeError("PPT manifest images 与终态 count 不一致")
+        for item in images:
+            if (
+                not isinstance(item, dict)
+                or set(item) != {"frame_seq", "snap_time", "path"}
+                or not isinstance(item["frame_seq"], int)
+                or not isinstance(item["snap_time"], int)
+                or not inside(Path(str(item["path"])), result_root)
+                or not Path(str(item["path"])).is_file()
+            ):
+                raise RuntimeError("PPT manifest images 字段或图片路径不合法")
         return {"terminal_status": 60, "slide_count": count, "manifest_verified": True}
 
 
@@ -502,7 +583,7 @@ def smoke_text(http: httpx.Client, endpoint: str, _: dict[str, Path], __: float)
     return {"extract_keywords": True, "course_overviews": True}
 
 
-RUNNERS: dict[str, Callable[[httpx.Client, str, dict[str, Path], float], dict[str, Any]]] = {
+RUNNERS: dict[str, Callable[..., dict[str, Any]]] = {
     "asr_offline": smoke_asr_offline,
     "asr_online": smoke_asr_online,
     "ocr": smoke_ocr,
@@ -525,6 +606,7 @@ def make_case(
     mock: bool,
     tag: str,
     sha: str,
+    command: str,
 ) -> dict[str, Any]:
     code = case["operator_code"]
     return {
@@ -533,13 +615,55 @@ def make_case(
         "started_at": started,
         "finished_at": finished,
         "target": code,
-        "command": f"deploy/scripts/run-operator-smoke --cases {code}",
+        "command": command,
         "evidence": evidence,
         "reason": reason,
         "mock": mock,
         "release_tag": tag,
         "git_sha": sha,
     }
+
+
+def reproduction_command(
+    args: argparse.Namespace,
+    *,
+    code: str,
+    endpoint: Any,
+    tag: str,
+    sha: str,
+) -> str:
+    command = [
+        "deploy/scripts/run-operator-smoke",
+        "--release-tag",
+        tag,
+        "--git-sha",
+        sha,
+        "--reports-root",
+        str(args.reports_root),
+        "--fixture-manifest",
+        str(args.fixture_manifest),
+        "--external-fixture-root",
+        str(args.external_fixture_root),
+        "--fixture-target-root",
+        str(args.fixture_target_root),
+        "--result-root",
+        str(args.result_root),
+        "--callback-listen-host",
+        str(args.callback_listen_host),
+        "--callback-advertise-base-url",
+        str(args.callback_advertise_base_url),
+        "--endpoints-json",
+        json.dumps({code: endpoint}, ensure_ascii=False, separators=(",", ":")),
+        "--cases",
+        code,
+        "--case-manifest",
+        str(args.case_manifest),
+        "--timeout-seconds",
+        str(args.timeout_seconds),
+    ]
+    if args.mock:
+        command.append("--mock")
+    return shlex.join(command)
 
 
 def main() -> int:
@@ -560,9 +684,33 @@ def main() -> int:
         selected = [case for case in all_cases if case["operator_code"] in selected_codes]
         for case in selected:
             endpoint = endpoints.get(case["operator_code"])
+            if case["operator_code"] == "facerec":
+                if (
+                    not isinstance(endpoint, list)
+                    or len(endpoint) != 3
+                    or len(set(endpoint)) != 3
+                    or any(
+                        urlsplit(str(item)).scheme not in {"http", "https"}
+                        or not urlsplit(str(item)).netloc
+                        or urlsplit(str(item)).username is not None
+                        or urlsplit(str(item)).password is not None
+                        or bool(urlsplit(str(item)).query)
+                        or bool(urlsplit(str(item)).fragment)
+                        for item in endpoint
+                    )
+                ):
+                    raise ValueError("FaceRec Smoke 必须配置三个不同实例")
+                continue
             parsed = urlsplit(str(endpoint))
             allowed = {"ws", "wss"} if case["operator_code"] == "asr_online" else {"http", "https"}
-            if parsed.scheme not in allowed or not parsed.netloc:
+            if (
+                parsed.scheme not in allowed
+                or not parsed.netloc
+                or parsed.username is not None
+                or parsed.password is not None
+                or bool(parsed.query)
+                or bool(parsed.fragment)
+            ):
                 raise ValueError(f"{case['operator_code']} endpoint 协议不合法")
         fixtures, missing_fixtures = load_and_stage_fixtures(
             args.fixture_manifest,
@@ -580,6 +728,13 @@ def main() -> int:
             for case in selected:
                 started = utc_now()
                 code = case["operator_code"]
+                command = reproduction_command(
+                    args,
+                    code=code,
+                    endpoint=endpoints[code],
+                    tag=tag,
+                    sha=sha,
+                )
                 evidence_path = smoke_root / f"{code}.json"
                 relative = f"smoke/{code}.json"
                 unavailable = [
@@ -613,14 +768,31 @@ def main() -> int:
                             mock=args.mock,
                             tag=tag,
                             sha=sha,
+                            command=command,
                         )
                     )
                     print(f"{code} Smoke 未执行: {reason}", file=sys.stderr)
                     continue
                 try:
-                    summary = RUNNERS[code](
-                        http, str(endpoints[code]), fixtures, args.timeout_seconds
+                    endpoint_value = (
+                        json.dumps(endpoints[code])
+                        if code == "facerec"
+                        else str(endpoints[code])
                     )
+                    if code == "ppt_slice":
+                        summary = smoke_ppt(
+                            http,
+                            endpoint_value,
+                            fixtures,
+                            args.timeout_seconds,
+                            callback_listen_host=args.callback_listen_host,
+                            callback_advertise_base_url=args.callback_advertise_base_url,
+                            result_root=args.result_root,
+                        )
+                    else:
+                        summary = RUNNERS[code](
+                            http, endpoint_value, fixtures, args.timeout_seconds
+                        )
                     evidence_payload = {
                         "schema_version": 1,
                         "operator_code": code,
@@ -643,6 +815,7 @@ def main() -> int:
                             mock=args.mock,
                             tag=tag,
                             sha=sha,
+                            command=command,
                         )
                     )
                 except Exception as exc:  # noqa: BLE001 - one failed case must not hide other evidence
@@ -671,6 +844,7 @@ def main() -> int:
                             mock=args.mock,
                             tag=tag,
                             sha=sha,
+                            command=command,
                         )
                     )
                     print(f"{code} Smoke 失败: {reason}", file=sys.stderr)

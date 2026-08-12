@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import stat
 import subprocess
 import threading
 import time
+import uuid
 import wave
 from base64 import b64decode
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -46,7 +49,12 @@ class _Server:
             def do_GET(self) -> None:  # noqa: N802
                 if owner.delay_seconds:
                     time.sleep(owner.delay_seconds)
-                status, body = owner.responses.get(self.path, (404, {"detail": "missing"}))
+                if self.path in owner.responses:
+                    status, body = owner.responses[self.path]
+                elif owner.post_handler is not None:
+                    status, body = owner.post_handler(self.path, self.headers, b"")
+                else:
+                    status, body = 404, {"detail": "missing"}
                 payload = json.dumps(body, ensure_ascii=False).encode()
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
@@ -212,7 +220,7 @@ def test_registration_verifier_requires_heartbeat_event(tmp_path: Path) -> None:
         [{"event_type": "REGISTERED"}],
     )
     with _Server(responses) as url:
-        completed = _run_registration(tmp_path, url, timeout="0.05")
+        completed = _run_registration(tmp_path, url, timeout="1")
 
     assert completed.returncode != 0
     assert "首次心跳" in completed.stderr
@@ -241,7 +249,7 @@ def _run_renderer(tmp_path: Path, cases: list[dict[str, Any]]) -> subprocess.Com
             evidence = release / relative
             evidence.parent.mkdir(parents=True, exist_ok=True)
             evidence.write_text("{}\n", encoding="utf-8")
-    source = release / "summary" / "cases.json"
+    source = release / "summary" / f"cases-{uuid.uuid4().hex}.json"
     source.write_text(json.dumps(cases, ensure_ascii=False), encoding="utf-8")
     return subprocess.run(
         [
@@ -421,10 +429,22 @@ class _WebSocketServer:
         self.thread.join(timeout=3)
 
 
-def _smoke_handler(tmp_path: Path, *, ppt_callback: bool = True, fail_ocr: bool = False) -> Any:
-    state = {"created": False}
+def _smoke_handler(
+    tmp_path: Path,
+    *,
+    ppt_callback: bool = True,
+    fail_ocr: bool = False,
+    wrong_face: bool = False,
+    vbas_failed: bool = False,
+    screen_failed: bool = False,
+) -> Any:
+    state: dict[str, Any] = {"created": False, "number": None}
 
     def handler(path: str, headers: Any, raw: bytes) -> tuple[int, Any]:
+        for prefix in ("/b", "/c"):
+            if path.startswith(prefix + "/") or path.startswith(prefix + "?"):
+                path = path[len(prefix) :]
+                break
         content_type = headers.get("Content-Type", "")
         if path == "/v1.1.8/seacraft_asr":
             assert "multipart/form-data" in content_type
@@ -443,24 +463,56 @@ def _smoke_handler(tmp_path: Path, *, ppt_callback: bool = True, fail_ocr: bool 
             }
         if path in {"/ImageDetect/student/v1.0.0", "/ImageDetect/teacher/v1.0.0"}:
             assert len(body["ImageList"]) == 1
-            return 200, {"StatusObject": {"Code": 0}, "DataList": [{"ResultList": []}]}
+            status_code = 500 if vbas_failed else 0
+            return 200, {
+                "StatusObject": {
+                    "StatusCode": status_code,
+                    "ImageIdList": ["smoke-frame"],
+                },
+                "DataList": [
+                    {
+                        "StatusObject": {
+                            "StatusCode": status_code,
+                            "ImageId": "smoke-frame",
+                        },
+                        "ResultList": [],
+                    }
+                ],
+            }
         if path == "/detect_all":
             assert body["image"]
+            failed = ["screen"] if screen_failed else []
             return 200, {
                 "code": 200,
-                "executed_modules": ["tilt", "screen"],
-                "failed_modules": [],
+                "executed_modules": ["tilt", "screen", "quality_abnormal", "occlusion"],
+                "failed_modules": failed,
                 "problem_types": [],
+                "tilt": {"code": 200, "result": {"is_tilted": False}},
+                "screen": {"code": 500 if screen_failed else 200, "detections": []},
+                "quality_abnormal": {"code": 200, "is_abnormal": False},
+                "occlusion": {"code": 200, "is_occluded": False},
             }
         if path == "/persons":
             state["created"] = True
+            state["number"] = body["number"]
             return 200, {"status_code": 200, "message": "created", "data": {"photo_path": ""}}
         if path == "/recognize":
             assert state["created"]
             return 200, {
                 "status_code": 200,
                 "message": "matched",
-                "data": {"match": [{"number": "harness-person"}], "embedding": [1, 2, 3]},
+                "data": {
+                    "match": [
+                        {"number": "wrong-person" if wrong_face else body["targets"][0]}
+                    ],
+                    "embedding": [1, 2, 3],
+                },
+            }
+        if path.startswith("/persons?"):
+            return 200, {
+                "status_code": 200,
+                "message": "listed",
+                "data": {"persons": [{"number": state["number"]}]},
             }
         if path == "/persons/delete":
             state["created"] = False
@@ -470,8 +522,26 @@ def _smoke_handler(tmp_path: Path, *, ppt_callback: bool = True, fail_ocr: bool 
         if path == "/v1/course_overviews":
             return 200, {"model": "fake", "result": {"overview": {"full_overview": "概览"}}}
         if path == "/LocalVideoPPTSliceTasks/v1.0.0":
-            manifest = Path(body["video_path"]).parent / "manifest.json"
-            manifest.write_text(json.dumps({"slides": [{"id": "slide-1"}]}), encoding="utf-8")
+            manifest = tmp_path / "result" / body["task_id"] / "ppt" / "manifest.json"
+            image = manifest.parent / "slices" / "ppt-0001-f17-t16s.jpg"
+            image.parent.mkdir(parents=True, exist_ok=True)
+            image.write_bytes(b"jpeg")
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "task_id": body["task_id"],
+                        "operator_task_id": body["operator_task_id"],
+                        "status": 60,
+                        "path": str(image.parent),
+                        "manifest_path": str(manifest),
+                        "count": 1,
+                        "images": [{"frame_seq": 17, "snap_time": 16, "path": str(image)}],
+                        "dynamic_segments": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
             if ppt_callback:
                 callback_body = {
                     "task_id": body["task_id"],
@@ -511,6 +581,8 @@ def _run_smoke(
     *,
     cases: str = "all",
     timeout: str = "2",
+    face_endpoints: list[str] | None = None,
+    callback_base: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     endpoints = {
         code: http_url
@@ -525,6 +597,16 @@ def _run_smoke(
         )
     }
     endpoints["asr_online"] = ws_url
+    if callback_base is None:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect(("192.0.2.1", 9))
+            callback_host = probe.getsockname()[0]
+        finally:
+            probe.close()
+        callback_base = f"http://{callback_host}"
+    if face_endpoints is not None:
+        endpoints["facerec"] = face_endpoints
     return subprocess.run(
         [
             str(SCRIPTS / "run-operator-smoke"),
@@ -540,6 +622,10 @@ def _run_smoke(
             str(manifest.parent / "fixtures"),
             "--fixture-target-root",
             str(tmp_path / "staged"),
+            "--result-root",
+            str(tmp_path / "result"),
+            "--callback-advertise-base-url",
+            callback_base,
             "--endpoints-json",
             json.dumps(endpoints),
             "--cases",
@@ -559,7 +645,13 @@ def _run_smoke(
 def test_smoke_runner_calls_all_eight_operator_contracts_and_redacts(tmp_path: Path) -> None:
     manifest = _fixture_manifest(tmp_path)
     with _WebSocketServer() as ws_url, _Server({}, _smoke_handler(tmp_path)) as http_url:
-        completed = _run_smoke(tmp_path, http_url, ws_url, manifest)
+        completed = _run_smoke(
+            tmp_path,
+            http_url,
+            ws_url,
+            manifest,
+            face_endpoints=[http_url, http_url + "/b", http_url + "/c"],
+        )
 
     assert completed.returncode == 0, completed.stderr
     smoke_dir = _release(tmp_path) / "smoke"
@@ -571,6 +663,90 @@ def test_smoke_runner_calls_all_eight_operator_contracts_and_redacts(tmp_path: P
     assert "embedding" not in combined
     assert "base64" not in combined.lower()
     assert "harness-person" not in combined
+    for case in cases:
+        command = case["command"]
+        assert "--release-tag" in command and TAG in command
+        assert "--git-sha" in command and SHA in command
+        assert "--reports-root" in command
+        assert "--fixture-manifest" in command
+        assert "--external-fixture-root" in command
+        assert "--fixture-target-root" in command
+        assert "--result-root" in command
+        assert "--endpoints-json" in command
+        assert "--callback-advertise-base-url" in command
+
+
+def test_ppt_callback_url_is_not_container_loopback_and_manifest_uses_images(
+    tmp_path: Path,
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    callback_urls: list[str] = []
+    handler = _smoke_handler(tmp_path)
+
+    def inspect(path: str, headers: Any, body: bytes) -> tuple[int, Any]:
+        if path == "/LocalVideoPPTSliceTasks/v1.0.0":
+            callback = json.loads(body)["result_callback_uri"]
+            callback_urls.append(callback)
+            assert "127.0.0.1" not in callback and "0.0.0.0" not in callback
+        return handler(path, headers, body)
+
+    with _WebSocketServer() as ws_url, _Server({}, inspect) as http_url:
+        completed = _run_smoke(tmp_path, http_url, ws_url, manifest, cases="ppt_slice")
+    assert completed.returncode == 0, completed.stderr
+    assert callback_urls and callback_urls[0].startswith("http://")
+
+
+def test_facerec_requires_three_distinct_instances_and_exact_created_match(
+    tmp_path: Path,
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    with _WebSocketServer() as ws_url, _Server({}, _smoke_handler(tmp_path)) as http_url:
+        duplicate = _run_smoke(
+            tmp_path,
+            http_url,
+            ws_url,
+            manifest,
+            cases="facerec",
+            face_endpoints=[http_url, http_url, http_url],
+        )
+    assert duplicate.returncode != 0
+    assert "三个不同" in duplicate.stderr
+
+    other = tmp_path / "wrong"
+    other.mkdir()
+    wrong_manifest = _fixture_manifest(other)
+    with _WebSocketServer() as ws_url, _Server(
+        {}, _smoke_handler(other, wrong_face=True)
+    ) as http_url:
+        wrong = _run_smoke(
+            other,
+            http_url,
+            ws_url,
+            wrong_manifest,
+            cases="facerec",
+            face_endpoints=[http_url, http_url + "/b", http_url + "/c"],
+        )
+    assert wrong.returncode != 0
+    assert "刚创建" in wrong.stderr
+
+
+@pytest.mark.parametrize(
+    ("case", "kwargs", "expected"),
+    (
+        ("vbas", {"vbas_failed": True}, "StatusCode"),
+        ("screen_det", {"screen_failed": True}, "failed_modules"),
+    ),
+)
+def test_visual_smoke_rejects_business_level_failure(
+    tmp_path: Path, case: str, kwargs: dict[str, bool], expected: str
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    with _WebSocketServer() as ws_url, _Server(
+        {}, _smoke_handler(tmp_path, **kwargs)
+    ) as http_url:
+        completed = _run_smoke(tmp_path, http_url, ws_url, manifest, cases=case)
+    assert completed.returncode != 0
+    assert expected in completed.stderr
 
 
 def test_smoke_runner_rejects_fixture_hash_mismatch(tmp_path: Path) -> None:
@@ -681,6 +857,18 @@ def test_registration_http_timeout_is_bounded_and_reported(tmp_path: Path) -> No
     assert "无法连接" in "".join(report["issues"])
 
 
+def test_registration_events_share_one_global_deadline(tmp_path: Path) -> None:
+    instances = _expected_instances()
+    responses = _events(instances)
+    with _Server(responses, delay_seconds=0.03) as url:
+        started = time.monotonic()
+        completed = _run_registration(tmp_path, url, timeout="0.12")
+        elapsed = time.monotonic() - started
+    assert completed.returncode != 0
+    assert elapsed < 0.35
+    assert "全局超时" in completed.stderr
+
+
 def test_smoke_http_timeout_is_bounded_and_reported(tmp_path: Path) -> None:
     manifest = _fixture_manifest(tmp_path)
     started = time.monotonic()
@@ -706,3 +894,64 @@ def test_renderer_is_idempotent_and_refuses_different_existing_output(tmp_path: 
     third = _run_renderer(tmp_path, cases)
     assert third.returncode != 0
     assert output.read_text(encoding="utf-8") == '{"tampered":true}\n'
+
+
+def test_renderer_markdown_conflict_does_not_publish_json(tmp_path: Path) -> None:
+    cases = [_case("INF-001")]
+    release = _release(tmp_path)
+    markdown = release / "summary" / "report.md"
+    markdown.write_text("conflict\n", encoding="utf-8")
+    completed = _run_renderer(tmp_path, cases)
+    assert completed.returncode != 0
+    assert not (release / "summary" / "report.json").exists()
+
+
+def test_renderer_recovers_after_process_crash_after_first_rename(tmp_path: Path) -> None:
+    cases = [_case("INF-001")]
+    release = _release(tmp_path)
+    source = release / "summary" / "cases.json"
+    evidence = release / "smoke" / "ocr.json"
+    evidence.write_text("{}\n", encoding="utf-8")
+    source.write_text(json.dumps(cases), encoding="utf-8")
+    command = [
+        str(PYTHON),
+        str(PLATFORM_ROOT / "scripts" / "render_milestone_2b_report.py"),
+        "--input",
+        str(source),
+        "--release-root",
+        str(release),
+        "--output-json",
+        str(release / "summary" / "report.json"),
+        "--output-markdown",
+        str(release / "summary" / "report.md"),
+    ]
+    env = os.environ.copy()
+    env["REPORT_TRANSACTION_CRASH_AFTER_FIRST_RENAME"] = "1"
+    failed = subprocess.run(command, env=env, text=True, capture_output=True, check=False)
+    assert failed.returncode != 0
+    recovered = subprocess.run(command, text=True, capture_output=True, check=False)
+    assert recovered.returncode == 0, recovered.stderr
+    assert (release / "summary" / "report.json").is_file()
+    assert (release / "summary" / "report.md").is_file()
+    assert not (release / "summary" / ".report-transaction.journal").exists()
+    assert not list((release / "summary").glob(".report.json.*"))
+    assert not list((release / "summary").glob(".report.md.*"))
+
+
+def test_renderer_concurrent_same_content_is_idempotent(tmp_path: Path) -> None:
+    cases = [_case("INF-001")]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: _run_renderer(tmp_path, cases), range(2)))
+    assert [item.returncode for item in results] == [0, 0]
+
+
+def test_renderer_concurrent_different_content_has_one_winner(tmp_path: Path) -> None:
+    first = [_case("INF-001")]
+    second = [{**_case("INF-002"), "reason": "另一份报告"}]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(_run_renderer, tmp_path, cases)
+            for cases in (first, second)
+        ]
+        results = [future.result() for future in futures]
+    assert sorted(item.returncode for item in results) == [0, 1]

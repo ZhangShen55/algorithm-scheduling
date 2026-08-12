@@ -186,12 +186,22 @@ def validate_instances(
 
 
 def heartbeat_issues(
-    base_url: str, observed: dict[str, dict[str, Any]], timeout: float
+    base_url: str,
+    observed: dict[str, dict[str, Any]],
+    request_timeout: float,
+    deadline: float,
 ) -> list[str]:
     issues = []
     for instance_id in sorted(observed):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            issues.append("注册验证全局超时，心跳审计未完成")
+            break
         quoted = urllib.parse.quote(instance_id, safe="")
-        events = get_json(f"{base_url}/ops/operator-instances/{quoted}/events?limit=100", timeout)
+        events = get_json(
+            f"{base_url}/ops/operator-instances/{quoted}/events?limit=100",
+            min(request_timeout, remaining),
+        )
         if not isinstance(events, list) or not any(
             isinstance(event, dict)
             and event.get("event_type") == "HEARTBEAT_SUMMARY"
@@ -230,15 +240,30 @@ def main() -> int:
         deadline = time.monotonic() + args.timeout_seconds
         while True:
             try:
-                rows = get_json(f"{base_url}/ops/operator-instances", args.request_timeout_seconds)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("注册验证全局超时")
+                rows = get_json(
+                    f"{base_url}/ops/operator-instances",
+                    min(args.request_timeout_seconds, remaining),
+                )
                 observed_count = len(rows) if isinstance(rows, list) else 0
                 last_issues, observed = validate_instances(rows, expected)
-                if not last_issues and set(observed) == set(expected):
-                    last_issues.extend(
-                        heartbeat_issues(base_url, observed, args.request_timeout_seconds)
+                if last_issues:
+                    break
+                last_issues.extend(
+                    heartbeat_issues(
+                        base_url,
+                        observed,
+                        args.request_timeout_seconds,
+                        deadline,
                     )
-            except (ConnectionError, ValueError) as exc:
-                last_issues = [str(exc)]
+                )
+            except (ConnectionError, ValueError, TimeoutError) as exc:
+                if time.monotonic() >= deadline:
+                    last_issues = [str(exc), "注册验证全局超时"]
+                else:
+                    last_issues = [str(exc)]
             if not last_issues or time.monotonic() >= deadline:
                 break
             time.sleep(min(args.poll_seconds, max(0, deadline - time.monotonic())))

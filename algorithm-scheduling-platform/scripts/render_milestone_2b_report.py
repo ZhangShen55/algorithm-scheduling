@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
 import stat
 import sys
 import tempfile
+import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -109,16 +111,29 @@ def validate(cases: Any, release_root: Path) -> tuple[list[dict[str, Any]], str,
     return validated, release_tag, git_sha
 
 
-def atomic_create(path: Path, content: bytes) -> None:
-    if path.exists() or path.is_symlink():
-        if path.is_symlink() or not path.is_file():
+def fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def require_safe_output(path: Path, content: bytes) -> str:
+    if path.is_symlink():
+        raise ValueError(f"输出路径不安全: {path}")
+    if path.exists():
+        if not path.is_file():
             raise ValueError(f"输出路径不安全: {path}")
         if path.read_bytes() == content:
-            return
+            return "same"
         raise ValueError(f"拒绝覆盖同一 release/SHA 的不同报告: {path}")
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = Path(name)
+    return "missing"
+
+
+def write_private_temp(parent: Path, name: str, content: bytes) -> Path:
+    descriptor, temporary_name = tempfile.mkstemp(prefix=name, dir=parent)
+    temporary = Path(temporary_name)
     try:
         os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "wb", closefd=True) as stream:
@@ -126,13 +141,99 @@ def atomic_create(path: Path, content: bytes) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         descriptor = -1
-        os.link(temporary, path)
-        temporary.unlink()
+        return temporary
     finally:
         if descriptor >= 0:
             os.close(descriptor)
-        if temporary.exists():
-            temporary.unlink()
+
+
+def recover_transaction(parent: Path, journal: Path) -> None:
+    if not journal.exists():
+        return
+    state = json.loads(journal.read_text(encoding="utf-8"))
+    if not isinstance(state, dict) or set(state) != {"published", "temporaries"}:
+        raise ValueError("报告事务 journal 不合法")
+    for name in state["published"]:
+        candidate = parent / safe_relative(str(name))
+        if candidate.parent != parent or candidate.is_symlink():
+            raise ValueError("报告事务发布路径不安全")
+        candidate.unlink(missing_ok=True)
+    for name in state["temporaries"]:
+        candidate = parent / safe_relative(str(name))
+        if candidate.parent != parent or candidate.is_symlink():
+            raise ValueError("报告事务临时路径不安全")
+        candidate.unlink(missing_ok=True)
+    journal.unlink()
+    fsync_directory(parent)
+
+
+def publish_report_transaction(
+    release_root: Path,
+    outputs: tuple[tuple[Path, bytes], tuple[Path, bytes]],
+) -> None:
+    parents = {path.parent.resolve(strict=True) for path, _ in outputs}
+    if len(parents) != 1:
+        raise ValueError("JSON 与 Markdown 必须位于同一个 release 汇总目录")
+    parent = next(iter(parents))
+    if parent != (release_root / "summary").resolve(strict=True):
+        raise ValueError("报告输出必须位于当前 release 的 summary 目录")
+    lock = parent / ".report-transaction.lock"
+    lock_fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    journal = parent / ".report-transaction.journal"
+    temporaries: list[Path] = []
+    published: list[Path] = []
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        recover_transaction(parent, journal)
+        states = [require_safe_output(path, content) for path, content in outputs]
+        if states == ["same", "same"]:
+            return
+        if "same" in states:
+            raise ValueError("报告双文件状态不一致，拒绝补写半套报告")
+        transaction_id = uuid.uuid4().hex
+        for path, content in outputs:
+            temporaries.append(
+                write_private_temp(parent, f".{path.name}.{transaction_id}.", content)
+            )
+        journal_payload = {
+            "published": [],
+            "temporaries": [path.name for path in temporaries],
+        }
+        journal.write_text(json.dumps(journal_payload), encoding="utf-8")
+        os.chmod(journal, 0o600)
+        with journal.open("rb") as stream:
+            os.fsync(stream.fileno())
+        fsync_directory(parent)
+        for index, ((destination, _), temporary) in enumerate(
+            zip(outputs, temporaries, strict=True)
+        ):
+            require_safe_output(destination, outputs[index][1])
+            os.replace(temporary, destination)
+            published.append(destination)
+            journal_payload["published"] = [path.name for path in published]
+            journal_payload["temporaries"] = [
+                path.name for path in temporaries if path.exists()
+            ]
+            journal.write_text(json.dumps(journal_payload), encoding="utf-8")
+            with journal.open("rb") as stream:
+                os.fsync(stream.fileno())
+            fsync_directory(parent)
+            if index == 0 and os.getenv("REPORT_TRANSACTION_CRASH_AFTER_FIRST_RENAME"):
+                os._exit(86)
+            if index == 0 and os.getenv("REPORT_TRANSACTION_FAIL_AFTER_FIRST_RENAME"):
+                raise RuntimeError("注入第一文件发布后的事务失败")
+        journal.unlink()
+        fsync_directory(parent)
+    except Exception:
+        for path in published:
+            path.unlink(missing_ok=True)
+        for path in temporaries:
+            path.unlink(missing_ok=True)
+        journal.unlink(missing_ok=True)
+        fsync_directory(parent)
+        raise
+    finally:
+        os.close(lock_fd)
 
 
 def render(cases: list[dict[str, Any]], tag: str, sha: str) -> tuple[dict[str, Any], str]:
@@ -183,11 +284,16 @@ def main() -> int:
         cases = json.loads(args.input.read_text(encoding="utf-8"))
         validated, tag, sha = validate(cases, args.release_root)
         document, markdown = render(validated, tag, sha)
-        atomic_create(
-            args.output_json,
-            (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode(),
+        publish_report_transaction(
+            args.release_root,
+            (
+                (
+                    args.output_json,
+                    (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode(),
+                ),
+                (args.output_markdown, markdown.encode()),
+            ),
         )
-        atomic_create(args.output_markdown, markdown.encode())
         return 0
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"报告生成失败: {exc}", file=sys.stderr)
