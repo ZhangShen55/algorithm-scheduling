@@ -105,6 +105,13 @@ Content-Type: application/json
 }
 ```
 
+平台只调用离线 ASR `/v1.1.8/seacraft_asr`。`language` 去除首尾空白并转为小写后，`auto`、`zh`、`en` 使用 Paraformer；当前唯一小语种白名单 `fr` 使用 Faster-Whisper。
+
+- `fr` 请求 `showSpk=true` 或 `showRoleIdentify=true` 时，每段 `role` 为 `null`；两者均为 `false` 时不返回 `role`。
+- `fr` 请求 `showEmotion=true` 时，每段 `emotion` 为 `null`；为 `false` 时不返回 `emotion`。
+- `segment_words` 每段始终存在。`wordTimestamps=false` 时为 `[]`；为 `true` 时返回真实词时间，个别无法对齐的段允许为 `[]`。
+- 算子未开启小语种或 Whisper 模型未就绪时，`fr` 返回 HTTP 200、`code=4003`；空值或其他未支持语言返回 HTTP 200、`code=4009`。平台将这些响应记为节点业务失败。
+
 `wordTimestamps` 保留但不建议开启。已完成 ASR 再以不同参数提交时，平台复用原结果和原 `effective_params`，不会自动重算或生成新版本。
 
 ### 3.4 学生行为示例
@@ -209,7 +216,8 @@ GET /api/course-jobs/{task_id}
 - `PPT_SLICE` 返回 `path/count`，例如 `/data/result/course-001/ppt/slices`。
 - `PPT_OCR.result` 按 `ppt_image_id` 返回 OCR 结构化数据和进度。
 - `PPT_KEYWORDS.result` 按同一 `ppt_image_id` 返回关键词和进度。
-- `ASR_TRANSCRIPTION.result` 保存离线 ASR v1.1.8 完整成功响应；`effective_params` 单独返回。
+- `ASR_TRANSCRIPTION.result` 保存离线 ASR v1.1.8 完整成功响应；成功顶层保持 `language`、`segments`、`text`、`speed_info`、`load_audio_time_ms`、`gpu_time_ms`，不增加能力状态或成功业务码字段；`effective_params` 单独返回。
+- ASR 每段 `speed` 使用 `int(内容数量 × 60 / (ed-bg) × 0.4)`；`speed_info` 保持 1/5/10 分钟窗口统计且不乘 `0.4`。
 - `COURSE_OVERVIEW.result` 保存原 `GenericResponse`，其中仍有算法自身的嵌套 `result.overview`。
 - `TEACHER_BEHAVIOR.result` 返回板书、坐、站、讲授区间和精选证据。没有某行为时对应数组为 `[]`，状态仍为 60。
 - `STUDENT_BEHAVIOR.result` 返回人数、到课率、区域入座率、provided 标识、行为统计和精选证据。
@@ -335,7 +343,8 @@ ws://online-gateway-service:8001
 4. 查询运行中组合任务，确认各泳道和节点状态可独立观察。
 5. 验证 `PPT_SLICE.path` 在共享挂载上可读，OCR/关键词从 `result` 读取。
 6. 验证 ASR 默认参数和覆盖后的 `effective_params`。
-7. 在缺少 front/back 区域时验证 provided 标识为 false，结果多次查询保持稳定。
-8. 分别发送 VBas、人脸、图像质量单图 Base64 请求，确认请求级实例分发。
-9. 建立实时 ASR 会话，确认同一会话粘性和断开后的容量释放。
-10. 使用双方约定的 `X-Trace-ID` 定位一次完整请求日志。
+7. 验证 `fr` 的条件字段、词时间和语速响应，并验证小语种关闭时 HTTP 200、`code=4003`。
+8. 在缺少 front/back 区域时验证 provided 标识为 false，结果多次查询保持稳定。
+9. 分别发送 VBas、人脸、图像质量单图 Base64 请求，确认请求级实例分发。
+10. 建立实时 ASR 会话，确认同一会话粘性和断开后的容量释放。
+11. 使用双方约定的 `X-Trace-ID` 定位一次完整请求日志。
