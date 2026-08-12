@@ -1,15 +1,9 @@
 name: algorithm-operators
 
-x-operator-environment: &operator-environment
-  PLATFORM_REGISTRATION_ENABLED: "true"
-  PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-  PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
-
 x-operator-common: &operator-common
   restart: unless-stopped
-  networks:
-    - algorithm-platform
-  healthcheck:
+  networks: [algorithm-platform]
+  healthcheck: &operator-healthcheck
     test:
       - CMD-SHELL
       - >-
@@ -21,171 +15,523 @@ x-operator-common: &operator-common
     retries: 10
     start_period: 120s
 
+x-gpu0-reservation: &gpu0-reservation
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          device_ids: ["0"]
+          capabilities: [gpu]
+x-gpu1-reservation: &gpu1-reservation
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          device_ids: ["1"]
+          capabilities: [gpu]
+x-gpu2-reservation: &gpu2-reservation
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          device_ids: ["2"]
+          capabilities: [gpu]
+
+x-asr-offline: &asr-offline
+  <<: *operator-common
+  image: ${ASR_OFFLINE_IMAGE:-seacraft-asr-offline:v1.0_260812}
+  volumes:
+    - {type: bind, source: "${COURSE_ROOT:-/data/course}", target: /data/course}
+    - {type: bind, source: "${RESULT_ROOT:-/data/result}", target: /data/result}
+    - {type: bind, source: ./config/operators/asr_offline.gpu.toml, target: /config.toml, read_only: true}
+x-asr-online: &asr-online
+  <<: *operator-common
+  image: ${ASR_ONLINE_IMAGE:-seacraft-asr-online:v1.0_260812}
+  volumes:
+    - {type: bind, source: "${COURSE_ROOT:-/data/course}", target: /data/course}
+    - {type: bind, source: "${RESULT_ROOT:-/data/result}", target: /data/result}
+    - {type: bind, source: ./config/operators/asr_online.gpu.toml, target: /config.toml, read_only: true}
+x-ocr: &ocr
+  <<: *operator-common
+  image: ${OCR_IMAGE:-algorithm-ocr:v1.0_260812}
+  volumes:
+    - {type: bind, source: "${COURSE_ROOT:-/data/course}", target: /data/course}
+    - {type: bind, source: "${RESULT_ROOT:-/data/result}", target: /data/result}
+    - {type: bind, source: ./config/operators/ocr.gpu.toml, target: /app/config.toml, read_only: true}
+x-vbas: &vbas
+  <<: *operator-common
+  image: ${VBAS_IMAGE:-algorithm-vbas:v1.0_260812}
+  volumes:
+    - {type: bind, source: "${COURSE_ROOT:-/data/course}", target: /data/course}
+    - {type: bind, source: "${RESULT_ROOT:-/data/result}", target: /data/result}
+    - {type: bind, source: ./config/operators/vbas.gpu.toml, target: /workspace/config.toml, read_only: true}
+x-facerec: &facerec
+  <<: *operator-common
+  image: ${FACEREC_IMAGE:-algorithm-facerec:v1.0_260812}
+  volumes:
+    - {type: bind, source: "${COURSE_ROOT:-/data/course}", target: /data/course}
+    - {type: bind, source: "${RESULT_ROOT:-/data/result}", target: /data/result}
+    - {type: bind, source: ./config/operators/facerec.gpu.toml, target: /config/config.toml, read_only: true}
+x-screen-det: &screen-det
+  <<: *operator-common
+  image: ${SCREEN_DET_IMAGE:-algorithm-screen-det:v1.0_260812}
+  volumes:
+    - {type: bind, source: "${COURSE_ROOT:-/data/course}", target: /data/course}
+    - {type: bind, source: "${RESULT_ROOT:-/data/result}", target: /data/result}
+    - {type: bind, source: ./config/operators/screen_det.gpu.toml, target: /app/config.toml, read_only: true}
+x-ppt-slice: &ppt-slice
+  <<: *operator-common
+  image: ${PPT_SLICE_IMAGE:-algorithm-ppt-slice:v1.0_260812}
+  volumes:
+    - {type: bind, source: "${COURSE_ROOT:-/data/course}", target: /data/course}
+    - {type: bind, source: "${RESULT_ROOT:-/data/result}", target: /data/result}
+    - {type: bind, source: ./config/operators/ppt_slice.cpu.toml, target: /workspace/config.toml, read_only: true}
+x-text-analysis: &text-analysis
+  <<: *operator-common
+  image: ${TEXT_ANALYSIS_IMAGE:-algorithm-text-analysis:v1.0_260812}
+  volumes:
+    - {type: bind, source: "${COURSE_ROOT:-/data/course}", target: /data/course}
+    - {type: bind, source: "${RESULT_ROOT:-/data/result}", target: /data/result}
+    - {type: bind, source: ./config/operators/text_analysis.cpu.toml, target: /app/config.toml, read_only: true}
+
 services:
   asr-offline-gpu0:
-    <<: *operator-common
-    image: ${ASR_OFFLINE_IMAGE:-seacraft-asr-offline:latest}
+    <<: *asr-offline
+    profiles: [gpu0]
     ports: ["18083:8083"]
     environment:
-      <<: *operator-environment
       OPERATOR_PORT: "8083"
       PORT: "8083"
+      CONFIG_PATH: /config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
       PLATFORM_INSTANCE_ID: asr-offline-gpu0
       PLATFORM_SERVICE_URL: http://asr-offline-gpu0:8083
       PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "0"
+      GPU_PROCESS_NAME: asr_offline
       NVIDIA_VISIBLE_DEVICES: "0"
-    volumes:
-      - ${COURSE_ROOT:-/data/course}:/data/course
-      - ${RESULT_ROOT:-/data/result}:/data/result
-      - ../../asr_offline/config.toml:/config.toml:ro
-
-  asr-online-gpu0:
-    <<: *operator-common
-    image: ${ASR_ONLINE_IMAGE:-seacraft-asr-online:latest}
-    ports: ["18084:8084"]
-    environment:
-      <<: *operator-environment
-      OPERATOR_PORT: "8084"
-      PORT: "8084"
-      PLATFORM_INSTANCE_ID: asr-online-gpu0
-      PLATFORM_SERVICE_URL: http://asr-online-gpu0:8084
-      PLATFORM_DECLARED_CAPACITY: "1"
-      PLATFORM_GPU_ID: "0"
-      NVIDIA_VISIBLE_DEVICES: "0"
-    volumes:
-      - ${COURSE_ROOT:-/data/course}:/data/course
-      - ${RESULT_ROOT:-/data/result}:/data/result
-      - ../../asr_online/config.toml:/config.toml:ro
+    deploy: *gpu0-reservation
 
   asr-offline-gpu1:
-    <<: *operator-common
-    image: ${ASR_OFFLINE_IMAGE:-seacraft-asr-offline:latest}
+    <<: *asr-offline
+    profiles: [gpu1]
     ports: ["28083:8083"]
     environment:
-      <<: *operator-environment
       OPERATOR_PORT: "8083"
       PORT: "8083"
+      CONFIG_PATH: /config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
       PLATFORM_INSTANCE_ID: asr-offline-gpu1
       PLATFORM_SERVICE_URL: http://asr-offline-gpu1:8083
       PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "1"
+      GPU_PROCESS_NAME: asr_offline
       NVIDIA_VISIBLE_DEVICES: "1"
-    volumes:
-      - ${COURSE_ROOT:-/data/course}:/data/course
-      - ${RESULT_ROOT:-/data/result}:/data/result
-      - ../../asr_offline/config.toml:/config.toml:ro
+    deploy: *gpu1-reservation
 
-  asr-online-gpu1:
-    <<: *operator-common
-    image: ${ASR_ONLINE_IMAGE:-seacraft-asr-online:latest}
-    ports: ["28084:8084"]
+  asr-offline-gpu2:
+    <<: *asr-offline
+    profiles: [gpu2]
+    ports: ["38083:8083"]
     environment:
-      <<: *operator-environment
+      OPERATOR_PORT: "8083"
+      PORT: "8083"
+      CONFIG_PATH: /config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: asr-offline-gpu2
+      PLATFORM_SERVICE_URL: http://asr-offline-gpu2:8083
+      PLATFORM_DECLARED_CAPACITY: "1"
+      PLATFORM_GPU_ID: "2"
+      GPU_PROCESS_NAME: asr_offline
+      NVIDIA_VISIBLE_DEVICES: "2"
+    deploy: *gpu2-reservation
+
+  asr-online-gpu0:
+    <<: *asr-online
+    profiles: [gpu0]
+    ports: ["18084:8084"]
+    environment:
       OPERATOR_PORT: "8084"
       PORT: "8084"
+      CONFIG_PATH: /config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: asr-online-gpu0
+      PLATFORM_SERVICE_URL: http://asr-online-gpu0:8084
+      PLATFORM_DECLARED_CAPACITY: "1"
+      PLATFORM_GPU_ID: "0"
+      GPU_PROCESS_NAME: asr_online
+      NVIDIA_VISIBLE_DEVICES: "0"
+    deploy: *gpu0-reservation
+
+  asr-online-gpu1:
+    <<: *asr-online
+    profiles: [gpu1]
+    ports: ["28084:8084"]
+    environment:
+      OPERATOR_PORT: "8084"
+      PORT: "8084"
+      CONFIG_PATH: /config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
       PLATFORM_INSTANCE_ID: asr-online-gpu1
       PLATFORM_SERVICE_URL: http://asr-online-gpu1:8084
       PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "1"
+      GPU_PROCESS_NAME: asr_online
       NVIDIA_VISIBLE_DEVICES: "1"
-    volumes:
-      - ${COURSE_ROOT:-/data/course}:/data/course
-      - ${RESULT_ROOT:-/data/result}:/data/result
-      - ../../asr_online/config.toml:/config.toml:ro
+    deploy: *gpu1-reservation
 
-  ppt-slice:
-    <<: *operator-common
-    image: ${PPT_SLICE_IMAGE:-algorithm-ppt-slice:latest}
-    ports: ["19001:9001"]
+  asr-online-gpu2:
+    <<: *asr-online
+    profiles: [gpu2]
+    ports: ["38084:8084"]
     environment:
-      <<: *operator-environment
-      OPERATOR_PORT: "9001"
-      PLATFORM_INSTANCE_ID: ppt-slice
-      PLATFORM_SERVICE_URL: http://ppt-slice:9001
-      MAX_CONCURRENT_TASKS: ${PPT_SLICE_CAPACITY:-15}
-      PLATFORM_DECLARED_CAPACITY: ${PPT_SLICE_CAPACITY:-15}
-    volumes:
-      - ${COURSE_ROOT:-/data/course}:/data/course
-      - ${RESULT_ROOT:-/data/result}:/data/result
+      OPERATOR_PORT: "8084"
+      PORT: "8084"
+      CONFIG_PATH: /config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: asr-online-gpu2
+      PLATFORM_SERVICE_URL: http://asr-online-gpu2:8084
+      PLATFORM_DECLARED_CAPACITY: "1"
+      PLATFORM_GPU_ID: "2"
+      GPU_PROCESS_NAME: asr_online
+      NVIDIA_VISIBLE_DEVICES: "2"
+    deploy: *gpu2-reservation
 
-  ocr:
-    <<: *operator-common
-    image: ${OCR_IMAGE:-algorithm-ocr:latest}
+  ocr-gpu0:
+    <<: *ocr
+    profiles: [gpu0]
     ports: ["18866:8866"]
     environment:
-      <<: *operator-environment
       OPERATOR_PORT: "8866"
-      PLATFORM_INSTANCE_ID: ocr
-      PLATFORM_SERVICE_URL: http://ocr:8866
-      PLATFORM_DECLARED_CAPACITY: ${OCR_CAPACITY:-1}
-      PLATFORM_GPU_ID: ${OCR_GPU_ID:-0}
-      NVIDIA_VISIBLE_DEVICES: ${OCR_GPU_ID:-0}
-    volumes:
-      - ${COURSE_ROOT:-/data/course}:/data/course
-      - ${RESULT_ROOT:-/data/result}:/data/result
+      CONFIG_PATH: /app/config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: ocr-gpu0
+      PLATFORM_SERVICE_URL: http://ocr-gpu0:8866
+      PLATFORM_DECLARED_CAPACITY: "1"
+      PLATFORM_GPU_ID: "0"
+      GPU_PROCESS_NAME: ocr
+      NVIDIA_VISIBLE_DEVICES: "0"
+    deploy: *gpu0-reservation
 
-  text-analysis:
-    <<: *operator-common
-    image: ${TEXT_ANALYSIS_IMAGE:-algorithm-text-analysis:latest}
-    ports: ["18000:8000"]
+  ocr-gpu1:
+    <<: *ocr
+    profiles: [gpu1]
+    ports: ["28866:8866"]
     environment:
-      <<: *operator-environment
-      OPERATOR_PORT: "8000"
-      PLATFORM_INSTANCE_ID: text-analysis
-      PLATFORM_SERVICE_URL: http://text-analysis:8000
-      PLATFORM_DECLARED_CAPACITY: ${TEXT_ANALYSIS_CAPACITY:-4}
-    volumes:
-      - ${COURSE_ROOT:-/data/course}:/data/course
-      - ${RESULT_ROOT:-/data/result}:/data/result
+      OPERATOR_PORT: "8866"
+      CONFIG_PATH: /app/config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: ocr-gpu1
+      PLATFORM_SERVICE_URL: http://ocr-gpu1:8866
+      PLATFORM_DECLARED_CAPACITY: "1"
+      PLATFORM_GPU_ID: "1"
+      GPU_PROCESS_NAME: ocr
+      NVIDIA_VISIBLE_DEVICES: "1"
+    deploy: *gpu1-reservation
 
-  vbas:
-    <<: *operator-common
-    image: ${VBAS_IMAGE:-algorithm-vbas:latest}
+  ocr-gpu2:
+    <<: *ocr
+    profiles: [gpu2]
+    ports: ["38866:8866"]
+    environment:
+      OPERATOR_PORT: "8866"
+      CONFIG_PATH: /app/config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: ocr-gpu2
+      PLATFORM_SERVICE_URL: http://ocr-gpu2:8866
+      PLATFORM_DECLARED_CAPACITY: "1"
+      PLATFORM_GPU_ID: "2"
+      GPU_PROCESS_NAME: ocr
+      NVIDIA_VISIBLE_DEVICES: "2"
+    deploy: *gpu2-reservation
+
+  vbas-gpu0:
+    <<: *vbas
+    profiles: [gpu0]
     ports: ["18981:8981"]
     environment:
-      <<: *operator-environment
       OPERATOR_PORT: "8981"
-      PLATFORM_INSTANCE_ID: vbas
-      PLATFORM_SERVICE_URL: http://vbas:8981
-      PLATFORM_DECLARED_CAPACITY: ${VBAS_CAPACITY:-1}
-      PLATFORM_GPU_ID: ${VBAS_GPU_ID:-0}
-      NVIDIA_VISIBLE_DEVICES: ${VBAS_GPU_ID:-0}
-    volumes:
-      - ${COURSE_ROOT:-/data/course}:/data/course
-      - ${RESULT_ROOT:-/data/result}:/data/result
+      CONFIG_PATH: /workspace/config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: vbas-gpu0
+      PLATFORM_SERVICE_URL: http://vbas-gpu0:8981
+      PLATFORM_DECLARED_CAPACITY: "1"
+      PLATFORM_GPU_ID: "0"
+      GPU_PROCESS_NAME: vbas
+      NVIDIA_VISIBLE_DEVICES: "0"
+    deploy: *gpu0-reservation
 
-  facerec:
-    <<: *operator-common
-    image: ${FACEREC_IMAGE:-algorithm-facerec:latest}
+  vbas-gpu1:
+    <<: *vbas
+    profiles: [gpu1]
+    ports: ["28981:8981"]
+    environment:
+      OPERATOR_PORT: "8981"
+      CONFIG_PATH: /workspace/config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: vbas-gpu1
+      PLATFORM_SERVICE_URL: http://vbas-gpu1:8981
+      PLATFORM_DECLARED_CAPACITY: "1"
+      PLATFORM_GPU_ID: "1"
+      GPU_PROCESS_NAME: vbas
+      NVIDIA_VISIBLE_DEVICES: "1"
+    deploy: *gpu1-reservation
+
+  vbas-gpu2:
+    <<: *vbas
+    profiles: [gpu2]
+    ports: ["38981:8981"]
+    environment:
+      OPERATOR_PORT: "8981"
+      CONFIG_PATH: /workspace/config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: vbas-gpu2
+      PLATFORM_SERVICE_URL: http://vbas-gpu2:8981
+      PLATFORM_DECLARED_CAPACITY: "1"
+      PLATFORM_GPU_ID: "2"
+      GPU_PROCESS_NAME: vbas
+      NVIDIA_VISIBLE_DEVICES: "2"
+    deploy: *gpu2-reservation
+
+  facerec-gpu0:
+    <<: *facerec
+    profiles: [gpu0]
     ports: ["18003:8000"]
     environment:
-      <<: *operator-environment
       OPERATOR_PORT: "8000"
-      PLATFORM_INSTANCE_ID: facerec
-      PLATFORM_SERVICE_URL: http://facerec:8000
-      PLATFORM_DECLARED_CAPACITY: ${FACEREC_CAPACITY:-1}
-      PLATFORM_GPU_ID: ${FACEREC_GPU_ID:-0}
-      NVIDIA_VISIBLE_DEVICES: ${FACEREC_GPU_ID:-0}
-    volumes:
-      - ${COURSE_ROOT:-/data/course}:/data/course
-      - ${RESULT_ROOT:-/data/result}:/data/result
+      CONFIG_PATH: /config/config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: facerec-gpu0
+      PLATFORM_SERVICE_URL: http://facerec-gpu0:8000
+      PLATFORM_DECLARED_CAPACITY: "1"
+      PLATFORM_GPU_ID: "0"
+      GPU_PROCESS_NAME: facerec
+      NVIDIA_VISIBLE_DEVICES: "0"
+    deploy: *gpu0-reservation
 
-  screen-det:
-    <<: *operator-common
-    image: ${SCREEN_DET_IMAGE:-algorithm-screen-det:latest}
+  facerec-gpu1:
+    <<: *facerec
+    profiles: [gpu1]
+    ports: ["28003:8000"]
+    environment:
+      OPERATOR_PORT: "8000"
+      CONFIG_PATH: /config/config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: facerec-gpu1
+      PLATFORM_SERVICE_URL: http://facerec-gpu1:8000
+      PLATFORM_DECLARED_CAPACITY: "1"
+      PLATFORM_GPU_ID: "1"
+      GPU_PROCESS_NAME: facerec
+      NVIDIA_VISIBLE_DEVICES: "1"
+    deploy: *gpu1-reservation
+
+  facerec-gpu2:
+    <<: *facerec
+    profiles: [gpu2]
+    ports: ["38003:8000"]
+    environment:
+      OPERATOR_PORT: "8000"
+      CONFIG_PATH: /config/config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: facerec-gpu2
+      PLATFORM_SERVICE_URL: http://facerec-gpu2:8000
+      PLATFORM_DECLARED_CAPACITY: "1"
+      PLATFORM_GPU_ID: "2"
+      GPU_PROCESS_NAME: facerec
+      NVIDIA_VISIBLE_DEVICES: "2"
+    deploy: *gpu2-reservation
+
+  screen-det-gpu0:
+    <<: *screen-det
+    profiles: [gpu0]
     ports: ["18880:8880"]
     environment:
-      <<: *operator-environment
       OPERATOR_PORT: "8880"
-      PLATFORM_INSTANCE_ID: screen-det
-      PLATFORM_SERVICE_URL: http://screen-det:8880
-      PLATFORM_DECLARED_CAPACITY: ${SCREEN_DET_CAPACITY:-1}
-      PLATFORM_GPU_ID: ${SCREEN_DET_GPU_ID:-0}
-      NVIDIA_VISIBLE_DEVICES: ${SCREEN_DET_GPU_ID:-0}
-    volumes:
-      - ${COURSE_ROOT:-/data/course}:/data/course
-      - ${RESULT_ROOT:-/data/result}:/data/result
+      CONFIG_PATH: /app/config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: screen-det-gpu0
+      PLATFORM_SERVICE_URL: http://screen-det-gpu0:8880
+      PLATFORM_DECLARED_CAPACITY: "1"
+      PLATFORM_GPU_ID: "0"
+      GPU_PROCESS_NAME: screen_det
+      NVIDIA_VISIBLE_DEVICES: "0"
+    deploy: *gpu0-reservation
+
+  screen-det-gpu1:
+    <<: *screen-det
+    profiles: [gpu1]
+    ports: ["28880:8880"]
+    environment:
+      OPERATOR_PORT: "8880"
+      CONFIG_PATH: /app/config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: screen-det-gpu1
+      PLATFORM_SERVICE_URL: http://screen-det-gpu1:8880
+      PLATFORM_DECLARED_CAPACITY: "1"
+      PLATFORM_GPU_ID: "1"
+      GPU_PROCESS_NAME: screen_det
+      NVIDIA_VISIBLE_DEVICES: "1"
+    deploy: *gpu1-reservation
+
+  screen-det-gpu2:
+    <<: *screen-det
+    profiles: [gpu2]
+    ports: ["38880:8880"]
+    environment:
+      OPERATOR_PORT: "8880"
+      CONFIG_PATH: /app/config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: screen-det-gpu2
+      PLATFORM_SERVICE_URL: http://screen-det-gpu2:8880
+      PLATFORM_DECLARED_CAPACITY: "1"
+      PLATFORM_GPU_ID: "2"
+      GPU_PROCESS_NAME: screen_det
+      NVIDIA_VISIBLE_DEVICES: "2"
+    deploy: *gpu2-reservation
+
+  ppt-slice-cpu0:
+    <<: *ppt-slice
+    profiles: [cpu]
+    ports: ["19001:9001"]
+    environment:
+      OPERATOR_PORT: "9001"
+      CONFIG_PATH: /workspace/config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: ppt-slice-cpu0
+      PLATFORM_SERVICE_URL: http://ppt-slice-cpu0:9001
+      PLATFORM_DECLARED_CAPACITY: "15"
+
+  ppt-slice-cpu1:
+    <<: *ppt-slice
+    profiles: [cpu]
+    ports: ["29001:9001"]
+    environment:
+      OPERATOR_PORT: "9001"
+      CONFIG_PATH: /workspace/config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: ppt-slice-cpu1
+      PLATFORM_SERVICE_URL: http://ppt-slice-cpu1:9001
+      PLATFORM_DECLARED_CAPACITY: "15"
+
+  ppt-slice-cpu2:
+    <<: *ppt-slice
+    profiles: [cpu]
+    ports: ["39001:9001"]
+    environment:
+      OPERATOR_PORT: "9001"
+      CONFIG_PATH: /workspace/config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: ppt-slice-cpu2
+      PLATFORM_SERVICE_URL: http://ppt-slice-cpu2:9001
+      PLATFORM_DECLARED_CAPACITY: "15"
+
+  text-analysis-cpu0:
+    <<: *text-analysis
+    profiles: [cpu]
+    ports: ["18000:8000"]
+    environment:
+      OPERATOR_PORT: "8000"
+      CONFIG_PATH: /app/config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: text-analysis-cpu0
+      PLATFORM_SERVICE_URL: http://text-analysis-cpu0:8000
+      PLATFORM_DECLARED_CAPACITY: "4"
+
+  text-analysis-cpu1:
+    <<: *text-analysis
+    profiles: [cpu]
+    ports: ["28000:8000"]
+    environment:
+      OPERATOR_PORT: "8000"
+      CONFIG_PATH: /app/config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: text-analysis-cpu1
+      PLATFORM_SERVICE_URL: http://text-analysis-cpu1:8000
+      PLATFORM_DECLARED_CAPACITY: "4"
+
+  text-analysis-cpu2:
+    <<: *text-analysis
+    profiles: [cpu]
+    ports: ["38000:8000"]
+    environment:
+      OPERATOR_PORT: "8000"
+      CONFIG_PATH: /app/config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_REGISTRATION_ENABLED: "true"
+      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
+      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      PLATFORM_INSTANCE_ID: text-analysis-cpu2
+      PLATFORM_SERVICE_URL: http://text-analysis-cpu2:8000
+      PLATFORM_DECLARED_CAPACITY: "4"
 
 networks:
   algorithm-platform:

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import yaml
+
 WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
 REGISTRY_REQUIREMENT = "algorithm-operator-registry-client==0.1.0"
 REGISTRY_WHEEL = "algorithm_operator_registry_client-0.1.0-py3-none-any.whl"
@@ -219,29 +221,46 @@ def test_operator_compose_declares_restart_health_mounts_and_instance_identity()
         / "deploy"
         / "docker-compose.operators.yml"
     )
-    compose = compose_path.read_text(encoding="utf-8")
-
-    for service in (
-        "asr-offline-gpu0",
-        "asr-online-gpu0",
-        "asr-offline-gpu1",
-        "asr-online-gpu1",
-        "ppt-slice",
-        "ocr",
-        "text-analysis",
-        "vbas",
-        "facerec",
-        "screen-det",
-    ):
-        assert f"  {service}:" in compose
-        assert f"PLATFORM_INSTANCE_ID: {service}" in compose
-    assert "restart: unless-stopped" in compose
-    assert "PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100" in compose
-    assert "PLATFORM_REGISTRATION_ENABLED: \"true\"" in compose
-    assert "PLATFORM_DECLARED_CAPACITY: ${PPT_SLICE_CAPACITY:-15}" in compose
-    assert "MAX_CONCURRENT_TASKS: ${PPT_SLICE_CAPACITY:-15}" in compose
-    assert "${COURSE_ROOT:-/data/course}:/data/course" in compose
-    assert "${RESULT_ROOT:-/data/result}:/data/result" in compose
-    assert "/ops/health" in compose
-    assert "PLATFORM_GPU_ID: \"0\"" in compose
-    assert "PLATFORM_GPU_ID: \"1\"" in compose
+    services = yaml.safe_load(compose_path.read_text(encoding="utf-8"))["services"]
+    expected = {
+        *(
+            f"{operator}-gpu{index}"
+            for operator in (
+                "asr-offline",
+                "asr-online",
+                "ocr",
+                "vbas",
+                "facerec",
+                "screen-det",
+            )
+            for index in range(3)
+        ),
+        *(
+            f"{operator}-cpu{index}"
+            for operator in ("ppt-slice", "text-analysis")
+            for index in range(3)
+        ),
+    }
+    assert set(services) == expected
+    for name, service in services.items():
+        environment = service["environment"]
+        assert service["restart"] == "unless-stopped"
+        assert service["networks"] == ["algorithm-platform"]
+        assert "/ops/health" in " ".join(service["healthcheck"]["test"])
+        assert environment["PLATFORM_REGISTRATION_ENABLED"] == "true"
+        assert environment["PLATFORM_CONTROL_SERVICE_URL"] == (
+            "http://control-service:18100"
+        )
+        assert environment["PLATFORM_INSTANCE_ID"] == name
+        assert int(environment["PLATFORM_DECLARED_CAPACITY"]) > 0
+        assert environment["UVICORN_WORKERS"] == "1"
+        volume_targets = {volume["target"]: volume for volume in service["volumes"]}
+        assert "/data/course" in volume_targets
+        assert "/data/result" in volume_targets
+        config_volumes = [
+            volume
+            for target, volume in volume_targets.items()
+            if target.endswith("config.toml")
+        ]
+        assert len(config_volumes) == 1
+        assert config_volumes[0]["read_only"] is True

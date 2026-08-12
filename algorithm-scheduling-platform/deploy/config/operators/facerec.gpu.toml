@@ -1,0 +1,37 @@
+# 三卡服务器 FaceRec 共享配置；MongoDB 通过 Compose 服务名访问。
+[db]
+username = "root"  # 数据库用户名
+password = "root"  # 数据库密码
+host = "mongodb"  # Compose 网络内 MongoDB 服务名
+port = "27017"  # 数据库端口
+database = "facerecapi" # 数据库名称
+auth_source = "admin" # 数据库认证源
+limit = 5000 # 限制返回结果条数
+[face]
+threshold = 0.4 # 人脸识别阈值
+candidate_threshold = 0.2 # 候选人脸阈值
+rec_min_face_hw = 50 # （识别阶段）最小人脸高度和宽度
+[gpu]
+device = "cuda:0"  # 容器内只暴露一张卡，统一使用 cuda:0
+[threading]
+max_workers = 2  # dlib 但是实例的进程数
+[frontlogin]
+username = "admin"  # 前端登录用户名
+password = "admin"  # 前端登录密码
+[image]
+max_feature_image_width_px = 9999  # 最大特征图片宽度 （以下都是为了控制像素大小）
+max_feature_image_height_px = 9999  # 最大特征图片高度
+min_feature_image_width_px = 80     # 最小特征图片宽度
+min_feature_image_height_px = 80    # 最小特征图片高度
+max_feature_image_size_m = 10 # 最大特征图片大小（MB）
+max_face_hw = 999  # （提取特征阶段）最大人脸高度和宽度
+min_face_hw = 50  # 最小人脸高度和宽度
+save_person_photo = false  # false 时只保存 embedding，不保存裁剪后的人脸图片
+[logger]
+level = "INFO"  # 日志级别
+log_path = "./logs/facere_service.log"  # 日志文件路径
+
+[stats]
+# 统计数据保留天数（自动清理超过该天数的数据）
+retention_days = 7  # 保留7天的详细日志
+hourly_retention_days = 30  # 保留30天的按小时聚合数据

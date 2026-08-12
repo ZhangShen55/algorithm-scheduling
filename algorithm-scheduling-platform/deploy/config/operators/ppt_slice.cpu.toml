@@ -1,0 +1,91 @@
+# 三实例 CPU 服务器 PPT 切片共享配置，结果写入平台持久目录。
+# Video PPT Slice Service Configuration
+# 视频PPT切片服务配置文件
+
+[app]
+# 应用基础配置
+# FastAPI 文档、健康信息和日志中显示的服务名称
+name = "Video PPT Slice Service"
+# FastAPI 文档、健康信息和版本接口返回的应用版本
+version = "V1.0.0_20260806"
+
+[task]
+# 任务配置
+# 单 Uvicorn Worker 最多同时保留的任务数；第 N+1 个请求返回拒绝状态
+max_concurrent_tasks = 15
+# 每个任务的解码帧生产者与切片消费者之间的内存队列容量
+max_queue_size = 25
+# 任务成功至少需要处理的采样帧数；当前完成条件为 processed_frames > min_frames_ok
+min_frames_ok = 5
+
+[similarity]
+# 相似度阈值配置
+# 相邻采样画面达到该相似度时，认为页面连续稳定
+default_contiguous_similarity = 0.99
+# 未提供请求级 threshold 时使用的已保存 PPT 去重阈值；Harness 直接运行使用该值
+default_saved_similarity = 0.98
+
+[dynamic_detection]
+# 持续动态区间检测；关闭后恢复旧切片判断流程
+enabled = true
+# 最小采样时间间隔（毫秒）；动态检测从参考帧中按该间隔限频
+sample_interval_ms = 1000
+# 灰度像素绝对差达到该值时认为像素变化
+pixel_difference_threshold = 30
+# 单帧变化像素比例阈值，范围 0-1
+changed_pixel_ratio = 0.04
+# 活动网格划分；用于忽略鼠标等小范围变化
+grid_rows = 4
+grid_columns = 4
+# 活动网格比例阈值，范围 0-1
+active_grid_ratio = 0.18
+# 活动观测滚动窗口（毫秒）
+window_ms = 8000
+# 从候选动态确认成动态区间的最短持续时间（毫秒）
+confirmation_ms = 5000
+# 窗口内活动观测比例阈值，范围 0-1
+required_active_ratio = 0.70
+# 动态内容连续稳定达到该时间后退出（毫秒）
+exit_stable_ms = 3000
+# 相邻动态区间间隔不超过该值时合并（毫秒）
+merge_gap_ms = 20000
+# 至少连续出现 cluster_min_segments 个动态段时，允许跨越的长静止镜头间隔（毫秒）
+cluster_gap_ms = 90000
+# 形成连续动态簇所需的最少动态段数；不得小于 3，避免吞掉普通 PPT
+cluster_min_segments = 3
+# 低运动视频延续开关；光流不能从稳定状态单独起段
+# 强活动已创建候选后，光流可参与确认并延续已确认动态段
+optical_flow_enabled = true
+# 光流分析缩放宽度（像素），用于控制 CPU 开销
+optical_flow_width = 320
+# 光流位移幅度达到该值时认为像素存在运动
+optical_flow_magnitude_threshold = 0.5
+# 运动像素覆盖比例阈值，范围 0-1；用于过滤鼠标等局部变化
+optical_flow_active_ratio = 0.05
+# 仅当已确认动态段最后由弱光流保活时，无运动后使用该宽限时间（毫秒）
+# 若最后是强像素/网格活动，仍使用 exit_stable_ms，避免延迟正常 PPT 恢复切片
+motion_grace_ms = 15000
+# 普通换页候选需要保持稳定的时间（毫秒）
+candidate_stable_ms = 2000
+
+[paths]
+# 平台内部共享结果根目录；请求不能覆盖该路径
+# 每个任务固定写入 {result_root}/{task_id}/ppt/slices，manifest 位于 ppt/manifest.json
+result_root = "/data/result"
+
+[logging]
+# 日志配置
+# Python 应用 Logger 的最低记录级别
+level = "INFO"
+# 日志目录；相对路径按服务启动目录解析
+dir = "./logs"
+# 普通日志文件名；错误日志固定为同目录下的 error.log
+file = "app.log"
+# 单个日志文件达到该字节数后轮转
+max_bytes = 10485760
+# 每类轮转日志保留的历史文件数量
+backup_count = 5
+# 文件日志格式
+format = "%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
+# 控制台和文件日志使用的时间格式
+date_format = "%Y-%m-%d %H:%M:%S"

@@ -1,0 +1,99 @@
+# 三卡服务器 VBas 共享配置；物理卡由 Compose 绑定，容器内 GPU_ID=0。
+IMAGE_ROOT = "/mnt/ias-images"
+RESULT_IMAGE_ROOT = "/data/result_images"
+SAVE_RESULT_IMAGE = 0
+INSTANCE_COUNT = 1
+WORKERS_PER_INSTANCE = 1
+GPU_ID = 0
+
+[TIAS]
+# TIAS 实例身份和对外访问地址。
+InstanceId = "tias-8981"
+BaseUrl = "http://127.0.0.1:8981"
+# 外部视觉编排服务的兼容注册入口；字段名为历史协议，暂不改名。
+AiQualityBaseUrl = "http://127.0.0.1:9000"
+# 是否暴露旧 IAS 同步任务接口。
+TiasExposeLegacySyncTasks = false
+# 本地推理准入控制。MaxQueueSize=0 表示不开启本地排队。
+MaxConcurrentBatches = 1
+MaxQueueSize = 0
+# 注册和心跳配置。
+HeartbeatIntervalSeconds = 5
+HeartbeatTimeoutSeconds = 15
+RegisterRetryIntervalSeconds = 5
+
+[Person_Thresd]
+Head = 0.25
+Top_Head = 0.1
+Hat = 0.1
+Headphones = 0.1
+Shoulder = 0.1
+
+[Face_Thresd]
+face = 0.1
+
+[Student_Thresd]
+phone = 0.7
+hand = 0.99
+sleep = 0.5
+stand = 0.99
+read = 0.5
+
+[Teacher_Behavior_Thresd]
+# 同一主体多类别框的高重叠合并阈值，主要用于兼容旧逻辑和结果聚合。
+MergeIoU = 0.8
+# 主体聚类 IoU 阈值；用于把同一老师的姿态框和授课行为框合成一个主体。
+SubjectClusterIoU = 0.45
+# teacher_behavior.pt 推理尺寸。
+ImageSize = 640
+
+sit = 0.4
+stand = 0.4
+bbwriting = 0.25
+teach = 0.25
+
+# 是否只保留一个主老师主体。
+KeepOnlyMainSubject = true
+# 主体选择策略。posture_confidence 表示优先按 sit/stand 姿态置信度选择老师主体。
+MainSubjectStrategy = "posture_confidence"
+
+# sit 与 stand 同时过阈值时的置信度差值比例阈值；差值比例 <= 该值时认为冲突不明显。
+PostureConflictRatio = 0.10
+
+# sit 与 stand 冲突不明显时的默认姿态；当前业务要求非坐即站，默认按 stand 输出。
+PostureConflictDefault = "stand"
+
+# 主体存在但 sit/stand 都未过阈值时，是否强制输出默认姿态并标记 PostureFallback。
+ForcePostureWhenMissing = true
+
+[Teacher_Head_Pose]
+# 头部姿态检测总开关。false 时不加载 DirectMHP，ReturnHeadPose=true 也不会返回 HeadPoseResult。
+Enabled = false
+# DirectMHP 源码目录；支持绝对路径，也支持相对项目根目录的路径。
+DirectMHPRoot = "app/vendor/DirectMHP"
+# DirectMHP 权重文件；当前默认使用 m 模型。
+DirectMHPWeights = "models/cmu_m_1280_e200_t40_lw010_best.pt"
+# DirectMHP 数据配置文件。
+DirectMHPData = "models/cmu_panoptic_coco.yaml"
+# DirectMHP 推理设备。Mac 本地用 cpu；NVIDIA GPU 环境可配置为 "0"。
+Device = "0"
+# DirectMHP 推理尺寸。
+ImageSize = 1280
+# DirectMHP 头部检测置信度阈值。
+ConfThres = 0.35
+# DirectMHP NMS IoU 阈值。
+IouThres = 0.45
+# 老师主体框 crop 扩展比例。
+CropScale = 1.35
+# 学生视角左右方向阈值；Yaw <= -阈值为 left，Yaw >= 阈值为 right。
+SideYawThreshold = 20.0
+# 低头阈值；Pitch >= 阈值时 IsLookingDown=true。
+DownPitchThreshold = 20.0
+
+[ModelProtection]
+# 模型静态加密开关。false 时按明文模型路径加载；true 时从 EncryptedModelRoot 解密 .enc 模型。
+Enabled = false
+EncryptedModelRoot = "/workspace/models-encrypted"
+DecryptedTempRoot = "/dev/shm/tias-models"
+KeyFile = "/run/secrets/tias_model_key"
+CleanupAfterLoad = true
