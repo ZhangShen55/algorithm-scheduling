@@ -1,7 +1,7 @@
 # 三卡服务器 FaceRec 共享配置；MongoDB 通过 Compose 服务名访问。
 [db]
-username = "root"  # 数据库用户名
-password = "root"  # 数据库密码
+username = "root"  # 默认用户名；部署时由 FACEREC_MONGO_USERNAME 覆盖
+password = "root"  # 默认密码；部署时由 FACEREC_MONGO_PASSWORD 覆盖
 host = "mongodb"  # Compose 网络内 MongoDB 服务名
 port = "27017"  # 数据库端口
 database = "facerecapi" # 数据库名称

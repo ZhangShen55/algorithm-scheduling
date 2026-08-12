@@ -1,6 +1,6 @@
 [db]
-username = "root"  # MongoDB 用户名
-password = "change-me"  # MongoDB 密码，生产环境请通过受控配置注入
+username = "root"  # MongoDB 用户名，可由 FACEREC_MONGO_USERNAME 覆盖
+password = "change-me"  # MongoDB 密码，可由 FACEREC_MONGO_PASSWORD 覆盖
 host = "127.0.0.1"  # MongoDB 地址
 port = "27017"  # MongoDB 端口
 database = "facerecapi"  # 人脸库数据库名

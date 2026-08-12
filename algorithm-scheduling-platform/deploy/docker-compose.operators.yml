@@ -351,6 +351,8 @@ services:
     environment:
       OPERATOR_PORT: "8000"
       CONFIG_PATH: /config/config.toml
+      FACEREC_MONGO_USERNAME: ${MONGO_ROOT_USERNAME:-root}
+      FACEREC_MONGO_PASSWORD: ${MONGO_ROOT_PASSWORD:-root}
       UVICORN_WORKERS: "1"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
@@ -370,6 +372,8 @@ services:
     environment:
       OPERATOR_PORT: "8000"
       CONFIG_PATH: /config/config.toml
+      FACEREC_MONGO_USERNAME: ${MONGO_ROOT_USERNAME:-root}
+      FACEREC_MONGO_PASSWORD: ${MONGO_ROOT_PASSWORD:-root}
       UVICORN_WORKERS: "1"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
@@ -389,6 +393,8 @@ services:
     environment:
       OPERATOR_PORT: "8000"
       CONFIG_PATH: /config/config.toml
+      FACEREC_MONGO_USERNAME: ${MONGO_ROOT_USERNAME:-root}
+      FACEREC_MONGO_PASSWORD: ${MONGO_ROOT_PASSWORD:-root}
       UVICORN_WORKERS: "1"
       PLATFORM_REGISTRATION_ENABLED: "true"
       PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100

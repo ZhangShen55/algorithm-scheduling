@@ -33,9 +33,13 @@ Kafka publishes separate host and Docker-network addresses; do not use
 
 The MongoDB `root`/`root` values are controlled test defaults. Override them with
 `MONGO_ROOT_USERNAME` and `MONGO_ROOT_PASSWORD` before the first startup of an empty
-`mongodb_data` volume. MongoDB initialization credentials apply only to an empty
-volume; changing these environment variables does not rotate credentials stored in an
-existing volume.
+`mongodb_data` volume. The operator Compose passes the same values to all three
+FaceRec instances as `FACEREC_MONGO_USERNAME` and `FACEREC_MONGO_PASSWORD`; FaceRec
+percent-encodes these separate fields when constructing its MongoDB URI, so reserved
+URI characters in credentials are supported. Do not provide a prebuilt URI through
+these variables. MongoDB initialization credentials apply only to an empty volume;
+changing these environment variables does not rotate credentials stored in an existing
+volume.
 
 ## Inspect logs and stop
 

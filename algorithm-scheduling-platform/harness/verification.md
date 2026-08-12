@@ -47,6 +47,20 @@ delivery documentation.
 
 Integration and runtime commands must record infrastructure versions and container status. A skipped integration test is not passing evidence. Full end-to-end evidence must show Kafka offsets, Worker-produced database state, operator HTTP/WebSocket traffic and filesystem results.
 
+## 2026-08-12 MongoDB authentication and FaceRec readiness
+
+Run the isolated MongoDB authentication check with Docker available:
+
+```bash
+.venv/bin/python -m pytest -q tests/integration/test_mongodb_auth_runtime.py
+```
+
+The test creates a uniquely named `mongo:7.0` container with a random host port and
+tmpfs-backed `/data/db`, verifies that configured credentials can ping and a wrong
+password cannot, then removes that exact container in `finally`. It does not use or
+delete the deployment `mongodb_data` volume. On 2026-08-12 the test completed with
+`1 passed` against Docker Desktop 29.5.3.
+
 ## 2026-08-10 PPT 视频输入字段规范化
 
 本轮将 PPT 算子的规范视频输入字段统一为 `video_path`。算子接受远程 URL 与绝对本地路径，旧

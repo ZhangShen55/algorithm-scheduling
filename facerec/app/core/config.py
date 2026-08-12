@@ -1,8 +1,11 @@
-from pydantic import BaseModel, ConfigDict, computed_field, field_validator
-from pathlib import Path
-import os
-import tomli
 import logging
+import os
+from pathlib import Path
+from typing import Any
+from urllib.parse import quote
+
+import tomli
+from pydantic import BaseModel, ConfigDict, computed_field, field_validator
 
 logger = logging.getLogger(__name__)
 logger.level = logging.DEBUG
@@ -25,10 +28,25 @@ class DBSettings(BaseModel):
     def url(self) -> str:
         # 构建 URL mongodb://user:pass@host:port/db?authSource=admin
         return (
-            f"mongodb://{self.username}:{self.password}@"
+            f"mongodb://{quote(self.username, safe='')}:{quote(self.password, safe='')}@"
             f"{self.host}:{self.port}/{self.database}"
             f"?authSource={self.auth_source}"
         )
+
+
+def apply_db_environment(config: dict[str, Any]) -> dict[str, Any]:
+    resolved = dict(config)
+    environment_fields = {
+        "username": "FACEREC_MONGO_USERNAME",
+        "password": "FACEREC_MONGO_PASSWORD",
+    }
+    for field, environment_name in environment_fields.items():
+        value = os.getenv(environment_name)
+        if value is not None:
+            resolved[field] = value
+    return resolved
+
+
 class FaceSettings(BaseModel):
     threshold: float
     candidate_threshold: float
@@ -95,7 +113,7 @@ def load_config():
     logger.debug(f"Config loaded: {config_data}")
 
     return Settings(
-        db=DBSettings(**config_data["db"]),
+        db=DBSettings(**apply_db_environment(config_data["db"])),
         face=FaceSettings(**config_data["face"]),
         thread=ThreadSettings(**config_data["threading"]),
         gpu=GpuSettings(**config_data["gpu"]),

@@ -68,6 +68,12 @@ def assert_operator_compose_matrix(compose: dict[str, Any]) -> None:
             assert environment["NVIDIA_VISIBLE_DEVICES"] == str(gpu_index)
             if operator == "facerec":
                 assert environment["CONFIG_PATH"] == "/config/config.toml"
+                assert environment["FACEREC_MONGO_USERNAME"] == (
+                    "${MONGO_ROOT_USERNAME:-root}"
+                )
+                assert environment["FACEREC_MONGO_PASSWORD"] == (
+                    "${MONGO_ROOT_PASSWORD:-root}"
+                )
                 healthcheck = " ".join(service["healthcheck"]["test"])
                 assert "json.load" in healthcheck
                 assert "status" in healthcheck
