@@ -12,6 +12,9 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.codex/
+harness/
+openspec/
 build/
 dist/
 tmp/
@@ -36,6 +39,8 @@ openspec/
 !models-encrypted/
 !models-encrypted/**
 *.key
+*.p12
+*.pfx
 **/tias_model_key
 **/secrets/
 *.pem

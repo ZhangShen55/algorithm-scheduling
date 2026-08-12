@@ -104,6 +104,30 @@ copies a previously built wheel without rebuilding:
 python scripts/stage_operator_registry_wheel.py
 ```
 
+The authoritative operator image matrix is `deploy/operator-images.tsv`. Validate
+all eight Dockerfiles and build contexts without building an image:
+
+```bash
+deploy/scripts/verify-operator-build-contexts
+```
+
+The gate rejects matrix drift, workspace-root build contexts, `COPY`/`ADD` sources
+outside an operator context and missing `.dockerignore` controls for Git state,
+tests, caches, local Harness/OpenSpec/Codex data and common secret-file classes.
+After model assets have been staged through the separately controlled asset process,
+build and inspect all eight images from any working directory:
+
+```bash
+deploy/scripts/build-images                    # default: v1.0_260812
+deploy/scripts/build-images v1.0_260813        # one explicit release tag
+```
+
+The build entrypoint stages the registry wheel first, checks root-disk free space
+before the sequence and before every image, applies the fixed Git commit as the
+`org.opencontainers.image.revision` label, and verifies both image reference and
+revision through `docker image inspect`. It stops on the first failure and never
+prunes containers, images, volumes or build cache.
+
 Production automation may instead download that exact wheel from the internal
 artifact repository into the build context. Images must not mount or add the platform
 source tree to `PYTHONPATH`. After an internal Python package index is available, the

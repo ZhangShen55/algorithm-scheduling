@@ -8,11 +8,16 @@ __pycache__/
 *.pyo
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
+.codex/
+harness/
+openspec/
 
 # 测试与样本（体积大，运行时不需要）
 tests/
 test_wav/
 *.wav
+!model/**/*.wav
 *.pcm
 *.mp3
 
@@ -26,6 +31,10 @@ asr_service.log
 .vscode/
 .claude/
 .env
+*.pem
+*.key
+*.p12
+*.pfx
 *.swp
 
 # 模型权重需要打入镜像，不要排除 model/ 内的 *.bin / *.safetensors。

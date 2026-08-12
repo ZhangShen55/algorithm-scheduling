@@ -62,7 +62,7 @@
 
 - [x] 7.1 将四个平台服务整理为完整 FastAPI 项目，提供 `app`、注释配置、依赖、Dockerfile，并增加含重启、就绪、共享挂载、资源和网络的 Compose
 - [x] 7.2 增加 Kafka 主机/internal listener，并说明宿主机进程和容器分别使用的 bootstrap 地址
-- [ ] 7.3 构建版本化平台 wheel，并更新八个算子镜像安装它，不依赖源码挂载或临时 `PYTHONPATH`
+- [x] 7.3 构建版本化平台 wheel，并更新八个算子镜像安装它，不依赖源码挂载或临时 `PYTHONPATH`
 - [ ] 7.4 增加隔离镜像测试，验证导入 `packages.operator_registry_client`、启用注册后启动且保持业务路由和默认端口
 - [ ] 7.5 增加部署预检，覆盖 `/data/course` 可写、`/data/result` 持久、GPU 标签、唯一实例 ID、数据库迁移、topics 和端口
 

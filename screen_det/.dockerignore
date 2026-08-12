@@ -1,6 +1,11 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.codex/
+harness/
+openspec/
 .venv/
 venv/
 .git/
@@ -12,6 +17,11 @@ scripts/
 nginx/
 logs/
 *.log
+.env
+*.pem
+*.key
+*.p12
+*.pfx
 docker-compose.yml
 README.md
 .dockerignore

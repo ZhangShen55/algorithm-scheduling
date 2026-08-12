@@ -2,6 +2,12 @@
 .gitignore
 __pycache__
 *.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.codex/
+harness/
+openspec/
 *.so
 *.c
 *.log
@@ -13,3 +19,8 @@ README.md
 /Dockerfile
 /Dockerfile.cython
 .dockerignore
+.env
+*.pem
+*.key
+*.p12
+*.pfx

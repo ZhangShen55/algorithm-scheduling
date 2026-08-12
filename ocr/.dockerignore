@@ -2,6 +2,11 @@
 .gitignore
 .DS_Store
 .pytest_cache
+.mypy_cache/
+.ruff_cache/
+.codex/
+harness/
+openspec/
 __pycache__
 *.py[cod]
 .venv
@@ -13,3 +18,8 @@ output
 tests
 docs
 *.log
+.env
+*.pem
+*.key
+*.p12
+*.pfx

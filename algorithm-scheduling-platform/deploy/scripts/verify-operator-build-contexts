@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import shlex
+import sys
+from pathlib import Path, PurePosixPath
+
+
+EXPECTED_MATRIX = (
+    ("asr_offline", "docker/Dockerfile", "seacraft-asr-offline"),
+    ("asr_online", "docker/Dockerfile", "seacraft-asr-online"),
+    ("ocr", "docker/Dockerfile", "algorithm-ocr"),
+    ("vbas", "docker/Dockerfile", "algorithm-vbas"),
+    ("facerec", "docker/Dockerfile", "algorithm-facerec"),
+    ("screen_det", "docker/Dockerfile", "algorithm-screen-det"),
+    ("ppt_slice", "Dockerfile", "algorithm-ppt-slice"),
+    ("text_analysis", "Dockerfile", "algorithm-text-analysis"),
+)
+
+REQUIRED_IGNORE_GROUPS = (
+    (".git", ".git", ".git/"),
+    ("tests", "tests", "tests/", "test", "test/", "**/tests/", "**/test/"),
+    ("Python cache", "__pycache__", "__pycache__/", "**/__pycache__/", "*.py[cod]"),
+    ("pytest cache", ".pytest_cache/", ".pytest_cache", "**/.pytest_cache/"),
+    ("mypy cache", ".mypy_cache/", ".mypy_cache", "**/.mypy_cache/"),
+    ("ruff cache", ".ruff_cache/", ".ruff_cache", "**/.ruff_cache/"),
+    ("Codex state", ".codex/", ".codex", "**/.codex/"),
+    ("Harness data", "harness/", "harness", "**/harness/"),
+    ("OpenSpec state", "openspec/", "openspec", "**/openspec/"),
+    ("environment secrets", ".env", ".env.*", "*.env", "**/.env"),
+    ("PEM secrets", "*.pem", "**/*.pem"),
+    ("private keys", "*.key", "**/*.key"),
+    ("PKCS12 secrets", "*.p12", "**/*.p12", "*.pfx", "**/*.pfx"),
+)
+
+
+class GateError(RuntimeError):
+    pass
+
+
+def _logical_lines(source: str) -> list[str]:
+    lines: list[str] = []
+    pending = ""
+    for raw_line in source.splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        pending = f"{pending} {stripped}".strip()
+        if pending.endswith("\\"):
+            pending = pending[:-1].rstrip()
+            continue
+        lines.append(pending)
+        pending = ""
+    if pending:
+        lines.append(pending)
+    return lines
+
+
+def _copy_sources(instruction: str) -> tuple[bool, list[str]]:
+    operation, _, arguments = instruction.partition(" ")
+    if operation.upper() not in {"COPY", "ADD"}:
+        return False, []
+    if not arguments:
+        raise GateError(f"invalid {operation} instruction: {instruction}")
+    if arguments.lstrip().startswith("["):
+        values = json.loads(arguments)
+        if not isinstance(values, list) or len(values) < 2:
+            raise GateError(f"invalid JSON {operation} instruction: {instruction}")
+        return False, [str(value) for value in values[:-1]]
+    values = shlex.split(arguments)
+    from_stage = any(value.startswith("--from=") for value in values)
+    while values and values[0].startswith("--"):
+        option = values.pop(0)
+        if option in {"--chown", "--chmod", "--exclude"} and values:
+            values.pop(0)
+    if len(values) < 2:
+        raise GateError(f"invalid {operation} instruction: {instruction}")
+    return from_stage, values[:-1]
+
+
+def _validate_source(context: str, dockerfile: str, source: str) -> None:
+    normalized = source.replace("\\", "/")
+    path = PurePosixPath(normalized)
+    if (
+        path.is_absolute()
+        or any(part == ".." for part in path.parts)
+        or normalized.startswith("$")
+    ):
+        raise GateError(
+            f"Dockerfile COPY/ADD source is outside build context: "
+            f"{context}/{dockerfile}: {source}"
+        )
+
+
+def _read_matrix(path: Path) -> tuple[tuple[str, str, str], ...]:
+    rows: list[tuple[str, str, str]] = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line or line.startswith("#"):
+            continue
+        values = line.split("\t")
+        if len(values) != 3:
+            raise GateError(f"invalid image matrix line {number}")
+        rows.append((values[0], values[1], values[2]))
+    return tuple(rows)
+
+
+def main() -> int:
+    platform_root = Path(__file__).resolve().parents[2]
+    workspace_root = platform_root.parent
+    manifest = platform_root / "deploy/operator-images.tsv"
+    matrix = _read_matrix(manifest)
+    if matrix != EXPECTED_MATRIX:
+        raise GateError(
+            "operator image matrix differs from the frozen eight-image contract: "
+            f"actual={matrix!r}"
+        )
+    for context_name, dockerfile_name, _ in matrix:
+        if context_name in {".", "..", ""}:
+            raise GateError("workspace root cannot be an operator build context")
+        context = (workspace_root / context_name).resolve()
+        if context.parent != workspace_root.resolve():
+            raise GateError(f"operator context is outside workspace root: {context_name}")
+        dockerfile = context / dockerfile_name
+        dockerignore = context / ".dockerignore"
+        if not context.is_dir() or not dockerfile.is_file():
+            raise GateError(f"missing build context or Dockerfile: {context_name}/{dockerfile_name}")
+        if not dockerignore.is_file():
+            raise GateError(f"missing .dockerignore: {context_name}")
+        ignore_lines = {
+            line.strip()
+            for line in dockerignore.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#") and not line.startswith("!")
+        }
+        missing_groups = [
+            name
+            for name, *patterns in REQUIRED_IGNORE_GROUPS
+            if not ignore_lines.intersection(patterns)
+        ]
+        if missing_groups:
+            raise GateError(
+                f"{context_name}/.dockerignore does not block required context pollution: "
+                f"{', '.join(missing_groups)}"
+            )
+        forbidden_reincludes = []
+        for line in dockerignore.read_text(encoding="utf-8").splitlines():
+            pattern = line.strip()
+            if not pattern.startswith("!"):
+                continue
+            lowered = pattern[1:].lower()
+            protected_tokens = (
+                ".git",
+                ".env",
+                ".pem",
+                ".key",
+                ".p12",
+                ".pfx",
+                ".codex",
+                "harness",
+                "openspec",
+                "__pycache__",
+                ".pytest_cache",
+                ".mypy_cache",
+                ".ruff_cache",
+            )
+            if any(token in lowered for token in protected_tokens):
+                forbidden_reincludes.append(pattern)
+        if forbidden_reincludes:
+            raise GateError(
+                f"{context_name}/.dockerignore must not re-include protected inputs: "
+                f"{', '.join(forbidden_reincludes)}"
+            )
+        for instruction in _logical_lines(dockerfile.read_text(encoding="utf-8")):
+            from_stage, sources = _copy_sources(instruction)
+            if from_stage:
+                continue
+            for source in sources:
+                _validate_source(context_name, dockerfile_name, source)
+        print(f"build-context: OK: {context_name}/{dockerfile_name}")
+    print("build-context: PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (GateError, OSError, ValueError, json.JSONDecodeError) as error:
+        print(f"build-context: FAIL: {error}", file=sys.stderr)
+        raise SystemExit(1) from error

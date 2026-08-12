@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() {
+  printf 'build-images: FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+check_root_disk() {
+  local minimum_gib="${MIN_ROOT_FREE_GIB:-100}"
+  [[ "$minimum_gib" =~ ^[0-9]+$ ]] || fail "MIN_ROOT_FREE_GIB must be a non-negative integer"
+  local available_kib
+  available_kib="$(df -Pk / | awk 'NR == 2 {print $4}')"
+  [[ "$available_kib" =~ ^[0-9]+$ ]] || fail "cannot determine root disk free space"
+  local minimum_kib=$((minimum_gib * 1024 * 1024))
+  (( available_kib >= minimum_kib )) || fail \
+    "root disk has ${available_kib} KiB free; ${minimum_gib} GiB required"
+}
+
+[[ "$#" -le 1 ]] || fail "usage: build-images [v1.0_YYMMDD]"
+version_tag="${1:-v1.0_260812}"
+[[ "$version_tag" =~ ^v[0-9]+\.[0-9]+_[0-9]{6}$ ]] || fail \
+  "image tag must match v<major>.<minor>_YYMMDD"
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+platform_root="$(cd -- "${script_dir}/../.." && pwd -P)"
+workspace_root="$(cd -- "${platform_root}/.." && pwd -P)"
+matrix="${platform_root}/deploy/operator-images.tsv"
+
+"${script_dir}/verify-operator-build-contexts"
+check_root_disk
+cd -- "$platform_root"
+python3 scripts/build_and_stage_operator_registry_wheel.py
+
+git_sha="$(git -C "$workspace_root" rev-parse HEAD)"
+[[ "$git_sha" =~ ^[0-9a-f]{40}$ ]] || fail "Git revision is not a full lowercase SHA: ${git_sha}"
+
+while IFS=$'\t' read -r context_name dockerfile_name image_repository; do
+  [[ -n "$context_name" && "${context_name:0:1}" != "#" ]] || continue
+  check_root_disk
+  context="${workspace_root}/${context_name}"
+  dockerfile="${context}/${dockerfile_name}"
+  image_ref="${image_repository}:${version_tag}"
+  printf 'build-images: building %s\n' "$image_ref"
+  docker build \
+    --file "$dockerfile" \
+    --tag "$image_ref" \
+    --label "org.opencontainers.image.revision=${git_sha}" \
+    "$context"
+  inspected_ref="$(docker image inspect --format '{{index .RepoTags 0}}' "$image_ref")"
+  [[ "$inspected_ref" == "$image_ref" ]] || fail \
+    "image inspect returned unexpected reference ${inspected_ref} for ${image_ref}"
+  inspected_revision="$(docker image inspect \
+    --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image_ref")"
+  [[ "$inspected_revision" == "$git_sha" ]] || fail \
+    "image ${image_ref} revision label is ${inspected_revision}; expected ${git_sha}"
+done < "$matrix"
+
+printf 'build-images: PASS: eight images built and inspected at %s\n' "$git_sha"

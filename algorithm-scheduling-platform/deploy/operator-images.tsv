@@ -1,0 +1,9 @@
+# build_context	dockerfile	image_repository
+asr_offline	docker/Dockerfile	seacraft-asr-offline
+asr_online	docker/Dockerfile	seacraft-asr-online
+ocr	docker/Dockerfile	algorithm-ocr
+vbas	docker/Dockerfile	algorithm-vbas
+facerec	docker/Dockerfile	algorithm-facerec
+screen_det	docker/Dockerfile	algorithm-screen-det
+ppt_slice	Dockerfile	algorithm-ppt-slice
+text_analysis	Dockerfile	algorithm-text-analysis
