@@ -1,17 +1,26 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import toml
 
 from app.core.model_protection import ModelProtectionConfig
 
-
 BASE_DIR = Path(__file__).resolve().parents[2]
-CONFIG_PATH = BASE_DIR / "config.toml"
+
+
+def _resolve_config_path() -> Path:
+    configured_path = Path(os.environ.get("CONFIG_PATH", "config.toml"))
+    if configured_path.is_absolute():
+        return configured_path
+    return BASE_DIR / configured_path
+
+
+CONFIG_PATH = _resolve_config_path()
 
 
 @dataclass(frozen=True)
@@ -129,7 +138,7 @@ class Settings:
     runtime: RuntimeConfig
 
 
-def _section(data: Dict[str, Any], name: str) -> Dict[str, Any]:
+def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
     value = data.get(name, {})
     return value if isinstance(value, dict) else {}
 
@@ -140,7 +149,7 @@ def _normalize_kernel_size(value: int) -> int:
     return value if value % 2 == 1 else value + 1
 
 
-def _normalize_aggregate_data(data: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_aggregate_data(data: dict[str, Any]) -> dict[str, Any]:
     result = dict(data)
     if "default_modules" in result:
         result["default_modules"] = tuple(str(x) for x in result["default_modules"])

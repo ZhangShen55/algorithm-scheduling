@@ -18,8 +18,9 @@ docker run --rm --name vbas-8981 \
 容器使用 `docker/start.sh` 直接启动单个 Uvicorn 进程，默认监听 `8981`。
 扩容由平台增加容器实例完成，容器内不启动负载均衡或多实例。
 
-`docker/Dockerfile.cuda113` 用于需要 CUDA 11.3/Python 3.8 兼容的环境。
-它与默认镜像一样通过 `docker/start.sh` 启动，单 worker 监听 `8981`。
+原 `docker/Dockerfile.cuda113` 已退役：它固定使用 Python 3.8，但当前算子注册客户端要求
+Python 3.10 及以上，无法构建出可注册的受支持镜像。历史定义仍可从 Git 历史恢复；
+当前受支持的构建入口仅为 `docker/Dockerfile` 和 `docker/Dockerfile.runtime`。
 
 ## 源码保护镜像
 

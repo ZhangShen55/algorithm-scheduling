@@ -120,12 +120,14 @@ def inspect_image_files(image: str) -> tuple[list[str], set[str]]:
         "sh",
         image,
         "-c",
-        "find /workspace/app -type f -print 2>/dev/null; "
-        "find /workspace/model-assets -type f -print 2>/dev/null; "
-        "for path in /usr/local/bin/tias-secure-entrypoint /usr/local/bin/vbas-start; do "
-        "if [ -f \"$path\" ]; then printf '%s\\n' \"$path\"; fi; "
-        "if [ -x \"$path\" ]; then printf '__EXECUTABLE__%s\\n' \"$path\"; fi; "
-        "done",
+        (
+            "find /workspace -xdev -type f -print 2>/dev/null; "
+            "for path in /usr/local/bin/tias-secure-entrypoint "
+            "/usr/local/bin/vbas-start; do "
+            "if [ -f \"$path\" ]; then printf '%s\\n' \"$path\"; fi; "
+            "if [ -x \"$path\" ]; then printf '__EXECUTABLE__%s\\n' \"$path\"; fi; "
+            "done"
+        ),
     ]
     completed = subprocess.run(
         command,
@@ -160,7 +162,12 @@ def inspect_image_config(image: str) -> tuple[list[str], list[str]]:
             "镜像启动配置读取失败: "
             f"exit={completed.returncode} stderr={completed.stderr.strip()}"
         )
-    config = json.loads(completed.stdout)
+    try:
+        config = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"镜像启动配置解析失败: image={image} invalid JSON ({exc.msg})"
+        ) from exc
     return config.get("Entrypoint") or [], config.get("Cmd") or []
 
 

@@ -1,12 +1,23 @@
+import os
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from scripts.check_tias_runtime_image import (
     evaluate_runtime_config,
     evaluate_runtime_files,
+    inspect_image_config,
+    inspect_image_files,
 )
 
 
 class TiasRuntimeImageCheckTest(unittest.TestCase):
+    def _install_docker_stub(self, directory: Path, source: str) -> None:
+        stub = directory / "docker"
+        stub.write_text(source, encoding="utf-8")
+        stub.chmod(0o755)
+
     def test_evaluate_runtime_files_rejects_sensitive_runtime_content(self):
         files = [
             "/workspace/app/main.py",
@@ -122,6 +133,64 @@ class TiasRuntimeImageCheckTest(unittest.TestCase):
         )
 
         self.assertEqual(failures, [])
+
+    def test_inspect_image_files_enumerates_forbidden_workspace_content(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bin_dir = Path(temporary_directory)
+            self._install_docker_stub(
+                bin_dir,
+                """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' \
+  /workspace/app/main.py \
+  /workspace/app/core/settings.cpython-311-x86_64-linux-gnu.so \
+  /usr/local/bin/tias-secure-entrypoint \
+  /usr/local/bin/vbas-start
+if [[ "$*" == *"find /workspace -xdev -type f -print"* ]]; then
+  printf '%s\n' \
+    /workspace/models/student.pt \
+    /workspace/docker/Dockerfile \
+    /workspace/RUNNING.md
+fi
+printf '%s\n' \
+  __EXECUTABLE__/usr/local/bin/tias-secure-entrypoint \
+  __EXECUTABLE__/usr/local/bin/vbas-start
+""",
+            )
+            environment = {"PATH": f"{bin_dir}:{os.environ['PATH']}"}
+
+            with patch.dict(os.environ, environment):
+                files, executable_files = inspect_image_files("vbas:test")
+            result = evaluate_runtime_files(
+                files,
+                executable_files=executable_files,
+            )
+
+        self.assertFalse(result.ok)
+        self.assertTrue(any("明文模型" in item for item in result.failures))
+        self.assertTrue(any("非运行目录" in item for item in result.failures))
+        self.assertTrue(any("非运行文件" in item for item in result.failures))
+
+    def test_inspect_image_config_wraps_malformed_json(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bin_dir = Path(temporary_directory)
+            self._install_docker_stub(
+                bin_dir,
+                """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' '{not-json}'
+""",
+            )
+            environment = {"PATH": f"{bin_dir}:{os.environ['PATH']}"}
+
+            with (
+                patch.dict(os.environ, environment),
+                self.assertRaisesRegex(
+                    RuntimeError,
+                    "镜像启动配置解析失败.*vbas:test",
+                ),
+            ):
+                inspect_image_config("vbas:test")
 
 
 if __name__ == "__main__":

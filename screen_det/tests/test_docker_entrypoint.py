@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -61,6 +62,40 @@ def _run_entrypoint(tmp_path: Path, **environment: str) -> subprocess.CompletedP
     )
 
 
+def _read_application_server_config(
+    config_path: str,
+    *,
+    cwd: Path,
+) -> dict[str, object]:
+    env = {
+        **os.environ,
+        "CONFIG_PATH": config_path,
+        "PYTHONPATH": str(PROJECT_ROOT),
+    }
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json; "
+                "from app.core.config import get_settings; "
+                "server = get_settings().server; "
+                "print(json.dumps({"
+                "'host': server.host, 'port': server.port, 'workers': server.workers"
+                "}))"
+            ),
+        ],
+        cwd=cwd,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=5,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout)
+
+
 def test_entrypoint_uses_server_toml_values(tmp_path: Path) -> None:
     _write_config(tmp_path, host="127.0.0.2", port=9123, workers=1)
 
@@ -71,6 +106,38 @@ def test_entrypoint_uses_server_toml_values(tmp_path: Path) -> None:
     assert args[args.index("--host") + 1] == "127.0.0.2"
     assert args[args.index("--port") + 1] == "9123"
     assert args[args.index("--workers") + 1] == "1"
+
+
+def test_config_path_override_is_shared_by_entrypoint_and_application(
+    tmp_path: Path,
+) -> None:
+    _write_config(tmp_path, host="127.0.0.9", port=9456, workers=1)
+    config_path = tmp_path / "config.toml"
+
+    completed = _run_entrypoint(tmp_path, CONFIG_PATH=str(config_path))
+
+    assert completed.returncode == 0, completed.stderr
+    args = (tmp_path / "uvicorn-args").read_text(encoding="utf-8").splitlines()
+    assert args[args.index("--host") + 1] == "127.0.0.9"
+    assert args[args.index("--port") + 1] == "9456"
+    assert _read_application_server_config(str(config_path), cwd=PROJECT_ROOT) == {
+        "host": "127.0.0.9",
+        "port": 9456,
+        "workers": 1,
+    }
+
+
+def test_application_resolves_relative_config_path_from_project_root(
+    tmp_path: Path,
+) -> None:
+    _write_config(tmp_path, host="127.0.0.8", port=9567, workers=1)
+    relative_path = os.path.relpath(tmp_path / "config.toml", PROJECT_ROOT)
+
+    assert _read_application_server_config(relative_path, cwd=tmp_path) == {
+        "host": "127.0.0.8",
+        "port": 9567,
+        "workers": 1,
+    }
 
 
 def test_entrypoint_environment_overrides_server_toml(tmp_path: Path) -> None:

@@ -11,6 +11,10 @@ GPU_ENTRYPOINTS = {
     "screen_det/docker/start.sh": ("screen_det", "8880"),
     "vbas/docker/start.sh": ("vbas", "8981"),
 }
+SUPPORTED_VBAS_DOCKERFILES = (
+    "vbas/docker/Dockerfile",
+    "vbas/docker/Dockerfile.runtime",
+)
 
 
 def test_gpu_entrypoints_reject_multiple_workers_before_initialization() -> None:
@@ -68,14 +72,22 @@ def test_vbas_uses_contract_port_and_no_internal_nginx() -> None:
     assert "WORKERS_PER_INSTANCE" not in start_source
     assert not (ROOT / "vbas/docker/nginx.conf").exists()
 
-    dockerfiles = sorted((ROOT / "vbas/docker").glob("Dockerfile*"))
-    assert dockerfiles
-    for dockerfile in dockerfiles:
+    for relative in SUPPORTED_VBAS_DOCKERFILES:
+        dockerfile = ROOT / relative
         source = dockerfile.read_text(encoding="utf-8")
         assert "EXPOSE 8981" in source, dockerfile
         assert "8881" not in source, dockerfile
         assert "nginx" not in source.lower(), dockerfile
         assert "start.sh" in source, dockerfile
+
+
+def test_vbas_exposes_only_supported_dockerfiles() -> None:
+    actual = {
+        path.relative_to(ROOT).as_posix()
+        for path in (ROOT / "vbas/docker").glob("Dockerfile*")
+    }
+
+    assert actual == set(SUPPORTED_VBAS_DOCKERFILES)
 
 
 def test_vbas_build_context_includes_canonical_image_inputs() -> None:
@@ -182,7 +194,8 @@ def test_text_analysis_preserves_safe_extra_arguments(tmp_path: Path) -> None:
 
 
 def test_all_supported_vbas_images_install_registry_client() -> None:
-    for dockerfile in sorted((ROOT / "vbas/docker").glob("Dockerfile*")):
+    for relative in SUPPORTED_VBAS_DOCKERFILES:
+        dockerfile = ROOT / relative
         source = dockerfile.read_text(encoding="utf-8")
         assert "algorithm_operator_registry_client-0.1.0-py3-none-any.whl" in source, (
             dockerfile
