@@ -33,11 +33,19 @@ REQUIRED_IGNORE_GROUPS = (
     ("PEM secrets", "*.pem", "**/*.pem"),
     ("private keys", "*.key", "**/*.key"),
     ("PKCS12 secrets", "*.p12", "**/*.p12", "*.pfx", "**/*.pfx"),
+    ("foreign wheels", "wheel/*.whl"),
+)
+
+REGISTRY_WHEEL_REINCLUDE = (
+    "!wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl"
 )
 
 ALLOWED_REINCLUDES = {
-    "asr_offline": {"!model/**/*.wav"},
+    "asr_offline": {"!model/**/*.wav", REGISTRY_WHEEL_REINCLUDE},
+    "asr_online": {REGISTRY_WHEEL_REINCLUDE},
+    "ocr": {REGISTRY_WHEEL_REINCLUDE},
     "vbas": {
+        REGISTRY_WHEEL_REINCLUDE,
         "!config.toml",
         "!models/",
         "!models/**",
@@ -46,6 +54,10 @@ ALLOWED_REINCLUDES = {
         "!models-encrypted/",
         "!models-encrypted/**",
     },
+    "facerec": {REGISTRY_WHEEL_REINCLUDE},
+    "screen_det": {REGISTRY_WHEEL_REINCLUDE},
+    "ppt_slice": {REGISTRY_WHEEL_REINCLUDE},
+    "text_analysis": {REGISTRY_WHEEL_REINCLUDE},
 }
 
 MODEL_ASSET_ROOTS = {
@@ -321,6 +333,31 @@ def _included_operator_paths(
     return included
 
 
+def _deleted_included_operator_paths(
+    workspace_root: Path,
+    matrix: tuple[tuple[str, str, str], ...],
+    dirty: set[str],
+) -> set[str]:
+    deleted = {
+        path
+        for path in dirty
+        if not (workspace_root / path).exists()
+    }
+    included: set[str] = set()
+    for context_name, _, _ in matrix:
+        context_prefix = f"{context_name}/"
+        patterns = _dockerignore_patterns(
+            (workspace_root / context_name / ".dockerignore").read_text(encoding="utf-8")
+        )
+        for path in deleted:
+            if not path.startswith(context_prefix):
+                continue
+            relative_to_context = path.removeprefix(context_prefix)
+            if not _is_ignored(relative_to_context, patterns):
+                included.add(path)
+    return included
+
+
 def _validate_git_inputs(
     workspace_root: Path,
     matrix: tuple[tuple[str, str, str], ...],
@@ -334,6 +371,7 @@ def _validate_git_inputs(
         "--",
     )
     included = _included_operator_paths(workspace_root, matrix)
+    deleted_included = _deleted_included_operator_paths(workspace_root, matrix, dirty)
     wheel_source_root = "algorithm-scheduling-platform/packages/operator_registry_client/"
     wheel_source_names = {
         "README.md",
@@ -366,12 +404,11 @@ def _validate_git_inputs(
         )
         and PurePosixPath(path).name not in IGNORABLE_UNTRACKED_NAMES
         and ".vscode" not in PurePosixPath(path).parts
-        and not (
-            path.startswith("asr_offline/wheel/")
-            and path.endswith(".whl")
-        )
     }
-    unsafe = sorted(dirty.intersection(included).union(untracked_included, wheel_inputs))
+    unsafe = sorted(
+        dirty.intersection(included)
+        .union(deleted_included, untracked_included, wheel_inputs)
+    )
     if unsafe:
         raise GateError(
             "Git revision does not describe included build inputs: " + ", ".join(unsafe)

@@ -26,3 +26,5 @@ logs/
 docker-compose.yml
 README.md
 .dockerignore
+wheel/*.whl
+!wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl

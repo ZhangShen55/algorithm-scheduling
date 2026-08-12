@@ -40,6 +40,8 @@ openspec/
 *.key
 *.p12
 *.pfx
+wheel/*.whl
+!wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl
 """
 
 
@@ -635,6 +637,35 @@ def test_git_input_gate_rejects_gitignored_untracked_included_source(
     assert "asr_offline/app/local.generated.py" in completed.stderr
 
 
+def test_git_input_gate_rejects_deleted_tracked_included_operator_file(
+    tmp_path: Path,
+) -> None:
+    workspace = _make_workspace(tmp_path)
+    _initialize_git_workspace(workspace)
+    deleted = workspace / "asr_offline/app/main.py"
+    deleted.unlink()
+
+    completed = _run_gate(workspace, "--verify-git-clean-included")
+
+    assert completed.returncode != 0
+    assert "asr_offline/app/main.py" in completed.stderr
+
+
+def test_git_input_gate_allows_deleted_tracked_excluded_operator_file(
+    tmp_path: Path,
+) -> None:
+    workspace = _make_workspace(tmp_path)
+    excluded = workspace / "asr_offline/tests/test_deleted.py"
+    excluded.parent.mkdir()
+    excluded.write_text("original\n", encoding="utf-8")
+    _initialize_git_workspace(workspace)
+    excluded.unlink()
+
+    completed = _run_gate(workspace, "--verify-git-clean-included")
+
+    assert completed.returncode == 0, completed.stderr
+
+
 @pytest.mark.parametrize(
     "relative_path",
     (
@@ -658,6 +689,58 @@ def test_git_input_gate_rejects_dirty_registry_wheel_input(
     assert relative_path in completed.stderr
 
 
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        "algorithm-scheduling-platform/packages/operator_registry_client/runtime.py",
+        "algorithm-scheduling-platform/packages/operator_registry_client/pyproject.toml",
+    ),
+)
+def test_git_input_gate_rejects_deleted_registry_wheel_source(
+    tmp_path: Path, relative_path: str
+) -> None:
+    workspace = _make_workspace(tmp_path)
+    path = workspace / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("original\n", encoding="utf-8")
+    _initialize_git_workspace(workspace)
+    path.unlink()
+
+    completed = _run_gate(workspace, "--verify-git-clean-included")
+
+    assert completed.returncode != 0
+    assert relative_path in completed.stderr
+
+
+def test_git_input_gate_allows_a_foreign_wheel_only_when_dockerignore_excludes_it(
+    tmp_path: Path,
+) -> None:
+    workspace = _make_workspace(tmp_path)
+    _initialize_git_workspace(workspace)
+    wheel = workspace / "asr_offline/wheel/pyarrow-20.0.0-py3-none-any.whl"
+    wheel.parent.mkdir(exist_ok=True)
+    wheel.write_bytes(b"foreign-wheel")
+
+    completed = _run_gate(workspace, "--verify-git-clean-included")
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_git_input_gate_allows_the_exact_registry_wheel(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    _initialize_git_workspace(workspace)
+    wheel = (
+        workspace
+        / "asr_offline/wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl"
+    )
+    wheel.parent.mkdir(exist_ok=True)
+    wheel.write_bytes(b"registry-wheel")
+
+    completed = _run_gate(workspace, "--verify-git-clean-included")
+
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_real_facerec_and_ppt_contexts_exclude_private_or_large_local_inputs() -> None:
     workspace_root = PLATFORM_ROOT.parent
     facerec_ignore = (workspace_root / "facerec/.dockerignore").read_text(encoding="utf-8")
@@ -677,3 +760,16 @@ def test_asr_offline_keeps_model_hotword_wav_in_the_build_context() -> None:
 
     assert "*.wav" in dockerignore
     assert "!model/**/*.wav" in dockerignore
+
+
+def test_all_real_contexts_only_reinclude_the_exact_registry_wheel() -> None:
+    workspace_root = PLATFORM_ROOT.parent
+    for context_name, _, _ in EXPECTED_MATRIX:
+        dockerignore = (workspace_root / context_name / ".dockerignore").read_text(
+            encoding="utf-8"
+        )
+        assert "wheel/*.whl" in dockerignore
+        assert (
+            "!wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl"
+            in dockerignore
+        )
