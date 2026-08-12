@@ -6,10 +6,9 @@ from datetime import datetime
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.core.models import load_models_if_needed
-from app.api.routes.asr_v18 import router as asr_v18_router
+from app.api.routes.asr import router as asr_router
 from app.api.routes.audio import router as audio_router
 from app.api.routes.status import router as status_router
-from app.api.routes.text import router as text_router
 from app.utils.asr_stats import reset_stats
 from packages.operator_registry_client import install_operator_runtime
 
@@ -46,9 +45,8 @@ def create_app() -> FastAPI:
 
     # 路由装配
     app.include_router(status_router)
-    app.include_router(asr_v18_router)
+    app.include_router(asr_router)
     app.include_router(audio_router)
-    app.include_router(text_router)
     install_operator_runtime(
         app,
         operator_code="asr_offline",

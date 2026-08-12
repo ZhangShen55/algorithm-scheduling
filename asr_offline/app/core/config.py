@@ -97,16 +97,6 @@ class Settings:
         model_paths = self._cfg.get("model_paths", {})
         return model_paths.get("whisper_model_dir", "/model/faster-whisper-large-v3")
 
-    @property
-    def bert_model_tokenizer(self) -> str:
-        model_paths = self._cfg.get("model_paths", {})
-        return model_paths.get("bert_model_tokenizer", "/model/bert-base-chinese")
-
-    @property
-    def bert_model_dir(self) -> str:
-        model_paths = self._cfg.get("model_paths", {})
-        return model_paths.get("bert_model_dir", "/model/bert_output/checkpoint-88")
-
     # 计算配置 - 从嵌套的 [compute] 部分读取
     @property
     def compute_type(self) -> str:
@@ -139,11 +129,6 @@ class Settings:
     def ban_hotword(self) -> bool:
         features = self._cfg.get("features", {})
         return features.get("ban_hotword", False)
-
-    @property
-    def open_fivewh(self) -> bool:
-        features = self._cfg.get("features", {})
-        return features.get("open_fivewh", False)
 
     # 长音频分块配置
     @property

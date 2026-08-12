@@ -88,13 +88,13 @@ class RouteAssemblyContractTests(unittest.TestCase):
         self.assertNotIn("/audio/detect_mandarin", paths)
         self.assertIn("/v1.1.8/seacraft_asr", paths)
         self.assertIn("/audio/db_snr", paths)
-        self.assertIn("/text/question", paths)
+        self.assertNotIn("/text/question", paths)
 
 
 class HttpLanguageFormContractTests(unittest.TestCase):
     @staticmethod
     def _build_client():
-        import app.api.routes.asr_v18 as route
+        import app.api.routes.asr as route
 
         app = FastAPI()
         app.include_router(route.router)
@@ -162,7 +162,7 @@ class HttpLanguageFormContractTests(unittest.TestCase):
 
 class LanguageDispatchTests(unittest.IsolatedAsyncioTestCase):
     async def test_paraformer_languages_are_normalized_before_dispatch(self):
-        import app.api.routes.asr_v18 as route
+        import app.api.routes.asr as route
 
         for supplied, expected in ((" Auto ", "auto"), ("ZH", "zh"), ("EN", "en")):
             with self.subTest(language=supplied):
@@ -188,7 +188,7 @@ class LanguageDispatchTests(unittest.IsolatedAsyncioTestCase):
                 whisper_getter.assert_not_called()
 
     async def test_unknown_and_empty_languages_are_rejected_before_audio_preparation(self):
-        import app.api.routes.asr_v18 as route
+        import app.api.routes.asr as route
 
         for supplied, normalized in ((" Klingon ", "klingon"), ("", "")):
             with self.subTest(language=supplied):
@@ -210,7 +210,7 @@ class LanguageDispatchTests(unittest.IsolatedAsyncioTestCase):
                 paraformer.assert_not_awaited()
 
     async def test_disabled_french_is_rejected_before_audio_preparation(self):
-        import app.api.routes.asr_v18 as route
+        import app.api.routes.asr as route
 
         request = make_request(language=" FR ")
         prepare = AsyncMock(return_value=(None, make_context(request)))
@@ -234,7 +234,7 @@ class LanguageDispatchTests(unittest.IsolatedAsyncioTestCase):
         whisper_getter.assert_not_called()
 
     async def test_unready_french_is_rejected_before_audio_preparation(self):
-        import app.api.routes.asr_v18 as route
+        import app.api.routes.asr as route
 
         request = make_request(language="fr")
         prepare = AsyncMock(return_value=(None, make_context(request)))
@@ -259,7 +259,7 @@ class LanguageDispatchTests(unittest.IsolatedAsyncioTestCase):
 
 class WhisperResponseContractTests(unittest.IsolatedAsyncioTestCase):
     async def _call_french(self, request, segments, *, duration=60.0, extra_patches=()):
-        import app.api.routes.asr_v18 as route
+        import app.api.routes.asr as route
 
         ctx = make_context(request, duration=duration)
         model = FakeWhisper(segments)
@@ -501,7 +501,7 @@ class WhisperResponseContractTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_whisper_generator_is_consumed_before_gpu_slot_release(self):
         import app.api.routes.asr_common as common
-        import app.api.routes.asr_v18 as route
+        import app.api.routes.asr as route
 
         slot_active = False
         yield_states = []

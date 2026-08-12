@@ -139,7 +139,7 @@ def test_operator_business_routes_and_default_ports_remain_compatible() -> None:
         "asr_offline": {
             "port": "8083",
             "sources": {
-                "app/api/routes/asr_v18.py": ["/v1.1.8/seacraft_asr"],
+                "app/api/routes/asr.py": ["/v1.1.8/seacraft_asr"],
             },
         },
         "asr_online": {

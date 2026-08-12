@@ -90,24 +90,6 @@ class SpeakerStudentSegment(BaseModel):
     # segment: List[str] = None  # 说话时间片段
 
 
-# 提问五何分类相关类
-class Segment(BaseModel):
-    segment_text: str
-    bg: str
-    ed: str
-    segment_words: list | None = None
-    role: str
-    emotion: str | None = None
-    
-
-class SegmentRequestBody(BaseModel):
-    segments: List[Segment]
-    task_id: Optional[str] = None
-    course_id: Optional[str] = None
-    confidence: float = 0.6  # nlp置信度阈值
-    min_len: int = 10  # 最小句子长度
-
-
 class CourseInfo(BaseModel):
     '''
     课程互动信息

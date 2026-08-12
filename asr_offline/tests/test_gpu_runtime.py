@@ -13,8 +13,6 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
         models._model_asr = None
         models._model_emotion = None
         models._model_whisper = None
-        models._model_bert = None
-        models._tokenizer = None
 
     def tearDown(self) -> None:
         self.models.settings._cfg.clear()
@@ -69,7 +67,6 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "open_spk": True,
             "open_emotion": True,
             "open_mul_lang": True,
-            "open_fivewh": True,
         }
 
         with (
@@ -77,14 +74,12 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
             patch.object(self.models.torch.cuda, "is_available", return_value=False),
             patch.object(self.models, "AutoModel") as auto_model,
             patch.object(self.models, "WhisperModel") as whisper_model,
-            patch.object(self.models.BertForSequenceClassification, "from_pretrained") as bert,
             self.assertRaisesRegex(RuntimeError, "CUDA 不可用"),
         ):
             await self.models.load_models_if_needed()
 
         auto_model.assert_not_called()
         whisper_model.assert_not_called()
-        bert.assert_not_called()
 
     async def test_ctranslate2_gpu_failure_precedes_whisper_constructor(self) -> None:
         self._configure_gpu()
@@ -92,7 +87,6 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "open_spk": False,
             "open_emotion": False,
             "open_mul_lang": True,
-            "open_fivewh": False,
         }
 
         with (
@@ -107,24 +101,18 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         whisper_model.assert_not_called()
 
-    async def test_startup_loads_retained_models_and_keeps_fivewh_lazy(self) -> None:
+    async def test_startup_loads_retained_asr_emotion_and_whisper_models(self) -> None:
         self._configure_gpu(device="cpu", ngpu=0)
         self.models.settings._cfg["features"] = {
             "open_spk": True,
             "open_emotion": True,
             "open_mul_lang": True,
-            "open_fivewh": True,
         }
 
         with (
             patch.dict("os.environ", {}, clear=True),
             patch.object(self.models, "AutoModel") as auto_model,
             patch.object(self.models, "WhisperModel") as whisper_model,
-            patch.object(
-                self.models.BertForSequenceClassification,
-                "from_pretrained",
-            ) as bert,
-            patch.object(self.models.BertTokenizer, "from_pretrained") as tokenizer,
         ):
             await self.models.load_models_if_needed()
 
@@ -148,21 +136,6 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
             device="cpu",
             device_index=0,
         )
-        bert.assert_not_called()
-        tokenizer.assert_not_called()
-
-    def test_bert_guard_runs_before_bert_constructor(self) -> None:
-        self._configure_gpu()
-
-        with (
-            patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False),
-            patch.object(self.models.torch.cuda, "is_available", return_value=False),
-            patch.object(self.models.BertForSequenceClassification, "from_pretrained") as bert,
-            self.assertRaisesRegex(RuntimeError, "CUDA 不可用"),
-        ):
-            self.models._ensure_bert_loaded()
-
-        bert.assert_not_called()
 
     def test_local_cpu_mode_is_preserved_without_deployment_switch(self) -> None:
         self._configure_gpu(device="cpu", ngpu=0)

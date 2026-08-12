@@ -53,3 +53,5 @@ wheel/*.whl
 model/speaker-diarization-3.1/
 model/segmentation-3.0/
 model/wespeaker-voxceleb-resnet34-LM/
+model/bert-base-chinese/
+model/bert_output/

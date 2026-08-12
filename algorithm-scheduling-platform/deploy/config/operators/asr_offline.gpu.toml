@@ -26,8 +26,6 @@ asr_model_dir = "./model/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-
 spk_model_dir = "./model/speech_campplus_sv_zh_en_16k-common_advanced"
 emotion_model_dir = "./model/emotion2vec_plus_large"
 whisper_model_dir = "./model/faster-whisper-large-v3"
-bert_model_tokenizer = "./model/bert-base-chinese"
-bert_model_dir = "./model/bert_output/checkpoint-88"
 
 # 计算配置
 [compute]
@@ -51,4 +49,3 @@ open_spk = true
 open_emotion = true
 ban_hotword = true
 open_mul_lang = true
-open_fivewh = true

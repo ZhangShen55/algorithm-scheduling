@@ -2,19 +2,9 @@ import re
 import unicodedata
 import math
 
-from app.entity.data import *
-from typing import List, Dict, Any, Union
+from typing import List
 from collections import defaultdict
 
-
-id2label = {
-    0: "what",         # 是何
-    1: "why",          # 为何
-    2: "how",          # 如何
-    3: "what_factors", # 由何
-    4: "what_if",      # 若何
-    5: "none"           # 非提问句
-}
 # 教师特征词汇（中英文）
 TEACHER_KEYWORDS = [
     # 中文关键词
@@ -95,67 +85,6 @@ def extract_features(segments: List[dict]):
 
     return spk_features
 
-
-
-def extract_features_segments(segments: List[Segment]):
-    """提取各个SPK ID的特征"""
-    spk_features = defaultdict(lambda: {
-        'utterance_count': 0,  # 发言次数
-        'total_length': 0,  # 总字数
-        'avg_length': 0,  # 平均字数
-        'keyword_count': 0,  # 教师关键词出现次数
-        'question_count': 0,  # 提问次数
-        'speech_time': 0,  # 发言时长
-        'segments': []  # 发言时间片段列表
-    })
-
-    # 统计基本特征
-    for segment in segments:
-        # role = segment.role
-        # content = segment.segment_text
-        # segment_time = float(segment.ed) - float(segment.bg)
-        role = segment.role
-        content = segment.segment_text
-        segment_time = float(segment.ed) - float(segment.bg)
-        # 更新发言次数和总字数
-        spk_features[role]['utterance_count'] += 1
-        spk_features[role]['total_length'] += len(content)
-        spk_features[role]['speech_time'] += segment_time
-
-        # 统计关键词
-        for keyword in TEACHER_KEYWORDS:
-            if keyword in content:
-                spk_features[role]['keyword_count'] += 1
-
-        
-        # 中文提问判断（包含）
-        # if '？' in content or '?' in content or '吗' in content or '呢' in content:
-        #     spk_features[role]['question_count'] += 1
-        # 中文提问判断（末尾）
-        if content.endswith('？') or content.endswith('?') or content.endswith('吗') or content.endswith('呢'):
-            spk_features[role]['question_count'] += 1
-
-        # 英文提问判断
-        else:
-            content_lower = content.lower()
-            # 检查是否以英文疑问词开头或包含英文疑问词
-            for question_word in ENGLISH_QUESTION_WORDS:
-                if content_lower.startswith(question_word) or f" {question_word} " in content_lower:
-                    spk_features[role]['question_count'] += 1
-                    break
-
-        # 记录发言时间段
-        spk_features[role]['segments'].append(f"{segment.bg}-{segment.ed}")
-
-    # 计算平均长度
-    for role in spk_features:
-        if spk_features[role]['utterance_count'] > 0:
-            spk_features[role]['avg_length'] = spk_features[role]['total_length'] / spk_features[role][
-                'utterance_count']
-
-    return spk_features
-
-
 # 鉴别老师
 def identify_teacher(spk_features):
     """根据特征识别哪个SPK ID是老师"""
@@ -223,75 +152,6 @@ def calculate_time_distribution(course_time: float, lecture_time: float, speech_
         "speech": round(speech_time / course_time, 2),
         "freetime": round(freetime / course_time, 2)
     }
-
-
-def merge_segments(segments: List[Segment]) -> List[Dict[str, Any]]:
-    merged = []
-    i = 0
-    while i < len(segments):
-        current = segments[i]
-        text = current.segment_text.strip()
-        bg = current.bg
-        ed = current.ed
-        spk = current.role
-
-        # 如果当前是逗号结尾，检查下一个是否以 。 或 ？ 结尾且同一个人
-        while text.endswith("，") and i + 1 < len(segments):
-            next_seg = segments[i + 1]
-            next_text = next_seg.segment_text.strip()
-            if next_seg.role == spk and (next_text.endswith("。") or next_text.endswith("？")):
-                text += next_text
-                ed = next_seg.ed
-                i += 1
-                break # 
-            else:
-                break
-
-        merged.append({"text": text, "bg": bg, "ed": ed, "role": spk})
-        i += 1
-    return merged
-
-
-def format_result(data: List[Dict[str, Any]], target_ids: Union[str, List[str]], speak_time: float,min_len: int = 6) -> Dict[str, Any]:
-    # result = {key: {"count": 0, "question_info": {"content": [], "times": []}} for key in id2label.values() if key != "none"}
-
-    # 修正字典推导式
-    result = {"role": target_ids , "speak_time": speak_time }
-    for key in id2label.values():
-        if key != "none":
-            result[key] = {"count": 0, "question_info": {"content": [], "times": []}}
-
-    if isinstance(target_ids, str):
-        target_ids = [target_ids]
-
-    for entry in data:
-        if entry["role"] in target_ids and entry["label"] != "none" and len(entry["text"]) >= min_len:
-            q = result[entry["label"]]
-            q["count"] += 1
-            q["question_info"]["content"].append(entry["text"])
-            q["question_info"]["times"].append(f"{entry['bg']}-{entry['ed']}")
-    return result
-
-
-
-def reformat_result(result_dict):
-    # 重构字典结构
-    new_result = {
-        "role": result_dict["role"],
-        "speak_time": result_dict["speak_time"]
-    }
-    for key in ["what", "why", "how", "what_factors", "what_if"]:
-        item = result_dict.get(key, {"count": 0, "question_info": {"content": [], "times": []}})
-        qinfo = {c: t for c, t in zip(item.get("question_info", {}).get("content", []),
-                                      item.get("question_info", {}).get("times", []))}
-        new_result[key] = {
-            "count": item.get("count", 0),
-            "question_info": qinfo
-        }
-    return new_result
-
-
-
 
 
 def convert_role_ids(segments: list, teacher_id: int, student_ids: list) -> list:

@@ -3,22 +3,15 @@ import os
 
 import ctranslate2
 import torch
-import torch.nn.functional as F
 from faster_whisper import WhisperModel
 from funasr import AutoModel
-from transformers import BertForSequenceClassification, BertTokenizer
 
 from app.core.config import settings
-from app.utils.feature_utils import id2label
 
 # 单例缓存
 _model_asr = None
 _model_emotion = None
 _model_whisper = None
-
-# 五何
-_model_bert = None
-_tokenizer = None
 
 # 线程锁
 _model_lock = asyncio.Lock()
@@ -60,10 +53,6 @@ def _validate_ctranslate2_cuda(runtime_device: torch.device) -> None:
             "Faster Whisper 要求使用 CTranslate2 CUDA "
             f"设备 cuda:{index}，但可见设备数量为 {available_count}"
         )
-
-
-def device() -> torch.device:
-    return resolve_runtime_device()
 
 
 async def load_models_if_needed():
@@ -119,36 +108,3 @@ def get_emotion_model():
 
 def get_whisper_model():
     return _model_whisper
-
-
-# ---------- 五何分类 ----------
-def _ensure_bert_loaded():
-    global _model_bert, _tokenizer
-    if _model_bert is None or _tokenizer is None:
-        runtime_device = resolve_runtime_device()
-        _model_bert = BertForSequenceClassification.from_pretrained(
-            pretrained_model_name_or_path=settings.bert_model_dir
-        ).to(runtime_device).eval()
-        _tokenizer = BertTokenizer.from_pretrained(
-            pretrained_model_name_or_path=settings.bert_model_tokenizer
-        )
-
-
-def predict_fivewh(text: str) -> tuple[str, int, float]:
-    """
-    教师提问5何（是何、为何、若何、由何、如何、非提问） bert预测（中文）
-    """
-    _ensure_bert_loaded()
-    inputs = _tokenizer(
-        text,
-        return_tensors="pt",
-        truncation=True,
-        padding=True,
-        max_length=128,
-    ).to(device())
-    with torch.no_grad():
-        logits = _model_bert(**inputs).logits
-        probs = F.softmax(logits, dim=1)
-        confidence, predicted = torch.max(probs, dim=1)
-
-    return id2label[predicted.item()], predicted.item(), confidence.item()

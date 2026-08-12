@@ -55,7 +55,7 @@ def test_gpu_configs_use_container_local_cuda_device_zero() -> None:
     assert screen_det["server"]["workers"] == 1
 
 
-def test_offline_asr_configs_exclude_pyannote_and_keep_retained_models() -> None:
+def test_offline_asr_configs_exclude_retired_models_and_keep_asr_models() -> None:
     config_paths = (
         WORKSPACE_ROOT / "asr_offline/config.toml",
         CONFIG_ROOT / "asr_offline.gpu.toml",
@@ -67,25 +67,28 @@ def test_offline_asr_configs_exclude_pyannote_and_keep_retained_models() -> None
         "spk_model_dir",
         "emotion_model_dir",
         "whisper_model_dir",
-        "bert_model_tokenizer",
-        "bert_model_dir",
     }
     retained_features = {
         "open_spk",
         "open_emotion",
         "open_mul_lang",
-        "open_fivewh",
     }
+    retired_model_paths = {
+        "pyannote_model_yml",
+        "bert_model_tokenizer",
+        "bert_model_dir",
+    }
+    retired_features = {"open_mul_spk", "open_fivewh"}
 
     for path in config_paths:
         config = _load(path)
         model_paths = config["model_paths"]
         features = config["features"]
 
-        assert "pyannote_model_yml" not in model_paths, path
-        assert "open_mul_spk" not in features, path
         assert retained_model_paths.issubset(model_paths), path
         assert retained_features.issubset(features), path
+        assert retired_model_paths.isdisjoint(model_paths), path
+        assert retired_features.isdisjoint(features), path
 
 
 def test_server_configs_keep_required_external_dependencies_and_paths() -> None:

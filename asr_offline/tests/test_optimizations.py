@@ -293,7 +293,7 @@ class RequirementsPinningTests(unittest.TestCase):
 
         self.assertNotIn("speaker-diarization-3.1", source)
 
-    def test_dockerignore_excludes_only_retired_pyannote_model_assets(self):
+    def test_dockerignore_excludes_only_retired_model_assets(self):
         source = Path(".dockerignore").read_text(encoding="utf-8")
         entries = {
             line.strip()
@@ -304,6 +304,8 @@ class RequirementsPinningTests(unittest.TestCase):
             "model/speaker-diarization-3.1/",
             "model/segmentation-3.0/",
             "model/wespeaker-voxceleb-resnet34-LM/",
+            "model/bert-base-chinese/",
+            "model/bert_output/",
         }
 
         self.assertTrue(expected.issubset(entries))
