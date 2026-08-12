@@ -1,0 +1,592 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+import time
+import uuid
+from collections.abc import Sequence
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+class VerificationError(RuntimeError):
+    pass
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="采集单个 GPU 算子实例真实性证据")
+    parser.add_argument("--container", required=True)
+    parser.add_argument("--physical-gpu", required=True, type=int)
+    parser.add_argument("--process-name", required=True)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--trigger-file", type=Path)
+    parser.add_argument("--probe-file", type=Path)
+    parser.add_argument("--sample-window", type=float, default=30.0)
+    parser.add_argument("--sample-interval", type=float, default=0.2)
+    parser.add_argument("--trigger-timeout", type=float, default=3600.0)
+    parser.add_argument("--assert-stopped", action="store_true")
+    parser.add_argument("--evidence", type=Path)
+    parser.add_argument("--stop-timeout", type=float, default=30.0)
+    return parser.parse_args()
+
+
+def _run(command: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+    completed = subprocess.run(
+        list(command), text=True, capture_output=True, check=False
+    )
+    if check and completed.returncode != 0:
+        raise VerificationError(f"命令执行失败：{command[0]}")
+    return completed
+
+
+def _require_component(value: str, name: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", value) is None:
+        raise VerificationError(f"{name} 格式不安全")
+    return value
+
+
+def _safe_output_path(path: Path) -> Path:
+    if ".." in path.parts:
+        raise VerificationError("输出路径不能包含父目录穿越")
+    absolute = path.absolute()
+    for parent in reversed(absolute.parents):
+        if parent == Path(parent.anchor):
+            continue
+        try:
+            metadata = os.lstat(parent)
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(metadata.st_mode):
+            raise VerificationError(f"输出路径的父目录不能是软链接：{parent}")
+    if not absolute.parent.is_dir():
+        raise VerificationError("输出目录不存在，请先初始化 release 报告目录")
+    if absolute.parent.name not in {"gpu-instances", "recovery"}:
+        raise VerificationError("输出必须位于 release 的 gpu-instances 或 recovery 目录")
+    git_sha = absolute.parent.parent.name
+    release_tag = absolute.parent.parent.parent.name
+    if (
+        absolute.parent.parent.parent.parent.name != "releases"
+        or re.fullmatch(r"[0-9a-f]{40}", git_sha) is None
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", release_tag) is None
+    ):
+        raise VerificationError("输出不在规范 release tag/Git SHA 归档层级")
+    if absolute.exists() or absolute.is_symlink():
+        kind = "软链接" if absolute.is_symlink() else "文件"
+        raise VerificationError(f"输出{kind}已存在，禁止覆盖：{absolute}")
+    return absolute
+
+
+def _atomic_write_once(path: Path, payload: dict[str, Any]) -> None:
+    data = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode()
+    temporary = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
+    descriptor: int | None = None
+    linked = False
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+        )
+        os.fchmod(descriptor, 0o600)
+        view = memoryview(data)
+        while view:
+            written = os.write(descriptor, view)
+            view = view[written:]
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        try:
+            os.link(temporary, path, follow_symlinks=False)
+        except FileExistsError as error:
+            raise VerificationError(f"输出文件已存在，禁止并发覆盖：{path}") from error
+        linked = True
+        directory_fd = os.open(
+            path.parent,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
+        )
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        if linked:
+            directory_fd = os.open(
+                path.parent,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
+            )
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+
+
+def _load_argv(path: Path | None, *, default: Sequence[str] | None = None) -> list[str]:
+    if path is None:
+        if default is None:
+            raise VerificationError("真实推理验证必须提供 --trigger-file")
+        return list(default)
+    if ".." in path.parts or path.is_symlink() or not path.is_file():
+        raise VerificationError("argv JSON 必须是无路径穿越的普通文件")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise VerificationError("argv JSON 无法解析") from error
+    if (
+        not isinstance(payload, list)
+        or not payload
+        or not all(isinstance(item, str) and "\0" not in item for item in payload)
+    ):
+        raise VerificationError("argv JSON 必须是非空字符串数组")
+    return payload
+
+
+def _inspect(container: str) -> dict[str, Any]:
+    completed = _run(["docker", "inspect", container])
+    try:
+        payload = json.loads(completed.stdout)
+        if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], dict):
+            raise ValueError
+        return payload[0]
+    except (json.JSONDecodeError, ValueError) as error:
+        raise VerificationError("docker inspect 返回格式异常") from error
+
+
+def _environment(inspect: dict[str, Any]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for entry in inspect.get("Config", {}).get("Env") or []:
+        if isinstance(entry, str) and "=" in entry:
+            name, value = entry.split("=", 1)
+            result[name] = value
+    return result
+
+
+def _gpu_rows() -> list[dict[str, Any]]:
+    completed = _run(
+        [
+            "nvidia-smi",
+            "--query-gpu=index,uuid,memory.used",
+            "--format=csv,noheader,nounits",
+        ]
+    )
+    rows: list[dict[str, Any]] = []
+    for raw in completed.stdout.splitlines():
+        values = [value.strip() for value in raw.split(",")]
+        if len(values) != 3:
+            raise VerificationError("nvidia-smi GPU 字段格式异常")
+        try:
+            rows.append(
+                {"index": int(values[0]), "uuid": values[1], "memory_mib": int(values[2])}
+            )
+        except ValueError as error:
+            raise VerificationError("nvidia-smi GPU 数值字段格式异常") from error
+    if not rows or len({row["index"] for row in rows}) != len(rows):
+        raise VerificationError("nvidia-smi GPU 索引为空或重复")
+    return rows
+
+
+def _process_rows(gpu_uuid: str) -> list[dict[str, Any]]:
+    completed = _run(
+        [
+            "nvidia-smi",
+            "--query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory",
+            "--format=csv,noheader,nounits",
+        ],
+        check=False,
+    )
+    if completed.returncode == 0:
+        expected_fields = 4
+        include_uuid = True
+    else:
+        completed = _run(
+            [
+                "nvidia-smi",
+                f"--id={gpu_uuid}",
+                "--query-compute-apps=pid,process_name,used_gpu_memory",
+                "--format=csv,noheader,nounits",
+            ]
+        )
+        expected_fields = 3
+        include_uuid = False
+    rows: list[dict[str, Any]] = []
+    for raw in completed.stdout.splitlines():
+        if not raw.strip():
+            continue
+        values = [value.strip() for value in raw.split(",")]
+        if len(values) != expected_fields:
+            raise VerificationError("nvidia-smi compute-apps 字段格式异常")
+        row_uuid = values.pop(0) if include_uuid else gpu_uuid
+        try:
+            rows.append(
+                {
+                    "gpu_uuid": row_uuid,
+                    "host_pid": int(values[0]),
+                    "process_name": values[1],
+                    "used_memory_mib": int(values[2]),
+                }
+            )
+        except ValueError as error:
+            raise VerificationError("nvidia-smi compute-apps 数值字段格式异常") from error
+    return [row for row in rows if row["gpu_uuid"] == gpu_uuid]
+
+
+def _docker_top_pids(container: str) -> set[int]:
+    completed = _run(["docker", "top", container, "-eo", "pid"])
+    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    if not lines or lines[0].upper() != "PID":
+        raise VerificationError("docker top PID 输出格式异常")
+    try:
+        return {int(line.split()[0]) for line in lines[1:]}
+    except (ValueError, IndexError) as error:
+        raise VerificationError("docker top PID 数值异常") from error
+
+
+def _proc_root() -> Path:
+    return Path(os.environ.get("GPU_EVIDENCE_PROC_ROOT", "/proc"))
+
+
+def _map_process(row: dict[str, Any], container_id: str, top_pids: set[int]) -> dict[str, Any]:
+    pid = row["host_pid"]
+    if pid not in top_pids:
+        raise VerificationError(f"CUDA PID {pid} 不在目标容器 docker top 中")
+    process_root = _proc_root() / str(pid)
+    try:
+        cgroup = (process_root / "cgroup").read_text(encoding="utf-8")
+        status = (process_root / "status").read_text(encoding="utf-8")
+        comm = (process_root / "comm").read_text(encoding="utf-8").strip()
+    except OSError as error:
+        raise VerificationError(f"CUDA PID {pid} 的 /proc 证据不完整") from error
+    if re.search(rf"(?<![0-9a-f]){re.escape(container_id)}(?![0-9a-f])", cgroup) is None:
+        raise VerificationError(f"CUDA PID {pid} cgroup 不包含完整目标容器 ID")
+    namespace_match = re.search(r"^NSpid:\s+([0-9\s]+)$", status, re.MULTILINE)
+    if namespace_match is None:
+        raise VerificationError(f"CUDA PID {pid} 缺少 NSpid 映射")
+    namespace_pids = [int(value) for value in namespace_match.group(1).split()]
+    if not namespace_pids or namespace_pids[0] != pid:
+        raise VerificationError(f"CUDA PID {pid} 的 NSpid 宿主 PID 映射不一致")
+    mapped = dict(row)
+    mapped["container_pid"] = namespace_pids[-1]
+    mapped["proc_comm"] = comm
+    mapped["mapping"] = {
+        "docker_top": True,
+        "cgroup_full_container_id": True,
+        "nspid": namespace_pids,
+    }
+    return mapped
+
+
+def _probe(container: str, probe_file: Path | None) -> dict[str, Any]:
+    probe_source = (
+        "import json,torch; ok=torch.cuda.is_available(); "
+        "print(json.dumps({'cuda_available':ok,"
+        "'device_count':torch.cuda.device_count(),"
+        "'current_device':torch.cuda.current_device() if ok else None,"
+        "'device_uuid':str(torch.cuda.get_device_properties(0).uuid) "
+        "if ok else None}))"
+    )
+    default = [
+        "python",
+        "-c",
+        probe_source,
+    ]
+    argv = _load_argv(probe_file, default=default)
+    completed = _run(["docker", "exec", container, *argv])
+    try:
+        result = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise VerificationError("容器内 CUDA probe 返回不是 JSON") from error
+    if not isinstance(result, dict):
+        raise VerificationError("容器内 CUDA probe 结果格式异常")
+    return result
+
+
+def _check_running_contract(
+    arguments: argparse.Namespace, inspect: dict[str, Any], gpu: dict[str, Any]
+) -> tuple[dict[str, str], dict[str, Any]]:
+    if inspect.get("State", {}).get("Running") is not True:
+        raise VerificationError("目标容器不是 running")
+    container_id = inspect.get("Id")
+    if not isinstance(container_id, str) or re.fullmatch(r"[0-9a-f]{64}", container_id) is None:
+        raise VerificationError("docker inspect 缺少完整 64 位容器 ID")
+    environment = _environment(inspect)
+    expected = {
+        "PLATFORM_INSTANCE_ID": arguments.container,
+        "PLATFORM_GPU_ID": str(arguments.physical_gpu),
+        "GPU_PROCESS_NAME": arguments.process_name,
+    }
+    for name, value in expected.items():
+        if environment.get(name) != value:
+            raise VerificationError(f"容器环境 {name} 与验证参数不一致")
+    visible = environment.get("NVIDIA_VISIBLE_DEVICES")
+    requests = inspect.get("HostConfig", {}).get("DeviceRequests") or []
+    requested_ids = [
+        device_id
+        for request in requests
+        if request.get("Driver") in {"", "nvidia", None}
+        for device_id in (request.get("DeviceIDs") or [])
+    ]
+    accepted = {str(arguments.physical_gpu), gpu["uuid"]}
+    if visible not in accepted or requested_ids != [str(arguments.physical_gpu)]:
+        raise VerificationError(
+            "NVIDIA_VISIBLE_DEVICES 或 Docker device request 未唯一绑定目标物理 GPU"
+        )
+    probe = _probe(arguments.container, arguments.probe_file)
+    if probe.get("cuda_available") is not True:
+        raise VerificationError("容器内 CUDA 不可用")
+    if probe.get("device_count") != 1:
+        raise VerificationError("容器内 CUDA device_count 必须等于 1")
+    if probe.get("current_device") != 0:
+        raise VerificationError("容器内当前设备必须是 cuda:0")
+    if probe.get("device_uuid") != gpu["uuid"]:
+        raise VerificationError("容器内 GPU UUID 与宿主目标 GPU 不一致")
+    return environment, probe
+
+
+def _redacted_command(argv: Sequence[str]) -> dict[str, Any]:
+    return {"executable": Path(argv[0]).name, "argument_count": len(argv) - 1}
+
+
+def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
+    if arguments.trigger_file is None:
+        raise VerificationError("真实推理验证必须提供 --trigger-file")
+    gpu_rows = _gpu_rows()
+    matching_gpu = [row for row in gpu_rows if row["index"] == arguments.physical_gpu]
+    if len(matching_gpu) != 1:
+        raise VerificationError("物理 GPU 索引未在 nvidia-smi 中唯一匹配")
+    gpu = matching_gpu[0]
+    inspect = _inspect(arguments.container)
+    environment, probe = _check_running_contract(arguments, inspect, gpu)
+    container_id = inspect["Id"]
+    before_rows = _process_rows(gpu["uuid"])
+    argv = _load_argv(arguments.trigger_file)
+    report["trigger"] = _redacted_command(argv)
+    trigger = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    samples: list[dict[str, Any]] = []
+    deadline = time.monotonic() + arguments.sample_window
+    try:
+        while trigger.poll() is None and time.monotonic() < deadline:
+            current_inspect = _inspect(arguments.container)
+            if current_inspect.get("Id") != container_id:
+                raise VerificationError("容器在同步采样期间发生重启或替换")
+            current_top = _docker_top_pids(arguments.container)
+            mapped: list[dict[str, Any]] = []
+            for row in _process_rows(gpu["uuid"]):
+                if row["process_name"] != arguments.process_name:
+                    if row["host_pid"] in current_top:
+                        raise VerificationError(
+                            f"CUDA PID {row['host_pid']} 进程名 "
+                            f"{row['process_name']} 与期望值不一致"
+                        )
+                    continue
+                mapped.append(_map_process(row, container_id, current_top))
+            if mapped:
+                memory = next(
+                    row["memory_mib"]
+                    for row in _gpu_rows()
+                    if row["index"] == arguments.physical_gpu
+                )
+                samples.append(
+                    {
+                        "timestamp": datetime.now(timezone.utc).isoformat(),  # noqa: UP017
+                        "gpu_memory_mib": memory,
+                        "processes": mapped,
+                    }
+                )
+            time.sleep(arguments.sample_interval)
+        remaining = max(0.0, arguments.trigger_timeout)
+        try:
+            return_code = trigger.wait(timeout=remaining)
+        except subprocess.TimeoutExpired as error:
+            trigger.terminate()
+            raise VerificationError("真实推理触发命令超时") from error
+        if return_code != 0:
+            raise VerificationError(f"真实推理触发命令失败，退出码 {return_code}")
+    finally:
+        if trigger.poll() is None:
+            trigger.terminate()
+            try:
+                trigger.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                trigger.kill()
+                trigger.wait(timeout=5)
+    if not samples:
+        raise VerificationError("真实推理期间未获得目标 CUDA PID 同步采样")
+    final_inspect = _inspect(arguments.container)
+    if final_inspect.get("Id") != container_id:
+        raise VerificationError("容器在验证期间发生重启或替换")
+    report.update(
+        {
+            "release_sha": inspect.get("Config", {}).get("Labels", {}).get(
+                "org.opencontainers.image.revision"
+            ),
+            "container": {
+                "id": container_id,
+                "name": arguments.container,
+                "instance_id": environment["PLATFORM_INSTANCE_ID"],
+                "init_host_pid": inspect["State"]["Pid"],
+            },
+            "gpu": {
+                "physical_index": arguments.physical_gpu,
+                "physical_uuid": gpu["uuid"],
+                "container_visible": environment.get("NVIDIA_VISIBLE_DEVICES"),
+            },
+            "cuda_probe": probe,
+            "memory_mib": {
+                "before": gpu["memory_mib"],
+                "during": max(sample["gpu_memory_mib"] for sample in samples),
+            },
+            "baseline_processes": [
+                {
+                    "host_pid": row["host_pid"],
+                    "process_name": row["process_name"],
+                    "used_memory_mib": row["used_memory_mib"],
+                }
+                for row in before_rows
+            ],
+            "synchronous_samples": samples,
+        }
+    )
+
+
+def _proc_belongs_to_container(pid: int, container_id: str) -> bool:
+    try:
+        cgroup = (_proc_root() / str(pid) / "cgroup").read_text(encoding="utf-8")
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+    except OSError as error:
+        raise VerificationError(f"无法复核已映射 CUDA PID {pid} 的 cgroup") from error
+    return re.search(
+        rf"(?<![0-9a-f]){re.escape(container_id)}(?![0-9a-f])", cgroup
+    ) is not None
+
+
+def _read_prior_evidence(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        raise VerificationError("--assert-stopped 必须提供 --evidence")
+    if ".." in path.parts or path.is_symlink() or not path.is_file():
+        raise VerificationError("先前 GPU 证据路径不安全或不存在")
+    try:
+        evidence = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise VerificationError("先前 GPU 证据无法解析") from error
+    if not isinstance(evidence, dict):
+        raise VerificationError("先前 GPU 证据必须是 JSON 对象")
+    if evidence.get("status") != "PASS":
+        raise VerificationError("先前 GPU 证据不是 PASS")
+    return evidence
+
+
+def _verify_stopped(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
+    evidence = _read_prior_evidence(arguments.evidence)
+    container = evidence.get("container", {})
+    gpu = evidence.get("gpu", {})
+    if container.get("name") != arguments.container:
+        raise VerificationError("先前证据的容器名与参数不一致")
+    if gpu.get("physical_index") != arguments.physical_gpu:
+        raise VerificationError("先前证据的物理 GPU 与参数不一致")
+    inspect = _inspect(arguments.container)
+    if inspect.get("State", {}).get("Running") is True:
+        raise VerificationError("--assert-stopped 时目标容器仍在运行")
+    if inspect.get("Id") != container.get("id"):
+        raise VerificationError("当前 stopped 容器 ID 与先前证据不一致，容器已被重建")
+    prior_pids = {
+        process["host_pid"]
+        for sample in evidence.get("synchronous_samples", [])
+        for process in sample.get("processes", [])
+        if isinstance(process.get("host_pid"), int)
+    }
+    if not prior_pids:
+        raise VerificationError("先前证据不含已映射 CUDA PID")
+    deadline = time.monotonic() + arguments.stop_timeout
+    remaining: set[int] = set()
+    while True:
+        active = {row["host_pid"] for row in _process_rows(gpu["physical_uuid"])}
+        remaining = {
+            pid
+            for pid in prior_pids & active
+            if _proc_belongs_to_container(pid, container["id"])
+        }
+        if not remaining or time.monotonic() >= deadline:
+            break
+        time.sleep(arguments.sample_interval)
+    if remaining:
+        raise VerificationError(f"容器停止后仍存在已映射 CUDA PID 残留：{sorted(remaining)}")
+    report.update(
+        {
+            "release_sha": evidence.get("release_sha"),
+            "container": container,
+            "gpu": gpu,
+            "prior_cuda_pids": sorted(prior_pids),
+            "remaining_cuda_pids": [],
+        }
+    )
+
+
+def main() -> int:
+    arguments = _parse_args()
+    output: Path | None = None
+    report: dict[str, Any] = {
+        "schema_version": 1,
+        "timestamp": datetime.now(timezone.utc).isoformat(),  # noqa: UP017
+        "status": "FAIL",
+        "mode": "assert-stopped" if arguments.assert_stopped else "running-inference",
+        "reason": "验证未完成",
+        "target": {
+            "container": arguments.container,
+            "physical_gpu": arguments.physical_gpu,
+            "process_name": arguments.process_name,
+        },
+        "commands": [
+            "docker inspect <container>",
+            "docker top <container> -eo pid",
+            "docker exec <container> <cuda-probe-argv>",
+            "nvidia-smi --query-gpu=<fields> --format=csv,noheader,nounits",
+            "nvidia-smi --query-compute-apps=<fields> --format=csv,noheader,nounits",
+            "<trigger-executable> <redacted-arguments>",
+        ],
+    }
+    try:
+        _require_component(arguments.container, "container")
+        _require_component(arguments.process_name, "process name")
+        if arguments.physical_gpu < 0:
+            raise VerificationError("physical GPU 索引不能为负数")
+        if arguments.sample_window <= 0 or arguments.sample_interval <= 0:
+            raise VerificationError("采样时间和间隔必须大于 0")
+        output = _safe_output_path(arguments.output)
+        if arguments.assert_stopped:
+            _verify_stopped(arguments, report)
+        else:
+            _verify_running(arguments, report)
+            output_sha = output.parent.parent.name
+            if report.get("release_sha") != output_sha:
+                raise VerificationError("镜像 release SHA 与输出归档 Git SHA 不一致")
+        report["status"] = "PASS"
+        report["reason"] = "GPU 实例、同步推理 PID 与精确容器归属证据一致"
+        _atomic_write_once(output, report)
+    except (OSError, VerificationError) as error:
+        report["reason"] = str(error)
+        if output is not None and not output.exists() and not output.is_symlink():
+            try:
+                _atomic_write_once(output, report)
+            except (OSError, VerificationError):
+                pass
+        print(f"GPU 实例验证失败：{error}", file=sys.stderr)
+        return 2
+    print(f"GPU 实例验证通过：{arguments.container}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

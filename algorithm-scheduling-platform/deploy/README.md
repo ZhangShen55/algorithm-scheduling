@@ -175,6 +175,31 @@ replacements and leaves unknown similarly named directories untouched. A private
 same-filesystem staging and fsync prevent a killed copy from accumulating partial roots
 or publishing a mixed release.
 
+After a GPU operator is healthy, collect its evidence while the corresponding real
+smoke request is still running. The trigger file is a JSON argv array and is executed
+without a shell; command arguments are not copied into the report:
+
+```bash
+cat >/tmp/asr-offline-gpu0-trigger.json <<'JSON'
+["/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/scripts/run-operator-smoke", "--operator", "asr_offline", "--instance", "asr-offline-gpu0"]
+JSON
+
+deploy/scripts/verify-gpu-instance \
+  --container asr-offline-gpu0 \
+  --physical-gpu 0 \
+  --process-name asr_offline \
+  --trigger-file /tmp/asr-offline-gpu0-trigger.json \
+  --output "deploy/reports/milestone-2b/releases/${RELEASE_TAG}/${RELEASE_GIT_SHA}/gpu-instances/asr-offline-gpu0.json"
+```
+
+`run-operator-smoke` is delivered by the later smoke Harness task; do not replace it
+with `sleep` or a health request. A PASS requires a target CUDA PID sampled while that
+real trigger is alive, an exact full-container-ID cgroup mapping and a matching process
+name. After stopping the same container, use `--assert-stopped --evidence <prior-json>`
+and write the new report under the release `recovery/` directory. Existing reports are
+never overwritten. Local fake-runtime tests prove verifier behavior only; they do not
+prove that the target NVIDIA server or any operator passed GPU acceptance.
+
 Current VBas and ScreenDet deployment uses plain models. Their encrypted directories
 and keys are excluded from image contexts. If encrypted mode is introduced later, pass
 the key via a separate read-only `/run/secrets/*` mount and do not include plain weights

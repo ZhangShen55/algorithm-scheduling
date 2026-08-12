@@ -18,6 +18,7 @@ docker compose -f deploy/docker-compose.operators.yml config --quiet
 docker compose -f deploy/docker-compose.platform.yml config --quiet
 deploy/scripts/verify-operator-build-contexts
 .venv/bin/pytest -q tests/test_milestone_2b_model_assets.py tests/test_milestone_2b_image_build.py
+.venv/bin/pytest -q tests/test_milestone_2b_gpu_evidence.py
 (cd ../control_service && ../algorithm-scheduling-platform/.venv/bin/python -m pytest -q)
 (cd ../orchestrator_service && ../algorithm-scheduling-platform/.venv/bin/python -m pytest -q)
 (cd ../vision_orchestrator_service && ../algorithm-scheduling-platform/.venv/bin/python -m pytest -q)
@@ -25,6 +26,10 @@ deploy/scripts/verify-operator-build-contexts
 python -m pytest -q tests/test_ppt_slice_adapter.py tests/test_platform_compose.py
 conda run -n ppt_slice python -m unittest discover -s ../ppt_slice/tests -v
 ```
+
+GPU 实例证据采集器的 fake Docker/NVIDIA/proc 行为合同见
+`harness/scenarios/milestone-2b-gpu-instance-evidence.md`。该本地测试不是真实 GPU 验收；
+Task 12-14 必须在目标服务器用各算子的真实 smoke 触发文件同步运行采集器。
 
 里程碑 2B 模型资产验证只使用仓库外受控目录。先生成精确 manifest，再事务发布并校验：
 
