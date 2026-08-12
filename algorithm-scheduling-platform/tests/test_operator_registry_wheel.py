@@ -4,6 +4,7 @@ import hashlib
 import os
 import subprocess
 import sys
+import textwrap
 import zipfile
 from base64 import urlsafe_b64encode
 from collections.abc import Callable
@@ -15,6 +16,7 @@ from scripts import build_and_stage_operator_registry_wheel as wheel_pipeline
 from scripts import stage_operator_registry_wheel
 from scripts.build_and_stage_operator_registry_wheel import (
     EXPECTED_METADATA_NAME,
+    EXPECTED_PACKAGE_MODULES,
     EXPECTED_REQUIRES_PYTHON,
     EXPECTED_RUNTIME_REQUIREMENTS,
     EXPECTED_VERSION,
@@ -197,6 +199,28 @@ def test_builder_receives_only_tracked_allowlisted_files_in_a_clean_tree(
 
 def test_default_source_allowlist_comes_from_tracked_package_files() -> None:
     assert wheel_pipeline._tracked_source_files(PACKAGE_ROOT) == EXPECTED_SOURCE_FILES
+    assert EXPECTED_PACKAGE_MODULES == (
+        "__init__.py",
+        "client.py",
+        "lifecycle.py",
+        "ops.py",
+        "runtime.py",
+    )
+
+
+def test_source_contract_rejects_a_sixth_tracked_python_module(tmp_path: Path) -> None:
+    package_root, dist_dir, workspace_root = _pipeline_paths(tmp_path)
+    (package_root / "admin.py").write_text("SECRET = True\n", encoding="utf-8")
+
+    with pytest.raises(WheelBuildError, match="源码合同不匹配.*admin.py"):
+        build_and_stage_registry_wheel(
+            package_root=package_root,
+            dist_dir=dist_dir,
+            workspace_root=workspace_root,
+            target_projects=TARGET_PROJECTS,
+            builder=_fake_builder(),
+            source_files=(*EXPECTED_SOURCE_FILES, "admin.py"),
+        )
 
 
 def test_tracked_source_allowlist_rejects_symlinks_and_non_package_files(
@@ -205,7 +229,7 @@ def test_tracked_source_allowlist_rejects_symlinks_and_non_package_files(
     package_root, dist_dir, workspace_root = _pipeline_paths(tmp_path)
     (package_root / "linked.py").symlink_to(package_root / "client.py")
 
-    with pytest.raises(WheelBuildError, match="符号链接"):
+    with pytest.raises(WheelBuildError, match="符号链接|不是普通文件"):
         build_and_stage_registry_wheel(
             package_root=package_root,
             dist_dir=dist_dir,
@@ -456,6 +480,319 @@ def test_builder_failure_preserves_existing_dist_and_targets(tmp_path: Path) -> 
     assert {path.read_bytes() for path in existing_paths} == {b"old-wheel"}
 
 
+def test_source_change_during_build_is_rejected_before_publish(tmp_path: Path) -> None:
+    package_root, dist_dir, workspace_root = _pipeline_paths(tmp_path)
+    existing_dist = dist_dir / EXPECTED_WHEEL_NAME
+    existing_dist.parent.mkdir()
+    existing_dist.write_bytes(b"old-wheel")
+
+    def mutate_after_build(_clean_source: Path, wheelhouse: Path) -> None:
+        _write_fake_wheel(wheelhouse)
+        (package_root / "runtime.py").write_text("changed", encoding="utf-8")
+
+    with pytest.raises(WheelBuildError, match="构建期间 tracked 源码发生变化"):
+        build_and_stage_registry_wheel(
+            package_root=package_root,
+            dist_dir=dist_dir,
+            workspace_root=workspace_root,
+            target_projects=TARGET_PROJECTS,
+            builder=mutate_after_build,
+            source_files=EXPECTED_SOURCE_FILES,
+        )
+
+    assert existing_dist.read_bytes() == b"old-wheel"
+
+
+def test_real_git_index_rejects_a_new_tracked_python_module(tmp_path: Path) -> None:
+    package_root, dist_dir, workspace_root = _pipeline_paths(tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=package_root, check=True)
+    subprocess.run(["git", "add", "."], cwd=package_root, check=True)
+    (package_root / "admin.py").write_text("SECRET = True\n", encoding="utf-8")
+    subprocess.run(["git", "add", "admin.py"], cwd=package_root, check=True)
+
+    with pytest.raises(WheelBuildError, match="源码合同不匹配.*admin.py"):
+        build_and_stage_registry_wheel(
+            package_root=package_root,
+            dist_dir=dist_dir,
+            workspace_root=workspace_root,
+            target_projects=TARGET_PROJECTS,
+            builder=_fake_builder(),
+        )
+
+
+def test_publication_lock_serializes_processes_and_is_private(tmp_path: Path) -> None:
+    lock_path = tmp_path / "registry-wheel.lock"
+    log_path = tmp_path / "critical.log"
+    script = textwrap.dedent(
+        f"""
+        import time
+        from pathlib import Path
+        from scripts.build_and_stage_operator_registry_wheel import _publication_lock
+        lock_path = Path({str(lock_path)!r})
+        log_path = Path({str(log_path)!r})
+        with _publication_lock(lock_path):
+            with log_path.open("a", encoding="utf-8") as stream:
+                stream.write("enter\\n")
+                stream.flush()
+            time.sleep(0.2)
+            with log_path.open("a", encoding="utf-8") as stream:
+                stream.write("exit\\n")
+        """
+    )
+    environment = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+    processes = [
+        subprocess.Popen([sys.executable, "-c", script], env=environment)
+        for _ in range(2)
+    ]
+
+    assert [process.wait(timeout=5) for process in processes] == [0, 0]
+    assert log_path.read_text(encoding="utf-8").splitlines() == [
+        "enter",
+        "exit",
+        "enter",
+        "exit",
+    ]
+    assert lock_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_two_process_publications_do_not_mix_artifacts(tmp_path: Path) -> None:
+    dist_dir = tmp_path / "dist"
+    dist_dir.mkdir()
+    destinations = [tmp_path / f"target-{index}.whl" for index in range(9)]
+    for destination in destinations:
+        destination.write_bytes(b"old-wheel")
+    log_path = tmp_path / "publish.log"
+    script = textwrap.dedent(
+        f"""
+        import hashlib
+        import sys
+        import time
+        from pathlib import Path
+        from scripts.build_and_stage_operator_registry_wheel import (
+            _publication_lock, _publish_artifact_transaction, _recover_transaction,
+        )
+        artifact = Path(sys.argv[1])
+        label = sys.argv[2]
+        dist_dir = Path({str(dist_dir)!r})
+        destinations = tuple(Path(path) for path in {[str(path) for path in destinations]!r})
+        entered = False
+        def record_replace(_destination):
+            global entered
+            if not entered:
+                entered = True
+                with Path({str(log_path)!r}).open("a", encoding="utf-8") as stream:
+                    stream.write(label + ":enter\\n")
+                time.sleep(0.1)
+        with _publication_lock(dist_dir / ".operator-registry-wheel.lock"):
+            _recover_transaction(dist_dir)
+            _publish_artifact_transaction(
+                artifact,
+                destinations,
+                dist_dir=dist_dir,
+                expected_hash=hashlib.sha256(artifact.read_bytes()).hexdigest(),
+                after_replace=record_replace,
+            )
+            with Path({str(log_path)!r}).open("a", encoding="utf-8") as stream:
+                stream.write(label + ":exit\\n")
+        """
+    )
+    environment = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+    artifacts = []
+    for label in ("A", "B"):
+        artifact = tmp_path / f"{label}.whl"
+        artifact.write_bytes(f"wheel-{label}".encode())
+        artifacts.append((artifact, label))
+    processes = [
+        subprocess.Popen(
+            [sys.executable, "-c", script, str(artifact), label],
+            env=environment,
+        )
+        for artifact, label in artifacts
+    ]
+
+    assert [process.wait(timeout=10) for process in processes] == [0, 0]
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert lines in (
+        ["A:enter", "A:exit", "B:enter", "B:exit"],
+        ["B:enter", "B:exit", "A:enter", "A:exit"],
+    )
+    assert {path.read_bytes() for path in destinations} in ({b"wheel-A"}, {b"wheel-B"})
+
+
+def test_interrupted_publication_is_rolled_back_on_next_lock_holder(
+    tmp_path: Path,
+) -> None:
+    dist_dir = tmp_path / "dist"
+    dist_dir.mkdir()
+    artifact = tmp_path / "new.whl"
+    artifact.write_bytes(b"new-wheel")
+    destinations = [tmp_path / f"target-{index}.whl" for index in range(9)]
+    for destination in destinations:
+        destination.write_bytes(b"old-wheel")
+    script = textwrap.dedent(
+        f"""
+        import os
+        from pathlib import Path
+        from scripts.build_and_stage_operator_registry_wheel import (
+            _publication_lock, _publish_artifact_transaction, _recover_transaction,
+        )
+        dist_dir = Path({str(dist_dir)!r})
+        destinations = {[str(path) for path in destinations]!r}
+        replacements = 0
+        def crash_after_four(_destination):
+            global replacements
+            replacements += 1
+            if replacements == 4:
+                os._exit(73)
+        with _publication_lock(dist_dir / ".operator-registry-wheel.lock"):
+            _recover_transaction(dist_dir)
+            _publish_artifact_transaction(
+                Path({str(artifact)!r}),
+                tuple(Path(path) for path in destinations),
+                dist_dir=dist_dir,
+                expected_hash={hashlib.sha256(b"new-wheel").hexdigest()!r},
+                after_replace=crash_after_four,
+            )
+        """
+    )
+    environment = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+
+    crashed = subprocess.run([sys.executable, "-c", script], env=environment, check=False)
+    assert crashed.returncode == 73
+    assert len({path.read_bytes() for path in destinations}) > 1
+
+    with wheel_pipeline._publication_lock(dist_dir / ".operator-registry-wheel.lock"):
+        wheel_pipeline._recover_transaction(dist_dir)
+
+    assert {path.read_bytes() for path in destinations} == {b"old-wheel"}
+    assert not (dist_dir / ".operator-registry-wheel.transaction.json").exists()
+    assert not list(tmp_path.rglob("*.registry-wheel-*.tmp"))
+
+
+def test_cleanup_failure_keeps_committed_journal_for_retry(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    dist_dir = tmp_path / "dist"
+    dist_dir.mkdir()
+    temporary = tmp_path / ".target.whl.registry-wheel-0.new.tmp"
+    temporary.write_bytes(b"new")
+    journal = {
+        "version": 1,
+        "phase": "committed",
+        "new_hash": hashlib.sha256(b"new").hexdigest(),
+        "targets": [
+            {
+                "destination": str(tmp_path / "target.whl"),
+                "temporary": str(temporary),
+                "backup": None,
+                "old_exists": False,
+                "old_hash": None,
+                "prepared": True,
+                "published": True,
+            }
+        ],
+    }
+    wheel_pipeline._write_journal(dist_dir, journal)
+    original_unlink = Path.unlink
+
+    def fail_selected_unlink(path: Path, *args, **kwargs) -> None:
+        if path == temporary:
+            raise OSError("cleanup failed")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_selected_unlink)
+    with pytest.raises(WheelBuildError, match="临时文件清理失败"):
+        wheel_pipeline._recover_transaction(dist_dir)
+
+    journal_path = dist_dir / ".operator-registry-wheel.transaction.json"
+    assert journal_path.exists()
+    assert temporary.exists()
+
+    monkeypatch.setattr(Path, "unlink", original_unlink)
+    wheel_pipeline._recover_transaction(dist_dir)
+    assert not journal_path.exists()
+    assert not temporary.exists()
+
+
+@pytest.mark.parametrize("failure_index", range(1, 10))
+def test_each_publication_replace_failure_rolls_back_all_targets(
+    tmp_path: Path,
+    failure_index: int,
+) -> None:
+    dist_dir = tmp_path / "dist"
+    dist_dir.mkdir()
+    artifact = tmp_path / "new.whl"
+    artifact.write_bytes(b"new-wheel")
+    destinations = tuple(tmp_path / f"target-{index}.whl" for index in range(9))
+    for destination in destinations:
+        destination.write_bytes(b"old-wheel")
+    calls = 0
+
+    def fail_selected_replace(source, destination) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == failure_index:
+            raise OSError(f"replace {failure_index} failed")
+        os.replace(source, destination)
+
+    with pytest.raises(OSError, match=f"replace {failure_index} failed"):
+        wheel_pipeline._publish_artifact_transaction(
+            artifact,
+            destinations,
+            dist_dir=dist_dir,
+            expected_hash=hashlib.sha256(b"new-wheel").hexdigest(),
+            replace=fail_selected_replace,
+        )
+
+    assert {path.read_bytes() for path in destinations} == {b"old-wheel"}
+    assert not (dist_dir / ".operator-registry-wheel.transaction.json").exists()
+
+
+@pytest.mark.parametrize("failure_index", range(1, 10))
+def test_each_rollback_replace_failure_preserves_recovery_evidence(
+    tmp_path: Path,
+    failure_index: int,
+) -> None:
+    dist_dir = tmp_path / "dist"
+    dist_dir.mkdir()
+    artifact = tmp_path / "new.whl"
+    artifact.write_bytes(b"new-wheel")
+    destinations = tuple(tmp_path / f"target-{index}.whl" for index in range(9))
+    for destination in destinations:
+        destination.write_bytes(b"old-wheel")
+    replacements = 0
+
+    def interrupt_after_first(destination: Path) -> None:
+        if destination == destinations[0]:
+            raise KeyboardInterrupt
+
+    def fail_selected_rollback(source, destination) -> None:
+        nonlocal replacements
+        replacements += 1
+        if replacements == failure_index:
+            raise OSError(f"rollback {failure_index} failed")
+        os.replace(source, destination)
+
+    with pytest.raises(WheelBuildError, match="事务回滚未完成"):
+        wheel_pipeline._publish_artifact_transaction(
+            artifact,
+            destinations,
+            dist_dir=dist_dir,
+            expected_hash=hashlib.sha256(b"new-wheel").hexdigest(),
+            after_replace=interrupt_after_first,
+            recover_replace=fail_selected_rollback,
+        )
+
+    journal = dist_dir / ".operator-registry-wheel.transaction.json"
+    assert journal.exists()
+    assert len(list(tmp_path.rglob("*.backup.tmp"))) == 9
+
+    wheel_pipeline._recover_transaction(dist_dir)
+    assert {path.read_bytes() for path in destinations} == {b"old-wheel"}
+    assert not journal.exists()
+
+
 def test_publish_failure_rolls_back_dist_and_all_operator_targets(tmp_path: Path) -> None:
     package_root, dist_dir, workspace_root = _pipeline_paths(tmp_path)
     destinations = [dist_dir / EXPECTED_WHEEL_NAME]
@@ -516,7 +853,7 @@ def test_post_replace_hash_mismatch_rolls_back_every_destination(tmp_path: Path)
         if replacements == 5:
             Path(destination).write_bytes(b"corrupted-wheel")
 
-    with pytest.raises(WheelBuildError, match="发布后.*hash 不一致"):
+    with pytest.raises(WheelBuildError, match="发布后.*hash"):
         build_and_stage_registry_wheel(
             package_root=package_root,
             dist_dir=dist_dir,

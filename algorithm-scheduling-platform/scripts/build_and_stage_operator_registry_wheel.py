@@ -3,37 +3,64 @@ from __future__ import annotations
 import argparse
 import csv
 import email
+import fcntl
 import hashlib
 import io
+import json
 import os
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+import tomllib
 import zipfile
 from base64 import urlsafe_b64encode
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import TypedDict, cast
 
 PLATFORM_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = PLATFORM_ROOT.parent
 PACKAGE_ROOT = PLATFORM_ROOT / "packages" / "operator_registry_client"
 DIST_DIR = PACKAGE_ROOT / "dist"
 
-EXPECTED_METADATA_NAME = "algorithm-operator-registry-client"
-EXPECTED_VERSION = "0.1.0"
-EXPECTED_REQUIRES_PYTHON = ">=3.10"
-EXPECTED_WHEEL_NAME = "algorithm_operator_registry_client-0.1.0-py3-none-any.whl"
-EXPECTED_RUNTIME_REQUIREMENTS = frozenset(
-    {
-        "fastapi<1,>=0.109",
-        "httpx<1,>=0.25",
-        "pydantic<3,>=2.5",
-    }
+def _canonical_dependency(requirement: str) -> str:
+    for index, character in enumerate(requirement):
+        if character in "<>=!~":
+            name = requirement[:index]
+            specifiers = requirement[index:].split(",")
+            return name + ",".join(sorted(specifiers))
+    return requirement
+
+
+with (PACKAGE_ROOT / "pyproject.toml").open("rb") as _pyproject_stream:
+    _PROJECT_METADATA = tomllib.load(_pyproject_stream)["project"]
+
+EXPECTED_METADATA_NAME = str(_PROJECT_METADATA["name"])
+EXPECTED_VERSION = str(_PROJECT_METADATA["version"])
+EXPECTED_REQUIRES_PYTHON = str(_PROJECT_METADATA["requires-python"])
+_NORMALIZED_DISTRIBUTION_NAME = EXPECTED_METADATA_NAME.replace("-", "_")
+EXPECTED_WHEEL_NAME = (
+    f"{_NORMALIZED_DISTRIBUTION_NAME}-{EXPECTED_VERSION}-py3-none-any.whl"
 )
-DIST_INFO_DIRECTORY = "algorithm_operator_registry_client-0.1.0.dist-info"
+EXPECTED_PACKAGE_MODULES = (
+    "__init__.py",
+    "client.py",
+    "lifecycle.py",
+    "ops.py",
+    "runtime.py",
+)
+EXPECTED_SOURCE_FILES = tuple(
+    sorted(("README.md", "pyproject.toml", *EXPECTED_PACKAGE_MODULES))
+)
+EXPECTED_RUNTIME_REQUIREMENTS = frozenset(
+    _canonical_dependency(str(requirement))
+    for requirement in _PROJECT_METADATA["dependencies"]
+)
+DIST_INFO_DIRECTORY = f"{_NORMALIZED_DISTRIBUTION_NAME}-{EXPECTED_VERSION}.dist-info"
 EXPECTED_DIST_INFO_MEMBERS = frozenset(
     {
         f"{DIST_INFO_DIRECTORY}/METADATA",
@@ -55,6 +82,24 @@ TARGET_PROJECTS = (
 
 Builder = Callable[[Path, Path], None]
 Replace = Callable[[str | os.PathLike[str], str | os.PathLike[str]], None]
+AfterReplace = Callable[[Path], None]
+
+
+class TransactionTarget(TypedDict):
+    destination: str
+    temporary: str
+    backup: str | None
+    old_exists: bool
+    old_hash: str | None
+    prepared: bool
+    published: bool
+
+
+class TransactionJournal(TypedDict):
+    version: int
+    phase: str
+    new_hash: str
+    targets: list[TransactionTarget]
 
 
 class WheelBuildError(RuntimeError):
@@ -124,11 +169,31 @@ def _prepare_clean_source(
         shutil.copyfile(source, destination)
         destination.chmod(0o644)
         validated.append(path.as_posix())
-    required = {"README.md", "pyproject.toml", "__init__.py"}
-    missing = required.difference(validated)
-    if missing:
-        raise WheelBuildError("tracked 源文件缺少必需项: " + ", ".join(sorted(missing)))
+    if set(validated) != set(EXPECTED_SOURCE_FILES) or len(validated) != len(
+        EXPECTED_SOURCE_FILES
+    ):
+        extras = sorted(set(validated).difference(EXPECTED_SOURCE_FILES))
+        missing = sorted(set(EXPECTED_SOURCE_FILES).difference(validated))
+        raise WheelBuildError(
+            "registry client 源码合同不匹配；如需新增模块请显式更新合同: "
+            f"extras={extras}, missing={missing}"
+        )
     return tuple(sorted(validated))
+
+
+def _source_snapshot(package_root: Path, source_files: Sequence[str]) -> str:
+    digest = hashlib.sha256()
+    for relative_path in sorted(source_files):
+        source = package_root / relative_path
+        if source.is_symlink() or not source.is_file():
+            raise WheelBuildError(f"tracked 源文件不是普通文件: {relative_path}")
+        content = source.read_bytes()
+        digest.update(relative_path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(str(len(content)).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(content)
+    return digest.hexdigest()
 
 
 def _build_wheel(package_root: Path, wheelhouse: Path) -> None:
@@ -278,81 +343,276 @@ def _assert_dist_contains_only_expected_wheel(dist_dir: Path) -> None:
         )
 
 
-def _temporary_sibling(destination: Path, label: str) -> Path:
-    descriptor, raw_path = tempfile.mkstemp(
-        prefix=f".{destination.name}.{label}-",
-        suffix=".tmp",
-        dir=destination.parent,
-    )
-    os.close(descriptor)
-    return Path(raw_path)
-
-
-def _prepare_publication(
-    wheel: Path,
-    destinations: Sequence[Path],
-    expected_hash: str,
-) -> dict[Path, Path]:
-    prepared: dict[Path, Path] = {}
+def _fsync_directory(directory: Path) -> None:
+    descriptor = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
-        for destination in destinations:
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            temporary = _temporary_sibling(destination, "new")
-            prepared[destination] = temporary
-            shutil.copyfile(wheel, temporary)
-            temporary.chmod(0o644)
-            actual_hash = hashlib.sha256(temporary.read_bytes()).hexdigest()
-            if actual_hash != expected_hash:
-                raise WheelBuildError(
-                    f"写入前 hash 校验失败: {temporary}: {actual_hash} != {expected_hash}"
-                )
-        return prepared
-    except BaseException:
-        for temporary in prepared.values():
-            temporary.unlink(missing_ok=True)
-        raise
-
-
-def _publish_with_rollback(
-    prepared: dict[Path, Path],
-    *,
-    expected_hash: str,
-    replace: Replace,
-) -> None:
-    backups: dict[Path, Path | None] = {}
-    try:
-        for destination in prepared:
-            if destination.exists():
-                backup = _temporary_sibling(destination, "backup")
-                shutil.copy2(destination, backup)
-                backups[destination] = backup
-            else:
-                backups[destination] = None
-
-        for destination, temporary in prepared.items():
-            replace(temporary, destination)
-        final_hashes = {
-            hashlib.sha256(destination.read_bytes()).hexdigest()
-            for destination in prepared
-        }
-        if final_hashes != {expected_hash}:
-            raise WheelBuildError(
-                "发布后 dist 与算子 wheel hash 不一致: "
-                + ", ".join(sorted(final_hashes))
-            )
-    except BaseException:
-        for destination, backup_path in backups.items():
-            if backup_path is None:
-                destination.unlink(missing_ok=True)
-            else:
-                os.replace(backup_path, destination)
-        raise
+        os.fsync(descriptor)
     finally:
-        for temporary in prepared.values():
+        os.close(descriptor)
+
+
+def _write_bytes_durable(path: Path, content: bytes, mode: int = 0o600) -> None:
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        mode,
+    )
+    try:
+        os.fchmod(descriptor, mode)
+        with os.fdopen(descriptor, "wb", closefd=False) as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+    finally:
+        os.close(descriptor)
+    _fsync_directory(path.parent)
+
+
+def _hash_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@contextmanager
+def _publication_lock(lock_path: Path) -> Iterator[None]:
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(
+        lock_path,
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        os.fchmod(descriptor, 0o600)
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise WheelBuildError(f"发布锁不是普通文件: {lock_path}")
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def _journal_path(dist_dir: Path) -> Path:
+    return dist_dir / ".operator-registry-wheel.transaction.json"
+
+
+def _write_journal(dist_dir: Path, journal: TransactionJournal) -> None:
+    path = _journal_path(dist_dir)
+    temporary = dist_dir / ".operator-registry-wheel.transaction.new.tmp"
+    temporary.unlink(missing_ok=True)
+    _write_bytes_durable(
+        temporary,
+        (json.dumps(journal, sort_keys=True, separators=(",", ":")) + "\n").encode(),
+    )
+    os.replace(temporary, path)
+    _fsync_directory(dist_dir)
+
+
+def _load_journal(dist_dir: Path) -> TransactionJournal | None:
+    path = _journal_path(dist_dir)
+    if not path.exists():
+        return None
+    if path.is_symlink() or not path.is_file():
+        raise WheelBuildError(f"事务 journal 不是普通文件: {path}")
+    try:
+        journal = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise WheelBuildError(f"事务 journal 无法解析: {path}") from exc
+    if (
+        not isinstance(journal, dict)
+        or journal.get("version") != 1
+        or journal.get("phase")
+        not in {"preparing", "prepared", "publishing", "committed", "rolled_back"}
+        or not isinstance(journal.get("new_hash"), str)
+        or not isinstance(journal.get("targets"), list)
+    ):
+        raise WheelBuildError(f"事务 journal 格式不受支持: {path}")
+    targets = journal["targets"]
+    if len(targets) > 9:
+        raise WheelBuildError(f"事务 journal 目标数量非法: {len(targets)}")
+    destinations: set[str] = set()
+    for index, item in enumerate(targets):
+        if not isinstance(item, dict):
+            raise WheelBuildError(f"事务 journal 目标格式非法: index={index}")
+        required_keys = {
+            "destination",
+            "temporary",
+            "backup",
+            "old_exists",
+            "old_hash",
+            "prepared",
+            "published",
+        }
+        if set(item) != required_keys:
+            raise WheelBuildError(f"事务 journal 目标字段非法: index={index}")
+        destination = Path(item["destination"])
+        temporary = Path(item["temporary"])
+        backup_value = item["backup"]
+        expected_temporary = destination.parent / (
+            f".{destination.name}.registry-wheel-{index}.new.tmp"
+        )
+        expected_backup = destination.parent / (
+            f".{destination.name}.registry-wheel-{index}.backup.tmp"
+        )
+        if (
+            not destination.is_absolute()
+            or str(destination) in destinations
+            or temporary != expected_temporary
+            or (backup_value is not None and Path(backup_value) != expected_backup)
+        ):
+            raise WheelBuildError(f"事务 journal 路径非法: index={index}")
+        destinations.add(str(destination))
+    return cast(TransactionJournal, journal)
+
+
+def _cleanup_transaction(dist_dir: Path, journal: TransactionJournal) -> None:
+    errors: list[str] = []
+    for item in journal["targets"]:
+        for key in ("temporary", "backup"):
+            raw_path = item.get(key)
+            if raw_path:
+                try:
+                    Path(str(raw_path)).unlink(missing_ok=True)
+                    _fsync_directory(Path(str(raw_path)).parent)
+                except OSError as exc:
+                    errors.append(f"{raw_path}: {exc}")
+    if errors:
+        raise WheelBuildError("事务临时文件清理失败: " + "; ".join(errors))
+    _journal_path(dist_dir).unlink(missing_ok=True)
+    _fsync_directory(dist_dir)
+
+
+def _recover_transaction(
+    dist_dir: Path,
+    *,
+    replace: Replace = os.replace,
+) -> None:
+    journal = _load_journal(dist_dir)
+    if journal is None:
+        return
+    if journal.get("phase") in {"committed", "rolled_back"}:
+        _cleanup_transaction(dist_dir, journal)
+        return
+
+    errors: list[str] = []
+    for item in journal["targets"]:
+        destination = Path(str(item["destination"]))
+        backup_value = item.get("backup")
+        if not item.get("prepared"):
+            continue
+        try:
+            if item["old_exists"]:
+                backup = Path(str(backup_value))
+                if not backup.is_file() or _hash_file(backup) != item["old_hash"]:
+                    raise WheelBuildError(f"事务备份缺失或 hash 错误: {backup}")
+                restore = destination.parent / f".{destination.name}.registry-wheel-restore.tmp"
+                restore.unlink(missing_ok=True)
+                _write_bytes_durable(restore, backup.read_bytes(), 0o644)
+                replace(restore, destination)
+            else:
+                destination.unlink(missing_ok=True)
+            _fsync_directory(destination.parent)
+        except (OSError, WheelBuildError) as exc:
+            errors.append(f"{destination}: {exc}")
+    if errors:
+        raise WheelBuildError("事务回滚未完成，已保留 journal 与备份: " + "; ".join(errors))
+
+    for item in journal["targets"]:
+        if not item.get("prepared"):
+            continue
+        destination = Path(str(item["destination"]))
+        if item["old_exists"]:
+            if not destination.is_file() or _hash_file(destination) != item["old_hash"]:
+                raise WheelBuildError(f"事务回滚后二次校验失败: {destination}")
+        elif destination.exists():
+            raise WheelBuildError(f"事务回滚后目标应不存在: {destination}")
+    journal["phase"] = "rolled_back"
+    _write_journal(dist_dir, journal)
+    _cleanup_transaction(dist_dir, journal)
+
+
+def _publish_artifact_transaction(
+    artifact: Path,
+    destinations: Sequence[Path],
+    *,
+    dist_dir: Path,
+    expected_hash: str,
+    replace: Replace = os.replace,
+    after_replace: AfterReplace | None = None,
+    recover_replace: Replace = os.replace,
+) -> None:
+    targets: list[TransactionTarget] = []
+    journal: TransactionJournal = {
+        "version": 1,
+        "phase": "preparing",
+        "new_hash": expected_hash,
+        "targets": targets,
+    }
+    try:
+        for index, destination in enumerate(destinations):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary = destination.parent / (
+                f".{destination.name}.registry-wheel-{index}.new.tmp"
+            )
+            backup = destination.parent / (
+                f".{destination.name}.registry-wheel-{index}.backup.tmp"
+            )
             temporary.unlink(missing_ok=True)
-        for backup_path in backups.values():
-            if backup_path is not None:
-                backup_path.unlink(missing_ok=True)
+            backup.unlink(missing_ok=True)
+            old_exists = destination.exists()
+            old_hash: str | None = None
+            if old_exists:
+                if destination.is_symlink() or not destination.is_file():
+                    raise WheelBuildError(f"发布目标不是普通文件: {destination}")
+                old_hash = _hash_file(destination)
+            item: TransactionTarget = {
+                "destination": str(destination),
+                "temporary": str(temporary),
+                "backup": str(backup) if old_exists else None,
+                "old_exists": old_exists,
+                "old_hash": old_hash,
+                "prepared": False,
+                "published": False,
+            }
+            targets.append(item)
+            _write_journal(dist_dir, journal)
+            _write_bytes_durable(temporary, artifact.read_bytes(), 0o644)
+            if old_exists:
+                _write_bytes_durable(backup, destination.read_bytes(), 0o600)
+            item["prepared"] = True
+            _write_journal(dist_dir, journal)
+        journal["phase"] = "prepared"
+        _write_journal(dist_dir, journal)
+        for item in targets:
+            destination = Path(str(item["destination"]))
+            temporary = Path(str(item["temporary"]))
+            replace(temporary, destination)
+            destination.chmod(0o644)
+            _fsync_directory(destination.parent)
+            item["published"] = True
+            journal["phase"] = "publishing"
+            _write_journal(dist_dir, journal)
+            if after_replace is not None:
+                after_replace(destination)
+        for destination in destinations:
+            if (
+                not destination.is_file()
+                or destination.stat().st_mode & 0o777 != 0o644
+                or _hash_file(destination) != expected_hash
+            ):
+                raise WheelBuildError(f"发布后 hash 或权限校验失败: {destination}")
+        journal["phase"] = "committed"
+        _write_journal(dist_dir, journal)
+        _cleanup_transaction(dist_dir, journal)
+    except BaseException:
+        if _journal_path(dist_dir).exists():
+            _recover_transaction(dist_dir, replace=recover_replace)
+        else:
+            for item in targets:
+                for key in ("temporary", "backup"):
+                    raw_path = item.get(key)
+                    if raw_path:
+                        Path(str(raw_path)).unlink(missing_ok=True)
+        raise
 
 
 def build_and_stage_registry_wheel(
@@ -376,6 +636,7 @@ def build_and_stage_registry_wheel(
         if source_files is not None
         else _tracked_source_files(package_root)
     )
+    source_snapshot = _source_snapshot(package_root, selected_source_files)
     with tempfile.TemporaryDirectory(prefix="operator-registry-build-") as raw_dir:
         build_root = Path(raw_dir)
         clean_source = build_root / "source"
@@ -395,20 +656,31 @@ def build_and_stage_registry_wheel(
             for project in target_projects
         )
         destinations = (dist_path, *staged_paths)
-        prepared = _prepare_publication(wheel, destinations, wheel_hash)
-        _publish_with_rollback(
-            prepared,
-            expected_hash=wheel_hash,
-            replace=replace,
-        )
+        lock_path = dist_dir / ".operator-registry-wheel.lock"
+        with _publication_lock(lock_path):
+            _recover_transaction(dist_dir)
+            if _source_snapshot(package_root, selected_source_files) != source_snapshot:
+                raise WheelBuildError("构建期间 tracked 源码发生变化，拒绝发布制品")
+            if _hash_file(wheel) != wheel_hash:
+                raise WheelBuildError("进入发布锁后 wheel hash 发生变化")
+            _publish_artifact_transaction(
+                wheel,
+                destinations,
+                dist_dir=dist_dir,
+                expected_hash=wheel_hash,
+                replace=replace,
+            )
 
     final_hashes = {
         hashlib.sha256(destination.read_bytes()).hexdigest()
         for destination in destinations
     }
-    if final_hashes != {wheel_hash}:
+    if final_hashes != {wheel_hash} or any(
+        destination.stat().st_mode & 0o777 != 0o644 for destination in destinations
+    ):
         raise WheelBuildError(
-            "发布后 dist 与算子 wheel hash 不一致: " + ", ".join(sorted(final_hashes))
+            "发布后 dist 与算子 wheel hash 或权限不一致: "
+            + ", ".join(sorted(final_hashes))
         )
     return PublishedWheel(
         dist_path=dist_path,

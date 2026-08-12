@@ -9,14 +9,17 @@ python -m pip install \
   packages/operator_registry_client/dist/algorithm_operator_registry_client-0.1.0-py3-none-any.whl
 ```
 
-构建脚本仅从 Git 已跟踪的 `pyproject.toml`、`README.md`、Python 模块和可选
-`py.typed` 复制普通文件到临时 clean source tree；不会携带工作树中的 `build/`、
-`__pycache__/`、`.pyc` 或未跟踪内部文件。然后使用当前 Python 环境中已安装的构建
+构建脚本要求 Git 跟踪集合严格等于 `pyproject.toml`、`README.md` 和显式声明的五个
+Python 模块；新增模块必须先更新构建合同，不能自动进入制品。脚本将这些普通文件复制
+到临时 clean source tree，不会携带工作树中的 `build/`、`__pycache__/`、`.pyc` 或
+未跟踪内部文件。然后使用当前 Python 环境中已安装的构建
 后端，以 `--no-deps --no-build-isolation --no-index` 在受控临时 wheelhouse 中生成
 制品。脚本严格校验固定文件名、Name、Version、Requires-Python、Requires-Dist、
 wheel 成员 allowlist 和 RECORD hash/size 后，才原子更新本目录的 `dist/`，并将同一
 字节分发到八个算子项目的 `wheel/` 构建上下文。任一目标发布或最终 SHA-256 校验失败
-时恢复全部旧版本，不会留下混合制品。
+时恢复全部旧版本，不会留下混合制品。发布阶段使用 `dist/` 下固定私有文件锁串行化
+进程，并将每个目标的临时文件、备份和替换进度写入耐久事务 journal；进程崩溃后，
+下一次运行会在发布新版本之前优先完成旧版本回滚。
 
 各算子的 `requirements.txt` 显式固定 `algorithm-operator-registry-client==0.1.0`。
 内部 PyPI 尚未建立时，先安装或暂存上述 wheel，再安装算子 requirements；不得从公网查找同名私有包。

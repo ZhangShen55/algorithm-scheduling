@@ -42,7 +42,8 @@ wheel 的 `Requires-Python` 为 `>=3.10`，运行依赖只有 FastAPI、HTTPX �
 八个算子的运行依赖文件统一固定 `algorithm-operator-registry-client==0.1.0`。内部 PyPI 尚未建立时，
 由 `scripts/build_and_stage_operator_registry_wheel.py` 将 Git 已跟踪源码复制到 clean source tree，
 再在临时 wheelhouse 离线构建并严格校验固定成员、依赖元数据与 RECORD，
-再原子发布到 `dist` 并将同一 SHA-256 的字节暂存到各算子的 Git 忽略目录。旧的
+再通过跨进程文件锁和耐久事务 journal 发布到 `dist`，并将同一 SHA-256 的字节暂存到
+各算子的 Git 忽略目录；中断事务由下一次运行优先回滚，避免九个路径残留混合版本。旧的
 `scripts/stage_operator_registry_wheel.py` 委托同一流程，不再复制可能陈旧的现存 wheel。
 镜像先安装该 wheel 再解析其余 requirements，避免从公网误解析私有包。
 

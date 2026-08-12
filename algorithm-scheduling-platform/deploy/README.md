@@ -94,7 +94,9 @@ their runtime requirements. Their Dockerfiles consume the same versioned artifac
 from an ignored `wheel/` build-context directory. The command above builds without an
 index from a clean Git-tracked source allowlist, validates the fixed filename,
 metadata, wheel member set and RECORD, atomically publishes `dist`, and stages
-byte-identical copies with SHA-256 verification. Run it before building images.
+byte-identical copies with SHA-256 verification. A private cross-process lock and
+durable transaction journal serialize the nine destination replacements and recover
+an interrupted publication before the next run. Run it before building images.
 The legacy command remains an alias for the same rebuild-and-stage pipeline and never
 copies a previously built wheel without rebuilding:
 
