@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 import re
+import signal
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -52,6 +55,50 @@ def _run_prepare(
         capture_output=True,
         check=False,
     )
+
+
+def _prepare_command(
+    reports_root: Path,
+    restricted_root: Path,
+    manifest: Path,
+) -> list[str]:
+    return [
+        str(PREPARE_REPORT_DIRECTORY),
+        "--release-tag",
+        RELEASE_TAG,
+        "--git-sha",
+        GIT_SHA,
+        "--reports-root",
+        str(reports_root),
+        "--restricted-root",
+        str(restricted_root),
+        "--external-manifest",
+        str(manifest),
+    ]
+
+
+def _archived_manifest(restricted_root: Path) -> Path:
+    return (
+        restricted_root
+        / "milestone-2b/releases"
+        / RELEASE_TAG
+        / GIT_SHA
+        / "model-assets.manifest.json"
+    )
+
+
+def _wait_for_path(path: Path, process: subprocess.Popen[str]) -> None:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if path.exists():
+            return
+        if process.poll() is not None:
+            stdout, stderr = process.communicate()
+            raise AssertionError(f"process exited before marker: {stdout=} {stderr=}")
+        time.sleep(0.01)
+    process.kill()
+    process.wait(timeout=5)
+    raise AssertionError(f"timed out waiting for {path}")
 
 
 def _git_check_ignore(path: str) -> bool:
@@ -351,6 +398,102 @@ def test_prepare_does_not_overwrite_a_different_archived_manifest(
     assert archived.read_bytes() == original.read_bytes()
 
 
+def test_manifest_archive_recovers_after_process_is_killed_during_write(
+    tmp_path: Path,
+) -> None:
+    reports_root = tmp_path / "reports"
+    restricted_root = tmp_path / "restricted"
+    reports_root.mkdir()
+    restricted_root.mkdir()
+    payload = '{"payload": "' + ("x" * 2_000_000) + '"}\n'
+    manifest = _private_manifest(tmp_path / "asset-source", payload)
+    pause_marker = tmp_path / "paused"
+    environment = dict(**os.environ)
+    environment["REPORT_ARCHIVE_TEST_PAUSE_AFTER_TEMP_WRITE"] = str(pause_marker)
+    process = subprocess.Popen(
+        _prepare_command(reports_root, restricted_root, manifest),
+        cwd=PLATFORM_ROOT,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    _wait_for_path(pause_marker, process)
+
+    process.send_signal(signal.SIGKILL)
+    process.wait(timeout=5)
+    assert process.returncode != 0
+    assert not _archived_manifest(restricted_root).exists()
+
+    resumed = _run_prepare(
+        reports_root,
+        restricted_root,
+        "--external-manifest",
+        str(manifest),
+    )
+
+    assert resumed.returncode == 0, resumed.stderr
+    assert _archived_manifest(restricted_root).read_bytes() == manifest.read_bytes()
+    release_root = _archived_manifest(restricted_root).parent
+    assert not list(release_root.glob(".model-assets.manifest.json.archive-*.tmp"))
+
+
+def test_concurrent_same_manifest_archives_are_both_idempotent(tmp_path: Path) -> None:
+    reports_root = tmp_path / "reports"
+    restricted_root = tmp_path / "restricted"
+    reports_root.mkdir()
+    restricted_root.mkdir()
+    manifest = _private_manifest(tmp_path / "asset-source", '{"same": true}\n')
+    command = _prepare_command(reports_root, restricted_root, manifest)
+
+    processes = [
+        subprocess.Popen(
+            command,
+            cwd=PLATFORM_ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        for _ in range(2)
+    ]
+    results = [process.communicate(timeout=10) for process in processes]
+
+    assert [process.returncode for process in processes] == [0, 0], results
+    assert _archived_manifest(restricted_root).read_bytes() == manifest.read_bytes()
+
+
+def test_concurrent_different_manifests_have_one_winner(tmp_path: Path) -> None:
+    reports_root = tmp_path / "reports"
+    restricted_root = tmp_path / "restricted"
+    reports_root.mkdir()
+    restricted_root.mkdir()
+    first = _private_manifest(tmp_path / "first-source", '{"winner": "first"}\n')
+    second = _private_manifest(tmp_path / "second-source", '{"winner": "second"}\n')
+    processes = [
+        subprocess.Popen(
+            _prepare_command(reports_root, restricted_root, manifest),
+            cwd=PLATFORM_ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        for manifest in (first, second)
+    ]
+    results = [process.communicate(timeout=10) for process in processes]
+
+    assert sorted(process.returncode for process in processes) == [0, 2], results
+    failed = next(
+        result
+        for process, result in zip(processes, results, strict=True)
+        if process.returncode
+    )
+    assert "不同" in failed[1]
+    assert _archived_manifest(restricted_root).read_bytes() in {
+        first.read_bytes(),
+        second.read_bytes(),
+    }
+
+
 def test_prepare_rejects_symlink_manifest(tmp_path: Path) -> None:
     reports_root = tmp_path / "reports"
     restricted_root = tmp_path / "restricted"
@@ -481,11 +624,51 @@ def test_prepare_rejects_restricted_archive_inside_git_worktree(
     assert not restricted_root.exists()
 
 
+@pytest.mark.parametrize("marker_kind", ("directory", "file"))
+@pytest.mark.parametrize("path_kind", ("source", "restricted"))
+def test_prepare_rejects_any_git_worktree_ancestor(
+    tmp_path: Path, marker_kind: str, path_kind: str
+) -> None:
+    git_worktree = tmp_path / "other-worktree"
+    git_worktree.mkdir(mode=0o700)
+    if marker_kind == "directory":
+        (git_worktree / ".git").mkdir()
+    else:
+        (git_worktree / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+    source_root = (
+        git_worktree / "asset-source"
+        if path_kind == "source"
+        else tmp_path / "asset-source"
+    )
+    manifest = _private_manifest(source_root)
+    reports_root = tmp_path / "reports"
+    reports_root.mkdir()
+    restricted_root = (
+        git_worktree / "restricted"
+        if path_kind == "restricted"
+        else tmp_path / "restricted"
+    )
+    restricted_root.mkdir(mode=0o700)
+    restricted_root.chmod(0o700)
+
+    completed = _run_prepare(
+        reports_root,
+        restricted_root,
+        "--external-manifest",
+        str(manifest),
+    )
+
+    assert completed.returncode != 0
+    assert not (reports_root / "milestone-2b").exists()
+    assert not (restricted_root / "milestone-2b").exists()
+
+
 def test_prepare_script_does_not_contain_destructive_commands() -> None:
     source = PREPARE_REPORT_DIRECTORY.read_text(encoding="utf-8")
 
-    for forbidden in ("rmtree", "unlink(", "docker system prune", "down -v"):
+    for forbidden in ("rmtree", "docker system prune", "down -v"):
         assert forbidden not in source
+    assert "fcntl.flock" in source
     assert "os.O_NOFOLLOW" in source
     assert "0o700" in source
     assert "0o600" in source

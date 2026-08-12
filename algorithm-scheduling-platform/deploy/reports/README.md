@@ -44,6 +44,11 @@ deploy/reports/milestone-2b/releases/{release_tag}/{git_sha}/
 `generate-model-asset-manifest` 以原子方式创建 `0600` manifest，但资产源根必须由交付人员预先
 创建为 `0700`。初始化器只验证并拒绝不安全来源，不会自动收紧源权限后继续。
 
+同一 release/SHA 的 manifest 归档由受限 release 目录中的 `0600` 进程锁串行化。锁内先复查
+终态文件：内容相同视为幂等成功，内容不同明确拒绝；终态不存在时，先写同目录 `0600` 临时文件并
+执行文件 `fsync`，再原子发布并对 release 目录 `fsync`。进程中断只会遗留严格随机命名的临时
+文件；下次持锁执行只清理由当前用户拥有的该格式普通文件，不删除终态或其他证据。
+
 `summary` 只能记录模型根名称、文件总数和总字节数，不得包含逐文件路径、逐文件哈希、密钥内容、
 密钥大小、密钥摘要、人脸原图或服务器认证信息。真实 JSON、日志、快照、暂停账本、模型 manifest
 和任何 secret metadata 都是运行证据，不得强制加入 Git。

@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import os
 import re
+import signal
 import stat
 import sys
+import uuid
 from pathlib import Path
 
 EVIDENCE_CATEGORIES = (
@@ -22,7 +25,11 @@ EVIDENCE_CATEGORIES = (
 )
 RELEASE_TAG_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 GIT_SHA_PATTERN = re.compile(r"[0-9a-fA-F]{40}")
-WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
+MANIFEST_NAME = "model-assets.manifest.json"
+ARCHIVE_LOCK_NAME = ".model-manifest-archive.lock"
+ARCHIVE_TEMP_PATTERN = re.compile(
+    rf"\.{re.escape(MANIFEST_NAME)}\.archive-[0-9a-f]{{32}}\.tmp"
+)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -66,7 +73,10 @@ def _require_private_root(path: Path, name: str) -> Path:
     try:
         metadata = os.lstat(absolute)
     except FileNotFoundError:
-        absolute.mkdir(mode=0o700, parents=False)
+        try:
+            absolute.mkdir(mode=0o700, parents=False)
+        except FileExistsError:
+            pass
         metadata = os.lstat(absolute)
     if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
         raise ValueError(f"{name} 必须是直接目录且不能是软链接")
@@ -81,7 +91,10 @@ def _ensure_private_tree(root: Path, *components: str) -> Path:
         try:
             metadata = os.lstat(current)
         except FileNotFoundError:
-            current.mkdir(mode=0o700)
+            try:
+                current.mkdir(mode=0o700)
+            except FileExistsError:
+                pass
             metadata = os.lstat(current)
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
             raise ValueError(f"归档路径组件不安全: {current}")
@@ -94,12 +107,6 @@ def _paths_overlap(first: Path, second: Path) -> bool:
     second_resolved = second.resolve(strict=False)
     common = Path(os.path.commonpath((first_resolved, second_resolved)))
     return common in {first_resolved, second_resolved}
-
-
-def _is_within(path: Path, root: Path) -> bool:
-    resolved_path = path.resolve(strict=False)
-    resolved_root = root.resolve(strict=False)
-    return resolved_path == resolved_root or resolved_root in resolved_path.parents
 
 
 def _inside_any_git_worktree(path: Path) -> bool:
@@ -155,40 +162,106 @@ def _read_private_manifest(source: Path) -> bytes:
     return bytes(source_bytes)
 
 
-def _copy_manifest_once(source_bytes: bytes, destination: Path) -> None:
-
-    if destination.exists():
-        destination_metadata = os.lstat(destination)
-        if stat.S_ISLNK(destination_metadata.st_mode) or not stat.S_ISREG(
-            destination_metadata.st_mode
-        ):
-            raise ValueError("已归档 manifest 不是安全的普通文件")
-        destination_fd = os.open(destination, os.O_RDONLY | os.O_NOFOLLOW)
-        try:
-            archived = bytearray()
-            while chunk := os.read(destination_fd, 1024 * 1024):
-                archived.extend(chunk)
-        finally:
-            os.close(destination_fd)
-        if archived != source_bytes:
-            raise ValueError("同一 release tag 与 Git SHA 已存在不同的模型 manifest")
-        os.chmod(destination, 0o600)
-        return
-
-    destination_fd = os.open(
-        destination,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-        0o600,
+def _fsync_directory(path: Path) -> None:
+    directory_fd = os.open(
+        path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW
     )
     try:
-        view = memoryview(source_bytes)
-        while view:
-            written = os.write(destination_fd, view)
-            view = view[written:]
-        os.fsync(destination_fd)
+        os.fsync(directory_fd)
     finally:
-        os.close(destination_fd)
-    os.chmod(destination, 0o600)
+        os.close(directory_fd)
+
+
+def _open_archive_lock(release_root: Path) -> int:
+    descriptor = os.open(
+        release_root / ARCHIVE_LOCK_NAME,
+        os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+        0o600,
+    )
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
+        os.close(descriptor)
+        raise ValueError("模型 manifest 归档锁必须是当前用户拥有的普通文件")
+    os.fchmod(descriptor, 0o600)
+    return descriptor
+
+
+def _cleanup_archive_temporaries(release_root: Path) -> None:
+    changed = False
+    for candidate in release_root.iterdir():
+        if ARCHIVE_TEMP_PATTERN.fullmatch(candidate.name) is None:
+            continue
+        metadata = os.lstat(candidate)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
+            raise ValueError("模型 manifest 临时归档文件不安全")
+        candidate.unlink()
+        changed = True
+    if changed:
+        _fsync_directory(release_root)
+
+
+def _read_archived_manifest(destination: Path) -> bytes:
+    metadata = os.lstat(destination)
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+    ):
+        raise ValueError("已归档 manifest 必须是当前用户拥有的 0600 普通文件")
+    descriptor = os.open(destination, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        archived = bytearray()
+        while chunk := os.read(descriptor, 1024 * 1024):
+            archived.extend(chunk)
+    finally:
+        os.close(descriptor)
+    return bytes(archived)
+
+
+def _copy_manifest_once(source_bytes: bytes, destination: Path) -> None:
+    release_root = destination.parent
+    lock_descriptor = _open_archive_lock(release_root)
+    temporary: Path | None = None
+    try:
+        fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
+        _cleanup_archive_temporaries(release_root)
+        if destination.exists() or destination.is_symlink():
+            if _read_archived_manifest(destination) != source_bytes:
+                raise ValueError("同一 release tag 与 Git SHA 已存在不同的模型 manifest")
+            return
+
+        temporary = release_root / (
+            f".{MANIFEST_NAME}.archive-{uuid.uuid4().hex}.tmp"
+        )
+        destination_fd = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+        )
+        try:
+            os.fchmod(destination_fd, 0o600)
+            view = memoryview(source_bytes)
+            while view:
+                written = os.write(destination_fd, view)
+                view = view[written:]
+            os.fsync(destination_fd)
+        finally:
+            os.close(destination_fd)
+        pause_marker = os.environ.get("REPORT_ARCHIVE_TEST_PAUSE_AFTER_TEMP_WRITE")
+        if pause_marker:
+            Path(pause_marker).write_text("paused", encoding="utf-8")
+            while True:
+                signal.pause()
+        os.replace(temporary, destination)
+        temporary = None
+        _fsync_directory(release_root)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+            _fsync_directory(release_root)
+        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+        os.close(lock_descriptor)
 
 
 def main() -> int:
@@ -204,8 +277,8 @@ def main() -> int:
             else None
         )
         restricted_candidate = arguments.restricted_root.absolute()
-        if _is_within(restricted_candidate, WORKSPACE_ROOT):
-            raise ValueError("restricted root 必须位于 Git 工作树外")
+        if _inside_any_git_worktree(restricted_candidate):
+            raise ValueError("restricted root 必须位于所有 Git 工作树外")
         reports_root = _require_private_root(arguments.reports_root, "reports root")
         restricted_root = _require_private_root(
             restricted_candidate, "restricted root"
