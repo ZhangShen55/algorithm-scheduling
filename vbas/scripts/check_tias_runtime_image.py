@@ -168,6 +168,10 @@ def inspect_image_config(image: str) -> tuple[list[str], list[str]]:
         raise RuntimeError(
             f"镜像启动配置解析失败: image={image} invalid JSON ({exc.msg})"
         ) from exc
+    if not isinstance(config, dict):
+        raise RuntimeError(  # noqa: TRY004 - CLI 统一处理镜像检查运行时错误。
+            f"镜像启动配置解析失败: image={image} 配置必须为 JSON 对象"
+        )
     return config.get("Entrypoint") or [], config.get("Cmd") or []
 
 

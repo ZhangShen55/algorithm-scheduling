@@ -30,7 +30,7 @@
 - 明确“API worker=1”的含义：单个 `ai_quality-api` 实例内部只启动 1 个 Uvicorn worker；如果需要 API 高可用，应启动第二个 API 实例并由 Nginx/LB 分发请求，而不是在一个 API 实例内开多个 Uvicorn worker。
 - 明确 Redis 是集群控制面的事实来源：是否允许消费、Worker 心跳、Worker 实际状态、TIAS 注册表均从 Redis 读写，不能依赖单个 API 进程内存。
 - 在 `ai_quality/docker/` 中集中存放 ai_quality 部署资产，包括 API/Worker 容器构建文件、compose 示例、环境变量示例和可选 Nginx 示例。
-- 在 `tias/docker/` 中集中存放 TIAS 部署资产，包括 TIAS 容器构建文件、compose 示例、环境变量示例和实例多开配置示例；保留根目录旧 Dockerfile 的兼容说明或迁移说明。
+- 在 `tias/docker/` 中集中存放 TIAS 部署资产，包括受支持的普通/安全运行镜像、compose 示例和环境变量示例；旧 CUDA 11.3 + Python 3.8 镜像由统一算子注册架构取代，并提供明确迁移说明。
 
 ## Capabilities
 
@@ -53,3 +53,4 @@
 - 影响文档和部署：需要说明 API 单实例推荐、可选双 API 高可用、Worker 集群、Redis 共享状态、Kafka partition 与 Worker 数量的关系。
 - 影响运行方式：生产推荐至少拆成 `ai_quality-api`、`ai_quality-worker`、Redis、TIAS 实例池四类运行单元；Nginx/LB 仅在多 API 或统一入口时引入；本地开发可以简化，但文档必须区分生产和本地。
 - 影响部署目录：新增 `ai_quality/docker/` 和 `tias/docker/`，后续部署相关文件优先放入各自服务目录，避免继续散落在项目根或服务根目录。
+- 影响 TIAS 镜像兼容：注册客户端要求 Python 3.10 及以上，旧 CUDA 11.3 + Python 3.8 构建入口退役；当前 VBas 普通部署迁移到 `docker/Dockerfile`，安全交付迁移到 `docker/Dockerfile.runtime`。

@@ -192,6 +192,27 @@ printf '%s\n' '{not-json}'
             ):
                 inspect_image_config("vbas:test")
 
+    def test_inspect_image_config_wraps_non_object_json(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bin_dir = Path(temporary_directory)
+            self._install_docker_stub(
+                bin_dir,
+                """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' '[]'
+""",
+            )
+            environment = {"PATH": f"{bin_dir}:{os.environ['PATH']}"}
+
+            with (
+                patch.dict(os.environ, environment),
+                self.assertRaisesRegex(
+                    RuntimeError,
+                    "镜像启动配置解析失败.*vbas:test.*JSON 对象",
+                ),
+            ):
+                inspect_image_config("vbas:test")
+
 
 if __name__ == "__main__":
     unittest.main()

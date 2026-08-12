@@ -83,6 +83,10 @@ TIAS MUST 在服务目录下提供 `docker/` 部署目录，用于集中保存 T
 - **WHEN** 需要本地或测试环境启动多个 TIAS 实例
 - **THEN** `tias/docker/` 必须提供多实例端口、instance_id、并发和队列配置示例
 
-#### Scenario: 旧 Dockerfile 兼容
-- **WHEN** 现有脚本仍引用 `tias/Dockerfile` 或 `tias/Dockerfile_cuda113`
-- **THEN** 实施方案必须保留兼容文件或在运行文档中明确迁移路径，避免部署脚本无提示失效
+#### Scenario: 旧 CUDA 11.3 镜像迁移
+- **WHEN** 现有脚本仍引用基于 CUDA 11.3 + Python 3.8 的 `tias/Dockerfile_cuda113` 或迁移后的 `tias/docker/Dockerfile.cuda113`
+- **THEN** 运行文档必须明确该镜像与要求 Python 3.10 及以上的统一算子注册客户端不兼容，并引导当前 VBas 普通部署使用 `docker/Dockerfile`、安全部署使用 `docker/Dockerfile.runtime`
+
+#### Scenario: 安全镜像单实例启动
+- **WHEN** 使用 `docker/docker-compose.gpu.secure.yml` 渲染当前 VBas 部署配置
+- **THEN** 配置必须只包含一个监听 8981 的 TIAS 服务，不覆盖安全镜像默认 `ENTRYPOINT`/`CMD`，并以一个 Uvicorn worker 和稳定进程名启动

@@ -3,7 +3,7 @@
 - [x] 0.1 将当前 `app/` 推理服务目录迁移为 `tias/`，保留模型、vendor、routers、services、schemas、core 等内部结构
 - [x] 0.2 将 TIAS 内部导入从 `app.*` 迁移为 `tias.*`，新增代码不得继续依赖 `app.*`
 - [x] 0.3 将启动入口从 `uvicorn app.main:app` 迁移为 `uvicorn tias.main:app`
-- [x] 0.4 更新 `Dockerfile`、`Dockerfile_cuda113`、`start.sh`、README、运行脚本和测试脚本中的 `app` 路径或包名
+- [x] 0.4 历史任务：曾更新 `Dockerfile`、`Dockerfile_cuda113`、`start.sh`、README、运行脚本和测试脚本中的 `app` 路径或包名；该 CUDA 11.3 入口现已退役，不属于当前支持契约
 - [x] 0.5 将配置样例中的 `app/models`、`app/vendor/DirectMHP` 等默认路径迁移为 `tias/models`、`tias/vendor/DirectMHP`
 - [x] 0.6 检查 `ai_quality` 代码，确保远程推理模式不直接 import `app.*` 或 `tias.services.*`
 - [x] 0.7 迁移后使用 `rg "from app|import app|app.main|app/models|app/vendor"` 检查旧引用残留，并确认残留项均为历史说明或兼容说明

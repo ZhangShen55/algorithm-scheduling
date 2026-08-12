@@ -252,8 +252,9 @@ ai_quality/docker/
 
 tias/docker/
 ├── Dockerfile
-├── Dockerfile.cuda113
+├── Dockerfile.runtime
 ├── docker-compose.yml
+├── docker-compose.gpu.secure.yml
 ├── env.example
 └── README.md
 ```
@@ -268,13 +269,17 @@ tias/docker/
 | `nginx.conf.example` | 可选双 API 高可用时的 Nginx upstream 示例 |
 | `README.md` | 说明 API 单实例、Worker 多实例、Redis、Kafka、TIAS 地址等启动方式 |
 
-`tias/docker/` 负责 TIAS 推理服务部署，保留 CPU 和 CUDA 镜像构建入口。当前 `tias/Dockerfile`、`tias/Dockerfile_cuda113` 已存在，实施时可以迁移到 `tias/docker/`，也可以先复制并在旧位置保留兼容说明，避免已有脚本立即失效。
+`tias/docker/` 负责 TIAS 推理服务部署。原 CUDA 11.3 构建入口固定使用 Python 3.8，
+与统一算子注册客户端要求的 Python 3.10 及以上不兼容，因此不再作为可构建的兼容镜像保留。
+旧脚本必须显式迁移：当前 VBas 普通运行使用 `docker/Dockerfile`，安全运行使用
+`docker/Dockerfile.runtime`。历史定义仅保留在 Git 历史和历史变更记录中，不代表当前支持契约。
 
 | 文件 | 中文说明 |
 | --- | --- |
-| `Dockerfile` | 构建 TIAS CPU 或默认运行镜像 |
-| `Dockerfile.cuda113` | 构建 CUDA 11.3 运行镜像，承接现有 `Dockerfile_cuda113` |
-| `docker-compose.yml` | 本地或测试环境多开 TIAS 实例示例，配置不同端口和 `InstanceId` |
+| `Dockerfile` | 构建 TIAS 普通运行镜像，安装统一算子注册客户端 |
+| `Dockerfile.runtime` | 构建带密钥引导和源码/模型保护的安全运行镜像 |
+| `docker-compose.yml` | 保留历史本地或测试多实例配置示例 |
+| `docker-compose.gpu.secure.yml` | 启动单个 8981 安全实例，不覆盖镜像默认启动链 |
 | `env.example` | ai_quality 注册地址、TIAS 监听端口、并发、队列、心跳间隔等环境变量示例 |
 | `README.md` | 说明 TIAS 单实例和多实例启动、注册 ai_quality、模型挂载和日志查看 |
 
@@ -500,7 +505,7 @@ sequenceDiagram
 | DRAINING 时长较长 | 课堂视频任务本身耗时长，接口返回状态后由 `/api/workers` 查询 current_task_id 和耗时 |
 | 多 API 实例同时写控制状态 | 该风险只存在于可选双 API 高可用形态；使用 Redis 原子递增版本号或事务，响应返回新版本；后写覆盖前写 |
 | 现有 `consume` 行为被破坏 | 保留 `consume` 兼容入口，新增 `worker` 作为推荐入口，迁移文档分阶段引导 |
-| Docker 文件迁移导致旧脚本失效 | 先保留根目录旧 Dockerfile 或提供兼容说明；文档统一推荐新 `docker/` 路径 |
+| Docker 文件迁移导致旧脚本失效 | 文档明确旧 CUDA 11.3 + Python 3.8 镜像已退役，并分别给出普通与安全镜像迁移路径 |
 
 ## Migration Plan
 
@@ -509,7 +514,7 @@ sequenceDiagram
 3. 新增 API 路由：健康检查、TIAS 注册表查询、Worker 控制、Worker 查询。
 4. 将 Kafka 消费循环封装为可暂停/恢复/排空的 Worker 服务。
 5. 新增 `worker` CLI 命令，保留 `consume` 兼容。
-6. 新增 `ai_quality/docker/` 和 `tias/docker/` 部署目录，集中 Dockerfile、compose、env 示例和 README。
+6. 新增 `ai_quality/docker/` 和 `tias/docker/` 部署目录，集中 Dockerfile、compose、env 示例和 README；旧 CUDA 11.3 + Python 3.8 入口迁移到受支持的普通或安全镜像。
 7. 更新 `ai_quality/RUNNING.md`、`tias/RUNNING.md` 和部署文档，说明 API 单实例、可选高可用、Worker 集群和 TIAS 多实例启动方式。
 8. 本地用 1 个 API、2 个 Worker、4 个 TIAS 验证控制状态切换。
 9. 如需要验证高可用，再用 2 个 API 实例通过 Nginx 入口验证请求随机落点下的控制一致性。

@@ -42,8 +42,8 @@
 - [x] 6.3 增加 API 健康检查示例、控制接口 curl 示例、Worker 查询示例，并补充可选 Nginx upstream 示例。
 - [x] 6.4 说明 Kafka partition 数、Worker 数、TIAS 容量三者共同决定有效并发。
 - [x] 6.5 新增 `ai_quality/docker/`，放置 ai_quality API/Worker 的 Dockerfile、compose 示例、env 示例、可选 Nginx 示例和 README。
-- [x] 6.6 新增 `tias/docker/`，放置 TIAS Dockerfile、CUDA Dockerfile、compose 多实例示例、env 示例和 README。
-- [x] 6.7 处理 `tias/Dockerfile`、`tias/Dockerfile_cuda113` 的兼容或迁移说明，避免已有部署脚本无提示失效。
+- [x] 6.6 新增 `tias/docker/`，放置受支持的普通/安全 TIAS Dockerfile、compose 示例、env 示例和 README。
+- [x] 6.7 明确旧 CUDA 11.3 + Python 3.8 镜像因统一算子注册客户端要求 Python 3.10 及以上而退役，并记录普通镜像与安全镜像迁移路径。
 
 ## 7. 测试和验证
 

@@ -80,6 +80,16 @@ GPU 与 secure 变体：
 
 这些 Compose 文件保留现有 `tias-*` 实例名、`[TIAS]` 配置和 `TIAS_*` 环境变量，因为它们是已有注册/部署兼容标识，不属于本次目录结构整改。
 
+secure Compose 只启动一个 `tias-gpu-8981` 服务并映射 `8981`。它不覆盖镜像默认
+`ENTRYPOINT`/`CMD`，因此启动时会先执行密钥引导，再通过 `vbas-start` 以
+`GPU_PROCESS_NAME=vbas`、`UVICORN_WORKERS=1` 启动单个 Uvicorn 进程。扩容应由平台增加
+独立容器实例，不在单个 Compose 定义内复用 GPU 进程或增加端口。
+
+```bash
+docker compose -f docker/docker-compose.gpu.secure.yml config
+docker compose -f docker/docker-compose.gpu.secure.yml up --build
+```
+
 ## 网络边界
 
 VBas 可单独启动并直接推理。如需注册/心跳，`[TIAS].AiQualityBaseUrl` 需指向外部 `jy-vision-orchestrator-server` 的兼容入口，并保证两个容器网络可达。
