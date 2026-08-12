@@ -1,6 +1,13 @@
 # Verification Commands
 
-Use the project `.venv` from the platform root.
+Use the project `.venv` from the platform root. When invoking tests from the
+platform root, use the explicit workspace import path below; this prevents a
+bare top-level `tests` package from another checkout from shadowing the
+platform tests:
+
+```bash
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q <test-paths>
+```
 
 ```bash
 .venv/bin/python -m compileall -q packages ../control_service/app ../orchestrator_service/app ../vision_orchestrator_service/app ../online_gateway_service/app
@@ -26,6 +33,36 @@ deploy/scripts/verify-operator-build-contexts
 python -m pytest -q tests/test_ppt_slice_adapter.py tests/test_platform_compose.py
 conda run -n ppt_slice python -m unittest discover -s ../ppt_slice/tests -v
 ```
+
+## 里程碑 2B 部署验证场景
+
+完整执行顺序、证据目录和未执行边界见
+[`scenarios/milestone-2b-deploy.md`](scenarios/milestone-2b-deploy.md)。本机
+MacBook 只能执行静态、脚本行为、平台集成和报告校验；`preflight` 的
+x86_64/三卡门禁、真实八镜像、24 实例、GPU PID、模型推理和完整业务泳道必须
+在目标服务器执行。
+
+Task 7B-9 当前仅代表构建输入、模型/密钥边界、GPU 证据采集器、注册/Smoke
+Harness 和报告归档的代码门禁已通过。它们不等价于真实三卡部署通过。任何
+`mock=true` 或 fake Docker/NVIDIA 报告必须在汇总中标注为非真实证据。
+
+报告初始化和发布构建必须使用完整 commit SHA，不能使用分支名代替：
+
+```bash
+RELEASE_TAG=v1.0_260812
+EXPECTED_GIT_SHA="$(git -C .. rev-parse HEAD)"
+MODEL_ASSET_SOURCE=/root/workspace/.algorithm-scheduling-assets/v1.0_260812
+RESTRICTED_REPORT_ROOT=/root/workspace/.algorithm-scheduling-restricted-reports
+
+deploy/scripts/prepare-report-directory \
+  --release-tag "$RELEASE_TAG" --git-sha "$EXPECTED_GIT_SHA" \
+  --reports-root "$PWD/deploy/reports" \
+  --restricted-root "$RESTRICTED_REPORT_ROOT" \
+  --external-manifest "$MODEL_ASSET_SOURCE/model-assets.manifest.json"
+```
+
+凭据、私钥、模型解密密钥、课程媒体和人脸原图通过服务器外部安全通道提供，
+不得写入命令历史、Git、Harness JSON 或 Markdown。
 
 GPU 实例证据采集器的 fake Docker/NVIDIA/proc 行为合同见
 `harness/scenarios/milestone-2b-gpu-instance-evidence.md`。该本地测试不是真实 GPU 验收；

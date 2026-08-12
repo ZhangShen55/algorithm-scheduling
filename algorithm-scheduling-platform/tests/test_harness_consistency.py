@@ -36,6 +36,7 @@ def test_harness_contains_required_governance_files() -> None:
         "verification.md",
         "scenarios/runtime-closure.md",
         "scenarios/ppt-shared-result.md",
+        "scenarios/milestone-2b-deploy.md",
     }
 
     assert required <= {

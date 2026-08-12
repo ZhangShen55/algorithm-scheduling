@@ -1,5 +1,40 @@
 # Single-project platform deployment
 
+## 里程碑 2B 部署验证入口
+
+完整顺序和证据边界见
+[`../harness/scenarios/milestone-2b-deploy.md`](../harness/scenarios/milestone-2b-deploy.md)。
+以下命令只适用于已通过服务器预检的 x86_64/三卡主机；MacBook 本地不得将 fake
+GPU 或静态 Compose 结果当作真实部署通过。
+
+服务器固定发布必须先取得完整 commit SHA，并从 Git 工作树外提供模型资产：
+
+```bash
+RELEASE_TAG=v1.0_260812
+EXPECTED_GIT_SHA="$(git -C .. rev-parse HEAD)"
+MODEL_ASSET_SOURCE=/root/workspace/.algorithm-scheduling-assets/v1.0_260812
+RESTRICTED_REPORT_ROOT=/root/workspace/.algorithm-scheduling-restricted-reports
+
+deploy/scripts/generate-model-asset-manifest \
+  --source "$MODEL_ASSET_SOURCE" --workspace "$PWD/.."
+deploy/scripts/stage-model-assets \
+  --source "$MODEL_ASSET_SOURCE" --workspace "$PWD/.."
+deploy/scripts/verify-model-assets \
+  --source "$MODEL_ASSET_SOURCE" --workspace "$PWD/.."
+deploy/scripts/prepare-report-directory \
+  --release-tag "$RELEASE_TAG" --git-sha "$EXPECTED_GIT_SHA" \
+  --reports-root "$PWD/deploy/reports" \
+  --restricted-root "$RESTRICTED_REPORT_ROOT" \
+  --external-manifest "$MODEL_ASSET_SOURCE/model-assets.manifest.json"
+
+EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" MODEL_ASSET_SOURCE="$MODEL_ASSET_SOURCE" \
+  deploy/scripts/build-images v1.0_260812
+```
+
+模型源、manifest、课程媒体、人脸原图、登录凭据、私钥和解密密钥均为外部
+受控输入，不得提交到 Git 或写入报告。报告根按
+`deploy/reports/milestone-2b/releases/{release_tag}/{git_sha}/` 归档。
+
 The platform Compose includes PostgreSQL, Kafka, Redis, MongoDB and all four platform
 services under the single `algorithm-scheduling-platform` project. They communicate
 over the explicitly named `algorithm-platform` network.
@@ -247,3 +282,18 @@ The template uses these invariants:
 Override image tags, host data roots and optional capacity variables through the
 environment before running Compose. Do not reuse an `instance_id` for two live
 containers.
+
+逐卡启动顺序（真实验证时使用，不要用 `down -v`）：
+
+```bash
+docker compose -f deploy/docker-compose.infrastructure.yml up -d
+docker compose -f deploy/docker-compose.platform.yml up -d --build
+docker compose -f deploy/docker-compose.operators.yml --profile gpu0 up -d
+docker compose -f deploy/docker-compose.operators.yml --profile gpu1 up -d
+docker compose -f deploy/docker-compose.operators.yml --profile gpu2 up -d
+docker compose -f deploy/docker-compose.operators.yml --profile cpu up -d
+```
+
+逐卡 Compose 后必须依次运行 `verify-gpu-instance`、`verify-operator-registration`
+和 `run-operator-smoke`，最后用报告 renderer 生成 JSON/Markdown 汇总。只执行
+health/readiness 不能证明模型推理、GPU 进程或课程泳道成功。

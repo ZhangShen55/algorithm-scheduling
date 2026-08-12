@@ -1,5 +1,29 @@
 # Change Ledger
 
+## 2026-08-12 - 里程碑 2B Task 10-11 文档与本地验收边界
+
+- 先前状态：Task 7B-9 的构建上下文、模型资产事务、GPU 证据采集器、注册/Smoke
+  和报告归档代码已经通过各自的本地行为门禁，但执行顺序、证据等级、服务器前置
+  条件和真实部署未在一个场景中收敛；裸 `pytest` 可能被同名外部 `tests` 包遮蔽。
+- 目标状态：新增 `harness/scenarios/milestone-2b-deploy.md`，固定从预检、容器
+  快照/暂停、基础设施、模型 staging、八镜像构建、逐卡 Compose、GPU 证据、注册、
+  八类 Smoke、反例/压力/恢复、恢复业务容器到报告渲染的顺序；所有命令使用当前
+  CLI 和完整 Git SHA，并要求 `PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest`。
+- 变更文件：Task 10-11 Harness 场景、验证命令、部署 README、单机运维手册和本台账。
+- 契约影响：不改变 A 面、算子 HTTP/WebSocket、Compose 端口、实例拓扑或服务边界；
+  只收紧证据归档和部署操作的可复现性。
+- 服务器前置：目标为 `root@192.168.29.11:22`，代码目录为
+  `/root/workspace/algorithm-scheduling`，架构 x86_64、三张 NVIDIA GPU、Docker
+  NVIDIA runtime、`/data/course` 与 `/data/result` 可写，并具备 PostgreSQL、Redis、
+  Kafka、MongoDB。登录凭据和私钥只通过外部安全通道提供，禁止进入仓库、报告和命令历史。
+- 当前证据等级：Task 7B-9 为静态/脚本行为/本地文件系统层级；里程碑 2A 为真实
+  PostgreSQL/Redis/Kafka、服务运行和契约 Stub 层级。尚未取得目标服务器三卡、真实模型、
+  24 实例注册、真实媒体推理或完整离线/在线泳道证据。
+- OpenSpec 状态：只保留已有真实证据对应的 2.3-2.6、4.1-4.6、4.13-4.14、8.1-8.5
+  勾选；7.4、7.5、4.7-4.12、视觉、在线、完整产品和真实部署任务不提前勾选。
+- 剩余风险：ScreenDet 仅属于 `online-gateway-service`；PPT 真实课程视频仍需终态
+  manifest/回调证据；ASR/VBas fixture 和六根模型 manifest 需要在服务器外部受控提供。
+
 ## 2026-08-12 - 里程碑 2B GPU 实例证据采集器（Task 8）
 
 - 先前状态：设计要求为 18 个 GPU 实例留存 CUDA/PID/容器归属证据，但尚无可执行采集器，只看环境变量或空闲模型进程会产生假通过。
