@@ -289,6 +289,10 @@ def _ledger_archives(path: Path) -> list[Path]:
     return sorted(path.parent.glob(f"{path.name}.audit.*.jsonl"))
 
 
+def _ledger_metadata(path: Path) -> Path:
+    return Path(f"{path}.archive.json")
+
+
 def _assert_archived_ledger(path: Path, expected: list[dict[str, Any]]) -> Path:
     assert not path.exists()
     archives = _ledger_archives(path)
@@ -703,6 +707,21 @@ def test_snapshot_refuses_to_replace_inventory_while_pause_ledger_is_active(
     assert _commands(environment) == []
 
 
+def test_container_protection_rejects_noncanonical_pause_record_override(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    snapshot = tmp_path / "snapshot.jsonl"
+    environment = _base_environment(
+        fake_bin, PAUSE_RECORD_PATH=str(tmp_path / "custom-paused.jsonl")
+    )
+
+    completed = _run("snapshot-existing-containers", snapshot, environment=environment)
+
+    assert completed.returncode != 0
+    assert "PAUSE_RECORD_PATH" in completed.stderr
+    assert _commands(environment) == []
+
+
 def test_snapshot_and_pause_share_the_default_snapshot_derived_lock(
     fake_bin: Path, tmp_path: Path
 ) -> None:
@@ -761,9 +780,8 @@ def test_pause_rejects_malformed_or_incomplete_snapshot_without_stopping(
     fake_bin: Path, tmp_path: Path, payload: str
 ) -> None:
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
     snapshot.write_text(payload, encoding="utf-8")
-    environment = _base_environment(fake_bin, PAUSE_RECORD_PATH=str(paused))
+    environment = _base_environment(fake_bin)
 
     completed = _run("pause-existing-containers", snapshot, "x", environment=environment)
 
@@ -791,11 +809,10 @@ def test_pause_stops_only_the_explicit_snapshot_verified_container_id(
 ) -> None:
     inspect = _inspect_record()
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(json.dumps(_snapshot_record(inspect)) + "\n", encoding="utf-8")
     environment = _base_environment(
         fake_bin,
-        PAUSE_RECORD_PATH=str(paused),
         DOCKER_INSPECT_FIXTURES=json.dumps(
             {inspect["Id"]: inspect, inspect["Name"].removeprefix("/"): inspect}
         ),
@@ -838,11 +855,10 @@ def test_pause_rejects_state_drift_without_claiming_it_stopped_the_container(
     original = _inspect_record()
     externally_stopped = _inspect_record(state="exited")
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
     environment = _base_environment(
         fake_bin,
-        PAUSE_RECORD_PATH=str(paused),
         DOCKER_INSPECT_FIXTURES=json.dumps(
             {
                 original["Id"]: externally_stopped,
@@ -864,11 +880,10 @@ def test_pause_rechecks_immediately_before_stop_and_rejects_external_stop(
 ) -> None:
     original = _inspect_record()
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
     environment = _base_environment(
         fake_bin,
-        PAUSE_RECORD_PATH=str(paused),
         EXTERNAL_STOP_BEFORE_INSPECT_NUMBER="3",
         EXTERNAL_STOP_ID=original["Id"],
         DOCKER_INSPECT_FIXTURES=json.dumps(
@@ -889,11 +904,10 @@ def test_pause_leaves_fsynced_pending_intent_when_interrupted_after_stop(
 ) -> None:
     original = _inspect_record()
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
     environment = _base_environment(
         fake_bin,
-        PAUSE_RECORD_PATH=str(paused),
         STOP_INTERRUPT_AFTER_STATE_ID=original["Id"],
         DOCKER_INSPECT_FIXTURES=json.dumps(
             {original["Id"]: original, original["Name"].removeprefix("/"): original}
@@ -911,11 +925,10 @@ def test_pause_keeps_pending_stop_when_docker_stop_does_not_converge(
 ) -> None:
     original = _inspect_record()
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
     environment = _base_environment(
         fake_bin,
-        PAUSE_RECORD_PATH=str(paused),
         STOP_PRESERVE_STATE="true",
         STOP_STATE_TIMEOUT_SECONDS="0",
         STATE_POLL_INTERVAL_SECONDS="0.01",
@@ -936,11 +949,10 @@ def test_pause_waits_for_delayed_exited_state_before_marking_stopped(
 ) -> None:
     original = _inspect_record()
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
     environment = _base_environment(
         fake_bin,
-        PAUSE_RECORD_PATH=str(paused),
         STOP_TRANSITION_AFTER_INSPECTS="2",
         STOP_STATE_TIMEOUT_SECONDS="1",
         STATE_POLL_INTERVAL_SECONDS="0.01",
@@ -960,11 +972,10 @@ def test_pause_persists_intent_before_restart_policy_neutralization_failure(
 ) -> None:
     original = _inspect_record()
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
     environment = _base_environment(
         fake_bin,
-        PAUSE_RECORD_PATH=str(paused),
         UPDATE_FAIL_ID=original["Id"],
         DOCKER_INSPECT_FIXTURES=json.dumps(
             {original["Id"]: original, original["Name"].removeprefix("/"): original}
@@ -987,11 +998,10 @@ def test_restore_repairs_interrupted_restart_policy_neutralization(
 ) -> None:
     original = _inspect_record()
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
     environment = _base_environment(
         fake_bin,
-        PAUSE_RECORD_PATH=str(paused),
         UPDATE_INTERRUPT_AFTER_STATE_ID=original["Id"],
         DOCKER_INSPECT_FIXTURES=json.dumps(
             {original["Id"]: original, original["Name"].removeprefix("/"): original}
@@ -1038,9 +1048,9 @@ def test_pause_rejects_a_symlink_ledger(fake_bin: Path, tmp_path: Path) -> None:
     snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
     target = tmp_path / "target.jsonl"
     target.write_text("do not replace\n", encoding="utf-8")
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     paused.symlink_to(target)
-    environment = _base_environment(fake_bin, PAUSE_RECORD_PATH=str(paused))
+    environment = _base_environment(fake_bin)
 
     completed = _run("pause-existing-containers", snapshot, original["Id"], environment=environment)
 
@@ -1054,14 +1064,13 @@ def test_two_concurrent_pauses_share_one_exclusive_ledger_and_stop_once(
 ) -> None:
     original = _inspect_record()
     snapshot = tmp_path / "snapshot.jsonl"
-    ledger = tmp_path / "paused.jsonl"
+    ledger = Path(f"{snapshot}.paused.jsonl")
     lock = tmp_path / "protection.lock"
     entered = tmp_path / "stop-entered"
     release = tmp_path / "stop-release"
     snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
     environment = _base_environment(
         fake_bin,
-        PAUSE_RECORD_PATH=str(ledger),
         DEPLOY_OPERATION_LOCK=str(lock),
         BLOCK_STOP_ID=original["Id"],
         STOP_ENTERED_PATH=str(entered),
@@ -1116,7 +1125,7 @@ def test_container_protection_rejects_a_symlink_operation_lock(
 ) -> None:
     original = _inspect_record()
     snapshot = tmp_path / "snapshot.jsonl"
-    ledger = tmp_path / "paused.jsonl"
+    ledger = Path(f"{snapshot}.paused.jsonl")
     target = tmp_path / "lock-target"
     lock = tmp_path / "protection.lock"
     snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
@@ -1129,7 +1138,6 @@ def test_container_protection_rejects_a_symlink_operation_lock(
     lock.symlink_to(target)
     environment = _base_environment(
         fake_bin,
-        PAUSE_RECORD_PATH=str(ledger),
         DEPLOY_OPERATION_LOCK=str(lock),
     )
 
@@ -1147,7 +1155,7 @@ def test_container_protection_rejects_a_symlink_lock_directory(
 ) -> None:
     original = _inspect_record()
     snapshot = tmp_path / "snapshot.jsonl"
-    ledger = tmp_path / "paused.jsonl"
+    ledger = Path(f"{snapshot}.paused.jsonl")
     real_lock_directory = tmp_path / "real-locks"
     linked_lock_directory = tmp_path / "linked-locks"
     real_lock_directory.mkdir()
@@ -1160,7 +1168,6 @@ def test_container_protection_rejects_a_symlink_lock_directory(
         arguments = (snapshot, original["Id"])
     environment = _base_environment(
         fake_bin,
-        PAUSE_RECORD_PATH=str(ledger),
         DEPLOY_OPERATION_LOCK=str(linked_lock_directory / "protection.lock"),
         DOCKER_INSPECT_FIXTURES=json.dumps(
             {original["Id"]: original, original["Name"].removeprefix("/"): original}
@@ -1181,7 +1188,7 @@ def test_restore_waits_for_pause_then_reads_and_restores_the_complete_ledger(
     first = _inspect_record()
     second = _inspect_record(container_id="b" * 64, name="existing-worker")
     snapshot = tmp_path / "snapshot.jsonl"
-    ledger = tmp_path / "paused.jsonl"
+    ledger = Path(f"{snapshot}.paused.jsonl")
     lock = tmp_path / "protection.lock"
     entered = tmp_path / "first-stop-entered"
     release = tmp_path / "first-stop-release"
@@ -1197,7 +1204,6 @@ def test_restore_waits_for_pause_then_reads_and_restores_the_complete_ledger(
     }
     pause_environment = _base_environment(
         fake_bin,
-        PAUSE_RECORD_PATH=str(ledger),
         DEPLOY_OPERATION_LOCK=str(lock),
         BLOCK_STOP_ID=first["Id"],
         STOP_ENTERED_PATH=str(entered),
@@ -1267,7 +1273,7 @@ def test_restore_reads_snapshot_after_waiting_for_lock_and_rejects_changed_bindi
     original = _inspect_record(state="exited")
     running_snapshot = _inspect_record()
     snapshot = tmp_path / "snapshot.jsonl"
-    ledger = tmp_path / "paused.jsonl"
+    ledger = Path(f"{snapshot}.paused.jsonl")
     lock = tmp_path / "protection.lock"
     snapshot.write_text(json.dumps(_snapshot_record(running_snapshot)) + "\n", encoding="utf-8")
     ledger.write_text(
@@ -1356,11 +1362,10 @@ def test_pause_does_not_stop_or_record_a_container_that_was_originally_stopped(
 ) -> None:
     inspect = _inspect_record(state="exited")
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(json.dumps(_snapshot_record(inspect)) + "\n", encoding="utf-8")
     environment = _base_environment(
         fake_bin,
-        PAUSE_RECORD_PATH=str(paused),
         DOCKER_INSPECT_FIXTURES=json.dumps(
             {inspect["Id"]: inspect, inspect["Name"].removeprefix("/"): inspect}
         ),
@@ -1379,14 +1384,13 @@ def test_pause_preserves_completed_stop_records_when_a_later_stop_fails(
     first = _inspect_record()
     second = _inspect_record(container_id="b" * 64, name="existing-worker")
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(
         "\n".join(json.dumps(_snapshot_record(item)) for item in (first, second)) + "\n",
         encoding="utf-8",
     )
     environment = _base_environment(
         fake_bin,
-        PAUSE_RECORD_PATH=str(paused),
         STOP_FAIL_ID=second["Id"],
         DOCKER_INSPECT_FIXTURES=json.dumps(
             {
@@ -1414,7 +1418,7 @@ def test_restore_starts_only_the_exact_id_stopped_by_this_pause_run(
     original = _inspect_record()
     current = _inspect_record(state="exited")
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
     paused.write_text(json.dumps(_pause_entry(original, "stopped")) + "\n", encoding="utf-8")
     environment = _base_environment(
@@ -1442,7 +1446,7 @@ def test_restore_keeps_restoring_when_start_does_not_reach_running(
         state="exited", restart_policy={"Name": "no", "MaximumRetryCount": 0}
     )
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
     paused.write_text(json.dumps(_pause_entry(original, "stopped")) + "\n", encoding="utf-8")
     environment = _base_environment(
@@ -1473,7 +1477,7 @@ def test_restore_waits_for_delayed_running_then_restores_original_restart_policy
         state="exited", restart_policy={"Name": "no", "MaximumRetryCount": 0}
     )
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
     paused.write_text(json.dumps(_pause_entry(original, "stopped")) + "\n", encoding="utf-8")
     environment = _base_environment(
@@ -1503,7 +1507,7 @@ def test_restore_keeps_restoring_when_original_restart_policy_is_not_confirmed(
         state="exited", restart_policy={"Name": "no", "MaximumRetryCount": 0}
     )
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
     paused.write_text(json.dumps(_pause_entry(original, "stopped")) + "\n", encoding="utf-8")
     environment = _base_environment(
@@ -1539,7 +1543,7 @@ def test_restore_reconciles_pending_stop_conservatively(
     original = _inspect_record()
     current = _inspect_record(state=current_state)
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
     paused.write_text(json.dumps(_pause_entry(original, "pending_stop")) + "\n", encoding="utf-8")
     environment = _base_environment(
@@ -1564,7 +1568,7 @@ def test_restore_recovers_when_start_succeeded_before_ledger_update(
     original = _inspect_record()
     current = _inspect_record(state="running")
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
     paused.write_text(json.dumps(_pause_entry(original, "restoring")) + "\n", encoding="utf-8")
     environment = _base_environment(
@@ -1590,7 +1594,7 @@ def test_restore_resume_does_not_restart_an_already_restored_first_container(
     first_running = _inspect_record()
     second_exited = _inspect_record(container_id="b" * 64, name="existing-worker", state="exited")
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(
         "\n".join(json.dumps(_snapshot_record(item)) for item in (first, second)) + "\n",
         encoding="utf-8",
@@ -1631,7 +1635,7 @@ def test_restore_interrupted_after_start_resumes_without_duplicate_start(
     original = _inspect_record()
     current = _inspect_record(state="exited")
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
     paused.write_text(json.dumps(_pause_entry(original, "stopped")) + "\n", encoding="utf-8")
     environment = _base_environment(
@@ -1661,7 +1665,7 @@ def test_restore_retry_continues_after_second_start_failure_without_restarting_f
     first_exited = _inspect_record(state="exited")
     second_exited = _inspect_record(container_id="b" * 64, name="existing-worker", state="exited")
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(
         "\n".join(json.dumps(_snapshot_record(item)) for item in (first, second)) + "\n",
         encoding="utf-8",
@@ -1737,6 +1741,40 @@ def test_two_consecutive_pause_restore_rounds_create_unique_read_only_audits(
         assert all(archive.stat().st_mode & 0o222 == 0 for archive in archives)
 
 
+@pytest.mark.parametrize("fault_stage", ["create", "chmod", "unlink"])
+def test_restore_archive_is_reentrant_after_each_destructive_stage(
+    fake_bin: Path, tmp_path: Path, fault_stage: str
+) -> None:
+    original = _inspect_record()
+    snapshot = tmp_path / "snapshot.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
+    expected = [_pause_entry(original, "restored")]
+    snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
+    paused.write_text(json.dumps(expected[0]) + "\n", encoding="utf-8")
+    environment = _base_environment(
+        fake_bin,
+        ARCHIVE_FAULT_STAGE=fault_stage,
+        DOCKER_INSPECT_FIXTURES=json.dumps(
+            {original["Id"]: original, original["Name"].removeprefix("/"): original}
+        ),
+    )
+
+    interrupted = _run(
+        "restore-existing-containers", snapshot, paused, environment=environment
+    )
+    environment.pop("ARCHIVE_FAULT_STAGE")
+    resumed = _run("restore-existing-containers", snapshot, paused, environment=environment)
+
+    assert interrupted.returncode != 0
+    assert resumed.returncode == 0, resumed.stderr
+    assert not paused.exists()
+    assert not _ledger_metadata(paused).exists()
+    archives = _ledger_archives(paused)
+    assert len(archives) == 1
+    assert archives[0].stat().st_mode & 0o777 == 0o400
+    assert _ledger(archives[0]) == expected
+
+
 @pytest.mark.parametrize("current_state", ["running", "created"])
 def test_restore_refuses_to_start_a_container_that_is_not_in_exited_state(
     fake_bin: Path, tmp_path: Path, current_state: str
@@ -1744,7 +1782,7 @@ def test_restore_refuses_to_start_a_container_that_is_not_in_exited_state(
     original = _inspect_record()
     current = _inspect_record(state=current_state)
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
     paused.write_text(json.dumps(_pause_entry(original, "stopped")) + "\n", encoding="utf-8")
     environment = _base_environment(
@@ -1777,7 +1815,7 @@ def test_restore_rejects_identity_or_critical_attribute_drift(
     else:
         changed["Mounts"][0]["Source"] = "/data/changed"
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
     paused.write_text(json.dumps(_pause_entry(original, "stopped")) + "\n", encoding="utf-8")
     environment = _base_environment(
@@ -1804,7 +1842,7 @@ def test_restore_empty_or_malformed_records_never_operate_on_containers(
     paused_payload: str,
 ) -> None:
     snapshot = tmp_path / "snapshot.jsonl"
-    paused = tmp_path / "paused.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
     snapshot.write_text(snapshot_payload, encoding="utf-8")
     paused.write_text(paused_payload, encoding="utf-8")
     environment = _base_environment(fake_bin)

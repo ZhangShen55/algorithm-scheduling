@@ -57,6 +57,24 @@ def atomic_write(tool: str, path: Path, records: list[dict]) -> None:
             os.unlink(temporary)
 
 
+def atomic_write_json(tool: str, path: Path, value: dict) -> None:
+    if path.is_symlink():
+        fail(tool, f"refusing symlink metadata: {path}")
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, sort_keys=True, separators=(",", ":"))
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        fsync_directory(path.parent)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def open_lock(tool: str, path: Path) -> int:
     parent = path.parent
     if parent.is_symlink() or not parent.is_dir():
@@ -79,7 +97,9 @@ def open_lock(tool: str, path: Path) -> int:
 
 def paths(snapshot_argument: str) -> tuple[Path, Path, Path]:
     snapshot = absolute(snapshot_argument)
-    ledger = absolute(os.environ.get("PAUSE_RECORD_PATH", f"{snapshot}.paused.jsonl"))
+    if "PAUSE_RECORD_PATH" in os.environ:
+        fail("container-protection", "PAUSE_RECORD_PATH is unsupported; ledger path is fixed")
+    ledger = absolute(f"{snapshot}.paused.jsonl")
     lock = absolute(os.environ.get("DEPLOY_OPERATION_LOCK", f"{snapshot}.operation.lock"))
     return snapshot, ledger, lock
 
@@ -99,22 +119,115 @@ def read_jsonl(tool: str, path: Path, kind: str) -> list[dict]:
     return records
 
 
-def archive_ledger(tool: str, ledger: Path, records: list[dict]) -> Path:
-    if ledger.is_symlink() or not ledger.is_file():
+def archive_metadata_path(ledger: Path) -> Path:
+    return Path(f"{ledger}.archive.json")
+
+
+def read_archive_metadata(tool: str, ledger: Path) -> dict | None:
+    path = archive_metadata_path(ledger)
+    if not path.exists() and not path.is_symlink():
+        return None
+    if path.is_symlink() or not path.is_file():
+        fail(tool, f"archive metadata must be a regular file: {path}")
+    metadata = path.stat()
+    if metadata.st_uid != os.geteuid():
+        fail(tool, f"archive metadata must be owned by the current user: {path}")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        fail(tool, f"malformed archive metadata: {error}")
+    required = {"version", "archive_id", "archive_name", "ledger_sha256"}
+    if not isinstance(value, dict) or not required.issubset(value) or value["version"] != 1:
+        fail(tool, "incomplete archive metadata")
+    archive_id = value["archive_id"]
+    expected_name = f"{ledger.name}.audit.{archive_id}.jsonl"
+    if not re.fullmatch(r"[0-9a-f]{32}", archive_id) or value["archive_name"] != expected_name:
+        fail(tool, "invalid archive metadata path")
+    if not re.fullmatch(r"[0-9a-f]{64}", value["ledger_sha256"]):
+        fail(tool, "invalid archive metadata hash")
+    return value
+
+
+def ensure_archive_metadata(tool: str, ledger: Path, payload: bytes) -> dict:
+    metadata = read_archive_metadata(tool, ledger)
+    digest = hashlib.sha256(payload).hexdigest()
+    if metadata is None:
+        archive_id = uuid.uuid4().hex
+        metadata = {
+            "version": 1,
+            "archive_id": archive_id,
+            "archive_name": f"{ledger.name}.audit.{archive_id}.jsonl",
+            "ledger_sha256": digest,
+        }
+    elif metadata["ledger_sha256"] != digest:
+        archive = ledger.parent / metadata["archive_name"]
+        if archive.exists() or archive.is_symlink():
+            fail(tool, "ledger changed after archive creation")
+        metadata["ledger_sha256"] = digest
+    atomic_write_json(tool, archive_metadata_path(ledger), metadata)
+    return metadata
+
+
+def verify_archive(tool: str, archive: Path, digest: str) -> None:
+    if archive.is_symlink() or not archive.is_file():
+        fail(tool, f"archive must be a regular file: {archive}")
+    metadata = archive.stat()
+    if metadata.st_uid != os.geteuid():
+        fail(tool, f"archive must be owned by the current user: {archive}")
+    if hashlib.sha256(archive.read_bytes()).hexdigest() != digest:
+        fail(tool, f"archive content hash mismatch: {archive}")
+
+
+def inject_archive_fault(stage: str) -> None:
+    if os.environ.get("ARCHIVE_FAULT_STAGE") == stage:
+        raise SystemExit(f"archive: injected failure after {stage}")
+
+
+def archive_ledger(tool: str, ledger: Path) -> Path:
+    metadata = read_archive_metadata(tool, ledger)
+    if ledger.exists() or ledger.is_symlink():
+        if ledger.is_symlink() or not ledger.is_file():
+            fail(tool, f"pause ledger must be a regular file: {ledger}")
+        payload = ledger.read_bytes()
+        metadata = ensure_archive_metadata(tool, ledger, payload)
+    elif metadata is None:
         fail(tool, f"pause ledger must be a regular file: {ledger}")
-    while True:
-        archive = ledger.with_name(
-            f"{ledger.name}.audit.{time.time_ns()}.{uuid.uuid4().hex}.jsonl"
-        )
+    else:
+        payload = b""
+
+    archive = ledger.parent / metadata["archive_name"]
+    digest = metadata["ledger_sha256"]
+    if archive.exists() or archive.is_symlink():
+        verify_archive(tool, archive, digest)
+    else:
+        if not ledger.exists():
+            fail(tool, "archive target is missing after ledger removal")
+        fd, temporary = tempfile.mkstemp(prefix=f".{archive.name}.", dir=ledger.parent)
         try:
-            os.link(ledger, archive, follow_symlinks=False)
-            break
-        except FileExistsError:
-            continue
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, archive)
+            fsync_directory(ledger.parent)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        inject_archive_fault("create")
+
+    verify_archive(tool, archive, digest)
     os.chmod(archive, 0o400)
     fsync_directory(ledger.parent)
-    os.unlink(ledger)
-    fsync_directory(ledger.parent)
+    inject_archive_fault("chmod")
+    if ledger.exists():
+        os.unlink(ledger)
+        fsync_directory(ledger.parent)
+    inject_archive_fault("unlink")
+    metadata_path = archive_metadata_path(ledger)
+    if metadata_path.exists():
+        os.unlink(metadata_path)
+        fsync_directory(ledger.parent)
     return archive
 
 
@@ -287,11 +400,13 @@ def snapshot_command(argument: str) -> None:
     lock_fd = open_lock(tool, lock)
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        if archive_metadata_path(ledger).exists():
+            archive_ledger(tool, ledger)
         if ledger.exists() or ledger.is_symlink():
             entries = read_jsonl(tool, ledger, "pause ledger")
             if any(entry.get("status") in ACTIVE for entry in entries):
                 fail(tool, f"active pause ledger prevents snapshot replacement: {ledger}")
-            archive_ledger(tool, ledger, entries)
+            archive_ledger(tool, ledger)
         completed = subprocess.run(
             ["docker", "ps", "-aq"], text=True, capture_output=True, check=False
         )
@@ -317,6 +432,8 @@ def pause_command(snapshot_argument: str, selectors: list[str]) -> None:
     lock_fd = open_lock(tool, lock)
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        if archive_metadata_path(ledger).exists():
+            archive_ledger(tool, ledger)
         records = validate_snapshot(tool, snapshot)
         by_id = {record["container_id"]: record for record in records}
         by_name = {record["name"]: record for record in records}
@@ -336,7 +453,7 @@ def pause_command(snapshot_argument: str, selectors: list[str]) -> None:
             entries = validate_ledger(tool, records, ledger)
             if any(entry["status"] in ACTIVE for entry in entries):
                 fail(tool, f"refusing existing active ledger: {ledger}")
-            archive_ledger(tool, ledger, entries)
+            archive_ledger(tool, ledger)
         for record in selected:
             if record["state"] == "running":
                 verify_identity(tool, record)
@@ -395,6 +512,11 @@ def restore_command(snapshot_argument: str, ledger_argument: str) -> None:
     lock_fd = open_lock(tool, lock)
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        if archive_metadata_path(ledger).exists():
+            archive_ledger(tool, ledger)
+            if not ledger.exists():
+                print("restore: complete")
+                return
         snapshots = validate_snapshot(tool, snapshot)
         entries = validate_ledger(tool, snapshots, ledger)
         for entry in entries:
@@ -438,7 +560,7 @@ def restore_command(snapshot_argument: str, ledger_argument: str) -> None:
             entry["status"] in TERMINAL and not entry["policy_neutralized"]
             for entry in entries
         ):
-            archive_ledger(tool, ledger, entries)
+            archive_ledger(tool, ledger)
     finally:
         os.close(lock_fd)
     print("restore: complete")
