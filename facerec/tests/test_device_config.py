@@ -105,6 +105,38 @@ def test_cuda_rejects_index_outside_visible_nvidia_devices(monkeypatch) -> None:
     assert option.calls == []
 
 
+@pytest.mark.parametrize("visible", ["-1", "NoDevFiles", "none", "void", ""])
+def test_cuda_rejects_environment_without_visible_devices(
+    monkeypatch, visible: str
+) -> None:
+    from app.core.runtime_device import configure_runtime_option
+
+    monkeypatch.setenv("REQUIRE_GPU", "true")
+    monkeypatch.setenv("NVIDIA_VISIBLE_DEVICES", visible)
+    option = FakeRuntimeOption()
+    fastdeploy = SimpleNamespace(is_built_with_gpu=lambda: True)
+
+    with pytest.raises(RuntimeError, match="可见 GPU 数量为 0"):
+        configure_runtime_option(option, "cuda:0", fastdeploy_module=fastdeploy)
+
+    assert option.calls == []
+
+
+@pytest.mark.parametrize("device", ["cuda", "cuda:x", "gpu:0", "cuda:-1", ""])
+def test_runtime_device_rejects_malformed_cuda_configuration(
+    monkeypatch, device: str
+) -> None:
+    from app.core.runtime_device import configure_runtime_option
+
+    monkeypatch.setenv("REQUIRE_GPU", "true")
+    option = FakeRuntimeOption()
+
+    with pytest.raises(RuntimeError, match="cpu 或 cuda:<index>"):
+        configure_runtime_option(option, device)
+
+    assert option.calls == []
+
+
 def test_project_root_contains_models_and_config() -> None:
     assert (PROJECT_ROOT / "config.toml").is_file()
     assert (PROJECT_ROOT / "ai_models").is_dir()

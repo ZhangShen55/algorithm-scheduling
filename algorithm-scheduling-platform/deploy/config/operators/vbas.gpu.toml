@@ -75,8 +75,8 @@ DirectMHPRoot = "app/vendor/DirectMHP"
 DirectMHPWeights = "models/cmu_m_1280_e200_t40_lw010_best.pt"
 # DirectMHP 数据配置文件。
 DirectMHPData = "models/cmu_panoptic_coco.yaml"
-# DirectMHP 推理设备。Mac 本地用 cpu；NVIDIA GPU 环境可配置为 "0"。
-Device = "0"
+# Compose 只暴露一张物理卡，容器内设备固定为 cuda:0。
+Device = "cuda:0"
 # DirectMHP 推理尺寸。
 ImageSize = 1280
 # DirectMHP 头部检测置信度阈值。

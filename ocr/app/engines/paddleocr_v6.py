@@ -105,15 +105,16 @@ class PaddleOCRV6Engine:
 
     def _validate_device(self, paddle_module: Any) -> None:
         kind, index = parse_device(self.device)
+        require_gpu = os.getenv("REQUIRE_GPU", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        if require_gpu and kind != "cuda":
+            raise ConfigurationError(
+                "部署要求使用 GPU，但 OCR 配置不是 cuda:<index>"
+            )
         if kind == "cpu":
-            if os.getenv("REQUIRE_GPU", "false").strip().lower() in {
-                "1",
-                "true",
-                "yes",
-            }:
-                raise ConfigurationError(
-                    "部署要求使用 GPU，但 OCR 配置不是 cuda:<index>"
-                )
             return
 
         if kind == "cuda":

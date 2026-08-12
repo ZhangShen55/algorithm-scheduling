@@ -46,6 +46,7 @@ def test_gpu_configs_use_container_local_cuda_device_zero() -> None:
     assert _load(CONFIG_ROOT / "ocr.gpu.toml")["server"]["workers"] == 1
     vbas = _load(CONFIG_ROOT / "vbas.gpu.toml")
     assert vbas["GPU_ID"] == 0
+    assert vbas["Teacher_Head_Pose"]["Device"] == "cuda:0"
     assert vbas["INSTANCE_COUNT"] == 1
     assert vbas["WORKERS_PER_INSTANCE"] == 1
     assert _load(CONFIG_ROOT / "facerec.gpu.toml")["gpu"]["device"] == "cuda:0"

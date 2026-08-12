@@ -5,7 +5,7 @@ import tempfile
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -13,10 +13,11 @@ import yaml
 
 from ..schemas.stu_tea_behavior import BoxPosition, HeadPoseResult, ObjectPosition
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DIRECTMHP_ROOT = PROJECT_ROOT / "app" / "vendor" / "DirectMHP"
-DEFAULT_DIRECTMHP_WEIGHTS = PROJECT_ROOT / "models" / "cmu_m_1280_e200_t40_lw010_best.pt"
+DEFAULT_DIRECTMHP_WEIGHTS = (
+    PROJECT_ROOT / "models" / "cmu_m_1280_e200_t40_lw010_best.pt"
+)
 DEFAULT_DIRECTMHP_DATA = PROJECT_ROOT / "models" / "cmu_panoptic_coco.yaml"
 
 DIRECTMHP_RUNTIME_DEPENDENCIES = [
@@ -92,8 +93,16 @@ def get_teacher_head_pose_int_config(key: str, default_value: int) -> int:
 
 
 def get_teacher_head_pose_config() -> TeacherHeadPoseConfig:
-    from ..core.settings import settings
-    from ..core.settings import model_path_resolver
+    from ..core.runtime_device import validate_model_device
+    from ..core.settings import device, model_path_resolver, settings, torch
+
+    configured_device = get_teacher_head_pose_raw_config("Device", settings.GPU_ID)
+    directmhp_device = validate_model_device(
+        configured_device,
+        device,
+        torch_module=torch,
+        model_name="DirectMHP",
+    )
 
     return TeacherHeadPoseConfig(
         directmhp_root=resolve_project_path(
@@ -102,7 +111,9 @@ def get_teacher_head_pose_config() -> TeacherHeadPoseConfig:
         ),
         directmhp_weights=model_path_resolver.prepare_model_path(
             resolve_project_path(
-                get_teacher_head_pose_raw_config("DirectMHPWeights", DEFAULT_DIRECTMHP_WEIGHTS),
+                get_teacher_head_pose_raw_config(
+                    "DirectMHPWeights", DEFAULT_DIRECTMHP_WEIGHTS
+                ),
                 DEFAULT_DIRECTMHP_WEIGHTS,
             )
         ),
@@ -110,7 +121,7 @@ def get_teacher_head_pose_config() -> TeacherHeadPoseConfig:
             get_teacher_head_pose_raw_config("DirectMHPData", DEFAULT_DIRECTMHP_DATA),
             DEFAULT_DIRECTMHP_DATA,
         ),
-        device=str(get_teacher_head_pose_raw_config("Device", settings.GPU_ID)),
+        device=str(directmhp_device),
         image_size=get_teacher_head_pose_int_config("ImageSize", 1280),
         conf_thres=get_teacher_head_pose_float_config("ConfThres", 0.35),
         iou_thres=get_teacher_head_pose_float_config("IouThres", 0.45),
@@ -180,7 +191,9 @@ def expand_box(
     return left, top, right, bottom
 
 
-def select_head_prediction(predictions: List[HeadPosePrediction]) -> Optional[HeadPosePrediction]:
+def select_head_prediction(
+    predictions: List[HeadPosePrediction],
+) -> Optional[HeadPosePrediction]:
     if not predictions:
         return None
     return max(
@@ -291,6 +304,16 @@ class DirectMHPBackend:
     def load(self):
         if self._loaded:
             return
+        from ..core.runtime_device import validate_model_device
+        from ..core.settings import device as operator_device
+        from ..core.settings import torch
+
+        directmhp_device = validate_model_device(
+            self.config.device,
+            operator_device,
+            torch_module=torch,
+            model_name="DirectMHP",
+        )
         self.validate_files()
         validate_directmhp_runtime_dependencies()
         root = str(self.config.directmhp_root.resolve())
@@ -300,7 +323,6 @@ class DirectMHPBackend:
         matplotlib_cache_dir.mkdir(parents=True, exist_ok=True)
         os.environ.setdefault("MPLCONFIGDIR", str(matplotlib_cache_dir))
 
-        import torch
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",
@@ -308,9 +330,8 @@ class DirectMHPBackend:
                 category=UserWarning,
             )
             from models.experimental import attempt_load
-            from utils.general import check_img_size, non_max_suppression, scale_coords
-            from utils.torch_utils import select_device
             from utils.datasets import LoadImages
+            from utils.general import check_img_size, non_max_suppression, scale_coords
 
         with self.config.directmhp_data.open(encoding="utf-8") as f:
             self.data = yaml.safe_load(f)
@@ -319,8 +340,10 @@ class DirectMHPBackend:
         self.non_max_suppression = non_max_suppression
         self.scale_coords = scale_coords
         self.LoadImages = LoadImages
-        self.device = select_device(self.config.device, batch_size=1)
-        self.model = attempt_load(str(self.config.directmhp_weights), map_location=self.device)
+        self.device = directmhp_device
+        self.model = attempt_load(
+            str(self.config.directmhp_weights), map_location=self.device
+        )
         self._cleanup_prepared_weight()
         self.stride = int(self.model.stride.max())
         self.imgsz = self.check_img_size(self.config.image_size, s=self.stride)
@@ -335,7 +358,9 @@ class DirectMHPBackend:
 
     def predict_file(self, image_path: Path) -> List[HeadPosePrediction]:
         self.load()
-        dataset = self.LoadImages(str(image_path), img_size=self.imgsz, stride=self.stride, auto=True)
+        dataset = self.LoadImages(
+            str(image_path), img_size=self.imgsz, stride=self.stride, auto=True
+        )
         dataset_iter = iter(dataset)
         _, img, im0, _ = next(dataset_iter)
         img = self.torch.from_numpy(img).to(self.device)
@@ -351,7 +376,11 @@ class DirectMHPBackend:
         )
         if not out or out[0] is None or len(out[0]) == 0:
             return []
-        bboxes = self.scale_coords(img.shape[2:], out[0][:, :4], im0.shape[:2]).cpu().numpy()
+        bboxes = (
+            self.scale_coords(img.shape[2:], out[0][:, :4], im0.shape[:2])
+            .cpu()
+            .numpy()
+        )
         scores = out[0][:, 4].cpu().numpy()
         pitch_yaw_roll = out[0][:, 6:].cpu().numpy()
         predictions = []

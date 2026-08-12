@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import unittest
 from dataclasses import replace
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import app.services.screen_detector as screen_detector
 from app.core.config import StartupConfigChangedError, get_settings, reload_settings
@@ -83,3 +84,64 @@ class YoloDeviceResolutionTests(unittest.TestCase):
         with patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False):
             with self.assertRaisesRegex(RuntimeError, "部署要求使用 GPU.*cuda:<index>"):
                 screen_detector.resolve_yolo_device("mps")
+
+
+class YoloHolderFailFastTests(unittest.TestCase):
+    def test_screen_holder_does_not_materialize_or_construct_yolo_when_resolver_fails(
+        self,
+    ) -> None:
+        holder = screen_detector.ScreenModelHolder()
+        settings = SimpleNamespace(
+            screen_detection=SimpleNamespace(weights_path="model/screen.pt"),
+            yolo=SimpleNamespace(device="cpu"),
+            model_protection=SimpleNamespace(),
+        )
+        yolo = Mock()
+
+        with (
+            patch.object(screen_detector, "get_settings", return_value=settings),
+            patch.object(
+                screen_detector,
+                "resolve_yolo_device",
+                side_effect=RuntimeError("GPU required"),
+            ),
+            patch.object(screen_detector, "materialize_model_path") as materialize,
+            patch.dict(
+                "sys.modules",
+                {"ultralytics": SimpleNamespace(YOLO=yolo)},
+            ),
+            self.assertRaisesRegex(RuntimeError, "GPU required"),
+        ):
+            holder.load()
+
+        materialize.assert_not_called()
+        yolo.assert_not_called()
+
+    def test_occlusion_holder_fails_before_model_materialization(self) -> None:
+        import app.services.occlusion_detector as occlusion_detector
+
+        holder = occlusion_detector.YoloOcclusionModelHolder()
+        settings = SimpleNamespace(
+            occlusion_detection=SimpleNamespace(
+                yolo_seg_weights_path="model/occlusion.pt"
+            ),
+            yolo=SimpleNamespace(device="cpu"),
+            model_protection=SimpleNamespace(),
+        )
+        yolo = Mock()
+
+        with (
+            patch.object(occlusion_detector, "get_settings", return_value=settings),
+            patch.object(
+                screen_detector,
+                "resolve_yolo_device",
+                side_effect=RuntimeError("GPU required"),
+            ),
+            patch.object(occlusion_detector, "materialize_model_path") as materialize,
+            patch.dict("sys.modules", {"ultralytics": SimpleNamespace(YOLO=yolo)}),
+            self.assertRaisesRegex(RuntimeError, "GPU required"),
+        ):
+            holder.load()
+
+        materialize.assert_not_called()
+        yolo.assert_not_called()

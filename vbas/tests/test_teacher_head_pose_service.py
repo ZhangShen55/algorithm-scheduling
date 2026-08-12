@@ -1,13 +1,29 @@
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from app.services.teacher_head_pose_service import (
     DEFAULT_DIRECTMHP_DATA,
     DEFAULT_DIRECTMHP_ROOT,
     DEFAULT_DIRECTMHP_WEIGHTS,
+    DirectMHPBackend,
     HeadPosePrediction,
+    TeacherHeadPoseConfig,
     TeacherHeadPoseThresholds,
     build_success_head_pose_result,
+    get_teacher_head_pose_config,
 )
+
+
+def fake_torch(*, cuda_available: bool, device_count: int):
+    return SimpleNamespace(
+        cuda=SimpleNamespace(
+            is_available=lambda: cuda_available,
+            device_count=lambda: device_count,
+        ),
+        device=lambda value: value,
+    )
 
 
 class TeacherHeadPoseServiceTest(unittest.TestCase):
@@ -48,7 +64,7 @@ class TeacherHeadPoseServiceTest(unittest.TestCase):
         self.assertEqual(result.HeadBox.LeftTopX, 100)
         self.assertEqual(result.HeadBox.LeftTopY, 200)
 
-    def test_head_pose_direction_reports_front_with_zero_angle_inside_side_threshold(self):
+    def test_head_pose_direction_reports_front_inside_side_threshold(self):
         prediction = HeadPosePrediction(
             box=(0, 0, 20, 20),
             confidence=0.70,
@@ -69,6 +85,135 @@ class TeacherHeadPoseServiceTest(unittest.TestCase):
         self.assertEqual(result.Yaw, -12.0)
         self.assertEqual(result.Angle, 0.0)
         self.assertFalse(result.IsLookingDown)
+
+
+class DirectMHPDeviceGuardTest(unittest.TestCase):
+    def _settings_module(
+        self,
+        *,
+        operator_device: str,
+        head_device: str,
+        torch_module,
+        prepare_model_path=Mock(),
+    ):
+        return SimpleNamespace(
+            device=operator_device,
+            torch=torch_module,
+            settings=SimpleNamespace(
+                GPU_ID=operator_device,
+                Teacher_Head_Pose={
+                    "Enabled": True,
+                    "Device": head_device,
+                },
+            ),
+            model_path_resolver=SimpleNamespace(
+                prepare_model_path=prepare_model_path,
+            ),
+        )
+
+    def test_cpu_directmhp_device_fails_before_weight_materialization(self):
+        prepare_model_path = Mock()
+        settings_module = self._settings_module(
+            operator_device="cuda:0",
+            head_device="cpu",
+            torch_module=fake_torch(cuda_available=True, device_count=1),
+            prepare_model_path=prepare_model_path,
+        )
+
+        with (
+            patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False),
+            patch.dict("sys.modules", {"app.core.settings": settings_module}),
+            self.assertRaisesRegex(RuntimeError, "DirectMHP.*cuda:0"),
+        ):
+            get_teacher_head_pose_config()
+
+        prepare_model_path.assert_not_called()
+
+    def test_mismatched_directmhp_device_fails_before_weight_materialization(self):
+        prepare_model_path = Mock()
+        settings_module = self._settings_module(
+            operator_device="cuda:0",
+            head_device="cuda:1",
+            torch_module=fake_torch(cuda_available=True, device_count=2),
+            prepare_model_path=prepare_model_path,
+        )
+
+        with (
+            patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False),
+            patch.dict("sys.modules", {"app.core.settings": settings_module}),
+            self.assertRaisesRegex(RuntimeError, "DirectMHP.*cuda:1.*cuda:0"),
+        ):
+            get_teacher_head_pose_config()
+
+        prepare_model_path.assert_not_called()
+
+    def test_out_of_range_directmhp_device_fails_before_weight_materialization(self):
+        prepare_model_path = Mock()
+        settings_module = self._settings_module(
+            operator_device="cuda:0",
+            head_device="cuda:1",
+            torch_module=fake_torch(cuda_available=True, device_count=1),
+            prepare_model_path=prepare_model_path,
+        )
+
+        with (
+            patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False),
+            patch.dict("sys.modules", {"app.core.settings": settings_module}),
+            self.assertRaisesRegex(RuntimeError, "cuda:1.*索引越界"),
+        ):
+            get_teacher_head_pose_config()
+
+        prepare_model_path.assert_not_called()
+
+    def test_valid_cuda_zero_does_not_change_visible_devices(self):
+        prepared = Path("/tmp/directmhp.pt")
+        prepare_model_path = Mock(return_value=prepared)
+        settings_module = self._settings_module(
+            operator_device="cuda:0",
+            head_device="cuda:0",
+            torch_module=fake_torch(cuda_available=True, device_count=1),
+            prepare_model_path=prepare_model_path,
+        )
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"REQUIRE_GPU": "true", "CUDA_VISIBLE_DEVICES": "sentinel"},
+                clear=False,
+            ),
+            patch.dict("sys.modules", {"app.core.settings": settings_module}),
+        ):
+            config = get_teacher_head_pose_config()
+            self.assertEqual(
+                "sentinel", __import__("os").environ["CUDA_VISIBLE_DEVICES"]
+            )
+
+        self.assertEqual("cuda:0", config.device)
+        prepare_model_path.assert_called_once()
+
+    def test_backend_rejects_invalid_device_before_attempt_load(self):
+        config = TeacherHeadPoseConfig(
+            directmhp_root=Path("/tmp/directmhp"),
+            directmhp_weights=Path("/tmp/directmhp.pt"),
+            directmhp_data=Path("/tmp/directmhp.yaml"),
+            device="cpu",
+        )
+        backend = DirectMHPBackend(config)
+        settings_module = self._settings_module(
+            operator_device="cuda:0",
+            head_device="cpu",
+            torch_module=fake_torch(cuda_available=True, device_count=1),
+        )
+
+        with (
+            patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False),
+            patch.dict("sys.modules", {"app.core.settings": settings_module}),
+            patch.object(backend, "validate_files") as validate_files,
+            self.assertRaisesRegex(RuntimeError, "DirectMHP.*cuda:0"),
+        ):
+            backend.load()
+
+        validate_files.assert_not_called()
 
 
 if __name__ == "__main__":

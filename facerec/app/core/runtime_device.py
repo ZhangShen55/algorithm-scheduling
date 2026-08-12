@@ -19,7 +19,7 @@ def _visible_nvidia_device_count() -> int | None:
     if raw is None or raw.strip().lower() == "all":
         return None
     normalized = raw.strip().lower()
-    if normalized in {"", "none", "void"}:
+    if normalized in {"", "-1", "none", "nodevfiles", "void"}:
         return 0
     return len([item for item in raw.split(",") if item.strip()])
 
@@ -37,7 +37,9 @@ def configure_runtime_option(
         option.use_cpu()
         return
 
-    index = int(configured.split(":", 1)[1])
+    if not configured.startswith("cuda:") or not configured[5:].isdigit():
+        raise RuntimeError("人脸算子设备必须是 cpu 或 cuda:<index>")
+    index = int(configured[5:])
     if fastdeploy_module is None:
         import fastdeploy as fastdeploy_module
     if not fastdeploy_module.is_built_with_gpu():

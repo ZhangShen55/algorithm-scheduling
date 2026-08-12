@@ -32,3 +32,28 @@ def resolve_runtime_device(configured: int | str, *, torch_module: Any | None = 
             f"GPU 设备 {device} 索引越界，可见 CUDA 设备数量为 {visible_count}"
         )
     return torch_module.device(device)
+
+
+def validate_model_device(
+    configured: int | str,
+    operator_device: Any,
+    *,
+    torch_module: Any | None = None,
+    model_name: str,
+):
+    try:
+        resolved = resolve_runtime_device(configured, torch_module=torch_module)
+    except RuntimeError as error:
+        message = (
+            f"{model_name} 设备 {configured!r} 无效，"
+            f"算子设备为 {operator_device}: {error}"
+        )
+        raise RuntimeError(
+            message
+        ) from error
+
+    if str(resolved) != str(operator_device):
+        raise RuntimeError(
+            f"{model_name} 设备 {resolved} 与算子设备 {operator_device} 不一致"
+        )
+    return resolved
