@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import stat
 import sys
 import uuid
@@ -30,7 +31,17 @@ class AssetError(RuntimeError):
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in result:
+                raise AssetError(f"JSON 包含重复键：{key}")
+            result[key] = item
+        return result
+
+    value = json.loads(
+        path.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_keys
+    )
     if not isinstance(value, dict):
         raise AssetError(f"JSON root must be an object: {path.name}")
     return value
@@ -246,7 +257,7 @@ def _recover(workspace: Path, definitions: dict[str, tuple[str, ...]]) -> None:
         or not isinstance(transaction_id, str)
         or len(transaction_id) != 32
         or any(character not in "0123456789abcdef" for character in transaction_id)
-        or journal.get("phase") not in {"prepared", "committed"}
+        or journal.get("phase") not in {"preparing", "prepared", "committed"}
     ):
         raise AssetError("invalid model asset transaction journal")
     expected_targets = set(definitions)
@@ -255,10 +266,17 @@ def _recover(workspace: Path, definitions: dict[str, tuple[str, ...]]) -> None:
     }
     if len(entries) != len(definitions) or actual_targets != expected_targets:
         raise AssetError("invalid model asset transaction journal target set")
-    committed = journal.get("phase") == "committed"
+    phase = journal.get("phase")
+    committed = phase == "committed"
     for entry in reversed(entries):
         if not isinstance(entry, dict):
             raise AssetError("invalid model asset transaction entry")
+        if not isinstance(entry.get("had_original"), bool) or not isinstance(
+            entry.get("switched"), bool
+        ):
+            raise AssetError("invalid model asset transaction entry state")
+        if "prepared" in entry and not isinstance(entry.get("prepared"), bool):
+            raise AssetError("invalid model asset transaction preparation state")
         target = workspace / str(entry["target"])
         stage = Path(str(entry["stage"]))
         backup = Path(str(entry["backup"]))
@@ -281,7 +299,7 @@ def _recover(workspace: Path, definitions: dict[str, tuple[str, ...]]) -> None:
         if backup.exists():
             os.replace(backup, target)
             _fsync_directory(target.parent)
-        elif not had_original and target.exists() and not stage.exists():
+        elif phase == "prepared" and not had_original and target.exists() and not stage.exists():
             _remove_tree(target)
         if stage.exists():
             _remove_tree(stage)
@@ -291,6 +309,15 @@ def _recover(workspace: Path, definitions: dict[str, tuple[str, ...]]) -> None:
 
 def _copy_tree(source_root: Path, stage: Path, files: dict[str, tuple[int, str]]) -> None:
     stage.mkdir(mode=0o700)
+    pause_marker = os.environ.get("MODEL_ASSET_TEST_PAUSE_AFTER_STAGE_CREATE")
+    if pause_marker and not Path(pause_marker).exists():
+        marker = Path(pause_marker)
+        marker.write_text(str(stage), encoding="utf-8")
+        with marker.open("rb") as stream:
+            os.fsync(stream.fileno())
+        _fsync_directory(marker.parent)
+        while True:
+            signal.pause()
     for relative in sorted(files):
         source = source_root / relative
         target = stage / relative
@@ -334,42 +361,48 @@ def stage(source: Path, workspace: Path) -> None:
             print("model-assets: PASS: assets already match manifest")
             return
         transaction_id = uuid.uuid4().hex
+        journal_entries: list[dict[str, Any]] = []
+        for target in expected:
+            destination = workspace / target
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            journal_entries.append(
+                {
+                    "target": target,
+                    "stage": str(
+                        destination.parent
+                        / f".{destination.name}.model-stage-{transaction_id}"
+                    ),
+                    "backup": str(
+                        destination.parent
+                        / f".{destination.name}.model-backup-{transaction_id}"
+                    ),
+                    "had_original": destination.exists(),
+                    "prepared": False,
+                    "switched": False,
+                }
+            )
         journal: dict[str, Any] = {
-            "phase": "prepared",
+            "phase": "preparing",
             "transaction_id": transaction_id,
-            "entries": [],
+            "entries": journal_entries,
         }
+        _atomic_json(_journal_path(workspace), journal)
         fail_after_stages = int(os.environ.get("MODEL_ASSET_TEST_FAIL_AFTER_STAGES", "0"))
-        prepared_stages: list[Path] = []
         try:
-            for stage_index, (target, entries) in enumerate(expected.items(), start=1):
-                destination = workspace / target
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                stage_path = destination.parent / (
-                    f".{destination.name}.model-stage-{transaction_id}"
-                )
-                backup_path = destination.parent / (
-                    f".{destination.name}.model-backup-{transaction_id}"
-                )
-                prepared_stages.append(stage_path)
+            for stage_index, entry in enumerate(journal_entries, start=1):
+                target = str(entry["target"])
+                entries = expected[target]
+                stage_path = Path(str(entry["stage"]))
                 _copy_tree(source / target, stage_path, entries)
                 _verify_tree(stage_path, entries)
-                journal["entries"].append(
-                    {
-                        "target": target,
-                        "stage": str(stage_path),
-                        "backup": str(backup_path),
-                        "had_original": destination.exists(),
-                        "switched": False,
-                    }
-                )
+                entry["prepared"] = True
+                _atomic_json(_journal_path(workspace), journal)
                 if fail_after_stages == stage_index:
                     raise AssetError("injected failure while preparing model stages")
         except Exception:
-            for stage_path in prepared_stages:
-                if stage_path.exists():
-                    _remove_tree(stage_path)
+            _recover(workspace, definitions)
             raise
+        journal["phase"] = "prepared"
         _atomic_json(_journal_path(workspace), journal)
         interrupt_spec = os.environ.get("MODEL_ASSET_TEST_INTERRUPT_AT", "")
 

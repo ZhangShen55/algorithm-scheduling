@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import signal
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -126,6 +128,20 @@ def _run_manifest_generator(
         capture_output=True,
         check=False,
     )
+
+
+def _wait_for_path(path: Path, process: subprocess.Popen[str]) -> None:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if path.exists():
+            return
+        if process.poll() is not None:
+            stdout, stderr = process.communicate()
+            raise AssertionError(f"process exited before marker: {stdout=} {stderr=}")
+        time.sleep(0.01)
+    process.kill()
+    process.wait(timeout=5)
+    raise AssertionError(f"timed out waiting for {path}")
 
 
 def _make_workspace(tmp_path: Path) -> Path:
@@ -278,6 +294,69 @@ def test_stager_rejects_a_tampered_journal_without_touching_external_paths(
     assert completed.returncode != 0
     assert "journal" in completed.stderr.lower()
     assert marker.read_text(encoding="utf-8") == "preserve"
+
+
+@pytest.mark.parametrize("duplicate_scope", ["top", "file_entry", "journal"])
+def test_asset_json_rejects_duplicate_keys(
+    tmp_path: Path, duplicate_scope: str
+) -> None:
+    source = tmp_path / "external-assets"
+    _write_asset_source(source)
+    workspace = _make_workspace(tmp_path)
+    if duplicate_scope == "journal":
+        transaction_id = "a" * 32
+        entries = []
+        for target in ASSET_TARGETS:
+            destination = workspace / target
+            entries.append(
+                {
+                    "target": target,
+                    "stage": str(
+                        destination.parent
+                        / f".{destination.name}.model-stage-{transaction_id}"
+                    ),
+                    "backup": str(
+                        destination.parent
+                        / f".{destination.name}.model-backup-{transaction_id}"
+                    ),
+                    "had_original": False,
+                    "switched": False,
+                }
+            )
+        journal = json.dumps(
+            {
+                "phase": "prepared",
+                "transaction_id": transaction_id,
+                "entries": entries,
+            }
+        )
+        journal = journal.replace(
+            '"phase": "prepared"',
+            '"phase": "prepared", "phase": "committed"',
+            1,
+        )
+        (workspace / ".model-assets-transaction.json").write_text(
+            journal, encoding="utf-8"
+        )
+    else:
+        manifest_path = source / "model-assets.manifest.json"
+        manifest = manifest_path.read_text(encoding="utf-8")
+        if duplicate_scope == "top":
+            manifest = manifest.replace(
+                '"schema_version": 1',
+                '"schema_version": 1, "schema_version": 1',
+                1,
+            )
+        else:
+            manifest = manifest.replace(
+                '"path":', '"path": "alias.bin", "path":', 1
+            )
+        manifest_path.write_text(manifest, encoding="utf-8")
+
+    completed = _run("stage-model-assets", source, workspace)
+
+    assert completed.returncode != 0
+    assert "重复" in completed.stderr
 
 
 @pytest.mark.parametrize("kind", ["symlink", "fifo"])
@@ -483,6 +562,151 @@ def test_copy_phase_failure_leaves_old_roots_and_no_transaction_artifacts(
     assert not list(workspace.glob("**/.*.model-backup-*"))
 
 
+def test_sigkill_during_copy_recovers_stages_without_accumulation(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "external-assets"
+    expected = _write_asset_source(source)
+    workspace = _make_workspace(tmp_path)
+    marker = tmp_path / "copy-stage-created"
+    environment = os.environ.copy()
+    environment["MODEL_ASSET_TEST_PAUSE_AFTER_STAGE_CREATE"] = str(marker)
+    process = subprocess.Popen(
+        [
+            str(SCRIPTS / "stage-model-assets"),
+            "--source",
+            str(source),
+            "--workspace",
+            str(workspace),
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=environment,
+    )
+
+    _wait_for_path(marker, process)
+    os.kill(process.pid, signal.SIGKILL)
+    process.wait(timeout=5)
+
+    journal = workspace / ".model-assets-transaction.json"
+    assert journal.exists()
+    assert list(workspace.glob("**/.*.model-stage-*"))
+    resumed = _run("stage-model-assets", source, workspace)
+
+    assert resumed.returncode == 0, resumed.stderr
+    assert not journal.exists()
+    assert not list(workspace.glob("**/.*.model-stage-*"))
+    assert not list(workspace.glob("**/.*.model-backup-*"))
+    for relative_path, payload in expected.items():
+        assert (workspace / relative_path).read_bytes() == payload
+
+
+def test_recovery_preserves_unknown_stage_like_directory(tmp_path: Path) -> None:
+    source = tmp_path / "external-assets"
+    _write_asset_source(source)
+    workspace = _make_workspace(tmp_path)
+    transaction_id = "a" * 32
+    entries = []
+    for target in ASSET_TARGETS:
+        destination = workspace / target
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        entries.append(
+            {
+                "target": target,
+                "stage": str(
+                    destination.parent
+                    / f".{destination.name}.model-stage-{transaction_id}"
+                ),
+                "backup": str(
+                    destination.parent
+                    / f".{destination.name}.model-backup-{transaction_id}"
+                ),
+                "had_original": False,
+                "prepared": False,
+                "switched": False,
+            }
+        )
+    known_stage = Path(str(entries[0]["stage"]))
+    known_stage.mkdir()
+    unknown = known_stage.with_name(f"{known_stage.name}-unknown")
+    unknown.mkdir()
+    marker = unknown / "preserve"
+    marker.write_text("preserve", encoding="utf-8")
+    (workspace / ".model-assets-transaction.json").write_text(
+        json.dumps(
+            {
+                "phase": "preparing",
+                "transaction_id": transaction_id,
+                "entries": entries,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    completed = _run("stage-model-assets", source, workspace)
+
+    assert completed.returncode == 0, completed.stderr
+    assert not known_stage.exists()
+    assert marker.read_text(encoding="utf-8") == "preserve"
+
+
+def test_preparing_recovery_does_not_delete_an_unrelated_new_target(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "external-assets"
+    _write_asset_source(source)
+    workspace = _make_workspace(tmp_path)
+    assert _run("stage-model-assets", source, workspace).returncode == 0
+    inodes_before = {
+        path.relative_to(workspace).as_posix(): path.stat().st_ino
+        for target in ASSET_TARGETS
+        for path in (workspace / target).rglob("*")
+        if path.is_file()
+    }
+    transaction_id = "a" * 32
+    entries = []
+    for target in ASSET_TARGETS:
+        destination = workspace / target
+        entries.append(
+            {
+                "target": target,
+                "stage": str(
+                    destination.parent
+                    / f".{destination.name}.model-stage-{transaction_id}"
+                ),
+                "backup": str(
+                    destination.parent
+                    / f".{destination.name}.model-backup-{transaction_id}"
+                ),
+                "had_original": False,
+                "prepared": False,
+                "switched": False,
+            }
+        )
+    (workspace / ".model-assets-transaction.json").write_text(
+        json.dumps(
+            {
+                "phase": "preparing",
+                "transaction_id": transaction_id,
+                "entries": entries,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    completed = _run("stage-model-assets", source, workspace)
+
+    inodes_after = {
+        path.relative_to(workspace).as_posix(): path.stat().st_ino
+        for target in ASSET_TARGETS
+        for path in (workspace / target).rglob("*")
+        if path.is_file()
+    }
+    assert completed.returncode == 0, completed.stderr
+    assert inodes_after == inodes_before
+
+
 def test_interrupted_switch_restores_an_originally_missing_root(tmp_path: Path) -> None:
     source = tmp_path / "external-assets"
     expected = _write_asset_source(source)
@@ -559,3 +783,36 @@ def test_runtime_secret_verifier_accepts_no_secrets_for_plain_model_mode() -> No
 
     assert completed.returncode == 0, completed.stderr
     assert "no runtime secrets requested" in completed.stdout.lower()
+
+
+def test_runtime_secret_verifier_rejects_symlink_parent(tmp_path: Path) -> None:
+    actual = tmp_path / "actual-secrets"
+    actual.mkdir(mode=0o700)
+    secret = actual / "runtime.key"
+    secret.write_bytes(b"not-printed")
+    secret.chmod(0o600)
+    alias = tmp_path / "secret-alias"
+    alias.symlink_to(actual, target_is_directory=True)
+
+    completed = _run_secret_verifier(
+        "--secret", f"model_key=/run/secrets/model_key={alias / 'runtime.key'}"
+    )
+
+    assert completed.returncode != 0
+    assert "符号链接" in completed.stderr
+
+
+def test_runtime_secret_verifier_rejects_world_writable_parent(tmp_path: Path) -> None:
+    insecure = tmp_path / "insecure-secrets"
+    insecure.mkdir(mode=0o777)
+    insecure.chmod(0o777)
+    secret = insecure / "runtime.key"
+    secret.write_bytes(b"not-printed")
+    secret.chmod(0o600)
+
+    completed = _run_secret_verifier(
+        "--secret", f"model_key=/run/secrets/model_key={secret}"
+    )
+
+    assert completed.returncode != 0
+    assert "目录权限" in completed.stderr

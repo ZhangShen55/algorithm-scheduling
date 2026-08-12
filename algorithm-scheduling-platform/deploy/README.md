@@ -141,17 +141,23 @@ The asset definition is `deploy/model-assets.json`: ASR Offline, ASR Online, OCR
 VBas plain models, FaceRec and ScreenDet. PPT Slice and Text Analysis have no local
 model roots. The external manifest is an input artifact and must stay outside Git.
 The transaction rejects missing/extra files, path traversal, symlinks, special files,
-secret/encrypted paths and hash drift; it uses a private lock, durable journal, fsync,
-same-filesystem stage/backup directories and restart recovery so six roots cannot be
-published as a mixed release.
+secret/encrypted paths, duplicate JSON keys and hash drift. Before creating any stage
+directory it fsyncs a `preparing` journal containing all six exact stage/backup paths;
+restart recovery removes only paths named by that transaction, rolls back interrupted
+replacements and leaves unknown similarly named directories untouched. A private lock,
+same-filesystem staging and fsync prevent a killed copy from accumulating partial roots
+or publishing a mixed release.
 
 Current VBas and ScreenDet deployment uses plain models. Their encrypted directories
 and keys are excluded from image contexts. If encrypted mode is introduced later, pass
 the key via a separate read-only `/run/secrets/*` mount and do not include plain weights
-in that encrypted image. `verify-runtime-secrets` validates only ID, container target,
-regular-file type, owner and exact `0600` mode; it never reads or reports secret content,
-size or hashes. ASR Online's current `.enc` implementation embeds its decryption material
-in source and is therefore an acknowledged risk, not a secure secret boundary.
+in that encrypted image. `verify-runtime-secrets` opens every host-source path component
+with no-follow semantics, rejects a symlink parent, and requires the direct configuration
+directory to be owned by the current UID without group/other write permission. It then
+validates only ID, container target, regular-file type, owner and exact `0600` mode; it
+never reads or reports secret content, size or hashes. ASR Online's current `.enc`
+implementation embeds its decryption material in source and is therefore an acknowledged
+risk, not a secure secret boundary.
 
 All eight runtime TOML files come from read-only Compose mounts under
 `deploy/config/operators/`; local `config*.toml` files are excluded from images.
