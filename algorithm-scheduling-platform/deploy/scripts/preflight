@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() {
+  printf 'preflight: FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+has_word() {
+  local needle="$1"
+  local word
+  shift
+  for word in "$@"; do
+    [[ "$word" == "$needle" ]] && return 0
+  done
+  return 1
+}
+
+min_root_free_gib="${MIN_ROOT_FREE_GIB:-100}"
+[[ "$min_root_free_gib" =~ ^[0-9]+$ ]] || fail "MIN_ROOT_FREE_GIB must be a non-negative integer"
+root_available_kib="$(df -Pk / | awk 'NR == 2 {print $4}')"
+[[ "$root_available_kib" =~ ^[0-9]+$ ]] || fail "cannot determine root disk free space"
+minimum_kib=$((min_root_free_gib * 1024 * 1024))
+(( root_available_kib >= minimum_kib )) || fail \
+  "root disk has ${root_available_kib} KiB free; ${min_root_free_gib} GiB required"
+printf 'preflight: OK: root disk free space\n'
+
+[[ "$(uname -m)" == "x86_64" ]] || fail "server architecture must be x86_64"
+printf 'preflight: OK: x86_64 architecture\n'
+
+command -v docker >/dev/null 2>&1 || fail "docker command is unavailable"
+docker version >/dev/null 2>&1 || fail "Docker daemon is unavailable"
+docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is unavailable"
+printf 'preflight: OK: Docker and Compose\n'
+
+gpu_image="${PREFLIGHT_GPU_IMAGE:-nvidia/cuda:12.4.1-base-ubuntu22.04}"
+if ! gpu_output="$(docker run --rm --gpus all "$gpu_image" \
+  nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null)"; then
+  fail "NVIDIA container runtime could not expose GPUs"
+fi
+gpu_count="$(printf '%s\n' "$gpu_output" | awk 'NF {count += 1} END {print count + 0}')"
+[[ "$gpu_count" == "3" ]] || fail "NVIDIA container must expose exactly 3 GPUs; found ${gpu_count}"
+printf 'preflight: OK: NVIDIA runtime exposes exactly 3 GPUs\n'
+
+course_root="${COURSE_ROOT:-/data/course}"
+result_root="${RESULT_ROOT:-/data/result}"
+writable_check_bin="${PREFLIGHT_WRITABLE_CHECK_BIN:-test}"
+for required_directory in "$course_root" "$result_root"; do
+  [[ -d "$required_directory" ]] || fail "required directory is missing: ${required_directory}"
+  if [[ "$writable_check_bin" == "test" ]]; then
+    [[ -w "$required_directory" ]] || fail "required directory is not writable: ${required_directory}"
+  else
+    "$writable_check_bin" "$required_directory" || \
+      fail "required directory is not writable: ${required_directory}"
+  fi
+done
+printf 'preflight: OK: course and result directories are writable\n'
+
+required_ports="${REQUIRED_PORTS:-5432 6379 9092 27017 18100 18101 18102 18103 18083 28083 38083 18084 28084 38084 18866 28866 38866 18981 28981 38981 18003 28003 38003 18880 28880 38880 19001 29001 39001 18000 28000 38000}"
+authorized_ports="${AUTHORIZED_OCCUPIED_PORTS:-}"
+read -r -a authorized_port_array <<<"$authorized_ports"
+socket_output="$(ss -H -ltn 2>/dev/null || true)"
+for required_port in $required_ports; do
+  [[ "$required_port" =~ ^[0-9]+$ ]] || fail "invalid required port: ${required_port}"
+  if printf '%s\n' "$socket_output" | awk -v port="$required_port" \
+    '$4 ~ (":" port "$") {found = 1} END {exit !found}'; then
+    has_word "$required_port" "${authorized_port_array[@]}" || \
+      fail "required port ${required_port} has an unauthorized occupant"
+  fi
+done
+printf 'preflight: OK: required ports have no unauthorized occupants\n'
+
+[[ -z "$(git status --porcelain)" ]] || fail "Git working tree is not clean"
+current_git_sha="$(git rev-parse HEAD)"
+if [[ -n "${EXPECTED_GIT_SHA:-}" && "$current_git_sha" != "$EXPECTED_GIT_SHA" ]]; then
+  fail "current Git SHA ${current_git_sha} does not match EXPECTED_GIT_SHA ${EXPECTED_GIT_SHA}"
+fi
+printf 'preflight: OK: Git state %s\n' "$current_git_sha"
+printf 'preflight: PASS\n'

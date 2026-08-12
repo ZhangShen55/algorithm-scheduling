@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$#" -lt 2 ]]; then
+  printf 'usage: %s SNAPSHOT_JSONL CONTAINER_ID_OR_NAME [...]\n' "$0" >&2
+  exit 64
+fi
+
+snapshot_path="$1"
+shift
+[[ -f "$snapshot_path" ]] || { printf 'pause: snapshot not found: %s\n' "$snapshot_path" >&2; exit 1; }
+pause_record_path="${PAUSE_RECORD_PATH:-${snapshot_path}.paused.jsonl}"
+record_directory="$(dirname "$pause_record_path")"
+mkdir -p "$record_directory"
+[[ ! -e "$pause_record_path" ]] || {
+  printf 'pause: refusing to overwrite existing pause record: %s\n' "$pause_record_path" >&2
+  exit 1
+}
+temporary_record="$(mktemp "${record_directory}/.paused-containers.XXXXXX")"
+validation_plan="$(mktemp "${TMPDIR:-/tmp}/pause-plan.XXXXXX")"
+trap 'rm -f "$temporary_record" "$validation_plan"' EXIT
+
+python3 - "$snapshot_path" "$@" >"$validation_plan" <<'PY'
+import json
+import re
+import sys
+
+required = {
+    "container_id", "name", "image_ref", "image_id", "state", "labels", "ports",
+    "mounts", "restart_policy", "compose_project",
+}
+snapshot_path, *selectors = sys.argv[1:]
+records = []
+with open(snapshot_path, encoding="utf-8") as stream:
+    for line_number, line in enumerate(stream, 1):
+        if not line.strip():
+            raise SystemExit(f"pause: blank snapshot line {line_number}")
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise SystemExit(f"pause: malformed snapshot line {line_number}: {error}") from error
+        if not isinstance(record, dict) or not required.issubset(record):
+            raise SystemExit(f"pause: incomplete snapshot line {line_number}")
+        if not re.fullmatch(r"[0-9a-f]{12,64}", record["container_id"]):
+            raise SystemExit(f"pause: invalid container ID on snapshot line {line_number}")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", record["name"]):
+            raise SystemExit(f"pause: invalid container name on snapshot line {line_number}")
+        records.append(record)
+
+by_id = {record["container_id"]: record for record in records}
+by_name = {record["name"]: record for record in records}
+if len(by_id) != len(records) or len(by_name) != len(records):
+    raise SystemExit("pause: duplicate container ID or name in snapshot")
+selected = []
+seen = set()
+for selector in selectors:
+    record = by_id.get(selector) or by_name.get(selector)
+    if record is None:
+        raise SystemExit(f"pause: selector is not present in snapshot: {selector}")
+    if record["container_id"] in seen:
+        raise SystemExit(f"pause: duplicate selector for container: {selector}")
+    seen.add(record["container_id"])
+    selected.append(record)
+for record in selected:
+    print(json.dumps(record, sort_keys=True, separators=(",", ":")))
+PY
+
+while IFS= read -r expected_record; do
+  [[ -n "$expected_record" ]] || continue
+  container_id="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["container_id"])' <<<"$expected_record")"
+  container_name="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["name"])' <<<"$expected_record")"
+  inspect_by_id="$(docker inspect "$container_id")" || {
+    printf 'pause: %s: container ID no longer exists\n' "$container_id" >&2
+    exit 1
+  }
+  inspect_by_name="$(docker inspect "$container_name")" || {
+    printf 'pause: %s: container name no longer exists\n' "$container_name" >&2
+    exit 1
+  }
+  python3 - "$expected_record" "$inspect_by_id" "$inspect_by_name" <<'PY'
+import json
+import sys
+
+expected = json.loads(sys.argv[1])
+
+def inspect_record(payload: str) -> dict:
+    values = json.loads(payload)
+    if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], dict):
+        raise SystemExit("pause: docker inspect returned an unexpected payload")
+    return values[0]
+
+by_id = inspect_record(sys.argv[2])
+by_name = inspect_record(sys.argv[3])
+if by_name.get("Id") != expected["container_id"]:
+    raise SystemExit(f"pause: {expected['name']}: name reuse detected")
+if by_id.get("Id") != expected["container_id"] or by_id.get("Name", "").removeprefix("/") != expected["name"]:
+    raise SystemExit(f"pause: {expected['name']}: ID or name changed")
+current_mounts = [
+    {
+        "type": mount.get("Type"), "source": mount.get("Source"),
+        "destination": mount.get("Destination"), "mode": mount.get("Mode"),
+        "rw": mount.get("RW"), "propagation": mount.get("Propagation"),
+    }
+    for mount in by_id.get("Mounts", [])
+]
+checks = {
+    "state": by_id.get("State", {}).get("Status") == expected["state"],
+    "image": by_id.get("Image") == expected["image_id"] and by_id.get("Config", {}).get("Image") == expected["image_ref"],
+    "ports": (by_id.get("HostConfig", {}).get("PortBindings") or {}) == expected["ports"],
+    "mounts": current_mounts == expected["mounts"],
+    "labels": (by_id.get("Config", {}).get("Labels") or {}) == expected["labels"],
+    "restart_policy": (by_id.get("HostConfig", {}).get("RestartPolicy") or {}) == expected["restart_policy"],
+}
+for attribute, unchanged in checks.items():
+    if not unchanged:
+        raise SystemExit(f"pause: {expected['name']}: {attribute} changed")
+PY
+done <"$validation_plan"
+
+mv "$temporary_record" "$pause_record_path"
+while IFS= read -r expected_record; do
+  [[ -n "$expected_record" ]] || continue
+  container_id="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["container_id"])' <<<"$expected_record")"
+  container_name="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["name"])' <<<"$expected_record")"
+  original_state="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["state"])' <<<"$expected_record")"
+  if [[ "$original_state" == "running" ]]; then
+    docker stop "$container_id" >/dev/null
+    python3 - "$container_id" "$container_name" <<'PY' >>"$pause_record_path"
+import json
+import sys
+print(json.dumps({"container_id": sys.argv[1], "name": sys.argv[2], "action": "stopped"}, sort_keys=True, separators=(",", ":")))
+PY
+    printf 'pause: %s (%s): stopped\n' "$container_name" "$container_id"
+  else
+    printf 'pause: %s (%s): unchanged (snapshot state %s)\n' "$container_name" "$container_id" "$original_state"
+  fi
+done <"$validation_plan"
+
+trap - EXIT
+rm -f "$validation_plan"
+printf 'pause: complete: %s\n' "$pause_record_path"

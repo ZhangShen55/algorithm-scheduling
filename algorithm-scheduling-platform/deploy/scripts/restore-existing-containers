@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$#" -ne 2 ]]; then
+  printf 'usage: %s SNAPSHOT_JSONL PAUSE_RECORD_JSONL\n' "$0" >&2
+  exit 64
+fi
+
+snapshot_path="$1"
+pause_record_path="$2"
+[[ -f "$snapshot_path" ]] || { printf 'restore: snapshot not found: %s\n' "$snapshot_path" >&2; exit 1; }
+[[ -f "$pause_record_path" ]] || { printf 'restore: pause record not found: %s\n' "$pause_record_path" >&2; exit 1; }
+restore_plan="$(mktemp "${TMPDIR:-/tmp}/restore-plan.XXXXXX")"
+trap 'rm -f "$restore_plan"' EXIT
+
+python3 - "$snapshot_path" "$pause_record_path" >"$restore_plan" <<'PY'
+import json
+import re
+import sys
+
+snapshot_required = {
+    "container_id", "name", "image_ref", "image_id", "state", "labels", "ports",
+    "mounts", "restart_policy", "compose_project",
+}
+pause_required = {"container_id", "name", "action"}
+
+def read_jsonl(path: str, required: set[str], kind: str) -> list[dict]:
+    records = []
+    with open(path, encoding="utf-8") as stream:
+        for line_number, line in enumerate(stream, 1):
+            if not line.strip():
+                raise SystemExit(f"restore: blank {kind} line {line_number}")
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise SystemExit(f"restore: malformed {kind} line {line_number}: {error}") from error
+            if not isinstance(record, dict) or not required.issubset(record):
+                raise SystemExit(f"restore: incomplete {kind} line {line_number}")
+            if not re.fullmatch(r"[0-9a-f]{12,64}", record["container_id"]):
+                raise SystemExit(f"restore: invalid container ID on {kind} line {line_number}")
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", record["name"]):
+                raise SystemExit(f"restore: invalid container name on {kind} line {line_number}")
+            records.append(record)
+    return records
+
+snapshots = read_jsonl(sys.argv[1], snapshot_required, "snapshot")
+pauses = read_jsonl(sys.argv[2], pause_required, "pause record")
+by_id = {record["container_id"]: record for record in snapshots}
+if len(by_id) != len(snapshots):
+    raise SystemExit("restore: duplicate container ID in snapshot")
+seen = set()
+for pause in pauses:
+    container_id = pause["container_id"]
+    if container_id in seen:
+        raise SystemExit(f"restore: duplicate pause record: {container_id}")
+    seen.add(container_id)
+    snapshot = by_id.get(container_id)
+    if snapshot is None or pause["name"] != snapshot["name"] or pause["action"] != "stopped":
+        raise SystemExit(f"restore: pause record is not bound to the snapshot: {container_id}")
+    if snapshot["state"] != "running":
+        raise SystemExit(f"restore: refusing to start originally non-running container: {container_id}")
+    print(json.dumps(snapshot, sort_keys=True, separators=(",", ":")))
+PY
+
+while IFS= read -r expected_record; do
+  [[ -n "$expected_record" ]] || continue
+  container_id="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["container_id"])' <<<"$expected_record")"
+  container_name="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["name"])' <<<"$expected_record")"
+  inspect_by_id="$(docker inspect "$container_id")" || {
+    printf 'restore: %s: container ID no longer exists\n' "$container_id" >&2
+    exit 1
+  }
+  inspect_by_name="$(docker inspect "$container_name")" || {
+    printf 'restore: %s: container name no longer exists\n' "$container_name" >&2
+    exit 1
+  }
+  python3 - "$expected_record" "$inspect_by_id" "$inspect_by_name" <<'PY'
+import json
+import sys
+
+expected = json.loads(sys.argv[1])
+
+def inspect_record(payload: str) -> dict:
+    values = json.loads(payload)
+    if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], dict):
+        raise SystemExit("restore: docker inspect returned an unexpected payload")
+    return values[0]
+
+by_id = inspect_record(sys.argv[2])
+by_name = inspect_record(sys.argv[3])
+if by_name.get("Id") != expected["container_id"]:
+    raise SystemExit(f"restore: {expected['name']}: name reuse detected")
+if by_id.get("Id") != expected["container_id"] or by_id.get("Name", "").removeprefix("/") != expected["name"]:
+    raise SystemExit(f"restore: {expected['name']}: ID or name changed")
+current_mounts = [
+    {
+        "type": mount.get("Type"), "source": mount.get("Source"),
+        "destination": mount.get("Destination"), "mode": mount.get("Mode"),
+        "rw": mount.get("RW"), "propagation": mount.get("Propagation"),
+    }
+    for mount in by_id.get("Mounts", [])
+]
+checks = {
+    "state": by_id.get("State", {}).get("Status") == "exited",
+    "image": by_id.get("Image") == expected["image_id"] and by_id.get("Config", {}).get("Image") == expected["image_ref"],
+    "ports": (by_id.get("HostConfig", {}).get("PortBindings") or {}) == expected["ports"],
+    "mounts": current_mounts == expected["mounts"],
+    "labels": (by_id.get("Config", {}).get("Labels") or {}) == expected["labels"],
+    "restart_policy": (by_id.get("HostConfig", {}).get("RestartPolicy") or {}) == expected["restart_policy"],
+}
+for attribute, unchanged in checks.items():
+    if not unchanged:
+        raise SystemExit(f"restore: {expected['name']}: {attribute} changed")
+PY
+done <"$restore_plan"
+
+while IFS= read -r expected_record; do
+  [[ -n "$expected_record" ]] || continue
+  container_id="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["container_id"])' <<<"$expected_record")"
+  container_name="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["name"])' <<<"$expected_record")"
+  docker start "$container_id" >/dev/null
+  printf 'restore: %s (%s): started\n' "$container_name" "$container_id"
+done <"$restore_plan"
+
+printf 'restore: complete\n'
