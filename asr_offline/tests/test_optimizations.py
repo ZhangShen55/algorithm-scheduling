@@ -113,6 +113,31 @@ class GpuConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             concurrency.add_queued_task = original_add_queued
             concurrency.remove_queued_task = original_remove_queued
 
+    async def test_whisper_generator_is_consumed_inside_model_lock(self):
+        import app.core.concurrency as concurrency
+
+        original_model_lock = concurrency._model_lock
+        lock_states = []
+
+        class FakeWhisper:
+            def transcribe(self):
+                def segments():
+                    lock_states.append(concurrency._model_lock.locked())
+                    yield "bonjour"
+
+                return segments(), {"language": "fr"}
+
+        try:
+            concurrency._model_lock = asyncio.Lock()
+            segments, info = await concurrency.transcribe_with_gpu_lock(FakeWhisper())
+
+            self.assertEqual(segments, ["bonjour"])
+            self.assertEqual(info, {"language": "fr"})
+            self.assertEqual(lock_states, [True])
+            self.assertFalse(concurrency._model_lock.locked())
+        finally:
+            concurrency._model_lock = original_model_lock
+
 
 class AudioAnalyzeTests(unittest.IsolatedAsyncioTestCase):
     async def test_db_snr_removes_temp_file_when_analysis_raises(self):
