@@ -10,7 +10,7 @@ DEPLOYMENT_DOC = PROJECT_ROOT / "deploy/README.md"
 def test_compose_defines_persistent_postgres_kafka_redis_and_mongodb() -> None:
     document = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
 
-    assert document["name"] == "algorithm-platform"
+    assert document["name"] == "algorithm-scheduling-platform"
     assert set(document["services"]) == {"postgres", "kafka", "redis", "mongodb"}
     assert set(document["volumes"]) == {
         "postgres_data",

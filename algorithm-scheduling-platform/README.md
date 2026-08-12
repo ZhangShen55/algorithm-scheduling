@@ -30,7 +30,8 @@ docker compose -f deploy/docker-compose.platform.yml up -d --build
 
 The stack exposes control/orchestrator on `18100`/`18101`, and maps vision/online to
 host ports `18102`/`18103`. All platform and infrastructure services share the
-`algorithm-platform` Compose project. Host-run processes use PostgreSQL, Kafka, Redis
+`algorithm-scheduling-platform` Compose project and the `algorithm-platform` network.
+Host-run processes use PostgreSQL, Kafka, Redis
 and MongoDB on localhost; containers use `postgres:5432`, `kafka:29092`, `redis:6379`
 and `mongodb:27017`. Use the infrastructure Compose alone only for dependency tests;
 do not start it and the platform Compose sequentially as separate projects.

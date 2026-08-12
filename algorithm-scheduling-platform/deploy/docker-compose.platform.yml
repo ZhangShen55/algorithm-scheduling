@@ -1,4 +1,4 @@
-name: algorithm-platform
+name: algorithm-scheduling-platform
 
 include:
   - path: docker-compose.infrastructure.yml

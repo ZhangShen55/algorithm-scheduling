@@ -5,15 +5,16 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = PROJECT_ROOT.parent
 COMPOSE_PATH = PROJECT_ROOT / "deploy/docker-compose.platform.yml"
+INFRASTRUCTURE_COMPOSE_PATH = PROJECT_ROOT / "deploy/docker-compose.infrastructure.yml"
 
 
-def _render_platform_compose() -> dict[str, object]:
+def _render_compose(compose_path: Path) -> dict[str, object]:
     result = subprocess.run(
         [
             "docker",
             "compose",
             "-f",
-            str(COMPOSE_PATH),
+            str(compose_path),
             "config",
             "--format",
             "json",
@@ -44,9 +45,11 @@ def test_platform_compose_closes_the_four_service_single_machine_topology() -> N
 
 
 def test_platform_include_renders_one_infrastructure_project_and_volume_set() -> None:
-    rendered = _render_platform_compose()
+    rendered = _render_compose(COMPOSE_PATH)
+    infrastructure = _render_compose(INFRASTRUCTURE_COMPOSE_PATH)
 
-    assert rendered["name"] == "algorithm-platform"
+    assert rendered["name"] == "algorithm-scheduling-platform"
+    assert rendered["name"] == infrastructure["name"]
     assert set(rendered["services"]) == {
         "postgres",
         "kafka",
@@ -57,12 +60,14 @@ def test_platform_include_renders_one_infrastructure_project_and_volume_set() ->
         "vision-orchestrator-service",
         "online-gateway-service",
     }
-    assert set(rendered["volumes"]) == {
+    expected_volumes = {
         "postgres_data",
         "kafka_data",
         "redis_data",
         "mongodb_data",
     }
+    assert set(rendered["volumes"]) == expected_volumes
+    assert set(infrastructure["volumes"]) == expected_volumes
 
 
 def test_platform_compose_uses_container_addresses_and_shared_storage() -> None:

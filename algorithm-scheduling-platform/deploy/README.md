@@ -1,7 +1,8 @@
 # Single-project platform deployment
 
 The platform Compose includes PostgreSQL, Kafka, Redis, MongoDB and all four platform
-services under the single `algorithm-platform` project.
+services under the single `algorithm-scheduling-platform` project. They communicate
+over the explicitly named `algorithm-platform` network.
 
 ## Start the complete platform stack
 
