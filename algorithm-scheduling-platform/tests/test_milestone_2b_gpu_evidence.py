@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -115,6 +117,7 @@ if args[:3] == ["top", "asr-offline-gpu0", "-eo"]:
     print("2000")
     raise SystemExit(0)
 if args[:2] == ["exec", "asr-offline-gpu0"]:
+    time.sleep(float(os.environ.get("FAKE_DOCKER_EXEC_DELAY", "0")))
     if "nvidia-smi" in args:
         print(os.environ.get("FAKE_CONTAINER_GPU_ROWS", "0, GPU-A"))
         raise SystemExit(0)
@@ -131,7 +134,9 @@ raise SystemExit(64)
         fake_bin / "nvidia-smi",
         f"""#!{sys.executable}
 import os, pathlib, sys
+import time
 args = " ".join(sys.argv[1:])
+time.sleep(float(os.environ.get("FAKE_NVIDIA_SMI_DELAY", "0")))
 if "--query-gpu=" in args:
     print(os.environ.get("FAKE_GPU_ROWS", "0, GPU-A, 100"))
     raise SystemExit(0)
@@ -185,6 +190,17 @@ marker.unlink(missing_ok=True)
         "proc_root": proc_root,
         "tmp_path": tmp_path,
     }
+
+
+def _wait_process_gone(pid: int) -> None:
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.02)
+    pytest.fail(f"process {pid} still exists")
 
 
 def _run(runtime: dict[str, Any], *extra: str) -> subprocess.CompletedProcess[str]:
@@ -664,3 +680,68 @@ def test_stopped_mode_requires_output_and_prior_evidence_same_release_sha(
 
     assert completed.returncode != 0
     assert "release SHA" in _report(gpu_runtime)["reason"]
+
+
+@pytest.mark.parametrize(
+    ("environment", "reason"),
+    [
+        ({"FAKE_DOCKER_TOP_DELAY": "1"}, "docker"),
+        ({"FAKE_DOCKER_EXEC_DELAY": "1"}, "docker"),
+        ({"FAKE_NVIDIA_SMI_DELAY": "1"}, "nvidia-smi"),
+    ],
+)
+def test_helper_commands_have_a_bounded_timeout_and_write_failure_report(
+    gpu_runtime: dict[str, Any], environment: dict[str, str], reason: str
+) -> None:
+    gpu_runtime["env"].update(environment)
+
+    completed = _run(gpu_runtime, "--command-timeout", "0.3")
+
+    assert completed.returncode != 0
+    assert "超时" in _report(gpu_runtime)["reason"]
+    assert reason in _report(gpu_runtime)["reason"]
+
+
+def test_verifier_kills_trigger_process_group_when_helper_command_fails(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    child_pid_file = gpu_runtime["tmp_path"] / "child.pid"
+    parent_pid_file = gpu_runtime["tmp_path"] / "parent.pid"
+    child = gpu_runtime["tmp_path"] / "child.py"
+    child.write_text(
+        "import os,time\n"
+        "open(os.environ['CHILD_PID_FILE'],'w').write(str(os.getpid()))\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    parent = gpu_runtime["tmp_path"] / "parent.py"
+    parent.write_text(
+        "import os,subprocess,sys,time\n"
+        "open(os.environ['PARENT_PID_FILE'],'w').write(str(os.getpid()))\n"
+        "subprocess.Popen([sys.executable,os.environ['CHILD_SCRIPT']])\n"
+        "open(os.environ['TRIGGER_MARKER'],'w').write('running')\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    gpu_runtime["trigger_file"].write_text(
+        json.dumps([sys.executable, str(parent)]), encoding="utf-8"
+    )
+    gpu_runtime["env"].update(
+        {
+            "CHILD_PID_FILE": str(child_pid_file),
+            "PARENT_PID_FILE": str(parent_pid_file),
+            "CHILD_SCRIPT": str(child),
+            "FAKE_DOCKER_TOP_DELAY": "1",
+        }
+    )
+
+    completed = _run(gpu_runtime, "--command-timeout", "0.3")
+
+    assert completed.returncode != 0
+    assert "超时" in _report(gpu_runtime)["reason"]
+    parent_pid = int(parent_pid_file.read_text(encoding="utf-8"))
+    child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+    _wait_process_gone(parent_pid)
+    _wait_process_gone(child_pid)
+    with pytest.raises(ProcessLookupError):
+        os.killpg(parent_pid, signal.SIGTERM)

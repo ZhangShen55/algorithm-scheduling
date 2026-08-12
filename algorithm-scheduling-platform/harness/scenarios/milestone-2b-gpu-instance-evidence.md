@@ -27,6 +27,8 @@
   若 PID 被其他容器复用，当前 cgroup 不同时不判为残留。
 - JSON 输出只能位于 release 归档中的 `gpu-instances` 或 `recovery`，使用
   `0600` 临时文件、`fsync` 和无覆盖发布。触发命令只记录可执行文件名和参数数量。
+- Docker、NVIDIA 和容器框架探针统一使用有界 `--command-timeout`；超时转为中文
+  FAIL 报告。真实推理触发器使用独立进程组，验证失败时先终止整组，再有界回收。
 
 ## 本地验证
 
@@ -46,12 +48,16 @@
 
 - RED：首批 `13` 项测试均因验证器不存在而失败；增量 PID 复用测试曾暴露
   停止检查误判残留的问题，在实现 cgroup 复核后转为 GREEN。
-- GREEN：规格复审后 `26` 项 fake 运行时行为测试通过，覆盖 cgroup v1/v2、外来 PID、
+- GREEN：质量复审后 `31` 项行为测试通过，覆盖 cgroup v1/v2、外来 PID、
   容器 ID 前缀碰撞、错误进程名、双可见卡、触发过快、容器重启、输出软链接/冲突/
-  并发、停止残留、DeviceRequests 索引/UUID 解析、历史 SHA 错配和非 Torch 算子。
+  并发、停止残留、DeviceRequests 索引/UUID 解析、历史 SHA 错配、非 Torch 算子、
+  辅助命令超时和真实触发父子进程组清理。
 - 证据层级：达到 GPU 验收工具的单元/脚本行为层级；未达到服务器 Docker、
   NVIDIA Driver、真实 CUDA、真实推理或三卡部署验收层级。
 - 剩余风险：目标服务器的 NVIDIA 驱动版本可能不支持 compute-apps 的 `gpu_uuid`
   字段，工具已提供按 UUID `--id` 查询的降级路径，但必须在 Task 12-14 真机预检中
   校准；FastDeploy 探针使用与 FaceRec 生产运行码相同的 `is_built_with_gpu()` API，
   但 fake 测试不能证明目标镜像的实际库版本，仍需真机执行；MIG 模式不在当前范围内。
+  当前 PID 证据未记录 `/proc/<pid>/stat` starttime，在极端 PID 快速复用时仍有 TOCTOU
+  窗口；本阶段依靠同步 trigger、docker top、cgroup 完整 ID 和 NSpid 组合缩小风险，
+  后续可在不改变证据格式主体的情况下追加 starttime。

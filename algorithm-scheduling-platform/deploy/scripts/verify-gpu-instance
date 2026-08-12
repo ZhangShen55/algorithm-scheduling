@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
@@ -18,6 +19,9 @@ from typing import Any
 
 class VerificationError(RuntimeError):
     pass
+
+
+COMMAND_TIMEOUT_SECONDS = 15.0
 
 
 def _parse_args() -> argparse.Namespace:
@@ -34,13 +38,23 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--assert-stopped", action="store_true")
     parser.add_argument("--evidence", type=Path)
     parser.add_argument("--stop-timeout", type=float, default=30.0)
+    parser.add_argument("--command-timeout", type=float, default=15.0)
     return parser.parse_args()
 
 
 def _run(command: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    completed = subprocess.run(
-        list(command), text=True, capture_output=True, check=False
-    )
+    try:
+        completed = subprocess.run(
+            list(command),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise VerificationError(
+            f"辅助命令 {command[0]} 执行超时（{COMMAND_TIMEOUT_SECONDS:g} 秒）"
+        ) from error
     if check and completed.returncode != 0:
         raise VerificationError(f"命令执行失败：{command[0]}")
     return completed
@@ -432,6 +446,34 @@ def _redacted_command(argv: Sequence[str]) -> dict[str, Any]:
     return {"executable": Path(argv[0]).name, "argument_count": len(argv) - 1}
 
 
+def _terminate_process_group(process: subprocess.Popen[Any]) -> None:
+    if process.poll() is not None:
+        process.wait()
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        process.wait()
+        return
+    except PermissionError as error:
+        raise VerificationError("无权终止真实推理触发进程组") from error
+    try:
+        process.wait(timeout=5)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except PermissionError as error:
+        raise VerificationError("无权强制终止真实推理触发进程组") from error
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired as error:
+        raise VerificationError("真实推理触发进程组无法在有界时间内回收") from error
+
+
 def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
     if arguments.trigger_file is None:
         raise VerificationError("真实推理验证必须提供 --trigger-file")
@@ -448,7 +490,12 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
     before_rows = _process_rows(gpu["uuid"])
     argv = _load_argv(arguments.trigger_file)
     report["trigger"] = _redacted_command(argv)
-    trigger = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    trigger = subprocess.Popen(
+        argv,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
     samples: list[dict[str, Any]] = []
     deadline = time.monotonic() + arguments.sample_window
     try:
@@ -491,13 +538,7 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
         if return_code != 0:
             raise VerificationError(f"真实推理触发命令失败，退出码 {return_code}")
     finally:
-        if trigger.poll() is None:
-            trigger.terminate()
-            try:
-                trigger.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                trigger.kill()
-                trigger.wait(timeout=5)
+        _terminate_process_group(trigger)
     if not samples:
         raise VerificationError("真实推理期间未获得目标 CUDA PID 同步采样")
     final_inspect = _inspect(arguments.container)
@@ -625,6 +666,7 @@ def _verify_stopped(arguments: argparse.Namespace, report: dict[str, Any]) -> No
 
 
 def main() -> int:
+    global COMMAND_TIMEOUT_SECONDS
     arguments = _parse_args()
     output: Path | None = None
     report: dict[str, Any] = {
@@ -654,6 +696,9 @@ def main() -> int:
             raise VerificationError("physical GPU 索引不能为负数")
         if arguments.sample_window <= 0 or arguments.sample_interval <= 0:
             raise VerificationError("采样时间和间隔必须大于 0")
+        if not 0.01 <= arguments.command_timeout <= 120:
+            raise VerificationError("command timeout 必须介于 0.01 到 120 秒")
+        COMMAND_TIMEOUT_SECONDS = arguments.command_timeout
         output = _safe_output_path(arguments.output)
         if arguments.assert_stopped:
             _verify_stopped(arguments, report)

@@ -9,7 +9,8 @@
 - 验证命令与环境：macOS CPU 上用 fake `docker`、`nvidia-smi` 和 `/proc` 执行聚焦测试、Ruff、严格 Mypy 和 `py_compile`；不连接远程服务器。
 - 证据层级与结论：验收工具单元/脚本行为层级符合；不计为真实 GPU、真实推理或三卡部署通过。
 - 问题收纳：停止模式首版仅比对历史 PID，会把被其他容器复用的宿主 PID 误判为残留；已通过当前 cgroup 完整 ID 复核修复。规格复审又发现默认 Torch 会误杀 OCR/FaceRec、样本提交前没有二次检查 trigger、历史证据 SHA 和 UUID DeviceRequests 解析不完整；均以先 RED 后 GREEN 的回归关闭。
-- 剩余风险：目标驱动对 compute-apps `gpu_uuid` 查询的支持仍需真机预检；MIG 不在本阶段范围。尚未勾选任何需要真实 GPU 证据的 OpenSpec 任务。
+- 质量复审：所有 Docker/NVIDIA/框架辅助命令增加统一可配但有界的超时；触发器在独立进程组中运行，任意失败都用 SIGTERM/SIGKILL 有界回收整组。真实父进程派生长驻子进程的测试已证明超时后两者均消失。
+- 剩余风险：目标驱动对 compute-apps `gpu_uuid` 查询的支持仍需真机预检；MIG 不在本阶段范围。PID 映射尚未记录 `/proc/<pid>/stat` starttime，极端快速 PID 复用仍有 TOCTOU 风险，已作为后续加强项记录。尚未勾选任何需要真实 GPU 证据的 OpenSpec 任务。
 
 ## 2026-08-12 - 离线 ASR 五何能力退役与路由模块收敛
 
