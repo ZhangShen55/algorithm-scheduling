@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "fixture_id": "ocr_image",
+      "source_kind": "repository",
+      "source": "ocr/tests/fixtures/ocr-test.jpg",
+      "server_target": "/data/course/_harness/fixtures/ocr-test.jpg",
+      "bytes": 312292,
+      "sha256": "1b3978f3708bc31e3acfe603b052531a480db87ebaa1460559ee7d3eb1160593"
+    },
+    {
+      "fixture_id": "facerec_image",
+      "source_kind": "repository",
+      "source": "facerec/tests/data/常泽宇.png",
+      "server_target": "/data/course/_harness/fixtures/facerec-person.png",
+      "bytes": 1162339,
+      "sha256": "8cdb30362c5d257af50c190d17fee61ab179cd85dc8723a2d474d1542904b1d5"
+    },
+    {
+      "fixture_id": "screen_det_image",
+      "source_kind": "repository",
+      "source": "ocr/tests/fixtures/ocr-test.jpg",
+      "server_target": "/data/course/_harness/fixtures/screen-det-test.jpg",
+      "bytes": 312292,
+      "sha256": "1b3978f3708bc31e3acfe603b052531a480db87ebaa1460559ee7d3eb1160593"
+    }
+  ],
+  "missing_fixtures": [
+    {
+      "fixture_id": "asr_offline_audio",
+      "reason": "仓库中的离线 ASR WAV 未被 Git 跟踪，部署前必须通过受控外部 fixture manifest 冻结字节数与 SHA-256"
+    },
+    {
+      "fixture_id": "asr_online_audio",
+      "reason": "仓库中的实时 ASR WAV 未被 Git 跟踪，部署前必须通过受控外部 fixture manifest 冻结字节数与 SHA-256"
+    },
+    {
+      "fixture_id": "vbas_image",
+      "reason": "VBas 示例图片未被 Git 跟踪，部署前必须通过受控外部 fixture manifest 冻结字节数与 SHA-256"
+    },
+    {
+      "fixture_id": "ppt_video",
+      "reason": "尚未冻结真实 P 视频的来源 URL、长度、字节数与 SHA-256，不能把任意课程视频计为基准 fixture"
+    }
+  ]
+}

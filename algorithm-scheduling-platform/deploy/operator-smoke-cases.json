@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "case_id": "INF-ASR-OFFLINE",
+      "operator_code": "asr_offline",
+      "fixtures": ["asr_offline_audio"],
+      "checks": ["multipart_v1_1_8", "non_empty_text", "segments"]
+    },
+    {
+      "case_id": "INF-ASR-ONLINE",
+      "operator_code": "asr_online",
+      "fixtures": ["asr_online_audio"],
+      "checks": ["websocket_v1_0_1", "pcm_s16le_16khz_mono", "incremental_text"]
+    },
+    {
+      "case_id": "INF-OCR",
+      "operator_code": "ocr",
+      "fixtures": ["ocr_image"],
+      "checks": ["single_image", "err_no_zero", "result_text"]
+    },
+    {
+      "case_id": "INF-VBAS",
+      "operator_code": "vbas",
+      "fixtures": ["vbas_image"],
+      "checks": ["student_behavior", "teacher_behavior"]
+    },
+    {
+      "case_id": "INF-FACEREC",
+      "operator_code": "facerec",
+      "fixtures": ["facerec_image"],
+      "checks": ["create_person", "save_person_photo_false", "recognize", "cleanup_person"]
+    },
+    {
+      "case_id": "INF-SCREEN-DET",
+      "operator_code": "screen_det",
+      "fixtures": ["screen_det_image"],
+      "checks": ["detect_all", "module_summary"]
+    },
+    {
+      "case_id": "INF-PPT-SLICE",
+      "operator_code": "ppt_slice",
+      "fixtures": ["ppt_video"],
+      "checks": ["accepted_50", "terminal_callback_60", "manifest"]
+    },
+    {
+      "case_id": "INF-TEXT-ANALYSIS",
+      "operator_code": "text_analysis",
+      "fixtures": [],
+      "checks": ["extract_keywords", "course_overviews"]
+    }
+  ]
+}
