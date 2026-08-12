@@ -147,11 +147,50 @@ def write_private_temp(parent: Path, name: str, content: bytes) -> Path:
             os.close(descriptor)
 
 
+def write_journal_atomic(
+    parent: Path,
+    journal: Path,
+    payload: dict[str, list[str]],
+    *,
+    allow_crash_injection: bool = False,
+) -> None:
+    content = json.dumps(payload, ensure_ascii=False).encode()
+    temporary = write_private_temp(parent, f"{journal.name}.", content)
+    try:
+        if allow_crash_injection and os.getenv(
+            "REPORT_TRANSACTION_CRASH_DURING_JOURNAL_REPLACE"
+        ):
+            os._exit(87)
+        os.replace(temporary, journal)
+        fsync_directory(parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def cleanup_orphan_journal_temporaries(parent: Path, journal: Path) -> None:
+    for candidate in parent.glob(f"{journal.name}.*"):
+        metadata = os.lstat(candidate)
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("报告事务 journal 临时路径不安全")
+        candidate.unlink()
+    fsync_directory(parent)
+
+
 def recover_transaction(parent: Path, journal: Path) -> None:
     if not journal.exists():
+        cleanup_orphan_journal_temporaries(parent, journal)
         return
-    state = json.loads(journal.read_text(encoding="utf-8"))
+    try:
+        state = json.loads(journal.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("报告事务 journal 不合法，拒绝覆盖未知输出") from exc
     if not isinstance(state, dict) or set(state) != {"published", "temporaries"}:
+        raise ValueError("报告事务 journal 不合法")
+    if not all(
+        isinstance(state[field], list)
+        and all(isinstance(item, str) for item in state[field])
+        for field in ("published", "temporaries")
+    ):
         raise ValueError("报告事务 journal 不合法")
     for name in state["published"]:
         candidate = parent / safe_relative(str(name))
@@ -164,6 +203,7 @@ def recover_transaction(parent: Path, journal: Path) -> None:
             raise ValueError("报告事务临时路径不安全")
         candidate.unlink(missing_ok=True)
     journal.unlink()
+    cleanup_orphan_journal_temporaries(parent, journal)
     fsync_directory(parent)
 
 
@@ -199,24 +239,25 @@ def publish_report_transaction(
             "published": [],
             "temporaries": [path.name for path in temporaries],
         }
-        journal.write_text(json.dumps(journal_payload), encoding="utf-8")
-        os.chmod(journal, 0o600)
-        with journal.open("rb") as stream:
-            os.fsync(stream.fileno())
-        fsync_directory(parent)
+        write_journal_atomic(parent, journal, journal_payload)
         for index, ((destination, _), temporary) in enumerate(
             zip(outputs, temporaries, strict=True)
         ):
             require_safe_output(destination, outputs[index][1])
-            os.replace(temporary, destination)
-            published.append(destination)
-            journal_payload["published"] = [path.name for path in published]
+            journal_payload["published"] = [
+                path.name for path in (*published, destination)
+            ]
             journal_payload["temporaries"] = [
                 path.name for path in temporaries if path.exists()
             ]
-            journal.write_text(json.dumps(journal_payload), encoding="utf-8")
-            with journal.open("rb") as stream:
-                os.fsync(stream.fileno())
+            write_journal_atomic(
+                parent,
+                journal,
+                journal_payload,
+                allow_crash_injection=index == 0,
+            )
+            os.replace(temporary, destination)
+            published.append(destination)
             fsync_directory(parent)
             if index == 0 and os.getenv("REPORT_TRANSACTION_CRASH_AFTER_FIRST_RENAME"):
                 os._exit(86)

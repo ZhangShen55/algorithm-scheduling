@@ -217,6 +217,7 @@ def main() -> int:
     started_at = datetime.now(UTC).isoformat()
     output: Path | None = None
     last_issues: list[str] = []
+    last_specific_issues: list[str] = []
     observed_count = 0
     try:
         tag = safe_component(args.release_tag, TAG_PATTERN, "release tag")
@@ -259,9 +260,15 @@ def main() -> int:
                         deadline,
                     )
                 )
+                if last_issues and not any("全局超时" in issue for issue in last_issues):
+                    last_specific_issues = list(last_issues)
             except (ConnectionError, ValueError, TimeoutError) as exc:
                 if time.monotonic() >= deadline:
-                    last_issues = [str(exc), "注册验证全局超时"]
+                    last_issues = list(last_specific_issues)
+                    if str(exc) not in last_issues:
+                        last_issues.append(str(exc))
+                    if "注册验证全局超时" not in last_issues:
+                        last_issues.append("注册验证全局超时")
                 else:
                     last_issues = [str(exc)]
             if not last_issues or time.monotonic() >= deadline:

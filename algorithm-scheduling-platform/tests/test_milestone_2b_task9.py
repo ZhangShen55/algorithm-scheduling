@@ -435,6 +435,7 @@ def _smoke_handler(
     ppt_callback: bool = True,
     fail_ocr: bool = False,
     wrong_face: bool = False,
+    missing_managed_face: bool = False,
     vbas_failed: bool = False,
     screen_failed: bool = False,
 ) -> Any:
@@ -512,7 +513,11 @@ def _smoke_handler(
             return 200, {
                 "status_code": 200,
                 "message": "listed",
-                "data": {"persons": [{"number": state["number"]}]},
+                "data": {
+                    "persons": [
+                        {"number": "existing-person" if missing_managed_face else state["number"]}
+                    ]
+                },
             }
         if path == "/persons/delete":
             state["created"] = False
@@ -729,6 +734,45 @@ def test_facerec_requires_three_distinct_instances_and_exact_created_match(
     assert wrong.returncode != 0
     assert "刚创建" in wrong.stderr
 
+    missing = tmp_path / "missing-managed-face"
+    missing.mkdir()
+    missing_manifest = _fixture_manifest(missing)
+    with _WebSocketServer() as ws_url, _Server(
+        {}, _smoke_handler(missing, missing_managed_face=True)
+    ) as http_url:
+        absent = _run_smoke(
+            missing,
+            http_url,
+            ws_url,
+            missing_manifest,
+            cases="facerec",
+            face_endpoints=[http_url, http_url + "/b", http_url + "/c"],
+        )
+    assert absent.returncode != 0
+    assert "实例 C" in absent.stderr and "刚创建" in absent.stderr
+
+
+@pytest.mark.parametrize(
+    "callback_base",
+    ("https://192.168.29.11", "http://user:password@192.168.29.11"),
+)
+def test_ppt_callback_advertise_rejects_non_http_or_userinfo(
+    tmp_path: Path, callback_base: str
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    with _WebSocketServer() as ws_url, _Server({}, _smoke_handler(tmp_path)) as http_url:
+        completed = _run_smoke(
+            tmp_path,
+            http_url,
+            ws_url,
+            manifest,
+            cases="ppt_slice",
+            callback_base=callback_base,
+        )
+    assert completed.returncode != 0
+    assert "callback advertise" in completed.stderr
+    assert "password" not in completed.stderr
+
 
 @pytest.mark.parametrize(
     ("case", "kwargs", "expected"),
@@ -936,6 +980,52 @@ def test_renderer_recovers_after_process_crash_after_first_rename(tmp_path: Path
     assert not (release / "summary" / ".report-transaction.journal").exists()
     assert not list((release / "summary").glob(".report.json.*"))
     assert not list((release / "summary").glob(".report.md.*"))
+
+
+def test_renderer_recovers_after_crash_during_atomic_journal_replace(tmp_path: Path) -> None:
+    cases = [_case("INF-001")]
+    release = _release(tmp_path)
+    source = release / "summary" / "cases.json"
+    evidence = release / "smoke" / "ocr.json"
+    evidence.write_text("{}\n", encoding="utf-8")
+    source.write_text(json.dumps(cases), encoding="utf-8")
+    command = [
+        str(PYTHON),
+        str(PLATFORM_ROOT / "scripts" / "render_milestone_2b_report.py"),
+        "--input",
+        str(source),
+        "--release-root",
+        str(release),
+        "--output-json",
+        str(release / "summary" / "report.json"),
+        "--output-markdown",
+        str(release / "summary" / "report.md"),
+    ]
+    env = os.environ.copy()
+    env["REPORT_TRANSACTION_CRASH_DURING_JOURNAL_REPLACE"] = "1"
+    failed = subprocess.run(command, env=env, text=True, capture_output=True, check=False)
+    assert failed.returncode != 0
+    recovered = subprocess.run(command, text=True, capture_output=True, check=False)
+    assert recovered.returncode == 0, recovered.stderr
+    assert (release / "summary" / "report.json").is_file()
+    assert (release / "summary" / "report.md").is_file()
+    assert not list((release / "summary").glob(".report-transaction.journal.*"))
+
+
+def test_renderer_truncated_journal_fails_closed_without_overwriting_unknown_output(
+    tmp_path: Path,
+) -> None:
+    cases = [_case("INF-001")]
+    release = _release(tmp_path)
+    unknown = release / "summary" / "report.json"
+    unknown.write_text('{"unknown":true}\n', encoding="utf-8")
+    (release / "summary" / ".report-transaction.journal").write_text(
+        '{"published":', encoding="utf-8"
+    )
+    completed = _run_renderer(tmp_path, cases)
+    assert completed.returncode != 0
+    assert "journal" in completed.stderr and "不合法" in completed.stderr
+    assert unknown.read_text(encoding="utf-8") == '{"unknown":true}\n'
 
 
 def test_renderer_concurrent_same_content_is_idempotent(tmp_path: Path) -> None:

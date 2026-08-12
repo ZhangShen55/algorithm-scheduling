@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -265,13 +266,7 @@ class CallbackCapture:
             def log_message(self, *_: object) -> None:
                 return
 
-        parsed = urlsplit(advertise_base_url)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            raise ValueError("callback advertise base URL 必须是 HTTP(S) URL")
-        if parsed.hostname in {"0.0.0.0", "127.0.0.1", "localhost", "::1"}:
-            raise ValueError("callback advertise base URL 必须可由算子容器访问")
-        if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
-            raise ValueError("callback advertise base URL 不能包含路径、查询或片段")
+        parsed = validate_callback_advertise_base_url(advertise_base_url)
         self.advertise_scheme = parsed.scheme
         self.advertise_host = parsed.hostname
         self.advertise_port = parsed.port
@@ -292,6 +287,25 @@ class CallbackCapture:
         self.server.shutdown()
         self.thread.join(timeout=3)
         self.server.server_close()
+
+
+def validate_callback_advertise_base_url(value: str) -> Any:
+    parsed = urlsplit(value)
+    if parsed.scheme != "http" or not parsed.hostname:
+        raise ValueError("callback advertise base URL 必须是 HTTP URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("callback advertise base URL 不能包含用户凭据")
+    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+        raise ValueError("callback advertise base URL 不能包含路径、查询或片段")
+    if parsed.hostname.lower() == "localhost":
+        raise ValueError("callback advertise base URL 必须可由算子容器访问")
+    try:
+        address = ipaddress.ip_address(parsed.hostname)
+    except ValueError:
+        address = None
+    if address is not None and (address.is_loopback or address.is_unspecified):
+        raise ValueError("callback advertise base URL 必须可由算子容器访问")
+    return parsed
 
 
 def require_http(response: httpx.Response, name: str) -> dict[str, Any]:
@@ -450,8 +464,17 @@ def smoke_facerec(
             http.get(manage_endpoint + "/persons", params={"skip": 0, "limit": 100}),
             "FaceRec shared Mongo query",
         )
-        if listed.get("status_code") != 200:
-            raise RuntimeError("FaceRec 实例 C 无法查询共享 Mongo 人物")
+        listed_data = listed.get("data")
+        listed_people = listed_data.get("persons") if isinstance(listed_data, dict) else None
+        if (
+            listed.get("status_code") != 200
+            or not isinstance(listed_people, list)
+            or number
+            not in {
+                item.get("number") for item in listed_people if isinstance(item, dict)
+            }
+        ):
+            raise RuntimeError("FaceRec 实例 C 未查到实例 A 刚创建的人物")
         return {"created": True, "recognized": True, "photo_saved": False, "cleanup": True}
     except BaseException as exc:
         primary_error = exc
@@ -673,6 +696,7 @@ def main() -> int:
         sha = safe_component(args.git_sha.lower(), SHA_PATTERN, "Git SHA")
         if args.timeout_seconds <= 0:
             raise ValueError("命令超时必须大于 0")
+        validate_callback_advertise_base_url(args.callback_advertise_base_url)
         endpoints = json.loads(args.endpoints_json)
         if not isinstance(endpoints, dict):
             raise ValueError("endpoints-json 必须是对象")
