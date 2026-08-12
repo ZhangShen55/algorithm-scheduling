@@ -659,9 +659,12 @@ def main() -> int:
             _verify_stopped(arguments, report)
         else:
             _verify_running(arguments, report)
-            output_sha = output.parent.parent.name
-            if report.get("release_sha") != output_sha:
-                raise VerificationError("镜像 release SHA 与输出归档 Git SHA 不一致")
+        output_sha = output.parent.parent.name
+        if report.get("release_sha") != output_sha:
+            subject = "镜像" if not arguments.assert_stopped else "历史证据"
+            raise VerificationError(
+                f"{subject} release SHA 与本次输出归档 Git SHA 不一致"
+            )
         report["status"] = "PASS"
         report["reason"] = "GPU 实例、同步推理 PID 与精确容器归属证据一致"
         _atomic_write_once(output, report)

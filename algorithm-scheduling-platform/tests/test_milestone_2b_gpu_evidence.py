@@ -642,3 +642,25 @@ def test_stopped_mode_rejects_prior_evidence_stored_under_wrong_sha(
 
     assert completed.returncode != 0
     assert "release SHA" in _report(gpu_runtime)["reason"]
+
+
+def test_stopped_mode_requires_output_and_prior_evidence_same_release_sha(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    assert _run(gpu_runtime).returncode == 0
+    prior = gpu_runtime["output"]
+    other_release = prior.parent.parent.parent / ("c" * 40)
+    recovery_output = other_release / "recovery/stopped.json"
+    recovery_output.parent.mkdir(parents=True)
+    gpu_runtime["output"] = recovery_output
+    gpu_runtime["inspect_path"].write_text(
+        json.dumps(_base_inspect(running=False)), encoding="utf-8"
+    )
+    gpu_runtime["env"]["FAKE_PROCESS_ROWS_BEFORE"] = ""
+
+    completed = _run(
+        gpu_runtime, "--assert-stopped", "--evidence", str(prior)
+    )
+
+    assert completed.returncode != 0
+    assert "release SHA" in _report(gpu_runtime)["reason"]
