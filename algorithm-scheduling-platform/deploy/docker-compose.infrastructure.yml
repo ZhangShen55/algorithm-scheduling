@@ -1,4 +1,4 @@
-name: algorithm-scheduling-platform
+name: algorithm-platform
 
 services:
   postgres:
@@ -66,10 +66,39 @@ services:
     networks:
       - algorithm-platform
 
+  mongodb:
+    image: mongo:7.0
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-root}
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          mongosh --quiet
+          --username "$$MONGO_INITDB_ROOT_USERNAME"
+          --password "$$MONGO_INITDB_ROOT_PASSWORD"
+          --authenticationDatabase admin
+          --eval "const credentials = {authenticationDatabase: 'admin'};
+          db = db.getSiblingDB(credentials.authenticationDatabase);
+          quit(db.adminCommand({ping:1}).ok === 1 ? 0 : 2)"
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    networks:
+      - algorithm-platform
+
 volumes:
   postgres_data:
   kafka_data:
   redis_data:
+  mongodb_data:
 
 networks:
   algorithm-platform:

@@ -68,6 +68,21 @@ x-vbas: &vbas
 x-facerec: &facerec
   <<: *operator-common
   image: ${FACEREC_IMAGE:-algorithm-facerec:v1.0_260812}
+  healthcheck:
+    test:
+      - CMD
+      - python
+      - -c
+      - >-
+        import json,os,urllib.request;
+        payload=json.load(urllib.request.urlopen(
+        'http://127.0.0.1:' + os.environ['OPERATOR_PORT'] + '/ops/health',
+        timeout=3));
+        raise SystemExit(0 if payload.get('status') == 'healthy' else 1)
+    interval: 15s
+    timeout: 5s
+    retries: 10
+    start_period: 120s
   volumes:
     - {type: bind, source: "${COURSE_ROOT:-/data/course}", target: /data/course}
     - {type: bind, source: "${RESULT_ROOT:-/data/result}", target: /data/result}

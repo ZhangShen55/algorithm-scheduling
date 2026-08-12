@@ -8,8 +8,10 @@ from fastapi import APIRouter, Query, HTTPException
 from datetime import datetime
 import psutil
 
+from app.core import ai_engine
 from app.core.database import db
 from app.core.logger import get_logger
+from app.core.readiness import FaceRecReadiness
 from app.services import ops_stats
 from app.models.response.ops_interface_rep import (
     APICallLogResponse,
@@ -22,6 +24,7 @@ from app.models.response.ops_interface_rep import (
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/ops", tags=["Operations & Monitoring"])
+readiness = FaceRecReadiness(db, ai_engine.embedding_model)
 
 
 @router.get("/health", response_model=HealthCheckResponse)
@@ -33,8 +36,10 @@ async def health_check():
     components = {}
 
     # 1. 检查数据库连接
+    await readiness.check()
     try:
-        await db.command("ping")
+        if not readiness.database_ready():
+            raise RuntimeError("MongoDB ping 失败")
         db_latency_start = datetime.now()
         await db["persons"].find_one()
         db_latency = (datetime.now() - db_latency_start).total_seconds() * 1000
@@ -48,6 +53,10 @@ async def health_check():
             "status": "down",
             "error": str(e)
         }
+
+    components["arcface"] = {
+        "status": "up" if readiness.embedding_model_ready() else "down"
+    }
 
     # 2. 检查存储空间
     try:

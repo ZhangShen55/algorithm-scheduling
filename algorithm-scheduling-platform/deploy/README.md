@@ -1,13 +1,19 @@
-# Local infrastructure
+# Single-project platform deployment
 
-The first development stage runs PostgreSQL, Kafka and Redis in three Docker containers. Platform processes run on the Mac host and use mapped localhost ports.
+The platform Compose includes PostgreSQL, Kafka, Redis, MongoDB and all four platform
+services under the single `algorithm-platform` project.
 
-## Start
+## Start the complete platform stack
 
 ```bash
-docker compose -f deploy/docker-compose.infrastructure.yml up -d
-docker compose -f deploy/docker-compose.infrastructure.yml ps
+docker compose -f deploy/docker-compose.platform.yml config --quiet
+docker compose -f deploy/docker-compose.platform.yml up -d --build
+docker compose -f deploy/docker-compose.platform.yml ps
 ```
+
+Do not start the infrastructure and platform files sequentially as separate Compose
+projects. Use `docker-compose.infrastructure.yml` alone only for dependency tests or
+when platform processes intentionally run on the host.
 
 ## Host endpoints
 
@@ -16,29 +22,36 @@ docker compose -f deploy/docker-compose.infrastructure.yml ps
 | PostgreSQL | `127.0.0.1:5432` | database/user/password: `algorithm` |
 | Kafka | `127.0.0.1:9092` | PLAINTEXT development listener |
 | Redis | `127.0.0.1:6379` | database 0, no development password |
+| MongoDB | `127.0.0.1:27017` | root username/password: `root`/`root`, `authSource=admin` |
 
 These addresses are for host-run platform processes. Platform containers on the
-`algorithm-platform` network use `postgres:5432`, `kafka:29092` and `redis:6379`.
+`algorithm-platform` network use `postgres:5432`, `kafka:29092`, `redis:6379` and
+`mongodb:27017`. FaceRec authenticates against MongoDB with `authSource=admin`.
 Kafka publishes separate host and Docker-network addresses; do not use
 `127.0.0.1:9092` from inside a container.
+
+The MongoDB `root`/`root` values are controlled test defaults. Override them with
+`MONGO_ROOT_USERNAME` and `MONGO_ROOT_PASSWORD` before the first startup of an empty
+`mongodb_data` volume. MongoDB initialization credentials apply only to an empty
+volume; changing these environment variables does not rotate credentials stored in an
+existing volume.
 
 ## Inspect logs and stop
 
 ```bash
-docker compose -f deploy/docker-compose.infrastructure.yml logs -f postgres kafka redis
-docker compose -f deploy/docker-compose.infrastructure.yml stop
+docker compose -f deploy/docker-compose.platform.yml logs -f postgres kafka redis mongodb
+docker compose -f deploy/docker-compose.platform.yml stop
 ```
 
 Named volumes preserve local development data when containers stop. Removing volumes is intentionally not included in the normal workflow.
 
-## Four-service platform stack
+## Infrastructure-only dependency testing
 
-Validate and start infrastructure plus all four platform service containers with:
+For dependency tests that run platform processes on the host:
 
 ```bash
-docker compose -f deploy/docker-compose.platform.yml config --quiet
-docker compose -f deploy/docker-compose.platform.yml up -d --build
-docker compose -f deploy/docker-compose.platform.yml ps
+docker compose -f deploy/docker-compose.infrastructure.yml up -d
+docker compose -f deploy/docker-compose.infrastructure.yml ps
 ```
 
 Host ports are `18100` for control, `18101` for orchestrator, `18102` for vision and

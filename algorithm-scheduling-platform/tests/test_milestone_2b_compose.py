@@ -68,6 +68,10 @@ def assert_operator_compose_matrix(compose: dict[str, Any]) -> None:
             assert environment["NVIDIA_VISIBLE_DEVICES"] == str(gpu_index)
             if operator == "facerec":
                 assert environment["CONFIG_PATH"] == "/config/config.toml"
+                healthcheck = " ".join(service["healthcheck"]["test"])
+                assert "json.load" in healthcheck
+                assert "status" in healthcheck
+                assert "healthy" in healthcheck
             if operator == "screen-det":
                 assert environment["CONFIG_PATH"] == "/app/config.toml"
             devices = service["deploy"]["resources"]["reservations"]["devices"]

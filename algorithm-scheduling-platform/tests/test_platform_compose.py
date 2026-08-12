@@ -1,8 +1,29 @@
+import json
+import subprocess
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = PROJECT_ROOT.parent
 COMPOSE_PATH = PROJECT_ROOT / "deploy/docker-compose.platform.yml"
+
+
+def _render_platform_compose() -> dict[str, object]:
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(COMPOSE_PATH),
+            "config",
+            "--format",
+            "json",
+        ],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout)
 
 
 def test_platform_compose_closes_the_four_service_single_machine_topology() -> None:
@@ -20,6 +41,28 @@ def test_platform_compose_closes_the_four_service_single_machine_topology() -> N
     assert compose.count("healthcheck:") >= 4
     assert compose.count("resources:") >= 1
     assert "algorithm-platform" in compose
+
+
+def test_platform_include_renders_one_infrastructure_project_and_volume_set() -> None:
+    rendered = _render_platform_compose()
+
+    assert rendered["name"] == "algorithm-platform"
+    assert set(rendered["services"]) == {
+        "postgres",
+        "kafka",
+        "redis",
+        "mongodb",
+        "control-service",
+        "orchestrator-service",
+        "vision-orchestrator-service",
+        "online-gateway-service",
+    }
+    assert set(rendered["volumes"]) == {
+        "postgres_data",
+        "kafka_data",
+        "redis_data",
+        "mongodb_data",
+    }
 
 
 def test_platform_compose_uses_container_addresses_and_shared_storage() -> None:

@@ -9,7 +9,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.core.database import db
 from app.core import ai_engine
 from app.core.config import settings
 from app.core.logger import get_logger
@@ -34,7 +33,8 @@ async def lifespan(app: FastAPI):
     logger.info("System Startup: Initializing resources...")
 
     try:
-        await db.command({"ping": 1})
+        if not await ops.readiness.check():
+            raise RuntimeError("MongoDB 或 ArcFace 模型未就绪")
         logger.debug("MongoDB ping ok")
     except Exception as e:
         logger.exception("MongoDB ping failed: %s", e)
@@ -137,6 +137,7 @@ install_operator_runtime(
     operator_code="facerec",
     capabilities=["recognize"],
     default_port=8003,
+    model_ready_provider=ops.readiness.model_ready,
 )
 
 # ---------------- 调试入口 ----------------
