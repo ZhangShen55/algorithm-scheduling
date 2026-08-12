@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -127,6 +128,18 @@ if args[:1] == ["stop"]:
     if len(args) == 2 and args[1] == os.environ.get("STOP_FAIL_ID"):
         print("injected stop failure", file=sys.stderr)
         raise SystemExit(1)
+    if len(args) == 2 and args[1] == os.environ.get("BLOCK_STOP_ID"):
+        entered = Path(os.environ["STOP_ENTERED_PATH"])
+        release = Path(os.environ["STOP_RELEASE_PATH"])
+        entered.write_text("entered", encoding="utf-8")
+        for _ in range(1000):
+            if release.exists():
+                break
+            import time
+            time.sleep(0.01)
+        else:
+            print("timed out waiting to release stop", file=sys.stderr)
+            raise SystemExit(70)
     default_state_path = Path(os.environ["COMMAND_LOG"]).with_name("docker-state.json")
     state_path = Path(os.environ.get("DOCKER_STATE_PATH", default_state_path))
     fixtures = (
@@ -134,9 +147,10 @@ if args[:1] == ["stop"]:
         if state_path.exists()
         else json.loads(os.environ.get("DOCKER_INSPECT_FIXTURES", "{}"))
     )
-    for item in fixtures.values():
-        if isinstance(item, dict) and item.get("Id") == args[1]:
-            item["State"]["Status"] = "exited"
+    if os.environ.get("STOP_PRESERVE_STATE") != "true":
+        for item in fixtures.values():
+            if isinstance(item, dict) and item.get("Id") == args[1]:
+                item["State"]["Status"] = "exited"
     state_path.write_text(json.dumps(fixtures), encoding="utf-8")
     if len(args) == 2 and args[1] == os.environ.get("STOP_INTERRUPT_AFTER_STATE_ID"):
         raise SystemExit(75)
@@ -173,6 +187,18 @@ def _run(script: str, *arguments: Path | str, environment: dict[str, str]) -> An
         capture_output=True,
         check=False,
     )
+
+
+def _wait_for_path(path: Path, process: subprocess.Popen[str]) -> None:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if path.exists():
+            return
+        if process.poll() is not None:
+            stdout, stderr = process.communicate()
+            raise AssertionError(f"process exited before marker: {stdout=} {stderr=}")
+        time.sleep(0.01)
+    raise AssertionError(f"timed out waiting for {path}")
 
 
 def _commands(environment: dict[str, str]) -> list[list[str]]:
@@ -725,6 +751,133 @@ def test_pause_rejects_a_symlink_ledger(fake_bin: Path, tmp_path: Path) -> None:
 
     assert completed.returncode != 0
     assert target.read_text(encoding="utf-8") == "do not replace\n"
+    assert _commands(environment) == []
+
+
+def test_two_concurrent_pauses_share_one_exclusive_ledger_and_stop_once(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    original = _inspect_record()
+    snapshot = tmp_path / "snapshot.jsonl"
+    ledger = tmp_path / "paused.jsonl"
+    lock = tmp_path / "protection.lock"
+    entered = tmp_path / "stop-entered"
+    release = tmp_path / "stop-release"
+    snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
+    environment = _base_environment(
+        fake_bin,
+        PAUSE_RECORD_PATH=str(ledger),
+        DEPLOY_OPERATION_LOCK=str(lock),
+        BLOCK_STOP_ID=original["Id"],
+        STOP_PRESERVE_STATE="true",
+        STOP_ENTERED_PATH=str(entered),
+        STOP_RELEASE_PATH=str(release),
+        DOCKER_INSPECT_FIXTURES=json.dumps(
+            {original["Id"]: original, original["Name"].removeprefix("/"): original}
+        ),
+    )
+    command = [str(SCRIPTS / "pause-existing-containers"), str(snapshot), original["Id"]]
+
+    first = subprocess.Popen(
+        command,
+        cwd=PLATFORM_ROOT,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        _wait_for_path(entered, first)
+        ledger.unlink()
+        second = subprocess.Popen(
+            command,
+            cwd=PLATFORM_ROOT,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        time.sleep(0.2)
+        assert second.poll() is None, second.communicate()
+        release.write_text("release", encoding="utf-8")
+        first_stdout, first_stderr = first.communicate(timeout=10)
+        second_stdout, second_stderr = second.communicate(timeout=10)
+    finally:
+        if first.poll() is None:
+            first.kill()
+            first.wait()
+
+    assert first.returncode == 0, (first_stdout, first_stderr)
+    assert second.returncode != 0, (second_stdout, second_stderr)
+    assert "existing" in second_stderr
+    assert _ledger(ledger) == [_pause_entry(original, "stopped")]
+    assert [command for command in _commands(environment) if command[1] == "stop"] == [
+        ["docker", "stop", original["Id"]]
+    ]
+
+
+@pytest.mark.parametrize("script", ["pause-existing-containers", "restore-existing-containers"])
+def test_container_protection_rejects_a_symlink_operation_lock(
+    fake_bin: Path, tmp_path: Path, script: str
+) -> None:
+    original = _inspect_record()
+    snapshot = tmp_path / "snapshot.jsonl"
+    ledger = tmp_path / "paused.jsonl"
+    target = tmp_path / "lock-target"
+    lock = tmp_path / "protection.lock"
+    snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
+    if script == "restore-existing-containers":
+        ledger.write_text(json.dumps(_pause_entry(original, "stopped")) + "\n", encoding="utf-8")
+        arguments: tuple[Path | str, ...] = (snapshot, ledger)
+    else:
+        arguments = (snapshot, original["Id"])
+    target.write_text("do not lock\n", encoding="utf-8")
+    lock.symlink_to(target)
+    environment = _base_environment(
+        fake_bin,
+        PAUSE_RECORD_PATH=str(ledger),
+        DEPLOY_OPERATION_LOCK=str(lock),
+    )
+
+    completed = _run(script, *arguments, environment=environment)
+
+    assert completed.returncode != 0
+    assert "lock" in completed.stderr
+    assert target.read_text(encoding="utf-8") == "do not lock\n"
+    assert _commands(environment) == []
+
+
+@pytest.mark.parametrize("script", ["pause-existing-containers", "restore-existing-containers"])
+def test_container_protection_rejects_a_symlink_lock_directory(
+    fake_bin: Path, tmp_path: Path, script: str
+) -> None:
+    original = _inspect_record()
+    snapshot = tmp_path / "snapshot.jsonl"
+    ledger = tmp_path / "paused.jsonl"
+    real_lock_directory = tmp_path / "real-locks"
+    linked_lock_directory = tmp_path / "linked-locks"
+    real_lock_directory.mkdir()
+    linked_lock_directory.symlink_to(real_lock_directory, target_is_directory=True)
+    snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
+    if script == "restore-existing-containers":
+        ledger.write_text(json.dumps(_pause_entry(original, "stopped")) + "\n", encoding="utf-8")
+        arguments: tuple[Path | str, ...] = (snapshot, ledger)
+    else:
+        arguments = (snapshot, original["Id"])
+    environment = _base_environment(
+        fake_bin,
+        PAUSE_RECORD_PATH=str(ledger),
+        DEPLOY_OPERATION_LOCK=str(linked_lock_directory / "protection.lock"),
+        DOCKER_INSPECT_FIXTURES=json.dumps(
+            {original["Id"]: original, original["Name"].removeprefix("/"): original}
+        ),
+    )
+
+    completed = _run(script, *arguments, environment=environment)
+
+    assert completed.returncode != 0
+    assert "lock" in completed.stderr
+    assert not (real_lock_directory / "protection.lock").exists()
     assert _commands(environment) == []
 
 

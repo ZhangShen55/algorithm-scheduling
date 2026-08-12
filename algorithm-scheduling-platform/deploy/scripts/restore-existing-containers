@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -41,6 +42,27 @@ def atomic_write(path: Path, records: list[dict]) -> None:
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def open_operation_lock(path: Path) -> int:
+    parent = path.parent
+    if parent.is_symlink() or not parent.is_dir():
+        fail(f"operation lock directory must be a real directory: {parent}")
+    parent_mode = parent.stat().st_mode
+    if parent_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        fail(f"operation lock directory must not be group/other writable: {parent}")
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags, 0o600)
+    except OSError as error:
+        fail(f"cannot securely open operation lock {path}: {error}")
+    metadata = os.fstat(fd)
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
+        os.close(fd)
+        fail(f"operation lock must be an owned regular file: {path}")
+    os.fchmod(fd, 0o600)
+    return fd
 
 
 def read_jsonl(path: Path, kind: str) -> list[dict]:
@@ -148,11 +170,9 @@ for number, entry in enumerate(ledger, 1):
         fail(f"compose_project mismatch on pause ledger line {number}")
 
 lock_path = Path(os.environ.get("DEPLOY_OPERATION_LOCK", ledger_path.parent / ".container-protection.lock"))
-if lock_path.is_symlink():
-    fail(f"refusing symlink operation lock: {lock_path}")
-with lock_path.open("a+", encoding="utf-8") as lock:
-    os.chmod(lock_path, 0o600)
-    fcntl.flock(lock, fcntl.LOCK_EX)
+lock_fd = open_operation_lock(lock_path)
+try:
+    fcntl.flock(lock_fd, fcntl.LOCK_EX)
     # There is an unavoidable external-concurrency window around Docker actions.
     for entry in ledger:
         status = entry["status"]
@@ -189,5 +209,7 @@ with lock_path.open("a+", encoding="utf-8") as lock:
         atomic_write(ledger_path, ledger)
         suffix = " recovered_from_pending" if recovered_pending else ""
         print(f"restore: {entry['name']} ({entry['container_id']}): started{suffix}")
+finally:
+    os.close(lock_fd)
 print("restore: complete")
 PY

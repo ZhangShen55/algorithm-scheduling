@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -42,6 +43,27 @@ def atomic_write(path: Path, records: list[dict]) -> None:
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def open_operation_lock(path: Path) -> int:
+    parent = path.parent
+    if parent.is_symlink() or not parent.is_dir():
+        fail(f"operation lock directory must be a real directory: {parent}")
+    parent_mode = parent.stat().st_mode
+    if parent_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        fail(f"operation lock directory must not be group/other writable: {parent}")
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags, 0o600)
+    except OSError as error:
+        fail(f"cannot securely open operation lock {path}: {error}")
+    metadata = os.fstat(fd)
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
+        os.close(fd)
+        fail(f"operation lock must be an owned regular file: {path}")
+    os.fchmod(fd, 0o600)
+    return fd
 
 
 def read_snapshot(path: Path) -> list[dict]:
@@ -120,8 +142,6 @@ if len(sys.argv) < 3:
     fail(f"usage: {sys.argv[0]} SNAPSHOT_JSONL CONTAINER_ID_OR_NAME [...]")
 snapshot_path = Path(sys.argv[1])
 ledger_path = Path(os.environ.get("PAUSE_RECORD_PATH", f"{snapshot_path}.paused.jsonl"))
-if ledger_path.is_symlink() or ledger_path.exists():
-    fail(f"refusing existing or symlink ledger: {ledger_path}")
 records = read_snapshot(snapshot_path)
 by_id = {record["container_id"]: record for record in records}
 by_name = {record["name"]: record for record in records}
@@ -139,13 +159,13 @@ for selector in sys.argv[2:]:
     selected.append(record)
 
 lock_path = Path(os.environ.get("DEPLOY_OPERATION_LOCK", ledger_path.parent / ".container-protection.lock"))
-if lock_path.is_symlink():
-    fail(f"refusing symlink operation lock: {lock_path}")
 lock_path.parent.mkdir(parents=True, exist_ok=True)
-with lock_path.open("a+", encoding="utf-8") as lock:
-    os.chmod(lock_path, 0o600)
-    fcntl.flock(lock, fcntl.LOCK_EX)
+lock_fd = open_operation_lock(lock_path)
+try:
+    fcntl.flock(lock_fd, fcntl.LOCK_EX)
     # This lock serializes this tool only; external Docker operations remain outside its control.
+    if ledger_path.is_symlink() or ledger_path.exists():
+        fail(f"refusing existing or symlink ledger: {ledger_path}")
     for record in selected:
         if record["state"] == "running":
             verify(record)
@@ -172,5 +192,7 @@ with lock_path.open("a+", encoding="utf-8") as lock:
         entry["status"] = "stopped"
         atomic_write(ledger_path, ledger)
         print(f"pause: {record['name']} ({record['container_id']}): stopped")
+finally:
+    os.close(lock_fd)
 print(f"pause: complete: {ledger_path}")
 PY
