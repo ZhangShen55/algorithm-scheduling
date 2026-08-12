@@ -2,6 +2,7 @@ import asyncio
 import io
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -136,6 +137,82 @@ class GpuConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(lock_states, [True])
             self.assertFalse(concurrency._model_lock.locked())
         finally:
+            concurrency._model_lock = original_model_lock
+
+    async def test_whisper_timeout_keeps_model_lock_until_worker_finishes(self):
+        import app.core.concurrency as concurrency
+        from fastapi import HTTPException
+
+        real_asyncio = asyncio
+        original_asyncio = concurrency.asyncio
+        original_model_lock = concurrency._model_lock
+        worker_started = threading.Event()
+        release_worker = threading.Event()
+        model_lock_released = threading.Event()
+        recovery_wait_started = threading.Event()
+        shield_call_count = 0
+
+        class TrackingLock(asyncio.Lock):
+            async def __aexit__(self, exc_type, exc_value, traceback):
+                result = await super().__aexit__(exc_type, exc_value, traceback)
+                model_lock_released.set()
+                return result
+
+        class FastTimeoutAsyncio:
+            CancelledError = real_asyncio.CancelledError
+            TimeoutError = real_asyncio.TimeoutError
+            create_task = staticmethod(real_asyncio.create_task)
+            to_thread = staticmethod(real_asyncio.to_thread)
+
+            @staticmethod
+            def shield(awaitable):
+                nonlocal shield_call_count
+                shield_call_count += 1
+                if shield_call_count >= 2:
+                    recovery_wait_started.set()
+                return real_asyncio.shield(awaitable)
+
+            @staticmethod
+            async def wait_for(awaitable, timeout):
+                started = await real_asyncio.to_thread(worker_started.wait, 0.5)
+                if not started:
+                    raise AssertionError("Whisper worker did not start")
+                raise real_asyncio.TimeoutError
+
+        class SlowWhisper:
+            def transcribe(self):
+                def segments():
+                    worker_started.set()
+                    release_worker.wait(timeout=1.0)
+                    yield "bonjour"
+
+                return segments(), {"language": "fr"}
+
+        task = None
+        try:
+            concurrency.asyncio = FastTimeoutAsyncio
+            concurrency._model_lock = TrackingLock()
+            task = asyncio.create_task(
+                concurrency.transcribe_with_gpu_lock(SlowWhisper())
+            )
+
+            started = await asyncio.to_thread(worker_started.wait, 0.5)
+            self.assertTrue(started)
+            recovery_started = await asyncio.to_thread(
+                recovery_wait_started.wait,
+                0.5,
+            )
+
+            self.assertTrue(recovery_started)
+            self.assertFalse(model_lock_released.is_set())
+            self.assertTrue(concurrency._model_lock.locked())
+            self.assertFalse(task.done())
+        finally:
+            release_worker.set()
+            if task is not None:
+                with self.assertRaises(HTTPException):
+                    await task
+            concurrency.asyncio = original_asyncio
             concurrency._model_lock = original_model_lock
 
 

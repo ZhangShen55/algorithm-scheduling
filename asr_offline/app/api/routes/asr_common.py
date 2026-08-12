@@ -15,7 +15,11 @@ from fastapi import HTTPException
 from app.entity.data import AsrRequestParams
 from app.core.config import settings
 from app.core.models import get_asr_model, get_emotion_model
-from app.core.concurrency import acquire_gpu_slot, generate_with_gpu_lock
+from app.core.concurrency import (
+    acquire_gpu_slot,
+    generate_with_gpu_lock,
+    transcribe_with_gpu_lock,
+)
 from app.utils.audio_utils import (
     preprocess_audio,
     write_audio_bytes_to_temp_file,
@@ -152,6 +156,99 @@ async def prepare_asr_context(request: AsrRequestParams) -> Tuple[Optional[dict]
         load_audio_time_ms=load_audio_time_ms,
     )
     return None, ctx
+
+
+async def run_whisper_asr(ctx: AsrContext, model_whisper) -> dict:
+    """运行不含说话人或情绪增强的 Whisper 小语种转写。"""
+    request = ctx.request
+    start_gpu = time.perf_counter()
+
+    try:
+        async with acquire_gpu_slot(task_id=ctx.task_id):
+            raw_segments, _ = await transcribe_with_gpu_lock(
+                model_whisper,
+                ctx.tmp_path,
+                language=request.language,
+                beam_size=5,
+                word_timestamps=request.wordTimestamps,
+            )
+    except (asyncio.TimeoutError, IndexError, HTTPException):
+        update_fail_task()
+        return {"msg": "请求过多或超时，请稍后再试", "code": 4004}
+
+    gpu_time_ms = (time.perf_counter() - start_gpu) * 1000
+    output_segments = []
+    texts = []
+
+    for segment in raw_segments:
+        if segment is None:
+            continue
+        try:
+            start = float(segment.start)
+            end = float(segment.end)
+        except (AttributeError, TypeError, ValueError):
+            continue
+
+        segment_text = str(getattr(segment, "text", "") or "").strip()
+        if not segment_text or end <= start:
+            continue
+
+        segment_words = []
+        if request.wordTimestamps:
+            for word in getattr(segment, "words", None) or []:
+                if word is None:
+                    continue
+                try:
+                    word_start = float(word.start)
+                    word_end = float(word.end)
+                except (AttributeError, TypeError, ValueError):
+                    continue
+                word_text = str(getattr(word, "word", "") or "").strip()
+                if not word_text:
+                    continue
+                segment_words.append({
+                    "bg": f"{word_start:.2f}",
+                    "ed": f"{word_end:.2f}",
+                    "word_text": word_text,
+                })
+
+        item = {
+            "segment_text": segment_text,
+            "bg": f"{start:.2f}",
+            "ed": f"{end:.2f}",
+            "speed": calculate_speech_rate(
+                segment_text,
+                start,
+                end,
+                settings.speech_rate_factor,
+            ),
+            "segment_words": segment_words,
+        }
+        if request.showSpk or request.showRoleIdentify:
+            item["role"] = None
+        if request.showEmotion:
+            item["emotion"] = None
+
+        output_segments.append(item)
+        texts.append(segment_text)
+
+    if not output_segments:
+        update_fail_task()
+        return {"msg": "音频文件为空或未检测到任何人声", "code": 4008}
+
+    result = {
+        "language": request.language,
+        "segments": output_segments,
+        "text": " ".join(texts),
+        "speed_info": build_speed_info(
+            output_segments,
+            total_duration=ctx.audio_total_s,
+        ),
+        "load_audio_time_ms": f"{ctx.load_audio_time_ms:.2f}",
+        "gpu_time_ms": f"{gpu_time_ms:.2f}",
+    }
+    update_stat("offline")
+    return result
 
 
 async def run_paraformer_asr(ctx: AsrContext) -> dict:

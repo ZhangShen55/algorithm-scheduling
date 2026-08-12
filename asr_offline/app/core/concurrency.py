@@ -67,11 +67,33 @@ async def generate_with_gpu_lock(model, *args, **kwargs):
 
 
 async def transcribe_with_gpu_lock(model, *args, **kwargs):
+    def _transcribe_and_collect():
+        segments, info = model.transcribe(*args, **kwargs)
+        return list(segments), info
+
+    async def _wait_until_worker_finishes(worker_task):
+        while not worker_task.done():
+            try:
+                await asyncio.shield(worker_task)
+            except asyncio.CancelledError:
+                continue
+        return worker_task.result()
+
     try:
         async with _model_lock:
-            return await asyncio.wait_for(
-                asyncio.to_thread(model.transcribe, *args, **kwargs),
-                timeout=60 * 60
+            worker_task = asyncio.create_task(
+                asyncio.to_thread(_transcribe_and_collect)
             )
+            try:
+                return await asyncio.wait_for(
+                    asyncio.shield(worker_task),
+                    timeout=60 * 60,
+                )
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                try:
+                    await _wait_until_worker_finishes(worker_task)
+                except Exception:
+                    pass
+                raise
     except asyncio.TimeoutError:
         raise HTTPException(status_code=408, detail="请求超时，请稍后再试")
