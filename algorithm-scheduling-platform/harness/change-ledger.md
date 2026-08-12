@@ -3,12 +3,12 @@
 ## 2026-08-12 - 里程碑 2B GPU 实例证据采集器（Task 8）
 
 - 先前状态：设计要求为 18 个 GPU 实例留存 CUDA/PID/容器归属证据，但尚无可执行采集器，只看环境变量或空闲模型进程会产生假通过。
-- 目标状态：`verify-gpu-instance` 将容器声明、容器内 CUDA UUID、真实触发存活期间的宿主 CUDA PID、进程名、`docker top`、完整 cgroup ID 和 `NSpid` 组合为单一证据链；停止模式只跟踪先前精确映射的 PID。
+- 目标状态：`verify-gpu-instance` 将容器声明、容器内 `nvidia-smi` 唯一卡/UUID、按算子选择的 Torch/Paddle/FastDeploy 框架探针、真实触发存活期间的宿主 CUDA PID、进程名、`docker top`、完整 cgroup ID 和 `NSpid` 组合为单一证据链；停止模式只跟踪先前精确映射的 PID。
 - 变更文件：GPU 采集 CLI、fake 运行时行为测试、部署说明、Harness 场景与验证入口。
 - 契约影响：算子 HTTP/WebSocket、端口、Compose 实例数和平台调度契约不变；只新增部署验收工具。
 - 验证命令与环境：macOS CPU 上用 fake `docker`、`nvidia-smi` 和 `/proc` 执行聚焦测试、Ruff、严格 Mypy 和 `py_compile`；不连接远程服务器。
 - 证据层级与结论：验收工具单元/脚本行为层级符合；不计为真实 GPU、真实推理或三卡部署通过。
-- 问题收纳：停止模式首版仅比对历史 PID，会把被其他容器复用的宿主 PID 误判为残留；已通过当前 cgroup 完整 ID 复核修复并加入回归。
+- 问题收纳：停止模式首版仅比对历史 PID，会把被其他容器复用的宿主 PID 误判为残留；已通过当前 cgroup 完整 ID 复核修复。规格复审又发现默认 Torch 会误杀 OCR/FaceRec、样本提交前没有二次检查 trigger、历史证据 SHA 和 UUID DeviceRequests 解析不完整；均以先 RED 后 GREEN 的回归关闭。
 - 剩余风险：目标驱动对 compute-apps `gpu_uuid` 查询的支持仍需真机预检；MIG 不在本阶段范围。尚未勾选任何需要真实 GPU 证据的 OpenSpec 任务。
 
 ## 2026-08-12 - 离线 ASR 五何能力退役与路由模块收敛

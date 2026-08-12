@@ -55,6 +55,9 @@ def _base_inspect(
     running: bool = True,
     container_id: str = CONTAINER_ID,
     gpu_id: str = "0",
+    device_ids: list[str] | None = None,
+    visible_device: str | None = None,
+    process_name: str = "asr_offline",
 ) -> dict[str, Any]:
     return {
         "Id": container_id,
@@ -64,8 +67,8 @@ def _base_inspect(
             "Env": [
                 "PLATFORM_INSTANCE_ID=asr-offline-gpu0",
                 f"PLATFORM_GPU_ID={gpu_id}",
-                "GPU_PROCESS_NAME=asr_offline",
-                f"NVIDIA_VISIBLE_DEVICES={gpu_id}",
+                f"GPU_PROCESS_NAME={process_name}",
+                f"NVIDIA_VISIBLE_DEVICES={visible_device or gpu_id}",
             ],
             "Labels": {"org.opencontainers.image.revision": RELEASE_SHA},
         },
@@ -73,7 +76,7 @@ def _base_inspect(
             "DeviceRequests": [
                 {
                     "Driver": "nvidia",
-                    "DeviceIDs": [gpu_id],
+                    "DeviceIDs": device_ids or [gpu_id],
                     "Capabilities": [["gpu"]],
                 }
             ]
@@ -96,6 +99,7 @@ def gpu_runtime(tmp_path: Path) -> dict[str, Any]:
         fake_bin / "docker",
         f"""#!{sys.executable}
 import json, os, pathlib, sys
+import time
 args = sys.argv[1:]
 inspect = json.loads(pathlib.Path(os.environ["FAKE_INSPECT"]).read_text())
 if args[:2] == ["inspect", "asr-offline-gpu0"]:
@@ -105,16 +109,19 @@ if args[:2] == ["inspect", "asr-offline-gpu0"]:
     print(json.dumps(inspect if isinstance(inspect, list) else [inspect]))
     raise SystemExit(0)
 if args[:3] == ["top", "asr-offline-gpu0", "-eo"]:
+    time.sleep(float(os.environ.get("FAKE_DOCKER_TOP_DELAY", "0")))
     print("PID")
     print("1000")
     print("2000")
     raise SystemExit(0)
 if args[:2] == ["exec", "asr-offline-gpu0"]:
+    if "nvidia-smi" in args:
+        print(os.environ.get("FAKE_CONTAINER_GPU_ROWS", "0, GPU-A"))
+        raise SystemExit(0)
     print(os.environ.get("FAKE_PROBE", json.dumps({{
-        "cuda_available": True,
+        "framework_gpu_available": True,
         "device_count": 1,
         "current_device": 0,
-        "device_uuid": "GPU-A",
     }})))
     raise SystemExit(int(os.environ.get("FAKE_PROBE_EXIT", "0")))
 raise SystemExit(64)
@@ -232,7 +239,8 @@ def test_verifier_records_synchronous_cuda_pid_and_exact_container_mapping(
     assert report["gpu"]["physical_uuid"] == "GPU-A"
     assert report["cuda_probe"]["device_count"] == 1
     assert report["cuda_probe"]["current_device"] == 0
-    assert report["cuda_probe"]["device_uuid"] == "GPU-A"
+    assert report["container_gpu_inventory"] == [{"index": 0, "uuid": "GPU-A"}]
+    assert report["framework_probe"]["framework"] == "torch"
     process = report["synchronous_samples"][0]["processes"][0]
     assert process["host_pid"] == 2000
     assert process["container_pid"] == 42
@@ -271,10 +279,9 @@ def test_verifier_accepts_exact_cgroup_v1_mapping(gpu_runtime: dict[str, Any]) -
         (
             {
                 "probe": {
-                    "cuda_available": True,
+                    "framework_gpu_available": True,
                     "device_count": 2,
                     "current_device": 0,
-                    "device_uuid": "GPU-A",
                 }
             },
             "device_count",
@@ -329,6 +336,83 @@ def test_verifier_rejects_trigger_that_finishes_before_a_synchronous_sample(
 
     assert completed.returncode != 0
     assert "同步采样" in _report(gpu_runtime)["reason"]
+
+
+def test_verifier_discards_sample_when_trigger_finishes_during_collection(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    gpu_runtime["env"]["TRIGGER_SECONDS"] = "0.03"
+    gpu_runtime["env"]["FAKE_DOCKER_TOP_DELAY"] = "0.08"
+
+    completed = _run(gpu_runtime)
+
+    assert completed.returncode != 0
+    assert "同步采样" in _report(gpu_runtime)["reason"]
+
+
+@pytest.mark.parametrize(
+    ("process_name", "framework"),
+    [("ocr", "paddle"), ("facerec", "fastdeploy")],
+)
+def test_non_torch_operator_uses_framework_specific_probe(
+    gpu_runtime: dict[str, Any], process_name: str, framework: str
+) -> None:
+    inspect = _base_inspect(process_name=process_name)
+    inspect["Config"]["Env"][0] = "PLATFORM_INSTANCE_ID=asr-offline-gpu0"
+    gpu_runtime["inspect_path"].write_text(json.dumps(inspect), encoding="utf-8")
+    gpu_runtime["env"]["FAKE_PROBE"] = json.dumps(
+        {"framework_gpu_available": True, "device_count": 1, "current_device": 0}
+    )
+
+    completed = _run_with_process(gpu_runtime, process_name)
+
+    assert completed.returncode == 0, completed.stderr
+    report = _report(gpu_runtime)
+    assert report["framework_probe"]["framework"] == framework
+    assert "torch" not in report["framework_probe"]["command"]
+
+
+def _run_with_process(
+    runtime: dict[str, Any], process_name: str, *extra: str
+) -> subprocess.CompletedProcess[str]:
+    command = [
+        str(VERIFIER), "--container", "asr-offline-gpu0", "--physical-gpu", "0",
+        "--process-name", process_name, "--output", str(runtime["output"]),
+        "--trigger-file", str(runtime["trigger_file"]), "--sample-window", "0.6",
+        "--sample-interval", "0.02", *extra,
+    ]
+    runtime["env"]["FAKE_PROCESS_ROWS_DURING"] = f"GPU-A, 2000, {process_name}, 300"
+    return subprocess.run(command, env=runtime["env"], text=True, capture_output=True, check=False)
+
+
+def test_device_requests_accept_gpu_uuid_when_it_resolves_to_physical_index(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    gpu_runtime["inspect_path"].write_text(
+        json.dumps(_base_inspect(device_ids=["GPU-A"], visible_device="GPU-A")),
+        encoding="utf-8",
+    )
+
+    completed = _run(gpu_runtime)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize(
+    "device_ids", [["0", "1"], ["GPU-UNKNOWN"], ["GPU-B"]]
+)
+def test_device_requests_reject_multiple_unknown_or_mismatched_devices(
+    gpu_runtime: dict[str, Any], device_ids: list[str]
+) -> None:
+    gpu_runtime["env"]["FAKE_GPU_ROWS"] = "0, GPU-A, 100\n1, GPU-B, 200"
+    gpu_runtime["inspect_path"].write_text(
+        json.dumps(_base_inspect(device_ids=device_ids)), encoding="utf-8"
+    )
+
+    completed = _run(gpu_runtime)
+
+    assert completed.returncode != 0
+    assert "device request" in _report(gpu_runtime)["reason"]
 
 
 def test_verifier_rejects_container_restart_during_sampling(
@@ -536,3 +620,25 @@ def test_stopped_mode_rejects_recreated_container_id(
 
     assert completed.returncode != 0
     assert "容器 ID" in _report(gpu_runtime)["reason"]
+
+
+def test_stopped_mode_rejects_prior_evidence_stored_under_wrong_sha(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    assert _run(gpu_runtime).returncode == 0
+    prior = gpu_runtime["output"]
+    wrong_root = prior.parent.parent.parent / ("c" * 40) / "gpu-instances"
+    wrong_root.mkdir(parents=True)
+    wrong_prior = wrong_root / prior.name
+    wrong_prior.write_bytes(prior.read_bytes())
+    recovery_output = wrong_root.parent / "recovery/stopped.json"
+    recovery_output.parent.mkdir()
+    gpu_runtime["output"] = recovery_output
+    gpu_runtime["inspect_path"].write_text(
+        json.dumps(_base_inspect(running=False)), encoding="utf-8"
+    )
+
+    completed = _run(gpu_runtime, "--assert-stopped", "--evidence", str(wrong_prior))
+
+    assert completed.returncode != 0
+    assert "release SHA" in _report(gpu_runtime)["reason"]

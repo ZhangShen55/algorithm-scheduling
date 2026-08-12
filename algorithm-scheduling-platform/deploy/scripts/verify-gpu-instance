@@ -197,6 +197,31 @@ def _gpu_rows() -> list[dict[str, Any]]:
     return rows
 
 
+def _container_gpu_rows(container: str) -> list[dict[str, Any]]:
+    completed = _run(
+        [
+            "docker",
+            "exec",
+            container,
+            "nvidia-smi",
+            "--query-gpu=index,uuid",
+            "--format=csv,noheader,nounits",
+        ]
+    )
+    rows: list[dict[str, Any]] = []
+    for raw in completed.stdout.splitlines():
+        values = [value.strip() for value in raw.split(",")]
+        if len(values) != 2:
+            raise VerificationError("容器内 nvidia-smi GPU 字段格式异常")
+        try:
+            rows.append({"index": int(values[0]), "uuid": values[1]})
+        except ValueError as error:
+            raise VerificationError("容器内 nvidia-smi GPU 索引格式异常") from error
+    if len(rows) != 1 or rows[0]["index"] != 0:
+        raise VerificationError("容器内 nvidia-smi 必须只显示一张 cuda:0")
+    return rows
+
+
 def _process_rows(gpu_uuid: str) -> list[dict[str, Any]]:
     completed = _run(
         [
@@ -287,20 +312,39 @@ def _map_process(row: dict[str, Any], container_id: str, top_pids: set[int]) -> 
     return mapped
 
 
-def _probe(container: str, probe_file: Path | None) -> dict[str, Any]:
-    probe_source = (
-        "import json,torch; ok=torch.cuda.is_available(); "
-        "print(json.dumps({'cuda_available':ok,"
-        "'device_count':torch.cuda.device_count(),"
-        "'current_device':torch.cuda.current_device() if ok else None,"
-        "'device_uuid':str(torch.cuda.get_device_properties(0).uuid) "
-        "if ok else None}))"
-    )
-    default = [
-        "python",
-        "-c",
-        probe_source,
-    ]
+def _framework_probe_argv(process_name: str) -> tuple[str, list[str]]:
+    if process_name in {"asr_offline", "asr_online", "vbas", "screen_det"}:
+        source = (
+            "import json,torch; ok=torch.cuda.is_available(); "
+            "print(json.dumps({'framework_gpu_available':ok,"
+            "'device_count':torch.cuda.device_count(),"
+            "'current_device':torch.cuda.current_device() if ok else None}))"
+        )
+        return "torch", ["python", "-c", source]
+    if process_name == "ocr":
+        source = (
+            "import json,paddle; ok=paddle.device.is_compiled_with_cuda(); "
+            "dev=paddle.device.get_device(); "
+            "print(json.dumps({'framework_gpu_available':ok,"
+            "'device_count':paddle.device.cuda.device_count(),"
+            "'current_device':int(dev.split(':',1)[1]) if dev.startswith('gpu:') "
+            "else None}))"
+        )
+        return "paddle", ["python", "-c", source]
+    if process_name == "facerec":
+        source = (
+            "import fastdeploy,json; "
+            "print(json.dumps({'framework_gpu_available':"
+            "fastdeploy.is_built_with_gpu()}))"
+        )
+        return "fastdeploy", ["python", "-c", source]
+    raise VerificationError(f"未为算子 {process_name} 定义受控 GPU 框架探针")
+
+
+def _probe(
+    container: str, process_name: str, probe_file: Path | None
+) -> dict[str, Any]:
+    framework, default = _framework_probe_argv(process_name)
     argv = _load_argv(probe_file, default=default)
     completed = _run(["docker", "exec", container, *argv])
     try:
@@ -309,12 +353,31 @@ def _probe(container: str, probe_file: Path | None) -> dict[str, Any]:
         raise VerificationError("容器内 CUDA probe 返回不是 JSON") from error
     if not isinstance(result, dict):
         raise VerificationError("容器内 CUDA probe 结果格式异常")
+    result["framework"] = framework if probe_file is None else "custom"
+    result["command"] = f"{Path(argv[0]).name} <redacted-probe-arguments>"
     return result
 
 
+def _resolve_gpu_identifier(identifier: str, inventory: list[dict[str, Any]]) -> str:
+    matches = [
+        row["uuid"]
+        for row in inventory
+        if identifier in {str(row["index"]), row["uuid"]}
+    ]
+    if len(matches) != 1:
+        raise VerificationError(f"Docker device request 无法唯一解析：{identifier}")
+    resolved = matches[0]
+    if not isinstance(resolved, str):
+        raise VerificationError(f"GPU UUID 字段不是字符串：{identifier}")
+    return resolved
+
+
 def _check_running_contract(
-    arguments: argparse.Namespace, inspect: dict[str, Any], gpu: dict[str, Any]
-) -> tuple[dict[str, str], dict[str, Any]]:
+    arguments: argparse.Namespace,
+    inspect: dict[str, Any],
+    gpu: dict[str, Any],
+    host_inventory: list[dict[str, Any]],
+) -> tuple[dict[str, str], dict[str, Any], list[dict[str, Any]]]:
     if inspect.get("State", {}).get("Running") is not True:
         raise VerificationError("目标容器不是 running")
     container_id = inspect.get("Id")
@@ -337,21 +400,32 @@ def _check_running_contract(
         if request.get("Driver") in {"", "nvidia", None}
         for device_id in (request.get("DeviceIDs") or [])
     ]
-    accepted = {str(arguments.physical_gpu), gpu["uuid"]}
-    if visible not in accepted or requested_ids != [str(arguments.physical_gpu)]:
+    if len(requested_ids) != 1:
         raise VerificationError(
-            "NVIDIA_VISIBLE_DEVICES 或 Docker device request 未唯一绑定目标物理 GPU"
+            "Docker device request 必须只声明一个 GPU"
         )
-    probe = _probe(arguments.container, arguments.probe_file)
-    if probe.get("cuda_available") is not True:
-        raise VerificationError("容器内 CUDA 不可用")
-    if probe.get("device_count") != 1:
-        raise VerificationError("容器内 CUDA device_count 必须等于 1")
-    if probe.get("current_device") != 0:
-        raise VerificationError("容器内当前设备必须是 cuda:0")
-    if probe.get("device_uuid") != gpu["uuid"]:
+    request_uuid = _resolve_gpu_identifier(requested_ids[0], host_inventory)
+    if visible is None:
+        raise VerificationError("NVIDIA_VISIBLE_DEVICES 缺失")
+    try:
+        visible_uuid = _resolve_gpu_identifier(visible, host_inventory)
+    except VerificationError as error:
+        raise VerificationError(f"NVIDIA_VISIBLE_DEVICES 无法解析：{visible}") from error
+    if request_uuid != gpu["uuid"] or visible_uuid != gpu["uuid"]:
+        raise VerificationError(
+            "Docker device request 或 NVIDIA_VISIBLE_DEVICES 与目标物理 GPU 不一致"
+        )
+    container_inventory = _container_gpu_rows(arguments.container)
+    if container_inventory[0]["uuid"] != gpu["uuid"]:
         raise VerificationError("容器内 GPU UUID 与宿主目标 GPU 不一致")
-    return environment, probe
+    probe = _probe(arguments.container, arguments.process_name, arguments.probe_file)
+    if probe.get("framework_gpu_available") is not True:
+        raise VerificationError("算子框架 GPU 不可用")
+    if "device_count" in probe and probe.get("device_count") != 1:
+        raise VerificationError("算子框架 device_count 必须等于 1")
+    if "current_device" in probe and probe.get("current_device") != 0:
+        raise VerificationError("算子框架当前设备必须是 cuda:0")
+    return environment, probe, container_inventory
 
 
 def _redacted_command(argv: Sequence[str]) -> dict[str, Any]:
@@ -367,7 +441,9 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
         raise VerificationError("物理 GPU 索引未在 nvidia-smi 中唯一匹配")
     gpu = matching_gpu[0]
     inspect = _inspect(arguments.container)
-    environment, probe = _check_running_contract(arguments, inspect, gpu)
+    environment, probe, container_inventory = _check_running_contract(
+        arguments, inspect, gpu, gpu_rows
+    )
     container_id = inspect["Id"]
     before_rows = _process_rows(gpu["uuid"])
     argv = _load_argv(arguments.trigger_file)
@@ -397,13 +473,14 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
                     for row in _gpu_rows()
                     if row["index"] == arguments.physical_gpu
                 )
-                samples.append(
-                    {
-                        "timestamp": datetime.now(timezone.utc).isoformat(),  # noqa: UP017
-                        "gpu_memory_mib": memory,
-                        "processes": mapped,
-                    }
-                )
+                if trigger.poll() is None:
+                    samples.append(
+                        {
+                            "timestamp": datetime.now(timezone.utc).isoformat(),  # noqa: UP017
+                            "gpu_memory_mib": memory,
+                            "processes": mapped,
+                        }
+                    )
             time.sleep(arguments.sample_interval)
         remaining = max(0.0, arguments.trigger_timeout)
         try:
@@ -443,6 +520,8 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
                 "container_visible": environment.get("NVIDIA_VISIBLE_DEVICES"),
             },
             "cuda_probe": probe,
+            "framework_probe": probe,
+            "container_gpu_inventory": container_inventory,
             "memory_mib": {
                 "before": gpu["memory_mib"],
                 "during": max(sample["gpu_memory_mib"] for sample in samples),
@@ -477,6 +556,15 @@ def _read_prior_evidence(path: Path | None) -> dict[str, Any]:
         raise VerificationError("--assert-stopped 必须提供 --evidence")
     if ".." in path.parts or path.is_symlink() or not path.is_file():
         raise VerificationError("先前 GPU 证据路径不安全或不存在")
+    absolute = path.absolute()
+    if absolute.parent.name != "gpu-instances":
+        raise VerificationError("先前 GPU 证据必须位于 gpu-instances 目录")
+    evidence_sha = absolute.parent.parent.name
+    if (
+        absolute.parent.parent.parent.parent.name != "releases"
+        or re.fullmatch(r"[0-9a-f]{40}", evidence_sha) is None
+    ):
+        raise VerificationError("先前 GPU 证据不在规范 release SHA 归档中")
     try:
         evidence = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -485,6 +573,8 @@ def _read_prior_evidence(path: Path | None) -> dict[str, Any]:
         raise VerificationError("先前 GPU 证据必须是 JSON 对象")
     if evidence.get("status") != "PASS":
         raise VerificationError("先前 GPU 证据不是 PASS")
+    if evidence.get("release_sha") != evidence_sha:
+        raise VerificationError("先前 GPU 证据 release SHA 与其归档目录不一致")
     return evidence
 
 
