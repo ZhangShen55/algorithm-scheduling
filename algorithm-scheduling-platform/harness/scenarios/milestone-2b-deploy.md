@@ -102,6 +102,19 @@ EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" MODEL_ASSET_SOURCE="$MODEL_ASSET_SOURCE" \
 `org.opencontainers.image.revision`。上下文门禁和模型校验任何一步失败都必须停在
 本阶段。
 
+### 本次远端执行结果（2026-08-12）
+
+服务器预检、模型资产传输、staging 和六个模型根逐文件校验已经通过。模型源中发现的
+两个 staging 污染文件（`vbas/models/.DS_Store`、`ocr/models/manifest.sha256`）已在
+Git 工作树外的受控 staging 源中精确移除，原始算子目录未修改。
+
+八镜像构建在第一个 ASR Offline 镜像解析
+`nvcr.io/nvidia/cuda:12.1.1-cudnn8-runtime-centos7` 时被 registry 大层 TLS handshake
+超时阻塞；随后两次有界 `docker pull` 重试仍卡在同一层，未生成完整基础镜像。根据门禁，
+后续平台、算子和真实推理阶段保持“未执行及原因”，不能把模型校验 PASS 或本地测试 PASS
+解释为部署完成。恢复 registry 传输或提供同一镜像 digest 的内部缓存后，从本阶段的基础
+镜像预拉取继续。
+
 ## 阶段 3：平台和逐卡算子拓扑
 
 ```bash
