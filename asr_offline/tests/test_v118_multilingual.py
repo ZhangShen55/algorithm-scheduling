@@ -303,7 +303,7 @@ class WhisperResponseContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args, ("/tmp/fake-french-audio.wav",))
         self.assertEqual(
             kwargs,
-            {"language": "fr", "beam_size": 5, "word_timestamps": False},
+            {"language": "fr", "beam_size": 5, "word_timestamps": True},
         )
 
     async def test_requested_role_and_emotion_are_null_without_enhancement_models(self):
@@ -400,6 +400,47 @@ class WhisperResponseContractTests(unittest.IsolatedAsyncioTestCase):
                 {"bg": "0.50", "ed": "0.90", "word_text": "élève"},
             ],
         )
+
+    async def test_word_timestamp_flag_does_not_change_speed_metrics(self):
+        import app.api.routes.asr_common as common
+
+        class BoundaryChangingWhisper(FakeWhisper):
+            def __init__(self):
+                super().__init__([])
+
+            def transcribe(self, *args, **kwargs):
+                self.calls.append((args, kwargs))
+                if kwargs["word_timestamps"]:
+                    segment = FakeSegment(
+                        0.25,
+                        1.25,
+                        "bonjour le monde",
+                        [FakeWord(0.25, 0.6, " bonjour ")],
+                    )
+                else:
+                    segment = FakeSegment(0.0, 2.0, "bonjour le monde")
+                return iter([segment]), SimpleNamespace(language="fr")
+
+        model = BoundaryChangingWhisper()
+        without_words = await common.run_whisper_asr(
+            make_context(make_request(word_timestamps=False), duration=2.0),
+            model,
+        )
+        with_words = await common.run_whisper_asr(
+            make_context(make_request(word_timestamps=True), duration=2.0),
+            model,
+        )
+
+        self.assertEqual(
+            [call[1]["word_timestamps"] for call in model.calls],
+            [True, True],
+        )
+        self.assertEqual(without_words["segments"][0]["segment_words"], [])
+        self.assertEqual(
+            without_words["segments"][0]["speed"],
+            with_words["segments"][0]["speed"],
+        )
+        self.assertEqual(without_words["speed_info"], with_words["speed_info"])
 
     async def test_segment_speed_uses_raw_times_and_configured_factor(self):
         request = make_request()

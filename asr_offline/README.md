@@ -218,10 +218,10 @@ curl -X POST "http://localhost:8083/v1.1.8/seacraft_asr" \
 
 **① 划分时间窗口**
 
-以时间轴 `0` 秒为起点，按 `unit×60` 秒等分。设整段最后一句的结束时间为 `max_end`（秒），则窗口个数：
+以时间轴 `0` 秒为起点，按 `unit×60` 秒等分。设音频总时长为 `audio_duration`，最后一句的结束时间为 `max_end`（单位均为秒），则时间轴终点 `axis_end = max(audio_duration, max_end)`。未提供音频总时长时，`axis_end` 回退为 `max_end`。窗口个数：
 
 ```
-segment_count = ceil(max_end / (unit×60))
+segment_count = ceil(axis_end / (unit×60))
 ```
 
 第 `k` 个窗口（`k` 从 0 开始）覆盖时间区间 `[k×unit×60, (k+1)×unit×60)`。
@@ -253,7 +253,7 @@ overlap(句子, 窗口k) = min(ed, 窗口k末) − max(bg, 窗口k首)
 
 补充规则：
 
-- **末窗口**：最后一个不足 `unit` 的窗口，标称时长改用**实际剩余时长** `max_end − k×unit×60`，避免被整窗时长稀释。
+- **末窗口**：最后一个不足 `unit` 的窗口，标称时长改用**实际剩余时长** `axis_end − k×unit×60`，避免被整窗时长稀释。因此音频尾部静音也会纳入窗口和末窗口分母。
 - **空窗口**：窗口内完全没有说话内容时，语速记为 `0`。
 - 该统计**不**乘 `rate_factor`（与单句 `speed` 不同：空闲已通过固定分母体现）。
 

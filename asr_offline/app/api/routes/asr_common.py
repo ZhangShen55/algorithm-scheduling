@@ -170,7 +170,8 @@ async def run_whisper_asr(ctx: AsrContext, model_whisper) -> dict:
                 ctx.tmp_path,
                 language=request.language,
                 beam_size=5,
-                word_timestamps=request.wordTimestamps,
+                # Keep segment boundaries identical regardless of response detail level.
+                word_timestamps=True,
             )
     except (asyncio.TimeoutError, IndexError, HTTPException):
         update_fail_task()
