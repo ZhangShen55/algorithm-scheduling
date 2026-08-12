@@ -19,6 +19,7 @@ docker run --rm --name vbas-8981 \
 扩容由平台增加容器实例完成，容器内不启动负载均衡或多实例。
 
 `docker/Dockerfile.cuda113` 用于需要 CUDA 11.3/Python 3.8 兼容的环境。
+它与默认镜像一样通过 `docker/start.sh` 启动，单 worker 监听 `8981`。
 
 ## 源码保护镜像
 
@@ -48,6 +49,11 @@ chmod 0400 docker/secrets/tias_model_key
 docker build -f docker/Dockerfile.runtime -t vbas:6.0-secure .
 python scripts/check_tias_runtime_image.py --image vbas:6.0-secure
 ```
+
+### x86 交付门禁
+
+当前 arm64 开发机上的 CUDA 基础镜像为 `linux/amd64`，且本次构建受到镜像仓库网络超时影响，未得到完整镜像验证结论。
+Task 13 必须在 x86 GPU 服务器上构建所有受支持的 VBas 镜像，并对 secure runtime 运行 `scripts/check_tias_runtime_image.py`，作为交付硬门禁。
 
 3. 运行时挂载：
 

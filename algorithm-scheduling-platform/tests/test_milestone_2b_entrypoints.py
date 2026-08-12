@@ -68,12 +68,14 @@ def test_vbas_uses_contract_port_and_no_internal_nginx() -> None:
     assert "WORKERS_PER_INSTANCE" not in start_source
     assert not (ROOT / "vbas/docker/nginx.conf").exists()
 
-    for relative in ("vbas/docker/Dockerfile", "vbas/docker/Dockerfile.runtime"):
-        source = (ROOT / relative).read_text(encoding="utf-8")
-        assert "EXPOSE 8981" in source, relative
-        assert "8881" not in source, relative
-        assert "nginx" not in source.lower(), relative
-        assert "docker/start.sh" in source, relative
+    dockerfiles = sorted((ROOT / "vbas/docker").glob("Dockerfile*"))
+    assert dockerfiles
+    for dockerfile in dockerfiles:
+        source = dockerfile.read_text(encoding="utf-8")
+        assert "EXPOSE 8981" in source, dockerfile
+        assert "8881" not in source, dockerfile
+        assert "nginx" not in source.lower(), dockerfile
+        assert "start.sh" in source, dockerfile
 
 
 def test_vbas_build_context_includes_canonical_image_inputs() -> None:
@@ -82,9 +84,20 @@ def test_vbas_build_context_includes_canonical_image_inputs() -> None:
     assert "!config.toml" in source
     assert "!models/**" in source
     assert "!models-encrypted/**" in source
-    assert source.index("**/models-encrypted/*.key") > source.index(
-        "!models-encrypted/**"
+    encrypted_models_included_at = source.index("!models-encrypted/**")
+    secret_patterns = (
+        "*.key",
+        "**/tias_model_key",
+        "**/secrets/",
+        "*.pem",
+        "*.crt",
+        "*.env",
+        ".env",
     )
+    for secret_pattern in secret_patterns:
+        assert source.index(secret_pattern, encrypted_models_included_at + 1) > (
+            encrypted_models_included_at
+        )
 
 
 def test_text_analysis_defaults_to_one_worker_on_python311() -> None:

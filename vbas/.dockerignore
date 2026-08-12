@@ -21,13 +21,6 @@ tests/
 tests2/
 docs/
 openspec/
-*.key
-**/tias_model_key
-**/secrets/
-*.pem
-*.crt
-*.env
-.env
 **/config.toml
 !config.toml
 **/*.pt
@@ -42,4 +35,11 @@ openspec/
 **/models-encrypted/
 !models-encrypted/
 !models-encrypted/**
+*.key
+**/tias_model_key
+**/secrets/
+*.pem
+*.crt
+*.env
+.env
 **/models-encrypted/*.key
