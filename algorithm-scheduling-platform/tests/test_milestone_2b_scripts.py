@@ -101,9 +101,33 @@ if args[:1] == ["run"]:
     print(os.environ.get("GPU_OUTPUT", ""))
     raise SystemExit(int(os.environ.get("GPU_RUN_EXIT", "0")))
 if args == ["ps", "-aq"]:
+    if os.environ.get("BLOCK_PS") == "true":
+        entered = Path(os.environ["PS_ENTERED_PATH"])
+        release = Path(os.environ["PS_RELEASE_PATH"])
+        entered.write_text("entered", encoding="utf-8")
+        for _ in range(1000):
+            if release.exists():
+                break
+            import time
+            time.sleep(0.01)
+        else:
+            print("timed out waiting to release ps", file=sys.stderr)
+            raise SystemExit(70)
     print(os.environ.get("DOCKER_PS_IDS", ""))
     raise SystemExit(int(os.environ.get("DOCKER_PS_EXIT", "0")))
 if args[:1] == ["inspect"] and len(args) == 2:
+    if args[1] == os.environ.get("BLOCK_INSPECT_ID"):
+        entered = Path(os.environ["INSPECT_ENTERED_PATH"])
+        release = Path(os.environ["INSPECT_RELEASE_PATH"])
+        entered.write_text("entered", encoding="utf-8")
+        for _ in range(1000):
+            if release.exists():
+                break
+            import time
+            time.sleep(0.01)
+        else:
+            print("timed out waiting to release inspect", file=sys.stderr)
+            raise SystemExit(70)
     default_state_path = Path(os.environ["COMMAND_LOG"]).with_name("docker-state.json")
     state_path = Path(os.environ.get("DOCKER_STATE_PATH", default_state_path))
     if state_path.exists():
@@ -119,6 +143,19 @@ if args[:1] == ["inspect"] and len(args) == 2:
             if isinstance(item, dict) and item.get("Id") == target:
                 item["State"]["Status"] = "exited"
         state_path.write_text(json.dumps(fixtures), encoding="utf-8")
+    for action, target_state in (("stop", "exited"), ("start", "running")):
+        marker = state_path.with_name(f"{state_path.name}.{action}-delay")
+        if marker.exists():
+            pending = json.loads(marker.read_text(encoding="utf-8"))
+            pending["remaining"] -= 1
+            if pending["remaining"] <= 0:
+                for item in fixtures.values():
+                    if isinstance(item, dict) and item.get("Id") == pending["container_id"]:
+                        item["State"]["Status"] = target_state
+                marker.unlink()
+                state_path.write_text(json.dumps(fixtures), encoding="utf-8")
+            else:
+                marker.write_text(json.dumps(pending), encoding="utf-8")
     value = fixtures.get(args[1], "__FAIL__")
     if value == "__FAIL__":
         raise SystemExit(1)
@@ -147,7 +184,12 @@ if args[:1] == ["stop"]:
         if state_path.exists()
         else json.loads(os.environ.get("DOCKER_INSPECT_FIXTURES", "{}"))
     )
-    if os.environ.get("STOP_PRESERVE_STATE") != "true":
+    stop_delay = int(os.environ.get("STOP_TRANSITION_AFTER_INSPECTS", "0"))
+    if stop_delay:
+        state_path.with_name(f"{state_path.name}.stop-delay").write_text(
+            json.dumps({"container_id": args[1], "remaining": stop_delay}), encoding="utf-8"
+        )
+    elif os.environ.get("STOP_PRESERVE_STATE") != "true":
         for item in fixtures.values():
             if isinstance(item, dict) and item.get("Id") == args[1]:
                 item["State"]["Status"] = "exited"
@@ -166,11 +208,40 @@ if args[:1] == ["start"]:
         if state_path.exists()
         else json.loads(os.environ.get("DOCKER_INSPECT_FIXTURES", "{}"))
     )
-    for item in fixtures.values():
-        if isinstance(item, dict) and item.get("Id") == args[1]:
-            item["State"]["Status"] = "running"
+    start_delay = int(os.environ.get("START_TRANSITION_AFTER_INSPECTS", "0"))
+    if start_delay:
+        state_path.with_name(f"{state_path.name}.start-delay").write_text(
+            json.dumps({"container_id": args[1], "remaining": start_delay}), encoding="utf-8"
+        )
+    else:
+        final_state = os.environ.get("START_FINAL_STATE", "running")
+        for item in fixtures.values():
+            if isinstance(item, dict) and item.get("Id") == args[1]:
+                item["State"]["Status"] = final_state
     state_path.write_text(json.dumps(fixtures), encoding="utf-8")
     if len(args) == 2 and args[1] == os.environ.get("START_INTERRUPT_AFTER_STATE_ID"):
+        raise SystemExit(75)
+    raise SystemExit(0)
+if args[:1] == ["update"] and len(args) == 3 and args[1].startswith("--restart="):
+    if args[2] == os.environ.get("UPDATE_FAIL_ID"):
+        print("injected update failure", file=sys.stderr)
+        raise SystemExit(1)
+    default_state_path = Path(os.environ["COMMAND_LOG"]).with_name("docker-state.json")
+    state_path = Path(os.environ.get("DOCKER_STATE_PATH", default_state_path))
+    fixtures = (
+        json.loads(state_path.read_text(encoding="utf-8"))
+        if state_path.exists()
+        else json.loads(os.environ.get("DOCKER_INSPECT_FIXTURES", "{}"))
+    )
+    value = args[1].removeprefix("--restart=")
+    name, _, retries = value.partition(":")
+    policy = {"Name": name, "MaximumRetryCount": int(retries or "0")}
+    if os.environ.get("UPDATE_PRESERVE_POLICY") != "true":
+        for item in fixtures.values():
+            if isinstance(item, dict) and item.get("Id") == args[2]:
+                item["HostConfig"]["RestartPolicy"] = policy
+    state_path.write_text(json.dumps(fixtures), encoding="utf-8")
+    if args[2] == os.environ.get("UPDATE_INTERRUPT_AFTER_STATE_ID"):
         raise SystemExit(75)
     raise SystemExit(0)
 raise SystemExit(64)
@@ -214,6 +285,19 @@ def _ledger(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
+def _ledger_archives(path: Path) -> list[Path]:
+    return sorted(path.parent.glob(f"{path.name}.audit.*.jsonl"))
+
+
+def _assert_archived_ledger(path: Path, expected: list[dict[str, Any]]) -> Path:
+    assert not path.exists()
+    archives = _ledger_archives(path)
+    assert len(archives) == 1
+    assert _ledger(archives[0]) == expected
+    assert archives[0].stat().st_mode & 0o222 == 0
+    return archives[0]
+
+
 def _inspect_record(
     container_id: str = "a" * 64,
     *,
@@ -222,6 +306,7 @@ def _inspect_record(
     state: str = "running",
     ports: dict[str, Any] | None = None,
     mounts: list[dict[str, Any]] | None = None,
+    restart_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "Id": container_id,
@@ -239,7 +324,9 @@ def _inspect_record(
             "PortBindings": ports
             if ports is not None
             else {"8000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8000"}]},
-            "RestartPolicy": {"Name": "unless-stopped", "MaximumRetryCount": 0},
+            "RestartPolicy": restart_policy
+            if restart_policy is not None
+            else {"Name": "unless-stopped", "MaximumRetryCount": 0},
         },
         "Mounts": mounts
         if mounts is not None
@@ -283,9 +370,16 @@ def _snapshot_record(inspect: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _pause_entry(inspect: dict[str, Any], status: str) -> dict[str, Any]:
+def _pause_entry(
+    inspect: dict[str, Any], status: str, *, policy_neutralized: bool | None = None
+) -> dict[str, Any]:
     binding = _snapshot_record(inspect)
     canonical = json.dumps(binding, sort_keys=True, separators=(",", ":")).encode()
+    if policy_neutralized is None:
+        policy_neutralized = (
+            status not in {"restored", "not_stopped"}
+            and binding["restart_policy"].get("Name") not in {"", "no"}
+        )
     return {
         "version": 1,
         "status": status,
@@ -293,6 +387,7 @@ def _pause_entry(inspect: dict[str, Any], status: str) -> dict[str, Any]:
         "name": binding["name"],
         "snapshot_sha256": hashlib.sha256(canonical).hexdigest(),
         "binding": binding,
+        "policy_neutralized": policy_neutralized,
     }
 
 
@@ -397,16 +492,18 @@ def test_preflight_rejects_an_unwritable_required_directory(
     course.mkdir()
     result.mkdir()
     unwritable = course if directory_name == "course" else result
+    unwritable.chmod(0o500)
     environment = _base_environment(
         fake_bin,
         COURSE_ROOT=str(course),
         RESULT_ROOT=str(result),
-        PREFLIGHT_WRITABLE_CHECK_BIN=str(fake_bin / "path-check"),
-        UNWRITABLE_PATH=str(unwritable),
         REQUIRED_PORTS="",
     )
 
-    completed = _run("preflight", environment=environment)
+    try:
+        completed = _run("preflight", environment=environment)
+    finally:
+        unwritable.chmod(0o700)
 
     assert completed.returncode != 0
     assert str(unwritable) in completed.stderr
@@ -510,6 +607,16 @@ def test_preflight_allows_explicit_unpinned_local_mode_with_a_warning(
     assert "WARNING" in completed.stderr
 
 
+def test_preflight_probes_required_directories_with_real_fsynced_io() -> None:
+    source = (SCRIPTS / "preflight").read_text(encoding="utf-8")
+
+    assert "PREFLIGHT_WRITABLE_CHECK_BIN" not in source
+    assert "os.open" in source
+    assert "O_EXCL" in source
+    assert "os.fsync" in source
+    assert "os.unlink" in source
+
+
 def test_snapshot_writes_a_complete_read_only_jsonl_record(
     fake_bin: Path, tmp_path: Path
 ) -> None:
@@ -568,6 +675,85 @@ def test_snapshot_rejects_a_symlink_output(fake_bin: Path, tmp_path: Path) -> No
     assert completed.returncode != 0
     assert target.read_text(encoding="utf-8") == "do not replace\n"
     assert _commands(environment) == []
+
+
+def test_snapshot_refuses_to_replace_inventory_while_pause_ledger_is_active(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    original = _inspect_record()
+    replacement = _inspect_record(container_id="b" * 64, name="replacement")
+    snapshot = tmp_path / "snapshot.jsonl"
+    ledger = Path(f"{snapshot}.paused.jsonl")
+    original_payload = json.dumps(_snapshot_record(original)) + "\n"
+    snapshot.write_text(original_payload, encoding="utf-8")
+    ledger.write_text(
+        json.dumps(_pause_entry(original, "stopped")) + "\n", encoding="utf-8"
+    )
+    environment = _base_environment(
+        fake_bin,
+        DOCKER_PS_IDS=replacement["Id"],
+        DOCKER_INSPECT_FIXTURES=json.dumps({replacement["Id"]: replacement}),
+    )
+
+    completed = _run("snapshot-existing-containers", snapshot, environment=environment)
+
+    assert completed.returncode != 0
+    assert "active" in completed.stderr
+    assert snapshot.read_text(encoding="utf-8") == original_payload
+    assert _commands(environment) == []
+
+
+def test_snapshot_and_pause_share_the_default_snapshot_derived_lock(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    original = _inspect_record()
+    snapshot = tmp_path / "snapshot.jsonl"
+    ledger = Path(f"{snapshot}.paused.jsonl")
+    entered = tmp_path / "ps-entered"
+    release = tmp_path / "ps-release"
+    snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
+    environment = _base_environment(
+        fake_bin,
+        BLOCK_PS="true",
+        PS_ENTERED_PATH=str(entered),
+        PS_RELEASE_PATH=str(release),
+        DOCKER_PS_IDS=original["Id"],
+        DOCKER_INSPECT_FIXTURES=json.dumps(
+            {original["Id"]: original, original["Name"].removeprefix("/"): original}
+        ),
+    )
+    snapshot_process = subprocess.Popen(
+        [str(SCRIPTS / "snapshot-existing-containers"), str(snapshot)],
+        cwd=PLATFORM_ROOT,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        _wait_for_path(entered, snapshot_process)
+        pause_process = subprocess.Popen(
+            [str(SCRIPTS / "pause-existing-containers"), str(snapshot), original["Id"]],
+            cwd=PLATFORM_ROOT,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        time.sleep(0.2)
+        assert pause_process.poll() is None, pause_process.communicate()
+        assert not ledger.exists()
+        assert not any(command[1] == "stop" for command in _commands(environment))
+        release.write_text("release", encoding="utf-8")
+        snapshot_stdout, snapshot_stderr = snapshot_process.communicate(timeout=10)
+        pause_stdout, pause_stderr = pause_process.communicate(timeout=10)
+    finally:
+        if snapshot_process.poll() is None:
+            snapshot_process.kill()
+            snapshot_process.wait()
+
+    assert snapshot_process.returncode == 0, (snapshot_stdout, snapshot_stderr)
+    assert pause_process.returncode == 0, (pause_stdout, pause_stderr)
 
 
 @pytest.mark.parametrize("payload", ["not-json\n", '{"container_id":"x"}\n'])
@@ -720,6 +906,115 @@ def test_pause_leaves_fsynced_pending_intent_when_interrupted_after_stop(
     assert _ledger(paused) == [_pause_entry(original, "pending_stop")]
 
 
+def test_pause_keeps_pending_stop_when_docker_stop_does_not_converge(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    original = _inspect_record()
+    snapshot = tmp_path / "snapshot.jsonl"
+    paused = tmp_path / "paused.jsonl"
+    snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
+    environment = _base_environment(
+        fake_bin,
+        PAUSE_RECORD_PATH=str(paused),
+        STOP_PRESERVE_STATE="true",
+        STOP_STATE_TIMEOUT_SECONDS="0",
+        STATE_POLL_INTERVAL_SECONDS="0.01",
+        DOCKER_INSPECT_FIXTURES=json.dumps(
+            {original["Id"]: original, original["Name"].removeprefix("/"): original}
+        ),
+    )
+
+    completed = _run("pause-existing-containers", snapshot, original["Id"], environment=environment)
+
+    assert completed.returncode != 0
+    assert "exited" in completed.stderr
+    assert _ledger(paused) == [_pause_entry(original, "pending_stop")]
+
+
+def test_pause_waits_for_delayed_exited_state_before_marking_stopped(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    original = _inspect_record()
+    snapshot = tmp_path / "snapshot.jsonl"
+    paused = tmp_path / "paused.jsonl"
+    snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
+    environment = _base_environment(
+        fake_bin,
+        PAUSE_RECORD_PATH=str(paused),
+        STOP_TRANSITION_AFTER_INSPECTS="2",
+        STOP_STATE_TIMEOUT_SECONDS="1",
+        STATE_POLL_INTERVAL_SECONDS="0.01",
+        DOCKER_INSPECT_FIXTURES=json.dumps(
+            {original["Id"]: original, original["Name"].removeprefix("/"): original}
+        ),
+    )
+
+    completed = _run("pause-existing-containers", snapshot, original["Id"], environment=environment)
+
+    assert completed.returncode == 0, completed.stderr
+    assert _ledger(paused) == [_pause_entry(original, "stopped")]
+
+
+def test_pause_persists_intent_before_restart_policy_neutralization_failure(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    original = _inspect_record()
+    snapshot = tmp_path / "snapshot.jsonl"
+    paused = tmp_path / "paused.jsonl"
+    snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
+    environment = _base_environment(
+        fake_bin,
+        PAUSE_RECORD_PATH=str(paused),
+        UPDATE_FAIL_ID=original["Id"],
+        DOCKER_INSPECT_FIXTURES=json.dumps(
+            {original["Id"]: original, original["Name"].removeprefix("/"): original}
+        ),
+    )
+
+    completed = _run("pause-existing-containers", snapshot, original["Id"], environment=environment)
+
+    assert completed.returncode != 0
+    assert _ledger(paused) == [
+        _pause_entry(original, "pending_stop", policy_neutralized=False)
+    ]
+    assert [command for command in _commands(environment) if command[1] in {"update", "stop"}] == [
+        ["docker", "update", "--restart=no", original["Id"]]
+    ]
+
+
+def test_restore_repairs_interrupted_restart_policy_neutralization(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    original = _inspect_record()
+    snapshot = tmp_path / "snapshot.jsonl"
+    paused = tmp_path / "paused.jsonl"
+    snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
+    environment = _base_environment(
+        fake_bin,
+        PAUSE_RECORD_PATH=str(paused),
+        UPDATE_INTERRUPT_AFTER_STATE_ID=original["Id"],
+        DOCKER_INSPECT_FIXTURES=json.dumps(
+            {original["Id"]: original, original["Name"].removeprefix("/"): original}
+        ),
+    )
+
+    pause = _run("pause-existing-containers", snapshot, original["Id"], environment=environment)
+    environment.pop("UPDATE_INTERRUPT_AFTER_STATE_ID")
+    restore = _run("restore-existing-containers", snapshot, paused, environment=environment)
+
+    assert pause.returncode != 0
+    assert restore.returncode == 0, restore.stderr
+    assert not paused.exists()
+    archives = _ledger_archives(paused)
+    assert len(archives) == 1
+    assert _ledger(archives[0]) == [_pause_entry(original, "not_stopped")]
+    updates = [command for command in _commands(environment) if command[1] == "update"]
+    assert updates == [
+        ["docker", "update", "--restart=no", original["Id"]],
+        ["docker", "update", "--restart=unless-stopped", original["Id"]],
+    ]
+
+
 def test_pause_rejects_compose_project_mismatch_before_docker(
     fake_bin: Path, tmp_path: Path
 ) -> None:
@@ -769,7 +1064,6 @@ def test_two_concurrent_pauses_share_one_exclusive_ledger_and_stop_once(
         PAUSE_RECORD_PATH=str(ledger),
         DEPLOY_OPERATION_LOCK=str(lock),
         BLOCK_STOP_ID=original["Id"],
-        STOP_PRESERVE_STATE="true",
         STOP_ENTERED_PATH=str(entered),
         STOP_RELEASE_PATH=str(release),
         DOCKER_INSPECT_FIXTURES=json.dumps(
@@ -962,7 +1256,9 @@ def test_restore_waits_for_pause_then_reads_and_restores_the_complete_ledger(
         ["docker", "start", first["Id"]],
         ["docker", "start", second["Id"]],
     ]
-    assert _ledger(ledger) == [_pause_entry(first, "restored"), _pause_entry(second, "restored")]
+    _assert_archived_ledger(
+        ledger, [_pause_entry(first, "restored"), _pause_entry(second, "restored")]
+    )
 
 
 def test_restore_reads_snapshot_after_waiting_for_lock_and_rejects_changed_binding(
@@ -1134,7 +1430,95 @@ def test_restore_starts_only_the_exact_id_stopped_by_this_pause_run(
     assert [command for command in _commands(environment) if command[1] == "start"] == [
         ["docker", "start", original["Id"]]
     ]
-    assert _ledger(paused) == [_pause_entry(original, "restored")]
+    _assert_archived_ledger(paused, [_pause_entry(original, "restored")])
+
+
+@pytest.mark.parametrize("final_state", ["exited", "dead"])
+def test_restore_keeps_restoring_when_start_does_not_reach_running(
+    fake_bin: Path, tmp_path: Path, final_state: str
+) -> None:
+    original = _inspect_record()
+    current = _inspect_record(
+        state="exited", restart_policy={"Name": "no", "MaximumRetryCount": 0}
+    )
+    snapshot = tmp_path / "snapshot.jsonl"
+    paused = tmp_path / "paused.jsonl"
+    snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
+    paused.write_text(json.dumps(_pause_entry(original, "stopped")) + "\n", encoding="utf-8")
+    environment = _base_environment(
+        fake_bin,
+        START_FINAL_STATE=final_state,
+        START_STATE_TIMEOUT_SECONDS="0",
+        STATE_POLL_INTERVAL_SECONDS="0.01",
+        DOCKER_INSPECT_FIXTURES=json.dumps(
+            {original["Id"]: current, original["Name"].removeprefix("/"): current}
+        ),
+    )
+
+    completed = _run("restore-existing-containers", snapshot, paused, environment=environment)
+
+    assert completed.returncode != 0
+    assert "running" in completed.stderr
+    assert _ledger(paused) == [_pause_entry(original, "restoring")]
+    assert not any(command[1] == "update" for command in _commands(environment))
+
+
+def test_restore_waits_for_delayed_running_then_restores_original_restart_policy(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    original = _inspect_record(
+        restart_policy={"Name": "on-failure", "MaximumRetryCount": 4}
+    )
+    current = _inspect_record(
+        state="exited", restart_policy={"Name": "no", "MaximumRetryCount": 0}
+    )
+    snapshot = tmp_path / "snapshot.jsonl"
+    paused = tmp_path / "paused.jsonl"
+    snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
+    paused.write_text(json.dumps(_pause_entry(original, "stopped")) + "\n", encoding="utf-8")
+    environment = _base_environment(
+        fake_bin,
+        START_TRANSITION_AFTER_INSPECTS="2",
+        START_STATE_TIMEOUT_SECONDS="1",
+        STATE_POLL_INTERVAL_SECONDS="0.01",
+        DOCKER_INSPECT_FIXTURES=json.dumps(
+            {original["Id"]: current, original["Name"].removeprefix("/"): current}
+        ),
+    )
+
+    completed = _run("restore-existing-containers", snapshot, paused, environment=environment)
+
+    assert completed.returncode == 0, completed.stderr
+    _assert_archived_ledger(paused, [_pause_entry(original, "restored")])
+    assert [command for command in _commands(environment) if command[1] == "update"] == [
+        ["docker", "update", "--restart=on-failure:4", original["Id"]]
+    ]
+
+
+def test_restore_keeps_restoring_when_original_restart_policy_is_not_confirmed(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    original = _inspect_record()
+    current = _inspect_record(
+        state="exited", restart_policy={"Name": "no", "MaximumRetryCount": 0}
+    )
+    snapshot = tmp_path / "snapshot.jsonl"
+    paused = tmp_path / "paused.jsonl"
+    snapshot.write_text(json.dumps(_snapshot_record(original)) + "\n", encoding="utf-8")
+    paused.write_text(json.dumps(_pause_entry(original, "stopped")) + "\n", encoding="utf-8")
+    environment = _base_environment(
+        fake_bin,
+        UPDATE_PRESERVE_POLICY="true",
+        DOCKER_INSPECT_FIXTURES=json.dumps(
+            {original["Id"]: current, original["Name"].removeprefix("/"): current}
+        ),
+    )
+
+    completed = _run("restore-existing-containers", snapshot, paused, environment=environment)
+
+    assert completed.returncode != 0
+    assert "restart policy" in completed.stderr
+    assert _ledger(paused) == [_pause_entry(original, "restoring")]
 
 
 @pytest.mark.parametrize(
@@ -1170,7 +1554,7 @@ def test_restore_reconciles_pending_stop_conservatively(
     assert completed.returncode == 0, completed.stderr
     starts = [command for command in _commands(environment) if command[1] == "start"]
     assert len(starts) == expected_start_count
-    assert _ledger(paused) == [_pause_entry(original, expected_status)]
+    _assert_archived_ledger(paused, [_pause_entry(original, expected_status)])
     assert message in completed.stdout
 
 
@@ -1194,7 +1578,7 @@ def test_restore_recovers_when_start_succeeded_before_ledger_update(
 
     assert completed.returncode == 0, completed.stderr
     assert not any(command[1] == "start" for command in _commands(environment))
-    assert _ledger(paused) == [_pause_entry(original, "restored")]
+    _assert_archived_ledger(paused, [_pause_entry(original, "restored")])
     assert "already restored" in completed.stdout
 
 
@@ -1236,7 +1620,9 @@ def test_restore_resume_does_not_restart_an_already_restored_first_container(
     assert completed.returncode == 0, completed.stderr
     starts = [command for command in _commands(environment) if command[1] == "start"]
     assert starts == [["docker", "start", second["Id"]]]
-    assert _ledger(paused) == [_pause_entry(first, "restored"), _pause_entry(second, "restored")]
+    _assert_archived_ledger(
+        paused, [_pause_entry(first, "restored"), _pause_entry(second, "restored")]
+    )
 
 
 def test_restore_interrupted_after_start_resumes_without_duplicate_start(
@@ -1264,7 +1650,7 @@ def test_restore_interrupted_after_start_resumes_without_duplicate_start(
     assert second_run.returncode == 0, second_run.stderr
     starts = [command for command in _commands(environment) if command[1] == "start"]
     assert starts == [["docker", "start", original["Id"]]]
-    assert _ledger(paused) == [_pause_entry(original, "restored")]
+    _assert_archived_ledger(paused, [_pause_entry(original, "restored")])
 
 
 def test_restore_retry_continues_after_second_start_failure_without_restarting_first(
@@ -1313,7 +1699,42 @@ def test_restore_retry_continues_after_second_start_failure_without_restarting_f
         ["docker", "start", second["Id"]],
         ["docker", "start", second["Id"]],
     ]
-    assert _ledger(paused) == [_pause_entry(first, "restored"), _pause_entry(second, "restored")]
+    _assert_archived_ledger(
+        paused, [_pause_entry(first, "restored"), _pause_entry(second, "restored")]
+    )
+
+
+def test_two_consecutive_pause_restore_rounds_create_unique_read_only_audits(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    original = _inspect_record()
+    snapshot = tmp_path / "snapshot.jsonl"
+    paused = Path(f"{snapshot}.paused.jsonl")
+    environment = _base_environment(
+        fake_bin,
+        DOCKER_PS_IDS=original["Id"],
+        DOCKER_INSPECT_FIXTURES=json.dumps(
+            {original["Id"]: original, original["Name"].removeprefix("/"): original}
+        ),
+    )
+
+    for expected_archive_count in (1, 2):
+        snapshot_run = _run("snapshot-existing-containers", snapshot, environment=environment)
+        pause_run = _run(
+            "pause-existing-containers", snapshot, original["Id"], environment=environment
+        )
+        restore_run = _run(
+            "restore-existing-containers", snapshot, paused, environment=environment
+        )
+
+        assert snapshot_run.returncode == 0, snapshot_run.stderr
+        assert pause_run.returncode == 0, pause_run.stderr
+        assert restore_run.returncode == 0, restore_run.stderr
+        assert not paused.exists()
+        archives = _ledger_archives(paused)
+        assert len(archives) == expected_archive_count
+        assert len({archive.name for archive in archives}) == expected_archive_count
+        assert all(archive.stat().st_mode & 0o222 == 0 for archive in archives)
 
 
 @pytest.mark.parametrize("current_state", ["running", "created"])

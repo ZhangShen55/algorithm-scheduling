@@ -44,15 +44,30 @@ printf 'preflight: OK: NVIDIA runtime exposes exactly 3 GPUs\n'
 
 course_root="${COURSE_ROOT:-/data/course}"
 result_root="${RESULT_ROOT:-/data/result}"
-writable_check_bin="${PREFLIGHT_WRITABLE_CHECK_BIN:-test}"
 for required_directory in "$course_root" "$result_root"; do
   [[ -d "$required_directory" ]] || fail "required directory is missing: ${required_directory}"
-  if [[ "$writable_check_bin" == "test" ]]; then
-    [[ -w "$required_directory" ]] || fail "required directory is not writable: ${required_directory}"
-  else
-    "$writable_check_bin" "$required_directory" || \
-      fail "required directory is not writable: ${required_directory}"
-  fi
+  python3 - "$required_directory" <<'PY' || fail \
+    "required directory is not writable by the preflight execution identity: ${required_directory}"
+import os
+import sys
+import uuid
+from pathlib import Path
+
+directory = Path(sys.argv[1])
+probe = directory / f".preflight-write-probe-{uuid.uuid4().hex}"
+fd = os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+try:
+    os.write(fd, b"probe")
+    os.fsync(fd)
+finally:
+    os.close(fd)
+os.unlink(probe)
+directory_fd = os.open(directory, os.O_RDONLY)
+try:
+    os.fsync(directory_fd)
+finally:
+    os.close(directory_fd)
+PY
 done
 printf 'preflight: OK: course and result directories are writable\n'
 
