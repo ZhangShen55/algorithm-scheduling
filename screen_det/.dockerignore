@@ -10,6 +10,7 @@ openspec/
 venv/
 .git/
 test/
+tests/
 model/
 docker/models-encrypted/*
 runs/

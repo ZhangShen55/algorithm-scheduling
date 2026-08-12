@@ -48,3 +48,11 @@ openspec/
 *.env
 .env
 **/models-encrypted/*.key
+
+# 模型目录 allowlist 之后再次排除本地缓存与密钥，避免 negation 重新纳入。
+**/__pycache__/
+*.py[cod]
+*.key
+*.pem
+*.p12
+*.pfx

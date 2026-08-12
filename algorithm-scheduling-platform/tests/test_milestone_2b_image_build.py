@@ -383,6 +383,87 @@ def test_build_context_gate_rejects_a_secret_reincluded_by_negation(tmp_path: Pa
     assert "re-include" in completed.stderr.lower()
 
 
+@pytest.mark.parametrize(
+    "negation",
+    ("!*", "!**", "!**/*", "!private/**", "!**/*.key"),
+)
+def test_build_context_gate_rejects_broad_negations_that_can_restore_pollution(
+    tmp_path: Path, negation: str
+) -> None:
+    workspace = _make_workspace(tmp_path)
+    dockerignore = workspace / "asr_offline/.dockerignore"
+    dockerignore.write_text(
+        dockerignore.read_text(encoding="utf-8") + f"{negation}\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_gate(workspace)
+
+    assert completed.returncode != 0
+    assert "re-include" in completed.stderr.lower()
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "https://example.invalid/archive.tar.gz",
+        "http://example.invalid/file.txt",
+        "git@github.com:example/private.git",
+        "git://example.invalid/repository.git",
+    ),
+)
+def test_build_context_gate_rejects_remote_add_sources(
+    tmp_path: Path, source: str
+) -> None:
+    workspace = _make_workspace(tmp_path)
+    (workspace / "asr_offline/docker/Dockerfile").write_text(
+        f"FROM scratch\nADD {source} /app/\n", encoding="utf-8"
+    )
+
+    completed = _run_gate(workspace)
+
+    assert completed.returncode != 0
+    assert "remote" in completed.stderr.lower()
+
+
+def test_build_context_gate_rejects_an_included_test_media_file(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    (workspace / "asr_offline/fixture.mp4").write_bytes(b"not-a-real-video")
+
+    completed = _run_gate(workspace)
+
+    assert completed.returncode != 0
+    assert "fixture.mp4" in completed.stderr
+
+
+def test_build_context_gate_allows_a_test_media_file_when_ignored(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    (workspace / "asr_offline/fixture.mp4").write_bytes(b"not-a-real-video")
+    dockerignore = workspace / "asr_offline/.dockerignore"
+    dockerignore.write_text(
+        dockerignore.read_text(encoding="utf-8") + "*.mp4\n", encoding="utf-8"
+    )
+
+    completed = _run_gate(workspace)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_build_context_gate_applies_negations_in_order_to_real_files(tmp_path: Path) -> None:
+    workspace = _make_workspace(tmp_path)
+    (workspace / "asr_offline/fixture.mp4").write_bytes(b"not-a-real-video")
+    dockerignore = workspace / "asr_offline/.dockerignore"
+    dockerignore.write_text(
+        dockerignore.read_text(encoding="utf-8") + "*.mp4\n!fixture.mp4\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_gate(workspace)
+
+    assert completed.returncode != 0
+    assert "fixture.mp4" in completed.stderr
+
+
 def test_real_facerec_and_ppt_contexts_exclude_private_or_large_local_inputs() -> None:
     workspace_root = PLATFORM_ROOT.parent
     facerec_ignore = (workspace_root / "facerec/.dockerignore").read_text(encoding="utf-8")

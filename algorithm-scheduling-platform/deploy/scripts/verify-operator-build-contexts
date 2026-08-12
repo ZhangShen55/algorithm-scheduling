@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import sys
 from pathlib import Path, PurePosixPath
-
 
 EXPECTED_MATRIX = (
     ("asr_offline", "docker/Dockerfile", "seacraft-asr-offline"),
@@ -34,6 +34,62 @@ REQUIRED_IGNORE_GROUPS = (
     ("PKCS12 secrets", "*.p12", "**/*.p12", "*.pfx", "**/*.pfx"),
 )
 
+ALLOWED_REINCLUDES = {
+    "asr_offline": {"!model/**/*.wav"},
+    "vbas": {
+        "!config.toml",
+        "!models/",
+        "!models/**",
+        "!app/vendor/DirectMHP/models/",
+        "!app/vendor/DirectMHP/models/**",
+        "!models-encrypted/",
+        "!models-encrypted/**",
+    },
+}
+
+MODEL_ASSET_ROOTS = {
+    "asr_offline": ("model",),
+    "asr_online": ("model",),
+    "ocr": ("models",),
+    "vbas": ("models", "models-encrypted", "app/vendor/DirectMHP/models"),
+    "facerec": ("ai_models",),
+    "screen_det": ("model", "docker/models-encrypted"),
+}
+
+DANGEROUS_MEDIA_SUFFIXES = frozenset(
+    {
+        ".mp4",
+        ".mov",
+        ".mkv",
+        ".avi",
+        ".wav",
+        ".mp3",
+        ".pcm",
+        ".flac",
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".bmp",
+    }
+)
+
+PROTECTED_PARTS = frozenset(
+    {
+        ".git",
+        ".codex",
+        "harness",
+        "openspec",
+        "test",
+        "tests",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+    }
+)
+
+SECRET_SUFFIXES = frozenset({".pem", ".key", ".p12", ".pfx"})
+
 
 class GateError(RuntimeError):
     pass
@@ -57,17 +113,17 @@ def _logical_lines(source: str) -> list[str]:
     return lines
 
 
-def _copy_sources(instruction: str) -> tuple[bool, list[str]]:
+def _copy_sources(instruction: str) -> tuple[str | None, bool, list[str]]:
     operation, _, arguments = instruction.partition(" ")
     if operation.upper() not in {"COPY", "ADD"}:
-        return False, []
+        return None, False, []
     if not arguments:
         raise GateError(f"invalid {operation} instruction: {instruction}")
     if arguments.lstrip().startswith("["):
         values = json.loads(arguments)
         if not isinstance(values, list) or len(values) < 2:
             raise GateError(f"invalid JSON {operation} instruction: {instruction}")
-        return False, [str(value) for value in values[:-1]]
+        return operation.upper(), False, [str(value) for value in values[:-1]]
     values = shlex.split(arguments)
     from_stage = any(value.startswith("--from=") for value in values)
     while values and values[0].startswith("--"):
@@ -76,12 +132,21 @@ def _copy_sources(instruction: str) -> tuple[bool, list[str]]:
             values.pop(0)
     if len(values) < 2:
         raise GateError(f"invalid {operation} instruction: {instruction}")
-    return from_stage, values[:-1]
+    return operation.upper(), from_stage, values[:-1]
 
 
 def _validate_source(context: str, dockerfile: str, source: str) -> None:
     normalized = source.replace("\\", "/")
     path = PurePosixPath(normalized)
+    is_remote = bool(
+        re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", normalized)
+        or re.match(r"^[^/@\s]+@[^/:\s]+:.+", normalized)
+    )
+    if is_remote:
+        raise GateError(
+            f"Dockerfile remote COPY/ADD source is forbidden: "
+            f"{context}/{dockerfile}: {source}"
+        )
     if (
         path.is_absolute()
         or any(part == ".." for part in path.parts)
@@ -91,6 +156,112 @@ def _validate_source(context: str, dockerfile: str, source: str) -> None:
             f"Dockerfile COPY/ADD source is outside build context: "
             f"{context}/{dockerfile}: {source}"
         )
+
+
+def _glob_regex(pattern: str) -> re.Pattern[str]:
+    result = ""
+    index = 0
+    while index < len(pattern):
+        character = pattern[index]
+        if character == "*":
+            if index + 1 < len(pattern) and pattern[index + 1] == "*":
+                index += 1
+                if index + 1 < len(pattern) and pattern[index + 1] == "/":
+                    index += 1
+                    result += "(?:.*/)?"
+                else:
+                    result += ".*"
+            else:
+                result += "[^/]*"
+        elif character == "?":
+            result += "[^/]"
+        elif character == "[":
+            closing = pattern.find("]", index + 1)
+            if closing == -1:
+                result += r"\["
+            else:
+                result += pattern[index : closing + 1]
+                index = closing
+        else:
+            result += re.escape(character)
+        index += 1
+    return re.compile(f"^{result}$")
+
+
+def _pattern_matches(pattern: str, relative_path: str) -> bool:
+    normalized = pattern.replace("\\", "/").lstrip("/")
+    directory_pattern = normalized.endswith("/")
+    normalized = normalized.rstrip("/")
+    if not normalized:
+        return False
+    path = PurePosixPath(relative_path)
+    if "/" not in normalized:
+        matcher = _glob_regex(normalized)
+        parts = path.parts[:-1] if directory_pattern else path.parts
+        return any(matcher.fullmatch(part) for part in parts)
+    matcher = _glob_regex(normalized)
+    candidates = [relative_path]
+    if directory_pattern:
+        candidates.extend("/".join(path.parts[:index]) for index in range(1, len(path.parts)))
+    return any(matcher.fullmatch(candidate) for candidate in candidates)
+
+
+def _is_ignored(relative_path: str, patterns: list[str]) -> bool:
+    ignored = False
+    for raw_pattern in patterns:
+        negated = raw_pattern.startswith("!")
+        pattern = raw_pattern[1:] if negated else raw_pattern
+        if _pattern_matches(pattern, relative_path):
+            ignored = not negated
+    return ignored
+
+
+def _under_allowed_root(relative_path: str, roots: tuple[str, ...]) -> bool:
+    return any(
+        relative_path == root or relative_path.startswith(f"{root}/") for root in roots
+    )
+
+
+def _pollution_reason(
+    context_name: str, relative_path: str
+) -> str | None:
+    path = PurePosixPath(relative_path)
+    lowered_parts = tuple(part.lower() for part in path.parts)
+    lowered_name = path.name.lower()
+    suffix = path.suffix.lower()
+    if any(part in PROTECTED_PARTS for part in lowered_parts):
+        return "protected test/cache/tooling path"
+    if lowered_name == ".env" or lowered_name.startswith(".env."):
+        return "environment secret"
+    if suffix in SECRET_SUFFIXES:
+        return "secret-file suffix"
+    if suffix in DANGEROUS_MEDIA_SUFFIXES and not _under_allowed_root(
+        relative_path, MODEL_ASSET_ROOTS.get(context_name, ())
+    ):
+        return "test/media artifact outside an approved model root"
+    return None
+
+
+def _dockerignore_patterns(source: str) -> list[str]:
+    return [
+        line.strip()
+        for line in source.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
+def _validate_context_files(
+    context_name: str, context: Path, patterns: list[str]
+) -> None:
+    for path in context.rglob("*"):
+        if not path.is_file() and not path.is_symlink():
+            continue
+        relative_path = path.relative_to(context).as_posix()
+        reason = _pollution_reason(context_name, relative_path)
+        if reason is not None and not _is_ignored(relative_path, patterns):
+            raise GateError(
+                f"{context_name} build context includes forbidden {reason}: {relative_path}"
+            )
 
 
 def _read_matrix(path: Path) -> tuple[tuple[str, str, str], ...]:
@@ -124,14 +295,14 @@ def main() -> int:
         dockerfile = context / dockerfile_name
         dockerignore = context / ".dockerignore"
         if not context.is_dir() or not dockerfile.is_file():
-            raise GateError(f"missing build context or Dockerfile: {context_name}/{dockerfile_name}")
+            raise GateError(
+                f"missing build context or Dockerfile: {context_name}/{dockerfile_name}"
+            )
         if not dockerignore.is_file():
             raise GateError(f"missing .dockerignore: {context_name}")
-        ignore_lines = {
-            line.strip()
-            for line in dockerignore.read_text(encoding="utf-8").splitlines()
-            if line.strip() and not line.lstrip().startswith("#") and not line.startswith("!")
-        }
+        dockerignore_source = dockerignore.read_text(encoding="utf-8")
+        patterns = _dockerignore_patterns(dockerignore_source)
+        ignore_lines = {line for line in patterns if not line.startswith("!")}
         missing_groups = [
             name
             for name, *patterns in REQUIRED_IGNORE_GROUPS
@@ -142,36 +313,20 @@ def main() -> int:
                 f"{context_name}/.dockerignore does not block required context pollution: "
                 f"{', '.join(missing_groups)}"
             )
-        forbidden_reincludes = []
-        for line in dockerignore.read_text(encoding="utf-8").splitlines():
-            pattern = line.strip()
-            if not pattern.startswith("!"):
-                continue
-            lowered = pattern[1:].lower()
-            protected_tokens = (
-                ".git",
-                ".env",
-                ".pem",
-                ".key",
-                ".p12",
-                ".pfx",
-                ".codex",
-                "harness",
-                "openspec",
-                "__pycache__",
-                ".pytest_cache",
-                ".mypy_cache",
-                ".ruff_cache",
-            )
-            if any(token in lowered for token in protected_tokens):
-                forbidden_reincludes.append(pattern)
+        allowed_reincludes = ALLOWED_REINCLUDES.get(context_name, set())
+        forbidden_reincludes = [
+            pattern
+            for pattern in patterns
+            if pattern.startswith("!") and pattern not in allowed_reincludes
+        ]
         if forbidden_reincludes:
             raise GateError(
                 f"{context_name}/.dockerignore must not re-include protected inputs: "
                 f"{', '.join(forbidden_reincludes)}"
             )
+        _validate_context_files(context_name, context, patterns)
         for instruction in _logical_lines(dockerfile.read_text(encoding="utf-8")):
-            from_stage, sources = _copy_sources(instruction)
+            _, from_stage, sources = _copy_sources(instruction)
             if from_stage:
                 continue
             for source in sources:
