@@ -40,6 +40,8 @@ RUN pip install torch==1.12.1+cu113 torchvision==0.13.1+cu113 torchaudio==0.12.1
 WORKDIR /workspace
 
 COPY ./requirements_cuda113.txt ./requirements_cuda113.txt
+ARG OPERATOR_REGISTRY_CLIENT_WHEEL=algorithm_operator_registry_client-0.1.0-py3-none-any.whl
+COPY wheel/${OPERATOR_REGISTRY_CLIENT_WHEEL} /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL}
 COPY ./app ./app
 COPY ./config.toml ./config.toml
 COPY ./models ./models
@@ -47,7 +49,8 @@ COPY ./models-encrypted ./models-encrypted
 COPY ./docker/start.sh ./docker/start.sh
 COPY ./scripts/build_cython_modules.py ./scripts/build_cython_modules.py
 
-RUN pip install -i https://mirrors.aliyun.com/pypi/simple/ -r requirements_cuda113.txt
+RUN pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} && \
+    pip install -i https://mirrors.aliyun.com/pypi/simple/ -r requirements_cuda113.txt
 
 ENV PYTHONUNBUFFERED=1 \
     CONFIG_PATH=/workspace/config.toml

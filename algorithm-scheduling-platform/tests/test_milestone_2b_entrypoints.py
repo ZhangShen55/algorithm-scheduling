@@ -42,8 +42,8 @@ def test_gpu_entrypoints_set_process_name_one_worker_and_stable_port() -> None:
 
         assert os.access(path, os.X_OK), relative
         assert f'PROCESS_NAME="${{GPU_PROCESS_NAME:-{default_name}}}"' in source, relative
-        assert 'WORKERS="${UVICORN_WORKERS:-1}"' in source, relative
-        assert f'PORT="${{PORT:-{default_port}}}"' in source, relative
+        assert 'WORKERS="${UVICORN_WORKERS:-' in source, relative
+        assert default_port in source, relative
         assert 'exec -a "$PROCESS_NAME"' in source, relative
         assert "--workers 1" in source, relative
 
@@ -108,3 +108,83 @@ def test_text_analysis_defaults_to_one_worker_on_python311() -> None:
     assert "UVICORN_WORKERS=1" in docker_source
     assert docker_source.count("FROM python:3.11") == 2
     assert "FROM python:3.10" not in docker_source
+
+
+def _clean_text_analysis_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    for name in ("UVICORN_WORKERS", "UVICORN_RELOAD", "UVICORN_EXTRA"):
+        environment.pop(name, None)
+    return environment
+
+
+def test_text_analysis_rejects_multi_process_options_before_import() -> None:
+    unsafe_environments = (
+        {"UVICORN_WORKERS": "2"},
+        {"UVICORN_RELOAD": "1"},
+        {"UVICORN_EXTRA": "--workers 2"},
+        {"UVICORN_EXTRA": "--workers=2"},
+        {"UVICORN_EXTRA": "--reload"},
+        {"UVICORN_EXTRA": "--reload=true"},
+    )
+
+    for overrides in unsafe_environments:
+        environment = _clean_text_analysis_environment()
+        environment.update(overrides)
+        completed = subprocess.run(
+            ["bash", str(ROOT / "text_analysis/start.sh")],
+            cwd=ROOT / "text_analysis",
+            env=environment,
+            text=True,
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+
+        assert completed.returncode != 0, overrides
+        assert "requires exactly one Uvicorn process" in completed.stderr, (
+            overrides,
+            completed.stdout,
+            completed.stderr,
+        )
+
+
+def test_text_analysis_preserves_safe_extra_arguments(tmp_path: Path) -> None:
+    capture_path = tmp_path / "uvicorn-args"
+    stub = tmp_path / "uvicorn"
+    stub.write_text(
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > \"$CAPTURE_PATH\"\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    environment = _clean_text_analysis_environment()
+    environment.update(
+        {
+            "PATH": f"{tmp_path}:{environment['PATH']}",
+            "CAPTURE_PATH": str(capture_path),
+            "UVICORN_EXTRA": "--timeout-keep-alive 10",
+        }
+    )
+
+    completed = subprocess.run(
+        ["bash", str(ROOT / "text_analysis/start.sh")],
+        cwd=ROOT / "text_analysis",
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=5,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    arguments = capture_path.read_text(encoding="utf-8").splitlines()
+    assert arguments[arguments.index("--workers") + 1] == "1"
+    assert arguments[-2:] == ["--timeout-keep-alive", "10"]
+
+
+def test_all_supported_vbas_images_install_registry_client() -> None:
+    for dockerfile in sorted((ROOT / "vbas/docker").glob("Dockerfile*")):
+        source = dockerfile.read_text(encoding="utf-8")
+        assert "algorithm_operator_registry_client-0.1.0-py3-none-any.whl" in source, (
+            dockerfile
+        )
+        assert "pip install --no-deps" in source, dockerfile

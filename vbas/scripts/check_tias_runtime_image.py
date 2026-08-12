@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 import argparse
 import fnmatch
+import json
 import subprocess
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Iterable
-
 
 FORBIDDEN_MODEL_EXTENSIONS = {".pt", ".pth", ".onnx", ".engine"}
 FORBIDDEN_KEY_EXTENSIONS = {".key", ".pem", ".crt"}
@@ -42,7 +42,14 @@ ALLOWED_PYTHON_FILES = {
 REQUIRED_FILES = {
     "/workspace/app/main.py",
     "/usr/local/bin/tias-secure-entrypoint",
+    "/usr/local/bin/vbas-start",
 }
+REQUIRED_EXECUTABLE_FILES = {
+    "/usr/local/bin/tias-secure-entrypoint",
+    "/usr/local/bin/vbas-start",
+}
+EXPECTED_ENTRYPOINT = ["/usr/local/bin/tias-secure-entrypoint"]
+EXPECTED_COMMAND = ["/usr/local/bin/vbas-start"]
 
 
 @dataclass(frozen=True)
@@ -53,8 +60,15 @@ class ImageCheckResult:
     checked_rule_count: int
 
 
-def evaluate_runtime_files(files: Iterable[str]) -> ImageCheckResult:
+def evaluate_runtime_files(
+    files: Iterable[str],
+    *,
+    executable_files: Iterable[str] = (),
+) -> ImageCheckResult:
     normalized_files = sorted({_normalize_path(item) for item in files if str(item).strip()})
+    normalized_executables = {
+        _normalize_path(item) for item in executable_files if str(item).strip()
+    }
     failures: list[str] = []
     extension_count = 0
 
@@ -73,12 +87,17 @@ def evaluate_runtime_files(files: Iterable[str]) -> ImageCheckResult:
             failures.append(f"发现非运行文件: {file_path}")
         if _is_protected_plain_source(file_path):
             failures.append(f"发现核心明文源码: {file_path}")
-        if suffix == ".so" and any(file_path.startswith(prefix) for prefix in PROTECTED_PACKAGE_PREFIXES):
+        if suffix == ".so" and any(
+            file_path.startswith(prefix) for prefix in PROTECTED_PACKAGE_PREFIXES
+        ):
             extension_count += 1
 
     missing_required = sorted(REQUIRED_FILES.difference(normalized_files))
     for file_path in missing_required:
         failures.append(f"缺少运行必需文件: {file_path}")
+    for file_path in sorted(REQUIRED_EXECUTABLE_FILES.intersection(normalized_files)):
+        if file_path not in normalized_executables:
+            failures.append(f"运行入口不可执行: {file_path}")
     if extension_count == 0:
         failures.append("未发现 Cython .so 编译产物")
 
@@ -86,11 +105,11 @@ def evaluate_runtime_files(files: Iterable[str]) -> ImageCheckResult:
         ok=not failures,
         failures=failures,
         extension_count=extension_count,
-        checked_rule_count=6,
+        checked_rule_count=8,
     )
 
 
-def list_image_files(image: str) -> list[str]:
+def inspect_image_files(image: str) -> tuple[list[str], set[str]]:
     command = [
         "docker",
         "run",
@@ -103,23 +122,59 @@ def list_image_files(image: str) -> list[str]:
         "-c",
         "find /workspace/app -type f -print 2>/dev/null; "
         "find /workspace/model-assets -type f -print 2>/dev/null; "
-        "if [ -f /usr/local/bin/tias-secure-entrypoint ]; then "
-        "printf '%s\\n' /usr/local/bin/tias-secure-entrypoint; "
-        "fi",
+        "for path in /usr/local/bin/tias-secure-entrypoint /usr/local/bin/vbas-start; do "
+        "if [ -f \"$path\" ]; then printf '%s\\n' \"$path\"; fi; "
+        "if [ -x \"$path\" ]; then printf '__EXECUTABLE__%s\\n' \"$path\"; fi; "
+        "done",
     ]
     completed = subprocess.run(
         command,
         check=False,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     if completed.returncode != 0:
         raise RuntimeError(
             "镜像文件列表读取失败: "
             f"exit={completed.returncode} stderr={completed.stderr.strip()}"
         )
-    return completed.stdout.splitlines()
+    files: list[str] = []
+    executable_files: set[str] = set()
+    for line in completed.stdout.splitlines():
+        if line.startswith("__EXECUTABLE__"):
+            executable_files.add(line.removeprefix("__EXECUTABLE__"))
+        else:
+            files.append(line)
+    return files, executable_files
+
+
+def inspect_image_config(image: str) -> tuple[list[str], list[str]]:
+    completed = subprocess.run(
+        ["docker", "image", "inspect", "--format", "{{json .Config}}", image],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "镜像启动配置读取失败: "
+            f"exit={completed.returncode} stderr={completed.stderr.strip()}"
+        )
+    config = json.loads(completed.stdout)
+    return config.get("Entrypoint") or [], config.get("Cmd") or []
+
+
+def evaluate_runtime_config(
+    *, entrypoint: Iterable[str], command: Iterable[str]
+) -> list[str]:
+    failures: list[str] = []
+    if list(entrypoint) != EXPECTED_ENTRYPOINT:
+        failures.append(
+            "默认 ENTRYPOINT 必须为: " + " ".join(EXPECTED_ENTRYPOINT)
+        )
+    if list(command) != EXPECTED_COMMAND:
+        failures.append("默认 CMD 必须为: " + " ".join(EXPECTED_COMMAND))
+    return failures
 
 
 def _normalize_path(value: str) -> str:
@@ -148,12 +203,24 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        files = list_image_files(args.image)
+        files, executable_files = inspect_image_files(args.image)
+        entrypoint, command = inspect_image_config(args.image)
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 2
 
-    result = evaluate_runtime_files(files)
+    result = evaluate_runtime_files(files, executable_files=executable_files)
+    config_failures = evaluate_runtime_config(
+        entrypoint=entrypoint,
+        command=command,
+    )
+    if config_failures:
+        result = ImageCheckResult(
+            ok=False,
+            failures=[*result.failures, *config_failures],
+            extension_count=result.extension_count,
+            checked_rule_count=result.checked_rule_count,
+        )
     if result.ok:
         print("VBas secure runtime 镜像检查通过")
         print(f".so 编译产物数量: {result.extension_count}")
