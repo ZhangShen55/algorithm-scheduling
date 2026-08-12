@@ -43,6 +43,108 @@ Harness 报告。当前明文模式不要求 runtime secret。未来启用加密
 算子本机真实运行的输入、环境、结果与缺口见
 `harness/scenarios/operator-local-runtime-validation.md`。该场景必须与课程 DAG 验收分开计数。
 
+## 2026-08-12 离线 ASR v1.1.8 多语言合同
+
+从工作区根目录执行静态、单元和平台合同验证：
+
+```bash
+(cd asr_offline && conda run -n asr python -m compileall -q app)
+(cd asr_offline && conda run -n asr python -m unittest discover -s tests -v)
+(cd asr_offline && conda run -n asr python -m pip check)
+(cd algorithm-scheduling-platform && .venv/bin/python -m pytest -q \
+  tests/test_milestone_2b_operator_configs.py \
+  tests/test_milestone_2b_gpu_fail_fast.py \
+  tests/test_operator_deployment_integration.py \
+  tests/test_offline_asr_adapter.py)
+```
+
+冷启动和 HTTP 合同验证需使用两个终端。终端 1 启动服务：
+
+```bash
+cd asr_offline
+conda run -n asr python -m uvicorn app.main:app \
+  --host 127.0.0.1 --port 18084 --workers 1
+```
+
+终端 2 等待健康检查成功后执行合同检查：
+
+```bash
+cd asr_offline
+until curl -fsS http://127.0.0.1:18084/ops/health; do sleep 1; done
+curl -fsS http://127.0.0.1:18084/ops/health
+curl -fsS http://127.0.0.1:18084/openapi.json | jq '.paths | keys | sort'
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  -X POST http://127.0.0.1:18084/v1.1.7/seacraft_asr
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  -X POST http://127.0.0.1:18084/audio/detect_mandarin
+curl -sS -X POST http://127.0.0.1:18084/v1.1.8/seacraft_asr \
+  -F 'audioFile=@test_wav/chinEng-16k.wav' \
+  -F 'language=Klingon'
+```
+
+全部 HTTP 检查和可选的真实推理完成后，在终端 1 按 `Ctrl-C` 停止服务，并确认
+`lsof -nP -iTCP:18084 -sTCP:LISTEN` 无输出。
+
+真实法语推理使用仓库外样本，该文件不得复制进仓库：
+
+```bash
+curl -fsS -X POST http://127.0.0.1:18084/v1.1.8/seacraft_asr \
+  -F 'audioFile=@/Volumes/Data55/asr测试文件/法语音频.mp3' \
+  -F 'language=fr' \
+  -F 'showSpk=true' \
+  -F 'showEmotion=true' \
+  -F 'showRoleIdentify=false' \
+  -F 'wordTimestamps=true' \
+  > /tmp/asr-fr-response.json
+
+jq -e --argjson duration 442.853878 '
+  [.segments[].segment_words[]?] as $words |
+  {
+    keys: (keys | sort),
+    language,
+    segments: (.segments | length),
+    words: ($words | length),
+    non_empty_word_segments: ([.segments[] | select((.segment_words | length) > 0)] | length),
+    positive_speed: ([.segments[] | select(.speed > 0)] | length),
+    role_present_and_null: ([.segments[] | select(has("role") and (.role == null))] | length),
+    emotion_present_and_null: ([.segments[] | select(has("emotion") and (.emotion == null))] | length),
+    word_ranges_valid: ([$words[] | select(
+      (.bg | tonumber) < 0 or
+      (.ed | tonumber) < (.bg | tonumber) or
+      (.ed | tonumber) > $duration
+    )] | length == 0),
+    word_starts_monotonic: ([range(1; $words | length) | select(
+      ($words[.].bg | tonumber) < ($words[. - 1].bg | tonumber)
+    )] | length == 0),
+    speed_units: [.speed_info[].unit],
+    speed_counts: [.speed_info[].segment_info.segment_count]
+  } as $evidence |
+  if (
+    $evidence.keys == ["gpu_time_ms", "language", "load_audio_time_ms", "segments", "speed_info", "text"] and
+    $evidence.language == "fr" and
+    $evidence.words > 0 and
+    $evidence.non_empty_word_segments > 0 and
+    $evidence.role_present_and_null == $evidence.segments and
+    $evidence.emotion_present_and_null == $evidence.segments and
+    $evidence.word_ranges_valid and
+    $evidence.word_starts_monotonic
+  ) then $evidence else error("法语 ASR 响应合同验证失败") end
+' /tmp/asr-fr-response.json
+
+rm -f /tmp/asr-fr-response.json
+```
+
+本次环境为 macOS / `asr` Python 3.11.13 / CPU，本机无可用 CUDA/CTranslate2 GPU。结果为：
+
+- 算子完整测试 `50/50` 通过，平台聚焦合同测试 `20/20` 通过，`pip check` 无损坏依赖。
+- 冷启动 `/ops/health` 返回 HTTP 200；OpenAPI 包含 `POST /v1.1.8/seacraft_asr`，不包含两个退役路由，两个退役路由实际均返回 HTTP 404。未支持语言返回 HTTP 200 / 业务码 `4009`。
+- `442.853878` 秒真实法语 MP3 推理耗时约 `536.8` 秒，得到 140 个 segment、1063 个真实词时间、139 个正数 `speed`，1/5/10 分钟 `speed_info` 窗口数为 8/2/1，所有请求的 `role`/`emotion` 均为 `null`。
+- 成功响应顶层精确为 `language`、`segments`、`text`、`speed_info`、`load_audio_time_ms` 和 `gpu_time_ms`，未增加能力状态或成功业务码字段。
+
+上述证据层级为算子静态/单元合同、本机服务运行和真实 CPU 推理。它不包含通过
+`control-service` 真实租约选择的调用，也不代表 Kafka、课程 DAG、GPU 容器或三卡部署已验收。
+旧报告流水线仍调用 `/audio/detect_mandarin`，在其迁移或确认停用前不得发布该套新合同。
+
 Root-service relocation image checks use the workspace root as build context:
 
 ```bash

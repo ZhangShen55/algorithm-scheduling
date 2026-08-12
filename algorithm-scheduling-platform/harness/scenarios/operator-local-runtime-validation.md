@@ -11,13 +11,23 @@
 | 算子 | Conda/Python | 真实调用证据 | 结论 |
 | --- | --- | --- | --- |
 | `asr_online` | `asr` / 3.11.13 | WebSocket 连续发送 10 块音频，9 块返回非空文本 | 通过 |
-| `asr_offline` | `asr` / 3.11.13 | `v1.1.8` 处理真实 20 秒 WAV，返回 8 个 segment，含说话人和情绪 | 通过 |
+| `asr_offline` | `asr` / 3.11.13 | `v1.1.8` 处理 442.85 秒真实法语 MP3，返回 140 个 segment 和 1063 个真实词时间 | 通过，本机 CPU 耗时约 536.8 秒 |
 | `facerec` | `facerecapi` / 3.10.19 | `/persons` 写入 512×float32 embedding；同图 `/recognize` 100% 命中；未保存人物图片 | 通过，Python 版本有约束 |
 | `ocr` | `ocr-v6` / 3.11 | `/ocr/prediction` 识别出“土地整治与土壤修复研究中心”等文本；149 项测试通过 | 通过 |
 | `screen_det` | `screen_det` / 3.11 | `/detect_all` 的四个检测模块均返回成功；68 项测试和 17 个子测试通过 | 通过 |
 | `vbas` | `vbas` / 3.11 | 学生接口识别 24 人；教师接口识别站立、讲授；55 项测试通过 | 通过 |
 | `text_analysis` | `openai` / 3.11 | 真实 Qwen 调用返回关键词及完整课程 overview、key_points、mindmap；24 项测试通过 | 通过，依赖外部 LLM |
 | `ppt_slice` | `ppt_slice` / 3.11 | 合成 MP4 经 HTTP 处理，落盘 1 张切片并回调一次；manifest 检出 `6000-15000ms` 动态区间；99 项测试通过 | 机制通过，真实课程 P 视频待验收 |
+
+## ASR Offline 多语言合同
+
+- 外部样本 `/Volumes/Data55/asr测试文件/法语音频.mp3` 时长 `442.853878` 秒，只用于本机验证，不复制进仓库。
+- 唯一离线转写路由为 `POST /v1.1.8/seacraft_asr`；`POST /v1.1.7/seacraft_asr` 和 `POST /audio/detect_mandarin` 均返回 HTTP 404，且不再出现于 OpenAPI。
+- `language=auto/zh/en` 保持 Paraformer 路由，`language=fr` 在 `open_mul_lang=true` 且 Whisper 就绪时执行小语种转写。功能关闭或模型未就绪时返回 HTTP 200 / 业务码 `4003`，空语言和未支持语言返回 HTTP 200 / 业务码 `4009`。
+- 法语成功响应顶层仅有 `language`、`segments`、`text`、`speed_info`、`load_audio_time_ms` 和 `gpu_time_ms`。实测得到 140 个 segment、1063 个真实词时间和 139 个正数 `speed`；`speed_info` 的 1/5/10 分钟窗口数分别为 8/2/1。
+- 小语种不调用说话人、角色或情绪增强模型。请求相应能力时 `role`/`emotion` 为 `null`；`wordTimestamps=false` 时 `segment_words=[]`，为 `true` 时返回 Whisper 真实词时间。Whisper 始终启用词对齐，仅在序列化时按请求隐藏词数组，保证 `wordTimestamps` 不改变 `speed` 和 `speed_info`。
+- `rate_factor=0.4` 只用于单段 `speed`，`speed_info` 不乘该系数。Pyannote 运行时、直接依赖和部署资源已移除；Paraformer、CAM++、emotion2vec、Whisper 和 FiveWh 在本次验证时仍保留。
+- 证据层级仅为算子静态/单元合同、本机冷启动和真实 CPU 推理，不代表已经通过真实租约调用，也不证明 Kafka、课程 DAG、GPU 容器或三卡部署已验收。
 
 ## FaceRec Python 约束
 
@@ -53,3 +63,4 @@ wheel 的 `Requires-Python` 为 `>=3.10`，运行依赖只有 FastAPI、HTTPX �
 2. `orchestrator-service` factory 尚未注入 PPT handler；提交、续租、终态持久化和 OCR 释放还没有组成常驻运行闭环。
 3. ScreenDet 与 Text Analysis 的通用 `/ops/status` 尚未反映真实模型/下游 LLM 就绪，应分别以 `/health`、`/api/models` 和真实请求作为就绪证据。
 4. 本场景没有证明多 GPU 部署、Kafka 消费、课程 DAG 或在线网关实例路由。
+5. 仓库外的旧报告流水线 `/Users/zhangshen/Documents/workspace/ai报告分析课程数据/scripts/pipeline.py` 仍调用已退役的 `/audio/detect_mandarin`；发布前必须迁移该步骤或确认整条流水线已停用。

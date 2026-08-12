@@ -1,5 +1,17 @@
 # Change Ledger
 
+## 2026-08-12 - 离线 ASR v1.1.8 多语言收敛与资源缩减
+
+- 先前状态：离线 ASR 同时暴露 `v1.1.7`、`v1.1.8` 和普通话检测路由；小语种路径保留了当前调度不需要且额外占用模型资源的 Pyannote 说话人链路，v1.1.8 未承接法语 Whisper 响应合同。
+- 目标状态：唯一离线转写接口收敛为 `POST /v1.1.8/seacraft_asr`；`auto/zh/en` 使用 Paraformer，只有白名单小语种 `fr` 使用 Faster-Whisper。`open_mul_lang=false` 或模型未就绪时返回 HTTP 200 / `4003`，空语言或未支持语言返回 HTTP 200 / `4009`。
+- 变更文件：`asr_offline` 路由、请求实体、Whisper 并发/响应组装、模型与功能配置、requirements、Docker/Compose、合同测试和说明文档；同步更新本 Harness 账本、验证命令和算子场景。
+- 契约影响：删除 `POST /v1.1.7/seacraft_asr` 和 `POST /audio/detect_mandarin`；保留 `/audio/db_snr` 和 `/text/question`。成功响应不新增顶层字段；法语请求的 `role`/`emotion` 按需返回 `null`，`segment_words` 在关闭词时间时为空数组、开启时为真实 Whisper 词时间。`rate_factor=0.4` 保留且只作用于单段 `speed`。
+- 资源边界：移除 Pyannote 代码、直接依赖、配置、Docker 改写和 Compose 兼容环境变量；三个退役 Pyannote 模型目录只从镜像上下文排除，不删除本地文件。Paraformer、CAM++、emotion2vec、Whisper 和 FiveWh 均保留，FiveWh 按请求懒加载。
+- 验证命令与环境：`asr` Python 3.11.13 / macOS CPU 环境执行 `compileall`、完整 `unittest`、`pip check`、平台 ASR 配置/部署/适配器聚焦合同测试、冷启动/OpenAPI/HTTP 路由验证，并对 `/Volumes/Data55/asr测试文件/法语音频.mp3` 执行真实 Faster-Whisper 推理。
+- 真实证据：算子完整测试 `50/50`、平台聚焦合同测试 `20/20` 通过，两个退役路由均为 HTTP 404。`442.853878` 秒法语样本在 CPU 上约 `536.8` 秒完成，返回 140 个 segment、1063 个词时间、139 个正数 `speed` 和 8/2/1 个 1/5/10 分钟 `speed_info` 窗口；请求的 `role`/`emotion` 全为 `null`，顶层字段严格保持既有 6 项。
+- 证据层级与结论：达到算子静态/单元合同、本机服务运行和真实 CPU 推理层级，未达到通过 `control-service` 真实租约调用的算子契约验证，不将其计为 Kafka、课程 DAG、GPU 容器或三卡部署完成证据。
+- 剩余风险：仓库外旧报告流水线仍调用已退役的 `/audio/detect_mandarin`；发布前必须迁移该步骤或确认整条流水线已停用。
+
 ## 2026-08-12 - 里程碑 2B 模型资产与密钥边界（Task 7C）
 
 - 先前状态：设计错误地列出七个模型目录并包含 VBas 加密目录；ScreenDet 运行读取 `model/screen.pt`、`model/occlusion.pt`，但 Dockerfile 没有复制模型且 `.dockerignore` 排除了模型；多个镜像仍可能复制本地配置或整个项目上下文。
