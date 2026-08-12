@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from fastapi import UploadFile, Depends, Form, File
+from fastapi import UploadFile, Depends, Form, File, Request
 from typing import List, Optional
 from typing import Annotated
 # import websockets
@@ -28,6 +28,7 @@ class AsrRequestParams:
 
 
 async def get_asr_params(
+    request: Request,
     audioFile: Annotated[UploadFile, File(...)],
     language: Annotated[str, Form()] = "auto",
     wordTimestamps: Annotated[bool, Form()] = False,
@@ -39,6 +40,11 @@ async def get_asr_params(
     showSpeed: Annotated[bool, Form()] = False,
     showRoleIdentify: Annotated[bool, Form()] = False,
 ) -> AsrRequestParams:
+    form = await request.form()
+    if "language" in form:
+        raw_language = form.get("language")
+        if isinstance(raw_language, str):
+            language = raw_language
     if hotWords is None:
         hotWords = []
     if output is None:

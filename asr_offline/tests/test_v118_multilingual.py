@@ -4,6 +4,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from app.entity.data import AsrRequestParams
 
 
@@ -86,6 +89,75 @@ class RouteAssemblyContractTests(unittest.TestCase):
         self.assertIn("/v1.1.8/seacraft_asr", paths)
         self.assertIn("/audio/db_snr", paths)
         self.assertIn("/text/question", paths)
+
+
+class HttpLanguageFormContractTests(unittest.TestCase):
+    @staticmethod
+    def _build_client():
+        import app.api.routes.asr_v18 as route
+
+        app = FastAPI()
+        app.include_router(route.router)
+        return route, TestClient(app)
+
+    def test_explicit_empty_language_is_rejected_before_audio_preparation(self):
+        route, client = self._build_client()
+        prepare = AsyncMock(return_value=({"msg": "audio read", "code": 4002}, None))
+
+        with patch.object(route, "prepare_asr_context", prepare):
+            response = client.post(
+                "/v1.1.8/seacraft_asr",
+                data={"language": ""},
+                files={"audioFile": ("dummy.wav", b"not-read", "audio/wav")},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"msg": "不支持的语言: ", "code": 4009})
+        prepare.assert_not_awaited()
+
+    def test_omitted_language_keeps_auto_default(self):
+        route, client = self._build_client()
+        prepare = AsyncMock(
+            side_effect=lambda request: (None, make_context(request)),
+        )
+        paraformer = AsyncMock(
+            side_effect=lambda context: {"language": context.request.language},
+        )
+
+        with (
+            patch.object(route, "prepare_asr_context", prepare),
+            patch.object(route, "run_paraformer_asr", paraformer),
+        ):
+            response = client.post(
+                "/v1.1.8/seacraft_asr",
+                files={"audioFile": ("dummy.wav", b"not-read", "audio/wav")},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"language": "auto"})
+        request = prepare.await_args.args[0]
+        self.assertEqual(request.language, "auto")
+        paraformer.assert_awaited_once()
+
+    def test_non_string_language_keeps_fastapi_validation(self):
+        route, client = self._build_client()
+        prepare = AsyncMock()
+
+        with patch.object(route, "prepare_asr_context", prepare):
+            response = client.post(
+                "/v1.1.8/seacraft_asr",
+                files={
+                    "audioFile": ("dummy.wav", b"not-read", "audio/wav"),
+                    "language": (
+                        "language.bin",
+                        b"fr",
+                        "application/octet-stream",
+                    ),
+                },
+            )
+
+        self.assertEqual(response.status_code, 422)
+        prepare.assert_not_awaited()
 
 
 class LanguageDispatchTests(unittest.IsolatedAsyncioTestCase):
