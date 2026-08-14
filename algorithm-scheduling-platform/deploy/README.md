@@ -203,12 +203,25 @@ path and have exact `0700` mode. The generator atomically creates the manifest w
 `0600` mode. Report archival validates the same ownership, mode, worktree and no-follow
 boundary before creating any release directories; it never repairs an insecure source.
 The transaction rejects missing/extra files, path traversal, symlinks, special files,
-secret/encrypted paths, duplicate JSON keys and hash drift. Before creating any stage
+secret/encrypted paths, nested `manifest.sha256`, duplicate JSON keys and hash drift.
+Before creating any stage
 directory it fsyncs a `preparing` journal containing all six exact stage/backup paths;
 restart recovery removes only paths named by that transaction, rolls back interrupted
 replacements and leaves unknown similarly named directories untouched. A private lock,
 same-filesystem staging and fsync prevent a killed copy from accumulating partial roots
 or publishing a mixed release.
+
+`build-images` derives the OCR runtime `manifest.sha256` from the protected external
+manifest into a temporary `0600` file outside the worktree. Only the OCR build receives
+that file as a required BuildKit secret. The Dockerfile verifies the exact copied file
+set and every digest before installing the derived runtime manifest, and the build entry
+removes the temporary file on success, failure or interruption. The Git worktree and
+external model roots do not gain a second manifest authority.
+
+Python wheels may be downloaded while each image is built. A quiet BuildKit log alone
+is not a failure: continue while network bytes, Docker cache size or filesystem writes
+show progress. Stop only for an explicit HTTP/connection failure or a sustained interval
+with no byte-level progress; do not cancel a slow but advancing Torch/CUDA wheel download.
 
 After a GPU operator is healthy, collect its evidence while the corresponding real
 smoke request is still running. The trigger file is a JSON argv array and is executed

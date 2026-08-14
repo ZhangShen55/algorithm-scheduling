@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 import sys
 
@@ -11,9 +12,19 @@ from app.core.model_verification import ModelVerificationError, verify_manifest
 
 
 def main() -> int:
-    models_root = PROJECT_ROOT / "models"
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--models-root", type=Path, default=PROJECT_ROOT / "models")
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--exact", action="store_true")
+    arguments = parser.parse_args()
+    models_root = arguments.models_root
+    manifest = arguments.manifest or models_root / "manifest.sha256"
     try:
-        verified = verify_manifest(models_root, models_root / "manifest.sha256")
+        verified = verify_manifest(
+            models_root,
+            manifest,
+            exact=arguments.exact,
+        )
     except ModelVerificationError as error:
         print(f"模型验证失败：{error}", file=sys.stderr)
         return 1

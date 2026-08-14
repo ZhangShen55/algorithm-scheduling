@@ -102,11 +102,23 @@ EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" MODEL_ASSET_SOURCE="$MODEL_ASSET_SOURCE" \
 `org.opencontainers.image.revision`。上下文门禁和模型校验任何一步失败都必须停在
 本阶段。
 
+构建期间允许 pip/Conda 在镜像内在线下载 Wheel。下载源可达且网络字节、Docker
+缓存或文件系统写入仍持续增长时，即使 BuildKit 日志暂时静默也必须继续等待。只有
+明确的 HTTP 403/404、连接失败，或持续无字节/无磁盘进展，才可中止并记录证据。
+构建期间由独立监控任务分别跟踪阶段/下载、磁盘/内存/进程和八镜像 revision 矩阵。
+“持续无进展”默认要求至少 15 分钟内每 60 秒采样一次，且网络接收字节、Docker
+缓存/镜像大小、相关文件系统写入和下载进程四类证据均无增长；任一证据有进展就重置
+观察窗口。
+
 ### 本次远端执行结果（2026-08-12）
 
 服务器预检、模型资产传输、staging 和六个模型根逐文件校验已经通过。模型源中发现的
 两个 staging 污染文件（`vbas/models/.DS_Store`、`ocr/models/manifest.sha256`）已在
 Git 工作树外的受控 staging 源中精确移除，原始算子目录未修改。
+这是当时的执行事实。`manifest.sha256` 在外部模型根中仍属于平台污染，只有经权威总清单
+投影后位于最终镜像内的运行时派生副本合法。现行合同不把该文件放回模型源或 Git，
+而是在每次发布构建时从外部总清单投影
+OCR 子集，以 BuildKit secret 校验镜像内精确文件集，再生成镜像内运行时派生清单。
 
 八镜像构建在第一个 ASR Offline 镜像解析
 `nvcr.io/nvidia/cuda:12.1.1-cudnn8-runtime-centos7` 时被 registry 大层 TLS handshake
@@ -143,9 +155,9 @@ OCR 可选 Cython 构建随后暴露出跨提交门禁冲突：其构建期导�
 使用 `c36dbc45c4c3a7e721785eb4a5cd8e12757c8cd4` 续接后，上述两项阻塞均已越过；
 ASR Offline 成功创建 Python 3.11.15 Conda 环境，并完整下载 766.7 MB 的 Torch 2.6.0
 wheel。但 PyTorch 随后仍需下载约十余个 CUDA 12.4 拆分 wheel 和 Triton，当前链路速率
-降至约 0.2-0.6 MB/s。依据有界下载规则，构建在 CUDA CUPTI wheel 阶段主动中止，后续
-七镜像未开始。通过内部镜像/代理准备这些 Python 3.11 x86_64 wheels，或批准长时间构建
-窗口后，再从本阶段统一入口继续；不得把单个 ASR 真机推理通过外推为八镜像通过。
+降至约 0.2-0.6 MB/s。当时依据旧的有界下载规则，构建在 CUDA CUPTI wheel 阶段主动中止，
+后续七镜像未开始。该中止是历史事实，但判定规则已被本节新策略取代：0.2-0.6 MB/s
+仍是明确进展，不再构成中止理由。不得把单个 ASR 真机推理通过外推为八镜像通过。
 
 ## 阶段 3：平台和逐卡算子拓扑
 

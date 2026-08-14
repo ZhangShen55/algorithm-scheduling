@@ -34,8 +34,10 @@ Cython 只提高源码阅读和逆向门槛，不是密码学加密，也不代�
 普通 x86_64 Linux 镜像：
 
 ```bash
+OCR_MODEL_MANIFEST_SECRET=/secure/build-inputs/ocr-runtime-manifest.sha256
 docker build \
   --platform linux/amd64 \
+  --secret id=ocr_model_manifest,src="$OCR_MODEL_MANIFEST_SECRET" \
   -f docker/Dockerfile \
   -t jy-ocr-v6-service:3.0-source \
   .
@@ -44,8 +46,10 @@ docker build \
 Cython 编译保护镜像：
 
 ```bash
+OCR_MODEL_MANIFEST_SECRET=/secure/build-inputs/ocr-runtime-manifest.sha256
 docker build \
   --platform linux/amd64 \
+  --secret id=ocr_model_manifest,src="$OCR_MODEL_MANIFEST_SECRET" \
   --build-arg cython=yes \
   -f docker/Dockerfile \
   -t jy-ocr-v6-service:3.0-cython \
@@ -64,6 +68,13 @@ docker build \
 ```
 
 该命令必须报告 `cython must be "yes" or "no"`。镜像使用 Paddle 官方中文文档提供的 `ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddle:3.3.0-gpu-cuda11.8-cudnn8.9`。镜像体积较大，首次跨架构构建需要预留足够磁盘和下载时间。
+
+`ocr_model_manifest` 是构建必需的 BuildKit secret。`OCR_MODEL_MANIFEST_SECRET` 必须是工作树和
+外部模型根之外的临时投影文件；禁止在项目 `models/` 或外部 `ocr/models/` 内生成
+`manifest.sha256`。调度平台发布应直接使用 `deploy/scripts/build-images`，由它从 Git
+工作树外的权威 `model-assets.manifest.json` 投影 OCR 子集、设置 `0600` 权限并在构建
+结束后清理。镜像会在依赖安装和应用导入前按该清单校验模型的精确文件集与
+SHA-256，并仅保留运行时引擎需要的派生清单。
 
 ### CPU 运行
 

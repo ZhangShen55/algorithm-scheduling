@@ -67,8 +67,13 @@ COPY scripts/verify_models.py /app/.build/verify_models.py
 COPY config.toml.example /app/.build/config.toml
 COPY docker/entrypoint.sh /usr/local/bin/ocr-entrypoint
 
-RUN chmod 0755 /usr/local/bin/ocr-entrypoint \
+RUN --mount=type=secret,id=ocr_model_manifest,required=true \
+    chmod 0755 /usr/local/bin/ocr-entrypoint \
     && python /app/.build/verify_models.py \
+         --models-root /app/models \
+         --manifest /run/secrets/ocr_model_manifest \
+         --exact \
+    && install -m 0444 /run/secrets/ocr_model_manifest /app/models/manifest.sha256 \
     && cp /app/.build/config.toml /app/config.toml \
     && python -c "import app.main; import app.engines.paddleocr_v6; import app.engines.paddle_formula; import app.services.ocr_service; import app.services.formula_service" \
     && rm -f /app/config.toml \

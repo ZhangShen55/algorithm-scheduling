@@ -161,6 +161,116 @@ def test_verify_models_script_runs_directly_and_checks_all_manifest_entries(
     assert "ModuleNotFoundError" not in result.stderr
 
 
+def test_verify_models_cli_accepts_an_external_manifest_and_exact_file_set(
+    tmp_path: Path,
+):
+    project = tmp_path / "project"
+    scripts_dir = project / "scripts"
+    core_dir = project / "app" / "core"
+    models = project / "models"
+    scripts_dir.mkdir(parents=True)
+    core_dir.mkdir(parents=True)
+    models.mkdir()
+    source_root = Path(__file__).resolve().parents[2]
+    shutil.copy(source_root / "scripts" / "verify_models.py", scripts_dir)
+    shutil.copy(
+        source_root / "app" / "core" / "model_verification.py",
+        core_dir,
+    )
+    (project / "app" / "__init__.py").write_text("", encoding="utf-8")
+    (core_dir / "__init__.py").write_text("", encoding="utf-8")
+    model = models / "model.bin"
+    model.write_bytes(b"model")
+    external_manifest = tmp_path / "ocr-model-manifest.sha256"
+    external_manifest.write_text(
+        f"{MODEL_HASH}  model.bin\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(scripts_dir / "verify_models.py"),
+            "--models-root",
+            str(models),
+            "--manifest",
+            str(external_manifest),
+            "--exact",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "1 个文件" in result.stdout
+
+
+def test_verify_models_cli_exact_mode_rejects_an_unlisted_model_file(
+    tmp_path: Path,
+):
+    project = tmp_path / "project"
+    scripts_dir = project / "scripts"
+    core_dir = project / "app" / "core"
+    models = project / "models"
+    scripts_dir.mkdir(parents=True)
+    core_dir.mkdir(parents=True)
+    models.mkdir()
+    source_root = Path(__file__).resolve().parents[2]
+    shutil.copy(source_root / "scripts" / "verify_models.py", scripts_dir)
+    shutil.copy(
+        source_root / "app" / "core" / "model_verification.py",
+        core_dir,
+    )
+    (project / "app" / "__init__.py").write_text("", encoding="utf-8")
+    (core_dir / "__init__.py").write_text("", encoding="utf-8")
+    (models / "model.bin").write_bytes(b"model")
+    (models / "unexpected.bin").write_bytes(b"unexpected")
+    external_manifest = tmp_path / "ocr-model-manifest.sha256"
+    external_manifest.write_text(
+        f"{MODEL_HASH}  model.bin\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(scripts_dir / "verify_models.py"),
+            "--models-root",
+            str(models),
+            "--manifest",
+            str(external_manifest),
+            "--exact",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "模型目录包含未声明文件：unexpected.bin" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_verify_manifest_exact_mode_rejects_an_unlisted_directory_symlink(
+    tmp_path: Path,
+):
+    models = tmp_path / "models"
+    models.mkdir()
+    model = models / "model.bin"
+    model.write_bytes(b"model")
+    manifest = tmp_path / "ocr-model-manifest.sha256"
+    manifest.write_text(f"{MODEL_HASH}  model.bin\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (models / "linked-directory").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ModelVerificationError, match="只能包含普通文件"):
+        verify_manifest(models, manifest, exact=True)
+
+
 @pytest.mark.parametrize("second_name", ["model.bin", "nested/../model.bin"])
 def test_verify_manifest_rejects_duplicate_normalized_declarations(
     tmp_path: Path,

@@ -44,6 +44,23 @@ check_root_disk
 cd -- "$platform_root"
 python3 scripts/build_and_stage_operator_registry_wheel.py
 
+ocr_manifest_directory="$(mktemp -d /tmp/algorithm-ocr-model-manifest.XXXXXX)"
+chmod 0700 "$ocr_manifest_directory"
+ocr_model_manifest="${ocr_manifest_directory}/manifest.sha256"
+cleanup() {
+  rm -f -- "$ocr_model_manifest"
+  rmdir -- "$ocr_manifest_directory" 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+python3 "${script_dir}/model_asset_transaction.py" project-sha256 \
+  --source "$MODEL_ASSET_SOURCE" \
+  --workspace "$workspace_root" \
+  --target ocr/models \
+  --output "$ocr_model_manifest"
+
 while IFS=$'\t' read -r context_name dockerfile_name image_repository; do
   [[ -n "$context_name" && "${context_name:0:1}" != "#" ]] || continue
   check_root_disk
@@ -51,11 +68,17 @@ while IFS=$'\t' read -r context_name dockerfile_name image_repository; do
   dockerfile="${context}/${dockerfile_name}"
   image_ref="${image_repository}:${version_tag}"
   printf 'build-images: building %s\n' "$image_ref"
-  docker build \
+  build_arguments=(
     --file "$dockerfile" \
     --tag "$image_ref" \
-    --label "org.opencontainers.image.revision=${git_sha}" \
-    "$context"
+    --label "org.opencontainers.image.revision=${git_sha}"
+  )
+  if [[ "$context_name" == "ocr" ]]; then
+    build_arguments+=(
+      --secret "id=ocr_model_manifest,src=${ocr_model_manifest}"
+    )
+  fi
+  docker build "${build_arguments[@]}" "$context"
   inspected_tags="$(docker image inspect --format '{{json .RepoTags}}' "$image_ref")"
   python3 - "$image_ref" "$inspected_tags" <<'PY' || fail \
     "image inspect RepoTags does not contain target reference ${image_ref}"

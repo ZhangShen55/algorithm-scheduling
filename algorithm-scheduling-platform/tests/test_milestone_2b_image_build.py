@@ -264,7 +264,7 @@ def test_build_images_runs_from_arbitrary_cwd_and_verifies_every_image(
     builds = [command for command in commands if command[:2] == ["docker", "build"]]
     assert len(builds) == 8
     for build, (context, dockerfile, image) in zip(builds, EXPECTED_MATRIX, strict=True):
-        assert build == [
+        expected_build = [
             "docker",
             "build",
             "--file",
@@ -273,8 +273,17 @@ def test_build_images_runs_from_arbitrary_cwd_and_verifies_every_image(
             f"{image}:v1.0_260812",
             "--label",
             f"org.opencontainers.image.revision={'a' * 40}",
-            str(workspace / context),
         ]
+        if context == "ocr":
+            assert build[len(expected_build)] == "--secret"
+            secret = build[len(expected_build) + 1]
+            assert secret.startswith("id=ocr_model_manifest,src=")
+            secret_path = Path(secret.removeprefix("id=ocr_model_manifest,src="))
+            assert not secret_path.exists()
+            expected_build.extend(["--secret", secret])
+        expected_build.append(str(workspace / context))
+        assert build == expected_build
+    assert sum("--secret" in build for build in builds) == 1
     assert sum(command[:3] == ["docker", "image", "inspect"] for command in commands) == 16
     assert (fake_bin / "df-count").read_text(encoding="utf-8") == "9"
 

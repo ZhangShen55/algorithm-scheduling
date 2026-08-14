@@ -22,7 +22,7 @@ JOURNAL_NAME = ".model-assets-transaction.json"
 LOCK_NAME = ".model-assets.lock"
 FORBIDDEN_SUFFIXES = {".key", ".pem", ".p12", ".pfx"}
 FORBIDDEN_PARTS = {"models-encrypted", "secrets"}
-POLLUTION_NAMES = {".DS_Store"}
+POLLUTION_NAMES = {".DS_Store", "manifest.sha256"}
 POLLUTION_PARTS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
 
 
@@ -71,6 +71,23 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     os.replace(temporary, path)
     os.chmod(path, 0o600)
     _fsync_directory(path.parent)
+
+
+def _write_private_text(path: Path, value: str) -> None:
+    if path.exists() or path.is_symlink():
+        raise AssetError("output already exists")
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptor = os.open(path, flags, 0o600)
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        stream.write(value)
+        stream.flush()
+        os.fsync(stream.fileno())
 
 
 def _remove_tree(path: Path) -> None:
@@ -135,6 +152,12 @@ def _manifest(
             if not isinstance(entry, dict):
                 raise AssetError(f"invalid file entry for {target}")
             relative = _safe_relative_path(entry.get("path"), field="file path").as_posix()
+            relative_path = PurePosixPath(relative)
+            if (
+                relative_path.name in POLLUTION_NAMES
+                or set(relative_path.parts).intersection(POLLUTION_PARTS)
+            ):
+                raise AssetError("model manifest contains cache or platform pollution")
             size = entry.get("bytes")
             digest = entry.get("sha256")
             if (
@@ -463,17 +486,61 @@ def verify(source: Path, workspace: Path) -> None:
     print("model-assets: PASS")
 
 
+def project_sha256_manifest(
+    source: Path,
+    workspace: Path,
+    target: str,
+    output: Path,
+) -> None:
+    _source_outside_worktree(source)
+    definitions = _definitions(workspace)
+    normalized_target = _safe_relative_path(target, field="target").as_posix()
+    if normalized_target not in definitions:
+        raise AssetError("projection target is not a defined model root")
+    output_parent = output.parent.resolve(strict=True)
+    resolved_output = output_parent / output.name
+    if resolved_output == workspace or workspace in resolved_output.parents:
+        raise AssetError("output must be outside the destination workspace")
+    if resolved_output == source or source in resolved_output.parents:
+        raise AssetError("output must be outside the model asset source")
+    entries = _manifest(source, definitions)[normalized_target]
+    lines = "".join(
+        f"{digest}  {relative}\n"
+        for relative, (_, digest) in sorted(entries.items())
+    )
+    _write_private_text(resolved_output, lines)
+    print(
+        f"model-assets: projected target={normalized_target} "
+        f"files={len(entries)}"
+    )
+    print("model-assets: PASS: runtime manifest projected")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("generate", "stage", "verify"))
+    parser.add_argument(
+        "command",
+        choices=("generate", "stage", "verify", "project-sha256"),
+    )
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--workspace", required=True, type=Path)
+    parser.add_argument("--target")
+    parser.add_argument("--output", type=Path)
     arguments = parser.parse_args()
     source = arguments.source.resolve(strict=True)
     workspace = arguments.workspace.resolve(strict=True)
     if source == workspace or workspace in source.parents:
         raise AssetError("model source must be outside the destination workspace")
-    if arguments.command == "generate":
+    if arguments.command == "project-sha256":
+        if not arguments.target or arguments.output is None:
+            raise AssetError("project-sha256 requires --target and --output")
+        project_sha256_manifest(
+            source,
+            workspace,
+            arguments.target,
+            arguments.output,
+        )
+    elif arguments.command == "generate":
         generate_manifest(source, workspace)
     elif arguments.command == "stage":
         stage(source, workspace)

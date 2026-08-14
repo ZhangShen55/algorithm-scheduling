@@ -76,7 +76,14 @@ def test_runtime_stage_preserves_platform_assets_and_removes_build_assets():
     assert "COPY models ./models" in runtime
     assert "COPY scripts/verify_models.py /app/.build/verify_models.py" in runtime
     assert "COPY config.toml.example /app/.build/config.toml" in runtime
-    assert "python /app/.build/verify_models.py" in runtime
+    assert "--mount=type=secret,id=ocr_model_manifest,required=true" in runtime
+    assert "--models-root /app/models" in runtime
+    assert "--manifest /run/secrets/ocr_model_manifest" in runtime
+    assert "--exact" in runtime
+    assert (
+        "install -m 0444 /run/secrets/ocr_model_manifest "
+        "/app/models/manifest.sha256"
+    ) in runtime
     assert "rm -rf /app/.build" in runtime
     assert "docker/build_cython.py" not in runtime
     assert "apt-get purge -y --auto-remove gcc g++ make" in runtime

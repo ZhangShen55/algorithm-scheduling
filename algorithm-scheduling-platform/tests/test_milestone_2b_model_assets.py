@@ -6,6 +6,7 @@ import os
 import signal
 import stat
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -133,6 +134,31 @@ def _run_manifest_generator(
     )
 
 
+def _run_sha256_projection(
+    source: Path,
+    workspace: Path,
+    output: Path,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "model_asset_transaction.py"),
+            "project-sha256",
+            "--source",
+            str(source),
+            "--workspace",
+            str(workspace),
+            "--target",
+            "ocr/models",
+            "--output",
+            str(output),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
 def _wait_for_path(path: Path, process: subprocess.Popen[str]) -> None:
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
@@ -207,7 +233,69 @@ def test_manifest_generator_freezes_all_external_regular_files(tmp_path: Path) -
     assert "sha256" not in completed.stdout.lower()
 
 
-@pytest.mark.parametrize("pollution", [".DS_Store", "__pycache__/model.pyc"])
+def test_external_manifest_projects_an_ocr_sha256_secret_without_hash_logging(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "external-assets"
+    _write_asset_source(source)
+    workspace = _make_workspace(tmp_path)
+    output = tmp_path / "ocr-model-manifest.sha256"
+
+    completed = _run_sha256_projection(source, workspace, output)
+
+    assert completed.returncode == 0, completed.stderr
+    document = json.loads(
+        (source / "model-assets.manifest.json").read_text(encoding="utf-8")
+    )
+    ocr_files = next(
+        asset["files"]
+        for asset in document["assets"]
+        if asset["target"] == "ocr/models"
+    )
+    assert output.read_text(encoding="utf-8").splitlines() == [
+        f"{entry['sha256']}  {entry['path']}"
+        for entry in sorted(ocr_files, key=lambda item: item["path"])
+    ]
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600
+    assert "sha256" not in completed.stdout.lower()
+    assert not any(entry["sha256"] in completed.stdout for entry in ocr_files)
+
+
+def test_sha256_projection_rejects_an_output_inside_the_git_workspace(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "external-assets"
+    _write_asset_source(source)
+    workspace = _make_workspace(tmp_path)
+    output = workspace / "ocr-model-manifest.sha256"
+
+    completed = _run_sha256_projection(source, workspace, output)
+
+    assert completed.returncode != 0
+    assert "output must be outside the destination workspace" in completed.stderr
+    assert not output.exists()
+
+
+def test_sha256_projection_does_not_overwrite_an_existing_file(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "external-assets"
+    _write_asset_source(source)
+    workspace = _make_workspace(tmp_path)
+    output = tmp_path / "existing.sha256"
+    output.write_text("preserve-me\n", encoding="utf-8")
+
+    completed = _run_sha256_projection(source, workspace, output)
+
+    assert completed.returncode != 0
+    assert "output already exists" in completed.stderr
+    assert output.read_text(encoding="utf-8") == "preserve-me\n"
+
+
+@pytest.mark.parametrize(
+    "pollution",
+    [".DS_Store", "__pycache__/model.pyc", "manifest.sha256"],
+)
 def test_manifest_generator_rejects_model_source_pollution(
     tmp_path: Path, pollution: str
 ) -> None:
@@ -224,6 +312,43 @@ def test_manifest_generator_rejects_model_source_pollution(
     assert completed.returncode != 0
     assert "pollution" in completed.stderr.lower()
     assert not (source / "model-assets.manifest.json").exists()
+
+
+def test_stager_rejects_a_nested_runtime_manifest_in_external_assets(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "external-assets"
+    _write_asset_source(source)
+    workspace = _make_workspace(tmp_path)
+    runtime_manifest = source / "ocr/models/manifest.sha256"
+    runtime_manifest.write_text("nested-runtime-manifest\n", encoding="utf-8")
+    document = json.loads(
+        (source / "model-assets.manifest.json").read_text(encoding="utf-8")
+    )
+    ocr_files = next(
+        asset["files"]
+        for asset in document["assets"]
+        if asset["target"] == "ocr/models"
+    )
+    payload = runtime_manifest.read_bytes()
+    ocr_files.append(
+        {
+            "path": "manifest.sha256",
+            "bytes": len(payload),
+            "sha256": _sha256(payload),
+        }
+    )
+    (source / "model-assets.manifest.json").write_text(
+        json.dumps(document),
+        encoding="utf-8",
+    )
+    (source / "model-assets.manifest.json").chmod(0o600)
+
+    completed = _run("stage-model-assets", source, workspace)
+
+    assert completed.returncode != 0
+    assert "pollution" in completed.stderr.lower()
+    assert not (workspace / "ocr/models").exists()
 
 
 def test_stager_is_idempotent(tmp_path: Path) -> None:

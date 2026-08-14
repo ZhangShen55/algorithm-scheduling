@@ -65,6 +65,8 @@ def verify_manifest(
     models_root: Path,
     manifest_path: Path,
     required_paths: Iterable[str | Path] | None = None,
+    *,
+    exact: bool = False,
 ) -> list[Path]:
     root = _absolute_without_resolving(models_root)
     try:
@@ -177,6 +179,37 @@ def verify_manifest(
             )
     elif not verified:
         raise ModelVerificationError("模型清单中没有可验证文件")
+    if exact:
+        actual: set[str] = set()
+        for candidate in root.rglob("*"):
+            relative = candidate.relative_to(root).as_posix()
+            try:
+                candidate.lstat()
+            except OSError as error:
+                raise ModelVerificationError(
+                    f"检查模型目录失败：{relative}"
+                ) from error
+            if candidate.is_symlink():
+                raise ModelVerificationError(
+                    f"模型目录只能包含普通文件：{relative}"
+                )
+            if candidate.is_dir():
+                continue
+            if not candidate.is_file():
+                raise ModelVerificationError(
+                    f"模型目录只能包含普通文件：{relative}"
+                )
+            actual.add(relative)
+        absolute_manifest = _absolute_without_resolving(manifest_path)
+        try:
+            actual.discard(absolute_manifest.relative_to(root).as_posix())
+        except ValueError:
+            pass
+        unlisted = sorted(actual.difference(declarations))
+        if unlisted:
+            raise ModelVerificationError(
+                f"模型目录包含未声明文件：{', '.join(unlisted)}"
+            )
     return verified
 
 
