@@ -1,5 +1,21 @@
 # Change Ledger
 
+## 2026-08-14 - ASR Offline 运行配置收敛与固定日志
+
+- 决策：`/get_status` 的 `appVersion` 改为代码常量 `asr:latest`，不再从 TOML 读取；保留
+  `id_engine` 及状态接口字段，不改变 HTTP 契约。
+- 设备语义：移除 `ngpu` 和 `ncpu` 配置。Paraformer/emotion2vec 的 `ngpu` 在模型加载时
+  根据已校验的 `device` 推导：`cpu` 为 `0`，`cuda:<index>` 为 `1`。GPU 配置仍要求
+  容器内 `device="cuda:0"`，但不再存在可与设备状态冲突的重复字段。
+- 日志与热词：移除未使用的 `hotword_path`。日志不再接受 `log_path`，固定写入
+  `asr_offline/logs/asr_service.log`，按本地时间每日轮转、保留 7 个归档；目录为运行时生成且被 Git 忽略。
+- 同步范围：本地 ASR 和平台 GPU 部署 TOML、ASR README、平台的本机 CPU 复验命令、配置契约测试及变更记录都已更新。
+- 验证证据：`asr` Python 3.11.13 运行 `compileall`、应用导入、`pip check`
+  与完整 `unittest` 全部通过（57 项）；平台部署配置/Compose 聚焦测试 5 项通过。冷启动后
+  `/get_status.appVersion="asr:latest"`、`logs/asr_service.log` 存在；对仓库外 442.853878 秒法语
+  MP3 发起 `v1.1.8 language=fr` 真实推理，返回 134 段、1036 个词，时间戳合法且
+  单调，1/5/10 分钟 `speed_info` 完整。
+
 ## 2026-08-14 - FaceRec PyPI 下载超时与可续接构建
 
 - 失败证据：提交 `8d5e63718bba56225fd0eda0f05935a6a4c9c84c` 的真实八镜像构建已完成

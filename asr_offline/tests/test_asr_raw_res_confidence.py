@@ -10,7 +10,7 @@ class AsrRawResultConfidenceTest(unittest.TestCase):
         _model_asr = AutoModel(
             model=settings.asr_model_dir,
             device=settings.device,
-            ngpu=settings.ngpu,
+            ngpu=0 if settings.device == "cpu" else 1,
             punc_model=settings.punc_model_dir,
             vad_model=settings.vad_model_dir,
             # spk_model='/var/model_zoo/model_asr/speech_campplus_sv_zh_en_16k-common_advanced',

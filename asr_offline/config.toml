@@ -2,20 +2,11 @@
 
 # 基础配置
 id_engine = "1"
-version = "seacraft-asr-app-v1.1.9"
 
 # 设备与并发配置
 device = "cpu"
-ngpu = 0
-ncpu = 4
 concurrency = 5              # 单实例 GPU slot 并发数
 gpu_slot_timeout_seconds = 720  # 等待 GPU slot 的最长秒数，超时后返回 408/业务超时
-
-# 日志配置
-log_path = "./asr_service.log"
-
-# 热词配置
-hotword_path = "./model/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch/example/hotword.txt"
 
 # 模型路径配置
 [model_paths]

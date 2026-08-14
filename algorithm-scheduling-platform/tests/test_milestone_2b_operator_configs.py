@@ -39,7 +39,7 @@ def test_shared_operator_configs_preserve_supported_field_shape_and_comments() -
 
 def test_gpu_configs_use_container_local_cuda_device_zero() -> None:
     assert _load(CONFIG_ROOT / "asr_offline.gpu.toml")["device"] == "cuda:0"
-    assert _load(CONFIG_ROOT / "asr_offline.gpu.toml")["ngpu"] == 1
+    assert "ngpu" not in _load(CONFIG_ROOT / "asr_offline.gpu.toml")
     assert _load(CONFIG_ROOT / "asr_online.gpu.toml")["device"] == "cuda:0"
     assert _load(CONFIG_ROOT / "asr_online.gpu.toml")["ngpu"] == 1
     assert _load(CONFIG_ROOT / "ocr.gpu.toml")["ocr"]["device"] == "cuda:0"

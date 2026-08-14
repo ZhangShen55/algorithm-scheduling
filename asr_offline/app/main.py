@@ -16,7 +16,7 @@ from packages.operator_registry_client import install_operator_runtime
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 1) 日志初始化
-    setup_logging(settings.log_path)
+    setup_logging()
 
     # 2) 重置统计
     reset_stats()

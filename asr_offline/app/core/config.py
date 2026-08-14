@@ -28,30 +28,18 @@ class Settings:
 
     # 基础配置
     @property
-    def log_path(self) -> str:
-        return self._cfg.get("log_path", "./asr_service.log")
-
-    @property
     def id_engine(self) -> str:
         import uuid
         return self._cfg.get("id_engine", f"seacraft-asr-{uuid.uuid4()}")
 
     @property
     def version(self) -> str:
-        return self._cfg.get("version", "seacraft-voice-analysis-app-pro")
+        return "asr:latest"
 
     # 设备与并发
     @property
-    def ngpu(self) -> int:
-        return self._cfg.get("ngpu", 1)
-
-    @property
     def device(self) -> str:
         return self._cfg.get("device", "cuda:0")
-
-    @property
-    def ncpu(self) -> int:
-        return self._cfg.get("ncpu", 4)
 
     @property
     def concurrency(self) -> int:

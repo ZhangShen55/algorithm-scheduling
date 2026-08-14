@@ -219,7 +219,7 @@ runtime_dir=/tmp/asr-fivewh-runtime-validation
 test ! -e "$runtime_dir"
 mkdir "$runtime_dir"
 cp config.toml "$runtime_dir/config.toml"
-perl -pi -e 's/^device = .*/device = "cpu"/; s/^ngpu = .*/ngpu = 0/; s/^open_emotion = .*/open_emotion = false/; s/^open_mul_lang = .*/open_mul_lang = false/' "$runtime_dir/config.toml"
+perl -pi -e 's/^device = .*/device = "cpu"/; s/^open_emotion = .*/open_emotion = false/; s/^open_mul_lang = .*/open_mul_lang = false/' "$runtime_dir/config.toml"
 ffmpeg -v error -y -ss 0 -t 12 -i test_wav/chinEng-16k.wav \
   -ac 1 -ar 16000 "$runtime_dir/short.wav"
 CONFIG_PATH="$runtime_dir/config.toml" PLATFORM_REGISTRATION_ENABLED=false \

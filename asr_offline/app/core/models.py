@@ -31,8 +31,6 @@ def resolve_runtime_device() -> torch.device:
         raise RuntimeError("ASR device 必须是 cpu 或 cuda:<index>")
 
     index = int(configured[5:])
-    if settings.ngpu != 1:
-        raise RuntimeError("ASR 使用 CUDA 时 ngpu 必须为 1")
     if not torch.cuda.is_available():
         raise RuntimeError(f"算子要求使用 GPU {configured}，但 CUDA 不可用")
     visible_count = torch.cuda.device_count()
@@ -63,14 +61,15 @@ async def load_models_if_needed():
 
     async with _model_lock:
         runtime_device = resolve_runtime_device()
+        model_ngpu = 1 if runtime_device.type == "cuda" else 0
         if settings.open_mul_lang:
             _validate_ctranslate2_cuda(runtime_device)
 
         if settings.open_spk and _model_asr is None:
             _model_asr = AutoModel(
                 model=settings.asr_model_dir,
-                device=settings.device,
-                ngpu=settings.ngpu,
+                device=str(runtime_device),
+                ngpu=model_ngpu,
                 punc_model=settings.punc_model_dir,
                 vad_model=settings.vad_model_dir,
                 spk_model=settings.spk_model_dir,
@@ -83,8 +82,8 @@ async def load_models_if_needed():
         if settings.open_emotion and settings.open_spk and _model_emotion is None:
             _model_emotion = AutoModel(
                 model=settings.emotion_model_dir,
-                device=settings.device,
-                ngpu=settings.ngpu,
+                device=str(runtime_device),
+                ngpu=model_ngpu,
                 disable_update=True,
                 disable_pbar=True
             )

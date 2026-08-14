@@ -28,7 +28,7 @@ class AsrModelConfidenceOutputTest(unittest.TestCase):
                 model=model_paths["asr_model_dir"],
                 punc_model=model_paths["punc_model_dir"],
                 device=self.config.get("device", "cuda:0"),
-                ngpu=self.config.get("ngpu", 1),
+                ngpu=0 if self.config.get("device", "cuda:0") == "cpu" else 1,
                 sentence_timestamp=True,
                 disable_update=True,
                 disable_pbar=True,

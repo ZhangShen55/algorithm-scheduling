@@ -18,19 +18,18 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.models.settings._cfg.clear()
         self.models.settings._cfg.update(self.original_cfg)
 
-    def _configure_gpu(self, *, device: str = "cuda:0", ngpu: int = 1) -> None:
+    def _configure_device(self, *, device: str = "cuda:0") -> None:
         self.models.settings._cfg["device"] = device
-        self.models.settings._cfg["ngpu"] = ngpu
 
     def test_required_gpu_rejects_cpu_configuration(self) -> None:
-        self._configure_gpu(device="cpu", ngpu=0)
+        self._configure_device(device="cpu")
 
         with patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False):
             with self.assertRaisesRegex(RuntimeError, "部署要求使用 GPU.*cuda:<index>"):
                 self.models.resolve_runtime_device()
 
     def test_required_gpu_rejects_unavailable_cuda(self) -> None:
-        self._configure_gpu()
+        self._configure_device()
 
         with (
             patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False),
@@ -40,7 +39,7 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.models.resolve_runtime_device()
 
     def test_required_gpu_rejects_out_of_range_index(self) -> None:
-        self._configure_gpu(device="cuda:1")
+        self._configure_device(device="cuda:1")
 
         with (
             patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False),
@@ -50,19 +49,21 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.models.resolve_runtime_device()
 
-    def test_required_gpu_rejects_inconsistent_ngpu(self) -> None:
-        self._configure_gpu(ngpu=0)
+    def test_cuda_mode_ignores_legacy_ngpu_configuration(self) -> None:
+        self._configure_device()
+        self.models.settings._cfg["ngpu"] = 0
 
         with (
             patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False),
             patch.object(self.models.torch.cuda, "is_available", return_value=True),
             patch.object(self.models.torch.cuda, "device_count", return_value=1),
-            self.assertRaisesRegex(RuntimeError, "ngpu 必须为 1"),
         ):
-            self.models.resolve_runtime_device()
+            resolved = self.models.resolve_runtime_device()
+
+        self.assertEqual(str(resolved), "cuda:0")
 
     async def test_torch_gpu_failure_precedes_all_enabled_model_constructors(self) -> None:
-        self._configure_gpu()
+        self._configure_device()
         self.models.settings._cfg["features"] = {
             "open_spk": True,
             "open_emotion": True,
@@ -82,7 +83,7 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
         whisper_model.assert_not_called()
 
     async def test_ctranslate2_gpu_failure_precedes_whisper_constructor(self) -> None:
-        self._configure_gpu()
+        self._configure_device()
         self.models.settings._cfg["features"] = {
             "open_spk": False,
             "open_emotion": False,
@@ -102,7 +103,8 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
         whisper_model.assert_not_called()
 
     async def test_startup_loads_retained_asr_emotion_and_whisper_models(self) -> None:
-        self._configure_gpu(device="cpu", ngpu=0)
+        self._configure_device(device="cpu")
+        self.models.settings._cfg["ngpu"] = 1
         self.models.settings._cfg["compute"] = {"compute_type": "float16"}
         self.models.settings._cfg["features"] = {
             "open_spk": True,
@@ -127,10 +129,12 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
             paraformer_call.kwargs["spk_model"],
             self.models.settings.spk_model_dir,
         )
+        self.assertEqual(paraformer_call.kwargs["ngpu"], 0)
         self.assertEqual(
             emotion_call.kwargs["model"],
             self.models.settings.emotion_model_dir,
         )
+        self.assertEqual(emotion_call.kwargs["ngpu"], 0)
         whisper_model.assert_called_once_with(
             self.models.settings.whisper_model_dir,
             compute_type="int8",
@@ -139,7 +143,7 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_local_cpu_mode_is_preserved_without_deployment_switch(self) -> None:
-        self._configure_gpu(device="cpu", ngpu=0)
+        self._configure_device(device="cpu")
 
         with patch.dict("os.environ", {}, clear=True):
             resolved = self.models.resolve_runtime_device()

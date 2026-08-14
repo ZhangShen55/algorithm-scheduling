@@ -92,19 +92,10 @@ pip install -r requirements.txt
 ```toml
 # 基础配置
 id_engine = "1"
-version = "seacraft-asr-app-v1.1.9"
 
 # 设备与并发配置
 device = "cuda:1"          # 推理设备
-ngpu = 1                   # GPU 数量
-ncpu = 4                   # CPU 线程数
 concurrency = 5            # 单实例 GPU 并发数
-
-# 日志配置
-log_path = "./asr_service.log"
-
-# 热词文件路径
-hotword_path = "/var/model_zoo/model_asr/.../hotword.txt"
 
 # 模型路径配置
 [model_paths]
@@ -126,6 +117,10 @@ open_emotion = true        # Paraformer 路径情感识别
 ban_hotword = true         # 禁用热词
 open_mul_lang = true       # 法语 Faster-Whisper 转写
 ```
+
+`/get_status` 中的 `appVersion` 固定为 `asr:latest`。`device="cpu"` 时模型使用
+`ngpu=0`，`device="cuda:<index>"` 时使用 `ngpu=1`，两者均不再由配置文件传入。日志固定写入
+项目根目录下的 `logs/asr_service.log`，按本地时间每日轮转并保留最近 7 个归档文件。
 
 > 实时转写（WebSocket）已拆分为独立项目 `jy-algorithm-app-asr-online`，不在本仓库内提供。
 
@@ -324,7 +319,7 @@ docker run -d \
 {
   "id_engine": "1",
   "status": "living",
-  "appVersion": "seacraft-asr-app-v1.1.9",
+  "appVersion": "asr:latest",
   "runTime": "1天 2小时 30分",
   "totalHaveDoneProcessTasks": 1523,
   "totalFailedTasks": 12,
