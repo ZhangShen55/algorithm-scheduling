@@ -94,6 +94,22 @@
   实例、平台注册、全部 Smoke/反例/压力/恢复和完整泳道仍未完成，不得外推为里程碑 2B
   已通过。
 
+## 2026-08-14 - Miniconda 镜像 GET 行为复核与默认源纠正
+
+- 失败复现：提交 `6b9376b3abf7d70f80ad71e337d96fe23d059fa8` 在目标服务器重新
+  执行八镜像构建，模型/上下文/wheel 门禁均通过，但 ASR Offline 的 Miniconda 下载在约
+  16 秒后以 wget exit 8 终止，构建脚本按设计短路。
+- 根因证据：清华入口对 curl HEAD 返回 302，并最终指向南京大学镜像的 HTTP 200；但在
+  ASR Offline 的同一 CentOS 7/wget 环境中执行真实 GET 时，清华入口直接返回 HTTP 403。
+  先前测速只证明站点吞吐，没有验证 Docker 构建所用客户端的 GET 行为。
+- 对照验证：同一容器对最终地址
+  `https://mirror.nju.edu.cn/anaconda/miniconda/Miniconda3-py311_23.11.0-2-Linux-x86_64.sh`
+  执行真实 GET，4 秒下载 141613749 字节，退出码为 0。
+- 修正决策：清华镜像不再作为默认值；两个 ASR Dockerfile 的 `MINICONDA_BASE_URL` 默认
+  改为南京大学镜像，build arg 覆盖能力保留。上一条“默认清华镜像”的决定被本条明确覆盖。
+- 当前边界：本条只关闭 Miniconda 下载源兼容问题；新的完整 SHA 尚需再次执行八镜像构建，
+  在八个镜像均通过 inspect 前不得声明构建完成。
+
 ## 2026-08-12 - 里程碑 2B Task 10-11 文档与本地验收边界
 
 - 先前状态：Task 7B-9 的构建上下文、模型资产事务、GPU 证据采集器、注册/Smoke

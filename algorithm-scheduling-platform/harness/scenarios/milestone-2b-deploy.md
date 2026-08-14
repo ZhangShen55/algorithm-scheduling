@@ -129,6 +129,12 @@ ASR Offline 单镜像和单次真实 GPU 推理，不代表八镜像或里程碑
 `EXPECTED_GIT_SHA` 并从本阶段的 `build-images` 命令继续。历史 CUDA 基础镜像下载阻塞
 记录必须保留，不能用本次结果覆盖。
 
+后续真实 GET 复核发现：清华入口对 curl HEAD 可返回重定向，但对 CentOS 7/wget GET
+返回 HTTP 403；其最终重定向目标南京大学镜像对同一容器 GET 成功，4 秒取得完整
+141613749 字节安装器。因此“默认清华镜像”的决定已被覆盖，当前默认值改为
+`https://mirror.nju.edu.cn/anaconda/miniconda`，build arg 覆盖方式不变。必须使用包含该
+修正的新完整 Git SHA 继续构建。
+
 ## 阶段 3：平台和逐卡算子拓扑
 
 ```bash

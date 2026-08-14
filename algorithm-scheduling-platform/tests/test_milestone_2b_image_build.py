@@ -815,7 +815,7 @@ def test_asr_images_use_the_reachable_configurable_miniconda_mirror(
     ).read_text(encoding="utf-8")
 
     assert (
-        "ARG MINICONDA_BASE_URL=https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda"
+        "ARG MINICONDA_BASE_URL=https://mirror.nju.edu.cn/anaconda/miniconda"
         in dockerfile
     )
     assert '"${MINICONDA_BASE_URL}/${MINICONDA_INSTALLER}"' in dockerfile
