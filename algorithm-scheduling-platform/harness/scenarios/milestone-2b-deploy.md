@@ -140,6 +140,13 @@ OCR 可选 Cython 构建随后暴露出跨提交门禁冲突：其构建期导�
 `!config.toml.example`，仍拒绝正式 `config.toml` 和其他配置重包含；镜像构建测试与真实
 八上下文门禁均已通过。继续构建时必须使用同时包含 Miniconda 源修正和本门禁修复的新 SHA。
 
+使用 `c36dbc45c4c3a7e721785eb4a5cd8e12757c8cd4` 续接后，上述两项阻塞均已越过；
+ASR Offline 成功创建 Python 3.11.15 Conda 环境，并完整下载 766.7 MB 的 Torch 2.6.0
+wheel。但 PyTorch 随后仍需下载约十余个 CUDA 12.4 拆分 wheel 和 Triton，当前链路速率
+降至约 0.2-0.6 MB/s。依据有界下载规则，构建在 CUDA CUPTI wheel 阶段主动中止，后续
+七镜像未开始。通过内部镜像/代理准备这些 Python 3.11 x86_64 wheels，或批准长时间构建
+窗口后，再从本阶段统一入口继续；不得把单个 ASR 真机推理通过外推为八镜像通过。
+
 ## 阶段 3：平台和逐卡算子拓扑
 
 ```bash

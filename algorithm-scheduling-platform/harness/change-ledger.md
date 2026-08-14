@@ -125,6 +125,29 @@
 - 当前边界：门禁与 OCR 新构建合同已对齐，但八镜像真实构建仍需使用包含本修复的新完整 SHA
   重新执行，不能仅依据本地门禁结果声明镜像通过。
 
+## 2026-08-14 - 八镜像续接至 Torch CUDA wheel 下载后有界中止
+
+- 执行提交：目标服务器 detached checkout
+  `c36dbc45c4c3a7e721785eb4a5cd8e12757c8cd4`，重新执行统一八镜像构建入口；模型资产、
+  八上下文、Git 输入和 registry wheel 门禁全部通过。
+- 已越过阶段：ASR Offline 从南京大学镜像下载并安装固定 Miniconda 安装器；Conda 环境
+  成功创建，镜像内确认 Python 3.11.15、glibc 2.17。此前 Miniconda 和 OCR 门禁阻塞均未复现。
+- 下载事实：`torch-2.6.0` 的 766.7 MB wheel 下载完成，用时 10 分 26 秒，平均约
+  1.4 MB/s；随后解析到 PyTorch CUDA 12.4 拆分依赖，下载速率一度降至约
+  0.2-0.6 MB/s。完整依赖集合还包含 `nvidia-cublas-cu12==12.4.5.8`、
+  `nvidia-cudnn-cu12==9.1.0.70`、`nvidia-cufft-cu12==11.2.1.3`、
+  `nvidia-curand-cu12==10.3.5.147`、`nvidia-cusolver-cu12==11.6.1.9`、
+  `nvidia-cusparse-cu12==12.3.1.170`、`nvidia-cusparselt-cu12==0.6.2`、
+  `nvidia-nccl-cu12==2.21.5`、`nvidia-cuda-{nvrtc,runtime,cupti}-cu12==12.4.127`、
+  `nvidia-nvjitlink-cu12==12.4.127`、`nvidia-nvtx-cu12==12.4.127` 和
+  `triton==3.2.0`。
+- 中止边界：在 `nvidia-cuda-cupti-cu12==12.4.127` 下载期间主动 Ctrl-C；BuildKit 报
+  `context canceled`，构建脚本停止在 ASR Offline，后续七个镜像未开始。没有清理 BuildKit
+  缓存、已有镜像、容器或业务数据。
+- 续接条件：通过更快镜像/内部代理准备上述 Python 3.11 x86_64 wheels，或接受当前带宽下的
+  长时间单次构建窗口后，再从统一构建入口继续。ASR Python 3.11 + Torch 2.6 的真机 GPU
+  推理结论仍有效，但八镜像整体保持未完成。
+
 ## 2026-08-12 - 里程碑 2B Task 10-11 文档与本地验收边界
 
 - 先前状态：Task 7B-9 的构建上下文、模型资产事务、GPU 证据采集器、注册/Smoke
