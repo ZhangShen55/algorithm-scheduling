@@ -806,6 +806,22 @@ def test_asr_offline_keeps_model_hotword_wav_in_the_build_context() -> None:
     assert "!model/**/*.wav" in dockerignore
 
 
+@pytest.mark.parametrize("operator_name", ("asr_offline", "asr_online"))
+def test_asr_images_use_the_reachable_configurable_miniconda_mirror(
+    operator_name: str,
+) -> None:
+    dockerfile = (
+        PLATFORM_ROOT.parent / operator_name / "docker/Dockerfile"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        "ARG MINICONDA_BASE_URL=https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda"
+        in dockerfile
+    )
+    assert '"${MINICONDA_BASE_URL}/${MINICONDA_INSTALLER}"' in dockerfile
+    assert "https://repo.anaconda.com/miniconda/${MINICONDA_INSTALLER}" not in dockerfile
+
+
 def test_all_real_contexts_only_reinclude_the_exact_registry_wheel() -> None:
     workspace_root = PLATFORM_ROOT.parent
     for context_name, _, _ in EXPECTED_MATRIX:

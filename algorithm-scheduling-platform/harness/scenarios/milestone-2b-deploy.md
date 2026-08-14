@@ -115,6 +115,20 @@ Git 工作树外的受控 staging 源中精确移除，原始算子目录未修�
 解释为部署完成。恢复 registry 传输或提供同一镜像 digest 的内部缓存后，从本阶段的基础
 镜像预拉取继续。
 
+### ASR 真机验证与构建续接（2026-08-14）
+
+用户后续准备好 CentOS 7 CUDA 基础镜像，并确认 ASR 采用 Python 3.11、
+Torch/Torchaudio 2.6.0。ASR Offline 镜像已在目标服务器构建，并通过 RTX 4090 D
+真实推理：容器内 `torch.cuda.is_available()` 为真，`/v1.1.8/seacraft_asr` 返回
+HTTP 200 和非空文本，推理期间 `nvidia-smi` 可见 `asr_offline` 进程。该结果只证明
+ASR Offline 单镜像和单次真实 GPU 推理，不代表八镜像或里程碑 2B 整体通过。
+
+继续构建时，ASR Online 在下载官方 Miniconda 安装器处长时间停顿；同机测速显示官方源
+约 0.60 MB/s、清华镜像约 5.43 MB/s。两个 ASR Dockerfile 因此将 Miniconda 基地址
+参数化并默认指向清华镜像。取得包含此变更的新完整 Git SHA 后，应重新设置
+`EXPECTED_GIT_SHA` 并从本阶段的 `build-images` 命令继续。历史 CUDA 基础镜像下载阻塞
+记录必须保留，不能用本次结果覆盖。
+
 ## 阶段 3：平台和逐卡算子拓扑
 
 ```bash

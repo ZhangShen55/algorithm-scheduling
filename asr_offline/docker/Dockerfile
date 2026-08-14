@@ -10,8 +10,9 @@ RUN mv /etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo.bak &
     yum clean all && yum install -y vim
 
 # CentOS 7 仅 glibc 2.17；latest Miniconda 安装器要求 glibc >= 2.28，须固定旧版
+ARG MINICONDA_BASE_URL=https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda
 ARG MINICONDA_INSTALLER=Miniconda3-py311_23.11.0-2-Linux-x86_64.sh
-RUN wget -q "https://repo.anaconda.com/miniconda/${MINICONDA_INSTALLER}" -O /tmp/miniconda.sh && \
+RUN wget -q "${MINICONDA_BASE_URL}/${MINICONDA_INSTALLER}" -O /tmp/miniconda.sh && \
     bash /tmp/miniconda.sh -b -p /opt/conda && rm -f /tmp/miniconda.sh
 ENV PATH="/opt/conda/bin:$PATH"
 

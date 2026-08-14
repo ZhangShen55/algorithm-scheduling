@@ -1,5 +1,29 @@
 # Change Ledger
 
+## 2026-08-14 - OCR 可选 Cython 构建与双项目同步
+
+- 先前状态：源项目和算法功能调度 OCR 副本的 CPU/NVIDIA GPU 镜像均直接交付完整 Python
+  业务源码；目标副本另有 operator registry、GPU 门禁、registry wheel 和平台 entrypoint，不能整目录覆盖。
+- 目标状态：同一份 `docker/Dockerfile` 默认构建源码镜像，仅在
+  `--build-arg cython=yes` 时编译 16 个功能模块；最终镜像不保留核心源码、编译中间产物、
+  编译器、Cython、依赖清单或正式配置。目标项目继续使用平台 wheel、`app.main:app` 和 entrypoint。
+- 变更文件：目标 OCR 的 `.dockerignore`、`app/main.py`、`docker/Dockerfile`、
+  `docker/build_cython.py`、`docker/README.md`、Docker/Cython/入口测试，以及中央 Harness 的
+  决策矩阵、验证入口和 `harness/scenarios/ocr-optional-cython-build-and-sync.md`。
+- 契约影响：`/ocr/getVersion`、`/ocr/prediction`、响应字段、端口 8866、模型和
+  `device = "cuda:<index>"` 格式不变；正式配置仍只允许宿主机挂载。两个项目的 NPU Dockerfile 未修改。
+- 同步版本：源项目基线为 `main@ffa85e757fa2446fb925747331aecfe9e779cf77`；目标仓库基线为
+  `codex/milestone-2b-three-gpu-deployment@701afa9f9973b6b062bfa90a66ce7fa101b5f428`。
+  两边模型摘要一致，模型目录未读取、复制或删除；目标已有无关未跟踪文档保持原状。
+- 验证命令与环境：MacBook / Docker Desktop 使用 `linux/amd64`；源项目 `160 passed`，
+  目标项目 `164 passed`；目标普通/Cython 镜像构建成功，大小分别为 `12803031907` 和
+  `12805680417` bytes。两种镜像使用同一只读 CPU 配置完成版本接口、真实 OCR 和公式关闭路径，
+  响应逐字段一致；非法 `cython=true` 和缺配置均按合同失败。
+- 证据等级与结论：达到静态/单元/契约、本机 CPU 真实推理、Docker 构建和容器运行层级；
+  目标平台专属入口、wheel、GPU 门禁和 entrypoint 已保留。综合结论为部分符合。
+- 剩余风险：尚未在真实 x86_64 NVIDIA 主机验证 `--gpus all`、`REQUIRE_GPU=true`、
+  `cuda:0`、公式开启、显存占用和容器重启；Cython 是编译保护，不是密码学加密。
+
 ## 2026-08-12 - 里程碑 2B 远端部署执行记录（模型资产与镜像前置）
 
 - 执行目标：在 `192.168.29.11` 上按里程碑 2B 计划推进三卡部署；本记录只收纳本次
@@ -45,6 +69,30 @@
   基础镜像，再以测试覆盖的最小 Dockerfile 变更将 ASR Offline 系统包管理从 yum 改为 apt。
 - 当前结论：八镜像构建仍为失败；基础设施、平台、24 个算子实例及所有真实运行验收保持
   “未执行及原因”，不得宣称里程碑 2B 部署完成。
+
+## 2026-08-14 - ASR Python 3.11 + Torch 2.6 真机验证与八镜像再次续接
+
+- 决策覆盖：上一条记录中“不降级 Torch”的边界已被后续用户决策覆盖；ASR 镜像现采用
+  Python 3.11、Torch/Torchaudio 2.6.0，并继续使用已经准备好的
+  `nvcr.io/nvidia/cuda:12.1.1-cudnn8-runtime-centos7`。未升级 CentOS 7 的 glibc。
+- 真实构建：目标服务器成功构建 `seacraft-asr-offline:v1.0_260812`。容器内实测为
+  Python 3.11.15、Torch 2.6.0+cu124、Torchaudio 2.6.0+cu124，
+  `torch.cuda.is_available()` 为真，识别到 RTX 4090 D。
+- 真实推理：通过 `/v1.1.8/seacraft_asr` 发起真实请求并取得 HTTP 200；返回文本非空、
+  `segments=1`、`gpu_time_ms=899.94`。推理期间宿主 `nvidia-smi` 可见进程名
+  `asr_offline`，显存约 4696 MiB。隔离验证容器随后停止并删除，镜像保留。
+- 八镜像续接：ASR Offline 命中构建缓存；ASR Online 命中 CUDA 基础镜像缓存后，官方
+  `repo.anaconda.com` 的 Miniconda 安装器下载约 200 秒仍未完成，按有界停顿规则主动中止，
+  未继续后续六个镜像。
+- 网络证据：同一服务器对 Miniconda 安装器地址测速，官方源约 0.60 MB/s，清华镜像约
+  5.43 MB/s，中科大镜像返回 HTTP 403。根因定位为构建期间的安装器下载源吞吐，不是
+  Python 3.11、Torch 2.6、CUDA、模型资产、构建上下文或磁盘门禁失败。
+- 修复决策：ASR Offline/Online Dockerfile 将 `MINICONDA_BASE_URL` 和安装器文件名定义为
+  build args，默认使用清华镜像，仍允许交付环境显式覆盖；对应合同测试固定默认源与参数化
+  下载行为。
+- 当前边界：ASR Offline 的单镜像构建和真实 GPU 推理已经通过；八镜像整体、24 个算子
+  实例、平台注册、全部 Smoke/反例/压力/恢复和完整泳道仍未完成，不得外推为里程碑 2B
+  已通过。
 
 ## 2026-08-12 - 里程碑 2B Task 10-11 文档与本地验收边界
 
