@@ -25,3 +25,12 @@ def test_run_uses_server_settings(monkeypatch, settings_file):
 
 def test_module_exports_application():
     assert main.app is not None
+
+
+def test_main_uses_the_same_startup_path(monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "run", lambda: calls.append(True))
+
+    main.main()
+
+    assert calls == [True]
