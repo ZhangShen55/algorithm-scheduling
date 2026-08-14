@@ -120,6 +120,14 @@ Git 工作树外的受控 staging 源中精确移除，原始算子目录未修�
 而是在每次发布构建时从外部总清单投影
 OCR 子集，以 BuildKit secret 校验镜像内精确文件集，再生成镜像内运行时派生清单。
 
+提交 `8d5e63718bba56225fd0eda0f05935a6a4c9c84c` 的后续真实构建已证明上述 OCR 投影契约：
+13 个文件精确校验通过，OCR 镜像成功。流水线随后在第 5 个 FaceRec 镜像中从
+`files.pythonhosted.org` 下载 pip Wheel 时触发 `ReadTimeoutError`。新版 FaceRec Dockerfile
+为构建工具和业务依赖统一使用可配置 PyPI 源、300 秒超时、10 次重试和 Wheel 优先。
+业务依赖步骤另通过可配置 `FASTDEPLOY_FIND_LINKS` 解析标准 PyPI 不提供的
+`fastdeploy-gpu-python==1.0.7` CPython 3.10 Linux Wheel。
+只能在包含该修复的新完整 SHA 上续接；当前真实证据为 `4/8` 镜像通过，不是八镜像完成。
+
 八镜像构建在第一个 ASR Offline 镜像解析
 `nvcr.io/nvidia/cuda:12.1.1-cudnn8-runtime-centos7` 时被 registry 大层 TLS handshake
 超时阻塞；随后两次有界 `docker pull` 重试仍卡在同一层，未生成完整基础镜像。根据门禁，

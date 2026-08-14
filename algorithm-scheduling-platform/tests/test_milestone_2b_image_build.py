@@ -870,6 +870,24 @@ def test_asr_images_use_the_reachable_configurable_miniconda_mirror(
     assert "https://repo.anaconda.com/miniconda/${MINICONDA_INSTALLER}" not in dockerfile
 
 
+def test_facerec_image_uses_a_configurable_resilient_pypi_source() -> None:
+    dockerfile = (
+        PLATFORM_ROOT.parent / "facerec/docker/Dockerfile"
+    ).read_text(encoding="utf-8")
+
+    assert "ARG PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple" in dockerfile
+    assert (
+        "ARG FASTDEPLOY_FIND_LINKS=https://www.paddlepaddle.org.cn/whl/fastdeploy.html"
+        in dockerfile
+    )
+    assert dockerfile.count('--index-url "$PYPI_INDEX_URL"') == 2
+    assert dockerfile.count('--find-links "$FASTDEPLOY_FIND_LINKS"') == 1
+    assert dockerfile.count("--timeout 300") == 2
+    assert dockerfile.count("--retries 10") == 2
+    assert dockerfile.count("--prefer-binary") == 2
+    assert "files.pythonhosted.org" not in dockerfile
+
+
 def test_all_real_contexts_only_reinclude_the_exact_registry_wheel() -> None:
     workspace_root = PLATFORM_ROOT.parent
     for context_name, _, _ in EXPECTED_MATRIX:

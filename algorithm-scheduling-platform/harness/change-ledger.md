@@ -1,5 +1,26 @@
 # Change Ledger
 
+## 2026-08-14 - FaceRec PyPI 下载超时与可续接构建
+
+- 失败证据：提交 `8d5e63718bba56225fd0eda0f05935a6a4c9c84c` 的真实八镜像构建已完成
+  ASR Offline、ASR Online、OCR 和 VBas，且四个 revision 均精确匹配。FaceRec 在
+  `pip3 install --upgrade pip setuptools wheel` 中从 `files.pythonhosted.org` 下载
+  1.8 MB 的 pip Wheel，到 0.3 MB 时触发 `ReadTimeoutError`；串行构建因此停止，
+  ScreenDet、PPT Slice 和 Text Analysis 未开始。
+- 根因：FaceRec Dockerfile 的构建工具升级和 `requirements.txt` 安装都没有使用可配置
+  镜像源、显式超时、重试和 Wheel 优先；默认 pip 读超时过短，与已批准的
+  “可达且有进展就等待”构建策略不一致。最终根盘仍有约 145 GiB，内存约
+  121 GiB 可用，已排除磁盘门禁和 OOM。
+- 修复边界：只为 FaceRec 新增可覆盖的 `PYPI_INDEX_URL`，默认使用已验证可达的
+  清华镜像；两条网络 pip 安装均设置 `--timeout 300 --retries 10 --prefer-binary`。
+  由于 `fastdeploy-gpu-python==1.0.7` 不在清华或官方 PyPI，业务依赖安装还通过
+  可覆盖的 `FASTDEPLOY_FIND_LINKS` 访问 Paddle 官方 Wheel 页；真机已确认该页面包含
+  `fastdeploy_gpu_python-1.0.7-cp310-cp310-manylinux1_x86_64.whl`。
+  不改动 FaceRec HTTP 契约、Python/FastDeploy 版本、模型、MongoDB 或 GPU 运行方式。
+- 续接边界：必须在包含本修复的新完整 SHA 上重新调用统一 `build-images`。
+  前四镜像和 FaceRec 已完成的 apt 层可命中 BuildKit 缓存，但仍要以八个最终
+  inspect 和新 revision 为准，不得沿用旧 SHA 宣称整体通过。
+
 ## 2026-08-14 - OCR 模型清单权威投影与构建续接
 
 - 失败证据：目标服务器在提交

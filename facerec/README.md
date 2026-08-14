@@ -55,6 +55,20 @@ app/
 pip install -r requirements.txt
 ```
 
+Docker 构建默认使用清华 PyPI 镜像，并为构建工具升级和业务依赖安装统一设置
+300 秒超时、10 次重试和 Wheel 优先。`fastdeploy-gpu-python==1.0.7` 不在标准
+PyPI，构建默认通过 Paddle FastDeploy Wheel 页面解析 CPython 3.10 Linux 产物。
+交付环境可覆盖两个源：
+
+```bash
+docker build \
+  --build-arg PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+  --build-arg FASTDEPLOY_FIND_LINKS=https://www.paddlepaddle.org.cn/whl/fastdeploy.html \
+  -f docker/Dockerfile \
+  -t algorithm-facerec:local \
+  .
+```
+
 ### 3) 准备模型文件
 
 将模型文件放入项目根目录 `ai_models/`：

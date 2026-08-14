@@ -1,5 +1,8 @@
 FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
+ARG PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG FASTDEPLOY_FIND_LINKS=https://www.paddlepaddle.org.cn/whl/fastdeploy.html
+
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV LANG=C.UTF-8
@@ -19,13 +22,24 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel
+RUN python3 -m pip install --no-cache-dir \
+    --index-url "$PYPI_INDEX_URL" \
+    --timeout 300 \
+    --retries 10 \
+    --prefer-binary \
+    --upgrade pip setuptools wheel
 
 COPY requirements.txt /app/
 ARG OPERATOR_REGISTRY_CLIENT_WHEEL=algorithm_operator_registry_client-0.1.0-py3-none-any.whl
 COPY wheel/${OPERATOR_REGISTRY_CLIENT_WHEEL} /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL}
 RUN python3 -m pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} && \
-    pip3 install --no-cache-dir -r requirements.txt
+    python3 -m pip install --no-cache-dir \
+        --index-url "$PYPI_INDEX_URL" \
+        --find-links "$FASTDEPLOY_FIND_LINKS" \
+        --timeout 300 \
+        --retries 10 \
+        --prefer-binary \
+        -r requirements.txt
 
 # 只打包运行源码与模型；配置由 Compose 只读挂载，media 只属于运行期数据。
 COPY app /app/app
