@@ -247,6 +247,20 @@ class StartScriptTests(unittest.TestCase):
 
 
 class RequirementsPinningTests(unittest.TestCase):
+    def test_python311_linux_runtime_uses_torch26_cuda_pair(self):
+        for filename in ("requirements.txt", "requirements-pip.txt"):
+            with self.subTest(filename=filename):
+                requirements = Path(filename).read_text(encoding="utf-8").splitlines()
+
+                self.assertIn("torch==2.6.0", requirements)
+                self.assertIn("torchaudio==2.6.0", requirements)
+                self.assertNotIn("torch==2.7.0", requirements)
+                self.assertNotIn("torchaudio==2.7.0", requirements)
+
+        dockerfile = Path("docker/Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("https://download.pytorch.org/whl/cu124", dockerfile)
+        self.assertIn("torch==2.6.0 torchaudio==2.6.0", dockerfile)
+
     def test_runtime_requirements_are_exactly_pinned(self):
         for filename in ("requirements.txt", "requirements-pip.txt"):
             with self.subTest(filename=filename):

@@ -12,8 +12,8 @@ fastapi==0.115.12
 httpx==0.28.1
 uvicorn==0.34.2
 requests==2.32.3
-torch==2.7.0
-torchaudio==2.7.0
+torch==2.6.0
+torchaudio==2.6.0
 numpy==1.26.4
 ffmpeg-python==0.2.0
 python-multipart==0.0.20
