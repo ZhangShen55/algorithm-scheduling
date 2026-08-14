@@ -31,7 +31,7 @@ def test_cpu_gpu_dockerfile_supports_strict_optional_cython_build():
     assert "COPY docker/build_cython.py" in content
     assert '--mode "$cython"' in content
     assert "COPY --from=app-builder /build/application/app ./app" in content
-    assert "/usr/local/cuda-11.8/compat" in content
+    assert "/usr/local/cuda-11.8/compat" not in content
     assert "libgl1 libglib2.0-0" in content
     assert "COPY config.toml " not in content
     assert "EXPOSE 8866" in content
@@ -46,6 +46,17 @@ def test_builder_reuses_the_compiler_from_the_fixed_paddle_base_image():
     assert "command -v gcc" in builder
     assert "command -v make" in builder
     assert "apt-get install -y --no-install-recommends build-essential" not in builder
+
+
+def test_runtime_prefers_the_nvidia_host_driver_over_cuda_compat():
+    runtime = _runtime_stage(
+        (PROJECT_ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    )
+
+    assert (
+        "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib64:"
+        "/usr/local/nvidia/lib:"
+    ) in runtime
 
 
 def test_runtime_stage_preserves_platform_assets_and_removes_build_assets():

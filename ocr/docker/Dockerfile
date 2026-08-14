@@ -37,7 +37,7 @@ ARG OPERATOR_REGISTRY_CLIENT_WHEEL=algorithm_operator_registry_client-0.1.0-py3-
 ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True \
-    LD_LIBRARY_PATH=/usr/local/nvidia/lib64:/usr/local/nvidia/lib:/usr/local/cuda-11.8/compat:/usr/local/cuda-11.8/targets/x86_64-linux/lib
+    LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/nvidia/lib:/usr/local/cuda-11.8/targets/x86_64-linux/lib
 
 WORKDIR /app
 
