@@ -888,6 +888,24 @@ def test_facerec_image_uses_a_configurable_resilient_pypi_source() -> None:
     assert "files.pythonhosted.org" not in dockerfile
 
 
+def test_text_analysis_image_uses_a_configurable_resilient_pypi_source() -> None:
+    dockerfile = (
+        PLATFORM_ROOT.parent / "text_analysis/Dockerfile"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        dockerfile.count(
+            "ARG PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple"
+        )
+        == 2
+    )
+    assert dockerfile.count('--index-url "$PYPI_INDEX_URL"') == 3
+    assert dockerfile.count("--timeout 300") == 3
+    assert dockerfile.count("--retries 10") == 3
+    assert dockerfile.count("--prefer-binary") == 3
+    assert "files.pythonhosted.org" not in dockerfile
+
+
 def test_all_real_contexts_only_reinclude_the_exact_registry_wheel() -> None:
     workspace_root = PLATFORM_ROOT.parent
     for context_name, _, _ in EXPECTED_MATRIX:

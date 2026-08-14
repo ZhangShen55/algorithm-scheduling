@@ -5,6 +5,8 @@
 ########################
 FROM python:3.11 AS builder
 
+ARG PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+
 WORKDIR /build
 
 # 安装运行依赖 + PyArmor
@@ -12,8 +14,18 @@ COPY requirements.txt /build/
 ARG OPERATOR_REGISTRY_CLIENT_WHEEL=algorithm_operator_registry_client-0.1.0-py3-none-any.whl
 COPY wheel/${OPERATOR_REGISTRY_CLIENT_WHEEL} /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL}
 RUN pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir pyarmor
+    pip install --no-cache-dir \
+        --index-url "$PYPI_INDEX_URL" \
+        --timeout 300 \
+        --retries 10 \
+        --prefer-binary \
+        -r requirements.txt && \
+    pip install --no-cache-dir \
+        --index-url "$PYPI_INDEX_URL" \
+        --timeout 300 \
+        --retries 10 \
+        --prefer-binary \
+        pyarmor
 
 # 拷贝源码（config.toml 不拷贝，运行时挂载）
 COPY app ./app
@@ -38,6 +50,8 @@ RUN chmod +x /build/obf/start.sh
 ########################
 FROM python:3.11 AS runtime
 
+ARG PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UVICORN_HOST=0.0.0.0 \
@@ -54,7 +68,12 @@ COPY requirements.txt /app/
 ARG OPERATOR_REGISTRY_CLIENT_WHEEL=algorithm_operator_registry_client-0.1.0-py3-none-any.whl
 COPY wheel/${OPERATOR_REGISTRY_CLIENT_WHEEL} /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL}
 RUN pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} && \
-    pip install --no-cache-dir -r /app/requirements.txt
+    pip install --no-cache-dir \
+        --index-url "$PYPI_INDEX_URL" \
+        --timeout 300 \
+        --retries 10 \
+        --prefer-binary \
+        -r /app/requirements.txt
 
 # 拷贝混淆后的代码与启动脚本
 COPY --from=builder /build/obf /app
