@@ -97,12 +97,6 @@ class Settings:
         model_paths = self._cfg.get("model_paths", {})
         return model_paths.get("whisper_model_dir", "/model/faster-whisper-large-v3")
 
-    # 计算配置 - 从嵌套的 [compute] 部分读取
-    @property
-    def compute_type(self) -> str:
-        compute = self._cfg.get("compute", {})
-        return compute.get("compute_type", "float16")
-
     # 语速计算配置 - 从嵌套的 [speech_rate] 部分读取
     @property
     def speech_rate_factor(self) -> float:

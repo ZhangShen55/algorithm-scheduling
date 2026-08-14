@@ -115,10 +115,6 @@ spk_model_dir = "/var/model_zoo/model_asr/speech_campplus_sv_zh_en_16k-common_ad
 emotion_model_dir = "/var/model_zoo/model_asr/emotion2vec_plus_large"
 whisper_model_dir = "/var/model_zoo/model_asr/faster-whisper-large-v3"
 
-# 计算配置（faster-whisper）
-[compute]
-compute_type = "int8"      # int8 / float16 等
-
 # 语速计算配置
 [speech_rate]
 rate_factor = 0.4          # 单句语速修正系数（数值偏高时下调）

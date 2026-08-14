@@ -92,7 +92,7 @@ async def load_models_if_needed():
         if settings.open_mul_lang and _model_whisper is None:
             _model_whisper = WhisperModel(
                 settings.whisper_model_dir,
-                compute_type=settings.compute_type,
+                compute_type="int8",
                 device=runtime_device.type,
                 device_index=runtime_device.index or 0,
             )

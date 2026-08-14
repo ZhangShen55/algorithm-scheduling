@@ -26,10 +26,6 @@ spk_model_dir = "./model/speech_campplus_sv_zh_en_16k-common_advanced"
 emotion_model_dir = "./model/emotion2vec_plus_large"
 whisper_model_dir = "./model/faster-whisper-large-v3"
 
-# 计算配置
-[compute]
-compute_type = "int8"
-
 # 语速计算配置
 [speech_rate]
 rate_factor = 0.4  # 语速修正系数（数值偏高时下调），最终语速 = 原始字/分钟 * rate_factor

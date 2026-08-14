@@ -103,6 +103,7 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_startup_loads_retained_asr_emotion_and_whisper_models(self) -> None:
         self._configure_gpu(device="cpu", ngpu=0)
+        self.models.settings._cfg["compute"] = {"compute_type": "float16"}
         self.models.settings._cfg["features"] = {
             "open_spk": True,
             "open_emotion": True,
@@ -132,7 +133,7 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
         whisper_model.assert_called_once_with(
             self.models.settings.whisper_model_dir,
-            compute_type=self.models.settings.compute_type,
+            compute_type="int8",
             device="cpu",
             device_index=0,
         )
