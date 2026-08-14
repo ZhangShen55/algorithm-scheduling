@@ -25,6 +25,27 @@
 - 证据位置：服务器上的运行日志按 release/SHA 归档；模型逐文件 manifest 保留在 Git 外受限
   目录，不写入仓库或报告。密码、私钥和模型原图未写入 Git、文档或命令参数。
 
+## 2026-08-14 - 里程碑 2B 八镜像构建续接与 ASR Offline 基础环境阻塞
+
+- 续接前置：用户已在目标服务器成功拉取
+  `nvcr.io/nvidia/cuda:12.1.1-cudnn8-runtime-centos7`；远端检查确认镜像为
+  `linux/amd64`，代码仍固定在 `855109bf5e746f97a6caf4856b733eb9127c405e`，工作树干净，
+  六个模型根再次逐文件校验 PASS，根分区剩余约 212 GiB。
+- 实际执行：重新运行八镜像构建入口；注册客户端 wheel、构建上下文门禁、模型门禁和
+  ASR Offline 的 CUDA 基础镜像阶段均通过。CentOS/Conda 系统依赖安装完成后，构建在
+  `requirements-pip.txt` 的 `torch==2.7.0` 解析处终止；后续七个镜像未开始。
+- 表面错误：Dockerfile 将 pip 主索引固定为阿里云镜像，该镜像当前只列出到
+  `torch 2.6.0`，因此报告 `No matching distribution found for torch==2.7.0`。
+- 根因：官方 PyPI 的 `torch 2.7.0` Python 3.11 x86_64 wheel 为
+  `manylinux_2_28`，要求 glibc 至少 2.28；当前 CentOS 7 CUDA 基础镜像只有 glibc 2.17。
+  仅增加官方 PyPI 索引只能解决“找不到版本”，不能解决运行时 ABI 不兼容。
+- 决策边界：未降级 Torch/Torchaudio、未强行升级容器 glibc、未切换未经确认的 CUDA/cuDNN
+  组合、未继续构建后续镜像。已确认同 CUDA/cuDNN 版本的
+  `nvcr.io/nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04` tag 存在；下一步需由用户准备该
+  基础镜像，再以测试覆盖的最小 Dockerfile 变更将 ASR Offline 系统包管理从 yum 改为 apt。
+- 当前结论：八镜像构建仍为失败；基础设施、平台、24 个算子实例及所有真实运行验收保持
+  “未执行及原因”，不得宣称里程碑 2B 部署完成。
+
 ## 2026-08-12 - 里程碑 2B Task 10-11 文档与本地验收边界
 
 - 先前状态：Task 7B-9 的构建上下文、模型资产事务、GPU 证据采集器、注册/Smoke
