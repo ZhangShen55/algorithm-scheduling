@@ -135,6 +135,11 @@ ASR Offline 单镜像和单次真实 GPU 推理，不代表八镜像或里程碑
 `https://mirror.nju.edu.cn/anaconda/miniconda`，build arg 覆盖方式不变。必须使用包含该
 修正的新完整 Git SHA 继续构建。
 
+OCR 可选 Cython 构建随后暴露出跨提交门禁冲突：其构建期导入校验需要无敏感值的
+`config.toml.example`，而旧门禁禁止所有 `!config*` 重包含。当前门禁只对 OCR 精确允许
+`!config.toml.example`，仍拒绝正式 `config.toml` 和其他配置重包含；镜像构建测试与真实
+八上下文门禁均已通过。继续构建时必须使用同时包含 Miniconda 源修正和本门禁修复的新 SHA。
+
 ## 阶段 3：平台和逐卡算子拓扑
 
 ```bash

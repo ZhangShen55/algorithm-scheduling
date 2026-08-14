@@ -473,6 +473,45 @@ COPY --from=builder /wheel /wheel
     assert completed.returncode == 0, completed.stderr
 
 
+def test_build_context_gate_allows_only_ocr_example_config_reinclude(
+    tmp_path: Path,
+) -> None:
+    workspace = _make_workspace(tmp_path)
+    dockerignore = workspace / "ocr/.dockerignore"
+    dockerignore.write_text(
+        dockerignore.read_text(encoding="utf-8")
+        + "config.toml\n!config.toml.example\n",
+        encoding="utf-8",
+    )
+    (workspace / "ocr/config.toml.example").write_text(
+        '[ocr]\ndevice = "cpu"\n', encoding="utf-8"
+    )
+    (workspace / "ocr/docker/Dockerfile").write_text(
+        "FROM scratch\nCOPY config.toml.example /app/.build/config.toml\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_gate(workspace)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_build_context_gate_rejects_ocr_runtime_config_reinclude(
+    tmp_path: Path,
+) -> None:
+    workspace = _make_workspace(tmp_path)
+    dockerignore = workspace / "ocr/.dockerignore"
+    dockerignore.write_text(
+        dockerignore.read_text(encoding="utf-8") + "config*.toml\n!config.toml\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_gate(workspace)
+
+    assert completed.returncode != 0
+    assert "re-include" in completed.stderr.lower()
+
+
 def test_build_context_gate_rejects_a_secret_reincluded_by_negation(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     dockerignore = workspace / "asr_offline/.dockerignore"
@@ -877,8 +916,13 @@ def test_all_operator_contexts_exclude_local_runtime_configs() -> None:
             for line in dockerignore.splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         }
-        assert "config*.toml" in lines, context_name
-        assert not any(line.startswith("!config") for line in lines), context_name
+        config_reincludes = {line for line in lines if line.startswith("!config")}
+        if context_name == "ocr":
+            assert "config.toml" in lines
+            assert config_reincludes == {"!config.toml.example"}
+        else:
+            assert "config*.toml" in lines, context_name
+            assert not config_reincludes, context_name
 
 
 def test_dockerfiles_do_not_copy_local_runtime_configs() -> None:
@@ -887,8 +931,8 @@ def test_dockerfiles_do_not_copy_local_runtime_configs() -> None:
         source = (workspace_root / context_name / dockerfile_name).read_text(
             encoding="utf-8"
         )
-        assert "COPY config.toml" not in source, context_name
-        assert "COPY ./config.toml" not in source, context_name
+        assert "COPY config.toml " not in source, context_name
+        assert "COPY ./config.toml " not in source, context_name
         assert "COPY . /" not in source, context_name
 
 

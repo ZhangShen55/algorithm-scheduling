@@ -43,7 +43,7 @@ REGISTRY_WHEEL_REINCLUDE = (
 ALLOWED_REINCLUDES = {
     "asr_offline": {"!model/**/*.wav", REGISTRY_WHEEL_REINCLUDE},
     "asr_online": {REGISTRY_WHEEL_REINCLUDE},
-    "ocr": {REGISTRY_WHEEL_REINCLUDE},
+    "ocr": {REGISTRY_WHEEL_REINCLUDE, "!config.toml.example"},
     "vbas": {
         REGISTRY_WHEEL_REINCLUDE,
         "!models/",
