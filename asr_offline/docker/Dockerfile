@@ -48,9 +48,6 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} && \
     pip install --only-binary=:all: pyarrow==20.0.0 && \
     pip install --no-cache-dir --retries 10 --timeout 600 \
-      --index-url https://pypi.org/simple \
-      torch==2.6.0 torchaudio==2.6.0 && \
-    pip install --no-cache-dir --retries 10 --timeout 600 \
       --prefer-binary \
       -r /tmp/requirements-pip.txt
 

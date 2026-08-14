@@ -258,9 +258,12 @@ class RequirementsPinningTests(unittest.TestCase):
                 self.assertNotIn("torchaudio==2.7.0", requirements)
 
         dockerfile = Path("docker/Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("--index-url https://pypi.org/simple", dockerfile)
+        self.assertIn(
+            "pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/",
+            dockerfile,
+        )
+        self.assertNotIn("--index-url https://pypi.org/simple", dockerfile)
         self.assertNotIn("https://download.pytorch.org/whl/cu124", dockerfile)
-        self.assertIn("torch==2.6.0 torchaudio==2.6.0", dockerfile)
 
     def test_runtime_requirements_are_exactly_pinned(self):
         for filename in ("requirements.txt", "requirements-pip.txt"):
