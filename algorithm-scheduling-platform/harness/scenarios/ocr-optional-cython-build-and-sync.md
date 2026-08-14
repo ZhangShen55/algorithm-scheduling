@@ -6,19 +6,25 @@
 `cython=yes` 的编译保护镜像，并确认源项目改动以允许清单同步到算法功能调度 OCR 副本。
 Cython 只提高源码阅读和逆向门槛，不是密码学加密。本场景不修改、也不验证 NPU Dockerfile。
 
-当前证据来自 Apple Silicon MacBook、`ocr-v6` Conda 环境和 Docker Desktop 的
-`linux/amd64` 模拟运行。没有真实 NVIDIA GPU 证据，因此结论只能为“部分符合”。
+证据包括 Apple Silicon MacBook、`ocr-v6` Conda 环境、Docker Desktop 的 `linux/amd64`
+构建，以及 `192.168.29.11` 上的真实 x86_64/NVIDIA GPU 运行。普通与 Cython、源与目标
+四个最终镜像均完成普通 OCR、公式识别、显存记录和容器重启复验。
 
 ## 输入与同步基线
 
 - 源项目：`/Users/zhangshen/Documents/workspace/jy-algorithm-app-ocr-v6-service`，
-  `main@ffa85e757fa2446fb925747331aecfe9e779cf77`，实施时保留已有未提交改动。
+  最终修复提交为 `main@797968c9eca8e51f5d52d62b94c38e8c517e30ed`，实施时保留已有未提交改动。
 - 目标仓库：`/Users/zhangshen/Documents/workspace/算法功能调度`，
-  `codex/milestone-2b-three-gpu-deployment@701afa9f9973b6b062bfa90a66ce7fa101b5f428`。
+  最终 OCR 修复提交为
+  `codex/milestone-2b-three-gpu-deployment@a5106d026b1aa58ed33f9125a0cb67b53e5e25c4`。
 - CPU 配置：两个项目各自的 `config.toml.example`，只读挂载到 `/app/config.toml`。
+- GPU 配置：同一份宿主机配置设置 `device = "cuda:0"` 和 `[formula].enabled = true`，
+  SHA-256 为 `debd64eacc36a9621633046a72715c6f8a8bba1b603c5e0ff647a370e51af02a`。
 - 真实 OCR 输入：`ocr/tests/fixtures/ocr-test.jpg`。
+- 真实公式输入：`ocr/tests/fixtures/formula-document.png`。
 - 模型摘要：源、目标 `models/manifest.sha256` 的 SHA-256 均为
-  `818231294db3ca1d430660640fd60cf9f29f1d7decf6f1affb5466bc03365a27`，模型未复制。
+  `818231294db3ca1d430660640fd60cf9f29f1d7decf6f1affb5466bc03365a27`；项目同步未复制模型，
+  GPU 隔离验收只传输一份已校验模型并由两个构建上下文复用。
 - 同步排除：`.git`、`.codex`、`openspec/`、正式 `config.toml`、日志、缓存、字节码、
   临时文件、模型目录和 NPU Dockerfile。
 
@@ -44,8 +50,8 @@ conda run -n ocr-v6 python -m compileall -q app
 conda run -n ocr-v6 python -m pytest -q tests
 ```
 
-源项目完整测试为 `160 passed`；目标项目编译、`from app.main import app` 和完整测试通过，
-结果为 `164 passed`。目标镜像构建命令：
+源项目完整测试为 `161 passed`；目标项目编译、`from app.main import app` 和完整测试通过，
+结果为 `165 passed`。目标镜像构建命令：
 
 ```bash
 docker build --platform linux/amd64 \
@@ -58,7 +64,9 @@ docker build --platform linux/amd64 \
   -t algorithm-scheduling-ocr:cython-check .
 ```
 
-普通镜像大小为 `12803031907` bytes，Cython 镜像大小为 `12805680417` bytes。Cython
+最终源普通/Cython 镜像 ID 分别为 `cb3ede66`、`c23d9f85`，大小分别为
+`12803022141`、`12805661912` bytes；最终目标普通/Cython 镜像 ID 分别为
+`de68f904`、`f7df45a3`，大小分别为 `12803034012`、`12805682418` bytes。Cython
 镜像包含 16 个原生扩展，不含核心 `.py`、C/C++/目标文件、Cython、gcc、构建目录、依赖清单
 或 `/app/config.toml`；registry wheel 安装结果和平台 entrypoint 保留。两种镜像的 12 个模型文件
 均通过 `manifest.sha256` 校验。
@@ -97,30 +105,44 @@ docker run --rm --platform linux/amd64 --entrypoint sh \
   '
 ```
 
-## 真实 NVIDIA GPU 待验收
+## 真实 NVIDIA GPU 验收
 
-在 x86_64 NVIDIA 主机准备宿主机 `config.toml`，设置 `device = "cuda:0"`，按需打开
-`[formula].enabled`，然后对普通和 Cython 镜像分别执行：
+验收主机为 `192.168.29.11`，架构 `x86_64`，Docker `26.1.4`，NVIDIA 驱动
+`570.172.08`。主机包含两张 RTX 4090 D 和一张 RTX 3090。四个最终镜像均使用以下约束
+逐个运行，`CUDA_VISIBLE_DEVICES=2` 将物理 GPU 2 映射为容器逻辑 `cuda:0`：
 
 ```bash
 docker run -d --name ocr-v6-cython-gpu-check \
   --gpus all \
+  -e CUDA_VISIBLE_DEVICES=2 \
   -e REQUIRE_GPU=true \
-  -p 8866:8866 \
+  -p 18866:8866 \
   -v "$(pwd)/config.toml:/app/config.toml:ro" \
   --log-driver json-file \
   --log-opt max-size=100m \
   --log-opt max-file=3 \
-  algorithm-scheduling-ocr:cython-check
+  algorithm-scheduling-ocr:cython-fixed
 ```
 
-验收必须记录容器内 `nvidia-smi`、应用显存占用、普通 OCR、公式开启路径、容器重启后再次推理，
-并用同一配置复验普通镜像。上述证据完成前，不得把本场景或 `DEC-023` 改为“符合”。
+首次真机启动暴露出镜像内 `/usr/local/cuda-11.8/compat/libcuda.so.520.61.05` 先于宿主机
+`libcuda.so.570.172.08` 加载，CUDA 返回错误 803。源提交 `797968c` 和目标提交 `a5106d0`
+删除该错误优先级，并把 `/usr/lib/x86_64-linux-gnu` 放在 `LD_LIBRARY_PATH` 首位。修复后的
+四个 Dockerfile 产物重新构建、传输并完成以下验收：
+
+- 容器内 Paddle 仅看到一个逻辑 GPU；四组进程都运行在物理 GPU 2，GPU 0/1 保持 `3 MiB`。
+- 源普通、源 Cython、目标普通、目标 Cython的进程显存分别为 `2414`、`2424`、`2414`、
+  `2418 MiB`，主机统计显存分别为 `2423`、`2433`、`2423`、`2427 MiB`。
+- 普通 OCR 均识别 2 条结果，响应 SHA-256 均为
+  `23810a5eca86757c7232bafc0a395533f5d035c2f31eb6213464f3b4dae30c1e`。
+- 公式路径均识别 28 个公式，响应 SHA-256 均为
+  `ab7d92d0801f530d04955f97f28b43f4115f3108e77f9396f99df00c7f3a0780`。
+- 四个容器重启后版本接口和真实 OCR 再次通过，重启前后 OCR 响应逐字一致。
+- 每组结束后精确删除验收容器；最终无本次活跃容器，三张 GPU 均恢复到 `3 MiB`。
 
 ## 证据结论
 
 - 静态、单元与契约测试：符合。
 - MacBook CPU / Docker `linux/amd64` 构建与真实 OCR：符合。
 - 双项目允许清单同步及平台专属能力保留：符合。
-- 真实 NVIDIA GPU、显存、公式路径和重启：待验证。
-- 综合结论：部分符合。
+- 真实 NVIDIA GPU、显存、公式路径和重启：符合。
+- 综合结论：符合。

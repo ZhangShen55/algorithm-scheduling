@@ -36,7 +36,7 @@ conda run -n ppt_slice python -m unittest discover -s ../ppt_slice/tests -v
 
 ## 2026-08-14 OCR 可选 Cython 构建与同步验证
 
-完整输入、允许清单、正反例和真实 GPU 缺口见
+完整输入、允许清单、正反例和真实 GPU 证据见
 [`scenarios/ocr-optional-cython-build-and-sync.md`](scenarios/ocr-optional-cython-build-and-sync.md)。
 
 从算法功能调度工作区根目录验证目标 OCR 项目：
@@ -61,10 +61,10 @@ docker build --platform linux/amd64 \
   -t algorithm-scheduling-ocr:cython-check .
 ```
 
-挂载 `config.toml.example` 只能作为本机 CPU 验证；生产 NVIDIA 验收必须使用宿主机正式
-`config.toml`、`--gpus all`、`REQUIRE_GPU=true` 和 `device = "cuda:<容器逻辑编号>"`，并记录
-真实 OCR、公式开启、显存及重启证据。当前仅有 MacBook CPU 和 Docker 模拟运行结果，
-因此 `DEC-023` 保持“部分符合”。
+生产 NVIDIA 验收使用宿主机配置、`--gpus all`、`REQUIRE_GPU=true` 和
+`device = "cuda:<容器逻辑编号>"`。`192.168.29.11` 已使用同一只读配置完成源/目标普通与
+Cython 四个最终镜像的真实 OCR、公式开启、显存和重启复验；详细镜像 ID、响应摘要和显存数据
+见场景文件，因此 `DEC-023` 结论为“符合”。
 
 ## 里程碑 2B 部署验证场景
 

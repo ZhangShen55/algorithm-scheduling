@@ -9,20 +9,26 @@
   编译器、Cython、依赖清单或正式配置。目标项目继续使用平台 wheel、`app.main:app` 和 entrypoint。
 - 变更文件：目标 OCR 的 `.dockerignore`、`app/main.py`、`docker/Dockerfile`、
   `docker/build_cython.py`、`docker/README.md`、Docker/Cython/入口测试，以及中央 Harness 的
-  决策矩阵、验证入口和 `harness/scenarios/ocr-optional-cython-build-and-sync.md`。
+  决策矩阵、验证入口和 `harness/scenarios/ocr-optional-cython-build-and-sync.md`。真机验收后还修正
+  `LD_LIBRARY_PATH`，防止 CUDA compat 驱动覆盖宿主机 NVIDIA 驱动，并增加回归测试。
 - 契约影响：`/ocr/getVersion`、`/ocr/prediction`、响应字段、端口 8866、模型和
   `device = "cuda:<index>"` 格式不变；正式配置仍只允许宿主机挂载。两个项目的 NPU Dockerfile 未修改。
-- 同步版本：源项目基线为 `main@ffa85e757fa2446fb925747331aecfe9e779cf77`；目标仓库基线为
-  `codex/milestone-2b-three-gpu-deployment@701afa9f9973b6b062bfa90a66ce7fa101b5f428`。
+- 同步版本：源项目最终修复提交为 `main@797968c9eca8e51f5d52d62b94c38e8c517e30ed`；
+  目标 OCR 最终修复提交为
+  `codex/milestone-2b-three-gpu-deployment@a5106d026b1aa58ed33f9125a0cb67b53e5e25c4`。
   两边模型摘要一致，模型目录未读取、复制或删除；目标已有无关未跟踪文档保持原状。
-- 验证命令与环境：MacBook / Docker Desktop 使用 `linux/amd64`；源项目 `160 passed`，
-  目标项目 `164 passed`；目标普通/Cython 镜像构建成功，大小分别为 `12803031907` 和
-  `12805680417` bytes。两种镜像使用同一只读 CPU 配置完成版本接口、真实 OCR 和公式关闭路径，
-  响应逐字段一致；非法 `cython=true` 和缺配置均按合同失败。
-- 证据等级与结论：达到静态/单元/契约、本机 CPU 真实推理、Docker 构建和容器运行层级；
-  目标平台专属入口、wheel、GPU 门禁和 entrypoint 已保留。综合结论为部分符合。
-- 剩余风险：尚未在真实 x86_64 NVIDIA 主机验证 `--gpus all`、`REQUIRE_GPU=true`、
-  `cuda:0`、公式开启、显存占用和容器重启；Cython 是编译保护，不是密码学加密。
+- 验证命令与环境：MacBook / Docker Desktop 使用 `linux/amd64`；源项目 `161 passed`，
+  目标项目 `165 passed`；四个修正版镜像完整构建成功。真实 x86_64 主机
+  `192.168.29.11` 使用同一只读 GPU 配置、`--gpus all`、`REQUIRE_GPU=true` 和物理 GPU 2，
+  完成四个最终镜像的版本接口、真实 OCR、公式开启、显存及重启验证。
+- 真机根因与结果：初次运行因 CUDA 11.8 compat 的 `libcuda.so.520.61.05` 抢先加载而返回
+  CUDA 错误 803；修复后四组 OCR/公式响应摘要完全一致，进程显存为 `2414-2424 MiB`，
+  重启前后 OCR 逐字一致，结束后无验收容器且三张 GPU 均恢复到 `3 MiB`。
+- 证据等级与结论：达到静态/单元/契约、本机 CPU 真实推理、Docker 完整构建、真实 NVIDIA
+  GPU 推理和容器重启层级；目标平台专属入口、wheel、GPU 门禁和 entrypoint 已保留。
+  综合结论为符合。
+- 剩余风险：Cython 是编译保护，不是密码学加密；后续更换 CUDA 基础镜像或驱动版本时仍需
+  复验宿主机 `libcuda` 的加载优先级。
 
 ## 2026-08-12 - 里程碑 2B 远端部署执行记录（模型资产与镜像前置）
 
