@@ -818,6 +818,24 @@ def test_git_input_gate_allows_a_foreign_wheel_only_when_dockerignore_excludes_i
     assert completed.returncode == 0, completed.stderr
 
 
+def test_git_input_gate_allows_rotated_asr_logs_excluded_by_real_context(
+    tmp_path: Path,
+) -> None:
+    workspace = _make_workspace(tmp_path)
+    real_dockerignore = PLATFORM_ROOT.parent / "asr_offline/.dockerignore"
+    (workspace / "asr_offline/.dockerignore").write_text(
+        real_dockerignore.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    _initialize_git_workspace(workspace)
+    rotated_log = workspace / "asr_offline/logs/asr_service.log.2026-08-14"
+    rotated_log.parent.mkdir()
+    rotated_log.write_text("rotated log\n", encoding="utf-8")
+
+    completed = _run_gate(workspace, "--verify-git-clean-included")
+
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_git_input_gate_allows_the_exact_registry_wheel(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     _initialize_git_workspace(workspace)

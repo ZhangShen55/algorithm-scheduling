@@ -153,6 +153,7 @@ GIT_SHA_PATTERN = re.compile(r"[0-9a-fA-F]{40}")
 DOCKER_IMAGE_ID_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
 REVISION_LABEL = "org.opencontainers.image.revision"
 WILDCARD_HOST = "*"
+SOCKET_SCOPE_ZONE_PATTERN = re.compile(r"[A-Za-z0-9_.-]+")
 PortMapping = tuple[int, int, str, str]
 EXPECTED_PLATFORM_PORT_MAPPINGS = {
     "postgres": (5432, 5432, "tcp", "127.0.0.1"),
@@ -700,6 +701,112 @@ def validate_host_compose(
     return sorted(set(platform_ports) | set(operator_ports))
 
 
+def _canonical_socket_endpoint(
+    value: str,
+    *,
+    allow_legacy_wildcard: bool,
+    allow_wildcard_port: bool = False,
+) -> tuple[str, int | None]:
+    bracketed = value.startswith("[")
+    zone: str | None = None
+    if bracketed:
+        closing = value.find("]")
+        if closing < 2:
+            raise PreflightError(f"socket endpoint is invalid: {value}")
+        host = value[1:closing]
+        suffix = value[closing + 1 :]
+        if suffix.startswith("%"):
+            zone, separator, port_text = suffix[1:].partition(":")
+            if not separator:
+                raise PreflightError(f"socket endpoint is invalid: {value}")
+        elif suffix.startswith(":"):
+            port_text = suffix[1:]
+        else:
+            raise PreflightError(f"socket endpoint is invalid: {value}")
+    else:
+        host, separator, port_text = value.rpartition(":")
+        if not separator:
+            raise PreflightError(f"socket endpoint is invalid: {value}")
+        if "%" in host:
+            host, zone = host.split("%", maxsplit=1)
+    if (bracketed and "%" in host) or (
+        host == "*" and (bracketed or zone is not None)
+    ):
+        raise PreflightError(f"socket endpoint is invalid: {value}")
+    if zone is not None and SOCKET_SCOPE_ZONE_PATTERN.fullmatch(zone) is None:
+        raise PreflightError(f"socket endpoint is invalid: {value}")
+    if port_text == "*":
+        if not allow_wildcard_port:
+            raise PreflightError(f"socket endpoint is invalid: {value}")
+        port = None
+    elif re.fullmatch(r"[0-9]+", port_text) is not None:
+        port = int(port_text)
+        if not 1 <= port <= 65535:
+            raise PreflightError(f"socket endpoint is invalid: {value}")
+    else:
+        raise PreflightError(f"socket endpoint is invalid: {value}")
+    rendered_port = "*" if port is None else str(port)
+    if host == "*":
+        if not allow_legacy_wildcard:
+            raise PreflightError(f"authorized occupied endpoint is invalid: {value}")
+        return f"*:{rendered_port}", port
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError as error:
+        raise PreflightError(f"socket endpoint is invalid: {value}") from error
+    if bracketed and address.version != 6:
+        raise PreflightError(f"socket endpoint is invalid: {value}")
+    rendered = str(address)
+    if address.version == 6:
+        rendered = f"[{rendered}]"
+    return f"{rendered}:{rendered_port}", port
+
+
+def validate_host_sockets(
+    socket_output: str,
+    *,
+    required_ports: list[int],
+    authorized_endpoints: list[str],
+) -> None:
+    if not required_ports or len(required_ports) != len(set(required_ports)):
+        raise PreflightError("required host socket ports must be unique and non-empty")
+    if any(not 1 <= port <= 65535 for port in required_ports):
+        raise PreflightError("required host socket port is invalid")
+    authorized = {
+        _canonical_socket_endpoint(endpoint, allow_legacy_wildcard=False)[0]
+        for endpoint in authorized_endpoints
+    }
+    required = set(required_ports)
+    for line_number, line in enumerate(socket_output.splitlines(), start=1):
+        if not line.strip():
+            continue
+        fields = line.split()
+        if (
+            len(fields) != 5
+            or fields[0] != "LISTEN"
+            or re.fullmatch(r"[0-9]+", fields[1]) is None
+            or re.fullmatch(r"[0-9]+", fields[2]) is None
+        ):
+            raise PreflightError(f"ss returned an invalid listening socket row: {line_number}")
+        endpoint, port = _canonical_socket_endpoint(
+            fields[3], allow_legacy_wildcard=True
+        )
+        if port is None:
+            raise PreflightError(f"socket endpoint is invalid: {fields[3]}")
+        _, peer_port = _canonical_socket_endpoint(
+            fields[4],
+            allow_legacy_wildcard=True,
+            allow_wildcard_port=True,
+        )
+        if peer_port is not None:
+            raise PreflightError(f"socket endpoint is invalid: {fields[4]}")
+        allowed = {endpoint}
+        if endpoint == f"*:{port}":
+            allowed = {f"0.0.0.0:{port}", f"[::]:{port}"}
+        if port in required and authorized.isdisjoint(allowed):
+            raise PreflightError(f"required endpoint {endpoint} has an unauthorized occupant")
+
+
 def _select_operator_services(
     operator_document: Any,
     *,
@@ -1128,6 +1235,9 @@ def parse_args() -> argparse.Namespace:
     compose.add_argument("--result-root", required=True)
     compose.add_argument("platform_json", type=Path)
     compose.add_argument("operator_json", type=Path)
+    sockets = subparsers.add_parser("host-sockets", allow_abbrev=False)
+    sockets.add_argument("--required-port", action="append", type=int, required=True)
+    sockets.add_argument("--authorized-endpoint", action="append", default=[])
     readiness = subparsers.add_parser("readiness", allow_abbrev=False)
     readiness.add_argument("--timeout", type=float, default=5.0)
     readiness.add_argument("urls", nargs="+")
@@ -1173,6 +1283,12 @@ def main() -> int:
                 result_root=args.result_root,
             )
             print(" ".join(str(port) for port in ports))
+        elif args.command == "host-sockets":
+            validate_host_sockets(
+                sys.stdin.read(),
+                required_ports=args.required_port,
+                authorized_endpoints=args.authorized_endpoint,
+            )
         elif args.command == "readiness":
             validate_readiness(args.urls, args.timeout)
         elif args.command == "database":

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import fcntl
 import importlib.util
 import json
 import os
 import re
 import shlex
+import shutil
 import socket
 import stat
 import subprocess
@@ -719,6 +721,150 @@ def test_smoke_entrypoint_and_manifest_are_strict() -> None:
     assert all("checks" in case and case["checks"] for case in manifest["cases"])
 
 
+@pytest.mark.parametrize(
+    ("entrypoint", "python_script"),
+    (
+        ("verify-operator-registration", "verify_operator_registration.py"),
+        ("run-operator-smoke", "run_operator_smoke.py"),
+    ),
+)
+def test_deploy_entrypoint_falls_back_to_path_python3_without_project_venv(
+    tmp_path: Path, entrypoint: str, python_script: str
+) -> None:
+    platform = tmp_path / "platform"
+    scripts = platform / "deploy" / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy2(SCRIPTS / entrypoint, scripts / entrypoint)
+    (scripts / python_script).write_text(
+        "import argparse\nargparse.ArgumentParser().parse_args()\n",
+        encoding="utf-8",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "python3").symlink_to(PYTHON)
+
+    completed = subprocess.run(
+        [str(scripts / entrypoint), "--help"],
+        cwd=platform,
+        env={**os.environ, "PATH": f"{fake_bin}:/usr/bin:/bin", "DEPLOY_PYTHON": ""},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "usage:" in completed.stdout
+
+
+@pytest.mark.parametrize(
+    ("entrypoint", "python_script"),
+    (
+        ("verify-operator-registration", "verify_operator_registration.py"),
+        ("run-operator-smoke", "run_operator_smoke.py"),
+    ),
+)
+def test_deploy_entrypoint_prefers_explicit_deploy_python(
+    tmp_path: Path, entrypoint: str, python_script: str
+) -> None:
+    platform = tmp_path / "platform"
+    scripts = platform / "deploy" / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy2(SCRIPTS / entrypoint, scripts / entrypoint)
+    (scripts / python_script).write_text(
+        "import argparse\nargparse.ArgumentParser().parse_args()\n",
+        encoding="utf-8",
+    )
+    project_bin = platform / ".venv" / "bin"
+    project_bin.mkdir(parents=True)
+    (project_bin / "python").symlink_to(PYTHON)
+    marker = tmp_path / "deploy-python-used"
+    deploy_python = tmp_path / "deploy-python"
+    deploy_python.write_text(
+        f"#!/bin/bash\nprintf used > {shlex.quote(str(marker))}\n"
+        f"exec {shlex.quote(str(PYTHON))} \"$@\"\n",
+        encoding="utf-8",
+    )
+    deploy_python.chmod(0o755)
+
+    completed = subprocess.run(
+        [str(scripts / entrypoint), "--help"],
+        cwd=platform,
+        env={**os.environ, "DEPLOY_PYTHON": str(deploy_python)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert marker.read_text(encoding="utf-8") == "used"
+
+
+@pytest.mark.parametrize("entrypoint", ("verify-operator-registration", "run-operator-smoke"))
+def test_deploy_entrypoint_reports_when_no_python_interpreter_is_available(
+    tmp_path: Path, entrypoint: str
+) -> None:
+    platform = tmp_path / "platform"
+    scripts = platform / "deploy" / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy2(SCRIPTS / entrypoint, scripts / entrypoint)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    dirname = shutil.which("dirname")
+    assert dirname is not None
+    (fake_bin / "dirname").symlink_to(dirname)
+
+    completed = subprocess.run(
+        ["/bin/bash", str(scripts / entrypoint), "--help"],
+        cwd=platform,
+        env={**os.environ, "PATH": str(fake_bin), "DEPLOY_PYTHON": ""},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 127
+    assert "no usable Python interpreter" in completed.stderr
+
+
+@pytest.mark.parametrize("entrypoint", ("verify-operator-registration", "run-operator-smoke"))
+@pytest.mark.parametrize("invalid_kind", ("missing", "non_executable", "directory"))
+def test_deploy_entrypoint_rejects_invalid_explicit_deploy_python_without_fallback(
+    tmp_path: Path, entrypoint: str, invalid_kind: str
+) -> None:
+    platform = tmp_path / "platform"
+    scripts = platform / "deploy" / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy2(SCRIPTS / entrypoint, scripts / entrypoint)
+    project_bin = platform / ".venv" / "bin"
+    project_bin.mkdir(parents=True)
+    (project_bin / "python").symlink_to(PYTHON)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "python3").symlink_to(PYTHON)
+
+    deploy_python = tmp_path / "explicit-python"
+    if invalid_kind == "non_executable":
+        deploy_python.write_text("not executable\n", encoding="utf-8")
+    elif invalid_kind == "directory":
+        deploy_python.mkdir()
+
+    completed = subprocess.run(
+        [str(scripts / entrypoint), "--help"],
+        cwd=platform,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "DEPLOY_PYTHON": str(deploy_python),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 127
+    assert "DEPLOY_PYTHON is not an executable file" in completed.stderr
+
+
 def test_gpu_acceptance_docs_contain_complete_executable_commands() -> None:
     readme = (DEPLOY / "README.md").read_text(encoding="utf-8")
     scenario = (
@@ -894,6 +1040,7 @@ def _prepare_early_phase_shell(tmp_path: Path, failing_command: str) -> tuple[Pa
     project_root = tmp_path / "project"
     scripts = project_root / "deploy/scripts"
     scripts.mkdir(parents=True)
+    shutil.copy2(SCRIPTS / "operator_lifecycle.py", scripts / "operator_lifecycle.py")
     release_root = (
         project_root
         / "deploy/reports/milestone-2b/releases"
@@ -925,9 +1072,45 @@ exit 0
     fake_bin = tmp_path / "early-bin"
     fake_bin.mkdir()
     _write_executable(
+        fake_bin / "python3",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf 'python3:%s\\n' "$*" >>"$COMMAND_LOG"
+if [[ "$#" -eq 3 && "$1" == "-m" && "$2" == "venv" ]]; then
+  venv_root="$3"
+  mkdir -p "$venv_root/bin"
+  cat >"$venv_root/bin/python" <<'PYTHON'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'venv-python:%s\\n' "$*" >>"$COMMAND_LOG"
+if [[ "$#" -eq 4 && "$1" == "-m" && "$2" == "pip" \
+  && "$3" == "install" && "$4" == "." ]]; then
+  exit 0
+fi
+if [[ "$#" -eq 1 && "$1" == "-" ]]; then
+  cat >/dev/null
+  runtime_evidence='{"python_executable":"/fake/.venv/bin/python",'
+  runtime_evidence+='"python_version":"3.11.0","dependencies":{'
+  runtime_evidence+='"httpx":"0.28.1","PyYAML":"6.0.3","websockets":"17.0.1"}}'
+  printf '%s\\n' "$runtime_evidence"
+  exit 0
+fi
+if [[ "${1:-}" == "deploy/scripts/operator_lifecycle.py" ]]; then
+  exec "$REAL_PYTHON" "$@"
+fi
+exit 64
+PYTHON
+  chmod 0755 "$venv_root/bin/python"
+  exit 0
+fi
+exit 64
+""",
+    )
+    _write_executable(
         fake_bin / "git",
         f"#!/usr/bin/env bash\nprintf '%s\\n' '{SHA}'\n",
     )
+    _write_executable(fake_bin / "flock", "#!/usr/bin/env bash\nexit 0\n")
     _write_executable(
         fake_bin / "docker",
         """#!/usr/bin/env bash
@@ -945,6 +1128,7 @@ exit 0
         "COMMAND_LOG": str(command_log),
         "FAILING_COMMAND": failing_command,
         "FAILURE_STATUS": "41",
+        "REAL_PYTHON": str(PYTHON),
     }
     return project_root, environment
 
@@ -977,6 +1161,9 @@ def test_canonical_early_phases_stop_at_first_failure(
 
     assert completed.returncode == 41, completed.stderr
     commands = (tmp_path / "early-commands.log").read_text(encoding="utf-8").splitlines()
+    assert any(command.startswith("python3:-m venv ") for command in commands)
+    assert "venv-python:-m pip install ." in commands
+    assert "venv-python:-" in commands
     assert failing_command in commands
     assert forbidden_later_command not in commands
 
@@ -996,7 +1183,15 @@ def _operator_containers(
         sorted(compose["services"].items()), start=1
     ):
         container_id = _container_id(index)
-        containers[container_id] = {"project": project, "service": service}
+        published_ports = [
+            int(str(port).rsplit(":", 2)[-2])
+            for port in specification.get("ports", [])
+        ]
+        containers[container_id] = {
+            "project": project,
+            "service": service,
+            "published_ports": published_ports,
+        }
         for profile in specification.get("profiles", []):
             profiles.setdefault(profile, []).append(container_id)
     return profiles, containers
@@ -1056,14 +1251,55 @@ def _prepare_fake_lifecycle(
     up_status: dict[str, int] | None = None,
     mutation: tuple[str, str] | None = None,
     failure_injection: dict[str, Any] | None = None,
+    initial_profiles: tuple[str, ...] = (),
+    include_baseline: bool = True,
+    replace_profiles: tuple[str, ...] = (),
 ) -> tuple[Path, Path, dict[str, str], str, dict[str, list[str]]]:
     project_root = tmp_path / "project"
     scripts = project_root / "deploy/scripts"
     scripts.mkdir(parents=True)
-    _write_executable(scripts / "preflight", "#!/usr/bin/env bash\nexit 0\n")
+    shutil.copy2(SCRIPTS / "operator_lifecycle.py", scripts / "operator_lifecycle.py")
+    _write_executable(
+        scripts / "preflight",
+        """#!/usr/bin/env bash
+printf '%s' "${AUTHORIZED_OCCUPIED_ENDPOINTS:-}" >"$FAKE_DOCKER_STATE/authorized-endpoints.log"
+if [[ -n "${EXPECTED_AUTHORIZED_ENDPOINTS:-}" && \
+  "${AUTHORIZED_OCCUPIED_ENDPOINTS:-}" != "$EXPECTED_AUTHORIZED_ENDPOINTS" ]]; then
+  exit 74
+fi
+if [[ -n "${FAKE_UNAUTHORIZED_OCCUPIED_ENDPOINT:-}" && \
+  " ${AUTHORIZED_OCCUPIED_ENDPOINTS:-} " != *" $FAKE_UNAUTHORIZED_OCCUPIED_ENDPOINT "* ]]; then
+  exit 75
+fi
+exit 0
+""",
+    )
     _write_executable(
         scripts / "restore-existing-containers",
-        "#!/usr/bin/env bash\nexit 0\n",
+        """#!/usr/bin/env bash
+printf '%s\n' "$@" >"$FAKE_DOCKER_STATE/restore-arguments.log"
+exit 0
+""",
+    )
+    _write_executable(
+        scripts / "snapshot-existing-containers",
+        """#!/usr/bin/env bash
+printf '%s:%s\n' "${0##*/}" "$*" >>"$FAKE_DOCKER_STATE/maintenance.log"
+if [[ -e "$1" || -L "$1" ]]; then
+  exit 72
+fi
+exit 0
+""",
+    )
+    _write_executable(
+        scripts / "pause-existing-containers",
+        """#!/usr/bin/env bash
+printf '%s:%s\n' "${0##*/}" "$*" >>"$FAKE_DOCKER_STATE/maintenance.log"
+if [[ -e "${1}.paused.jsonl" || -L "${1}.paused.jsonl" ]]; then
+  exit 73
+fi
+exit 0
+""",
     )
 
     profiles, containers = _operator_containers()
@@ -1074,10 +1310,21 @@ def _prepare_fake_lifecycle(
         containers[container_id]["service"] for container_id in compose_container_ids
     )
     baseline_id = _container_id(999)
-    containers[baseline_id] = {
-        "project": "algorithm-operators",
-        "service": "ocr-gpu0",
-    }
+    ocr_metadata = next(
+        metadata
+        for metadata in containers.values()
+        if metadata["service"] == "ocr-gpu0"
+    )
+    containers[baseline_id] = dict(ocr_metadata)
+    replacements_on_up: dict[str, dict[str, str]] = {}
+    replacement_index = 2000
+    for profile in replace_profiles:
+        replacements_on_up[profile] = {}
+        for old_container_id in profiles[profile]:
+            replacement_index += 1
+            new_container_id = _container_id(replacement_index)
+            replacements_on_up[profile][old_container_id] = new_container_id
+            containers[new_container_id] = dict(containers[old_container_id])
     if mutation is not None:
         mutation_kind, profile = mutation
         target_id = profiles[profile][0]
@@ -1085,6 +1332,7 @@ def _prepare_fake_lifecycle(
             containers[target_id]["inspect_fails"] = True
         elif mutation_kind == "project":
             containers[target_id]["project"] = "untrusted-project"
+            containers[target_id]["force_compose_ps"] = True
         elif mutation_kind == "service":
             containers[target_id]["service"] = "untrusted-service"
         else:  # pragma: no cover - test helper misuse
@@ -1092,12 +1340,44 @@ def _prepare_fake_lifecycle(
 
     state_dir = tmp_path / "docker-state"
     state_dir.mkdir()
+    initial_ids = [
+        container_id
+        for profile in initial_profiles
+        for container_id in profiles[profile]
+    ]
+    if include_baseline:
+        initial_ids.append(baseline_id)
     state = {
-        "current": [baseline_id],
+        "current": initial_ids,
         "profiles": profiles,
         "containers": containers,
         "compose_services": compose_services,
+        "replacements_on_up": replacements_on_up,
         "up_status": up_status or {},
+        "compose_documents": {
+            "docker-compose.platform.yml": {
+                "name": "algorithm-scheduling-platform",
+                "services": {},
+            },
+            "docker-compose.operators.yml": {
+                "name": "algorithm-operators",
+                "services": {
+                    metadata["service"]: {
+                        "ports": [
+                            {
+                                "host_ip": "127.0.0.1",
+                                "published": str(port),
+                                "protocol": "tcp",
+                                "target": port,
+                            }
+                            for port in metadata["published_ports"]
+                        ]
+                    }
+                    for metadata in containers.values()
+                    if metadata["project"] == "algorithm-operators"
+                },
+            },
+        },
         **(failure_injection or {}),
     }
     (state_dir / "state.json").write_text(
@@ -1124,6 +1404,10 @@ def save() -> None:
     temporary.replace(state_path)
 
 if args and args[0] == "compose":
+    compose_file = pathlib.Path(args[args.index("-f") + 1]).name
+    if "config" in args and "--format" in args:
+        print(json.dumps(state["compose_documents"][compose_file]))
+        raise SystemExit(0)
     if "config" in args and "--services" in args:
         print("\\n".join(state["compose_services"]))
         raise SystemExit(0)
@@ -1131,8 +1415,13 @@ if args and args[0] == "compose":
         if "--profile" in args:
             profile = args[args.index("--profile") + 1]
             for container_id in state["profiles"].get(profile, []):
-                if container_id not in state["current"]:
-                    state["current"].append(container_id)
+                replacement_id = state["replacements_on_up"].get(profile, {}).get(
+                    container_id, container_id
+                )
+                if container_id != replacement_id and container_id in state["current"]:
+                    state["current"].remove(container_id)
+                if replacement_id not in state["current"]:
+                    state["current"].append(replacement_id)
             save()
             raise SystemExit(int(state["up_status"].get(profile, 0)))
         raise SystemExit(0)
@@ -1142,11 +1431,61 @@ if args and args[0] == "compose":
             save()
             if state["compose_ps_calls"] == state.get("compose_ps_fail_on_call"):
                 raise SystemExit(67)
-            print("\\n".join(state["current"]))
+            expected_project = state["compose_documents"][compose_file]["name"]
+            requested_services = set(args[args.index("-q") + 1 :])
+            print(
+                "\\n".join(
+                    container_id
+                    for container_id in state["current"]
+                    if (
+                        (
+                            not requested_services
+                            or state["containers"][container_id]["service"]
+                            in requested_services
+                        )
+                        and (
+                            state["containers"][container_id]["project"]
+                            == expected_project
+                            or state["containers"][container_id].get("force_compose_ps")
+                        )
+                    )
+                )
+            )
         raise SystemExit(0)
 
 if args and args[0] == "inspect":
+    if "-f" not in args and args[-1] != "ocr-v6-amd":
+        records = []
+        for container_id in args[1:]:
+            metadata = state["containers"].get(container_id)
+            if metadata is None or metadata.get("inspect_fails"):
+                raise SystemExit(1)
+            records.append(
+                {
+                    "Id": container_id,
+                    "State": {"Running": container_id in state["current"]},
+                    "Config": {
+                        "Labels": {
+                            "com.docker.compose.project": metadata["project"],
+                            "com.docker.compose.service": metadata["service"],
+                        }
+                    },
+                    "NetworkSettings": {
+                        "Ports": metadata.get("inspect_ports") or {
+                            f"{port}/tcp": [
+                                {"HostIp": "127.0.0.1", "HostPort": str(port)}
+                            ]
+                            for port in metadata["published_ports"]
+                        }
+                    },
+                }
+            )
+        print(json.dumps(records))
+        raise SystemExit(0)
     container_id = args[-1]
+    if container_id == "ocr-v6-amd" and "-f" not in args:
+        print("{}")
+        raise SystemExit(0)
     metadata = state["containers"].get(container_id)
     if metadata is None or metadata.get("inspect_fails"):
         raise SystemExit(1)
@@ -1220,9 +1559,23 @@ os.close(descriptor)
 print(path)
 """
     _write_executable(fake_bin / "mktemp", fake_mktemp)
+    fake_flock = """#!/usr/bin/env python3
+import fcntl
+import sys
 
-    release_root = tmp_path / "release"
+if len(sys.argv) != 3 or sys.argv[1] != "-n":
+    raise SystemExit(2)
+try:
+    fcntl.flock(int(sys.argv[2]), fcntl.LOCK_EX | fcntl.LOCK_NB)
+except (BlockingIOError, OSError):
+    raise SystemExit(1)
+"""
+    _write_executable(fake_bin / "flock", fake_flock)
+
+    report_root = tmp_path / "reports"
+    release_root = report_root / "milestone-2b" / "releases" / TAG / SHA
     (release_root / "container-maintenance").mkdir(parents=True)
+    (release_root / "preflight").mkdir()
     environment = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
@@ -1230,20 +1583,27 @@ print(path)
         "RELEASE_ROOT": str(release_root),
         "EXPECTED_GIT_SHA": SHA,
         "RELEASE_TAG": TAG,
-        "REPORT_ROOT": str(tmp_path / "reports"),
+        "REPORT_ROOT": str(report_root),
         "SNAPSHOT": str(tmp_path / "snapshot.json"),
+        "PAUSED_LEDGER": str(tmp_path / "snapshot.json.paused.jsonl"),
+        "PREVIOUS_RELEASE_ROOT": "",
+        "DEPLOY_PYTHON": str(PYTHON),
     }
     return project_root, release_root, environment, baseline_id, profiles
 
 
-def _run_lifecycle_script(
-    tmp_path: Path,
+def _run_prepared_lifecycle(
+    project_root: Path,
+    environment: dict[str, str],
     script: str,
-    **fixture_options: Any,
-) -> tuple[subprocess.CompletedProcess[str], Path, dict[str, Any], str, dict[str, list[str]]]:
-    project_root, release_root, environment, baseline_id, profiles = (
-        _prepare_fake_lifecycle(tmp_path, **fixture_options)
-    )
+) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
+    release_block = _extract_scenario_bash_blocks_before(
+        "## 阶段 1：服务器预检、快照和暂停"
+    )[0]
+    lifecycle_functions = release_block.split(
+        "validate_previous_release_root()", 1
+    )[1]
+    lifecycle_functions = "validate_previous_release_root()" + lifecycle_functions
     completed = subprocess.run(
         [
             "bash",
@@ -1253,6 +1613,11 @@ def _run_lifecycle_script(
                     _extract_scenario_bash_blocks_before(
                         "## 阶段 1：服务器预检、快照和暂停"
                     )[0].splitlines()[0],
+                    "OPERATOR_LIFECYCLE_LOCK_PID=",
+                    "OPERATOR_LIFECYCLE_LOCK_CONTROL_FD=",
+                    "OPERATOR_LIFECYCLE_LOCK_READY_FD=",
+                    lifecycle_functions,
+                    "acquire_operator_lifecycle_lock",
                     script,
                 )
             ),
@@ -1266,12 +1631,635 @@ def _run_lifecycle_script(
     )
     state_dir = Path(environment["FAKE_DOCKER_STATE"])
     state = json.loads((state_dir / "state.json").read_text(encoding="utf-8"))
+    return completed, state
+
+
+def _run_lifecycle_script(
+    tmp_path: Path,
+    script: str,
+    **fixture_options: Any,
+) -> tuple[subprocess.CompletedProcess[str], Path, dict[str, Any], str, dict[str, list[str]]]:
+    project_root, release_root, environment, baseline_id, profiles = (
+        _prepare_fake_lifecycle(tmp_path, **fixture_options)
+    )
+    completed, state = _run_prepared_lifecycle(project_root, environment, script)
     return completed, release_root, state, baseline_id, profiles
 
 
 def _ledger_ids(release_root: Path, ledger_name: str) -> list[str]:
     ledger = release_root / "container-maintenance" / ledger_name
     return ledger.read_text(encoding="utf-8").splitlines()
+
+
+def _write_operator_ledgers(
+    release_root: Path, baseline_ids: list[str], new_ids: list[str]
+) -> None:
+    ledger_dir = release_root / "container-maintenance"
+    ledger_dir.mkdir(parents=True, exist_ok=True)
+    for ledger_name, container_ids in (
+        ("baseline-operator-container-ids.txt", baseline_ids),
+        ("new-operator-container-ids.txt", new_ids),
+    ):
+        content = "".join(f"{container_id}\n" for container_id in container_ids)
+        (ledger_dir / ledger_name).write_text(content, encoding="utf-8")
+
+
+def _previous_release_root(environment: dict[str, str]) -> Path:
+    return (
+        Path(environment["REPORT_ROOT"])
+        / "milestone-2b"
+        / "releases"
+        / TAG
+        / ("b" * 40)
+    )
+
+
+def _release_root_for_sha(environment: dict[str, str], git_sha: str) -> Path:
+    return (
+        Path(environment["REPORT_ROOT"])
+        / "milestone-2b"
+        / "releases"
+        / TAG
+        / git_sha
+    )
+
+
+def _maintenance_paths(release_root: Path) -> tuple[Path, Path, Path]:
+    ledger_dir = release_root / "container-maintenance"
+    snapshot = ledger_dir / "existing-containers.jsonl"
+    paused = ledger_dir / "existing-containers.jsonl.paused.jsonl"
+    provenance = ledger_dir / "operator-maintenance-provenance.json"
+    return snapshot, paused, provenance
+
+
+def _write_maintenance_ledgers(release_root: Path) -> tuple[Path, Path]:
+    snapshot, paused, _ = _maintenance_paths(release_root)
+    snapshot.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    snapshot.write_text('{"name":"ocr-v6-amd"}\n', encoding="utf-8")
+    paused.write_text(
+        '{"name":"ocr-v6-amd","was_running":true}\n', encoding="utf-8"
+    )
+    return snapshot, paused
+
+
+def _write_maintenance_provenance(
+    release_root: Path,
+    *,
+    source_release_root: Path,
+    authoritative_snapshot: Path,
+    authoritative_paused: Path,
+) -> Path:
+    _, _, provenance = _maintenance_paths(release_root)
+    provenance.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    provenance.write_text(
+        json.dumps(
+            {
+                "authoritative_paused_ledger": str(authoritative_paused),
+                "authoritative_snapshot": str(authoritative_snapshot),
+                "source_git_sha": source_release_root.name,
+                "source_release_root": str(source_release_root),
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    provenance.chmod(0o400)
+    return provenance
+
+
+def _release_tag_lock_path(environment: dict[str, str]) -> Path:
+    return (
+        Path(environment["REPORT_ROOT"])
+        / "milestone-2b"
+        / "releases"
+        / TAG
+        / ".operator-lifecycle.lock"
+    )
+
+
+def _stage_three_initialization() -> str:
+    stage_three = _extract_scenario_bash_block("阶段 3：平台和逐卡算子拓扑")
+    return stage_three.split('EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA"', 1)[0]
+
+
+def _stage_one_and_three_initialization() -> str:
+    stage_one = _extract_scenario_bash_block(
+        "## 阶段 1：服务器预检、快照和暂停"
+    )
+    return f"{stage_one}\n{_stage_three_initialization()}"
+
+
+def _docker_calls(environment: dict[str, str]) -> list[list[str]]:
+    calls_path = Path(environment["FAKE_DOCKER_STATE"]) / "calls.log"
+    if not calls_path.exists():
+        return []
+    return [json.loads(line) for line in calls_path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_new_release_inherits_previous_baseline_and_immediately_refreshes_new_ledger(
+    tmp_path: Path,
+) -> None:
+    project_root, release_root, environment, _, profiles = _prepare_fake_lifecycle(
+        tmp_path,
+        initial_profiles=("gpu0",),
+        include_baseline=False,
+    )
+    previous_root = _previous_release_root(environment)
+    previous_new = sorted(profiles["gpu0"])
+    _write_operator_ledgers(previous_root, [], previous_new)
+    environment["PREVIOUS_RELEASE_ROOT"] = str(previous_root)
+
+    completed, _ = _run_prepared_lifecycle(
+        project_root, environment, _stage_three_initialization()
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert _ledger_ids(release_root, "baseline-operator-container-ids.txt") == []
+    assert _ledger_ids(release_root, "new-operator-container-ids.txt") == previous_new
+
+
+def test_new_release_rejects_previous_new_when_it_is_not_current_minus_baseline(
+    tmp_path: Path,
+) -> None:
+    project_root, release_root, environment, _, profiles = _prepare_fake_lifecycle(
+        tmp_path,
+        initial_profiles=("gpu0",),
+        include_baseline=False,
+    )
+    previous_root = _previous_release_root(environment)
+    _write_operator_ledgers(previous_root, [], sorted(profiles["gpu0"][:-1]))
+    environment["PREVIOUS_RELEASE_ROOT"] = str(previous_root)
+
+    completed, _ = _run_prepared_lifecycle(
+        project_root, environment, _stage_three_initialization()
+    )
+
+    assert completed.returncode != 0
+    assert "previous new ledger" in completed.stderr
+    ledger_dir = release_root / "container-maintenance"
+    assert not (ledger_dir / "baseline-operator-container-ids.txt").exists()
+    assert not (ledger_dir / "new-operator-container-ids.txt").exists()
+
+
+@pytest.mark.parametrize("existing_ledger", ("baseline", "new"))
+def test_current_release_rejects_partial_operator_ledger(
+    tmp_path: Path,
+    existing_ledger: str,
+) -> None:
+    project_root, release_root, environment, baseline_id, _ = _prepare_fake_lifecycle(
+        tmp_path
+    )
+    ledger_dir = release_root / "container-maintenance"
+    ledger_name = f"{existing_ledger}-operator-container-ids.txt"
+    content = f"{baseline_id}\n" if existing_ledger == "baseline" else ""
+    (ledger_dir / ledger_name).write_text(content, encoding="utf-8")
+
+    completed, _ = _run_prepared_lifecycle(
+        project_root, environment, _stage_three_initialization()
+    )
+
+    assert completed.returncode != 0
+    assert "partial ledger" in completed.stderr
+    assert not any(call and call[0] == "compose" for call in _docker_calls(environment))
+
+
+def test_current_release_complete_ledgers_resume_without_replacing_baseline(
+    tmp_path: Path,
+) -> None:
+    project_root, release_root, environment, baseline_id, profiles = (
+        _prepare_fake_lifecycle(tmp_path, initial_profiles=("gpu0",))
+    )
+    previous_new = sorted(profiles["gpu0"])
+    _write_operator_ledgers(release_root, [baseline_id], previous_new)
+
+    completed, _ = _run_prepared_lifecycle(
+        project_root, environment, _stage_three_initialization()
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert _ledger_ids(release_root, "baseline-operator-container-ids.txt") == [
+        baseline_id
+    ]
+    assert _ledger_ids(release_root, "new-operator-container-ids.txt") == previous_new
+
+
+def test_same_sha_full_phase_one_and_three_reuses_active_current_maintenance_ledgers(
+    tmp_path: Path,
+) -> None:
+    project_root, release_root, environment, baseline_id, _ = _prepare_fake_lifecycle(
+        tmp_path
+    )
+    current_snapshot, current_paused = _write_maintenance_ledgers(release_root)
+    _write_operator_ledgers(release_root, [baseline_id], [])
+
+    completed, state = _run_prepared_lifecycle(
+        project_root, environment, _stage_one_and_three_initialization()
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    expected_endpoints = sorted(
+        f"127.0.0.1:{port}"
+        for port in state["containers"][baseline_id]["published_ports"]
+    )
+    assert (
+        Path(environment["FAKE_DOCKER_STATE"]) / "authorized-endpoints.log"
+    ).read_text(encoding="utf-8") == " ".join(expected_endpoints)
+    assert not (Path(environment["FAKE_DOCKER_STATE"]) / "maintenance.log").exists()
+    assert current_snapshot.read_text(encoding="utf-8") == '{"name":"ocr-v6-amd"}\n'
+    assert "was_running" in current_paused.read_text(encoding="utf-8")
+    assert _ledger_ids(release_root, "baseline-operator-container-ids.txt") == [
+        baseline_id
+    ]
+
+
+def test_third_sha_uses_previous_operator_ledgers_and_original_maintenance_authority(
+    tmp_path: Path,
+) -> None:
+    project_root, release_root, environment, baseline_id, _ = _prepare_fake_lifecycle(
+        tmp_path
+    )
+    authority_root = _release_root_for_sha(environment, "c" * 40)
+    authority_snapshot, authority_paused = _write_maintenance_ledgers(authority_root)
+    previous_root = _previous_release_root(environment)
+    _write_operator_ledgers(previous_root, [baseline_id], [])
+    _write_maintenance_provenance(
+        previous_root,
+        source_release_root=authority_root,
+        authoritative_snapshot=authority_snapshot,
+        authoritative_paused=authority_paused,
+    )
+    environment["PREVIOUS_RELEASE_ROOT"] = str(previous_root)
+
+    first_run, _ = _run_prepared_lifecycle(
+        project_root, environment, _stage_one_and_three_initialization()
+    )
+    second_run, _ = _run_prepared_lifecycle(
+        project_root, environment, _stage_one_and_three_initialization()
+    )
+
+    assert first_run.returncode == 0, first_run.stderr
+    assert second_run.returncode == 0, second_run.stderr
+    assert _ledger_ids(release_root, "baseline-operator-container-ids.txt") == [
+        baseline_id
+    ]
+    _, _, provenance = _maintenance_paths(release_root)
+    assert stat.S_IMODE(provenance.stat().st_mode) == 0o400
+    assert json.loads(provenance.read_text(encoding="utf-8")) == {
+        "authoritative_paused_ledger": str(authority_paused),
+        "authoritative_snapshot": str(authority_snapshot),
+        "source_git_sha": "b" * 40,
+        "source_release_root": str(previous_root),
+    }
+    assert not (Path(environment["FAKE_DOCKER_STATE"]) / "maintenance.log").exists()
+
+
+def test_same_sha_existing_provenance_rejects_rebinding_to_another_previous_release(
+    tmp_path: Path,
+) -> None:
+    project_root, release_root, environment, baseline_id, _ = _prepare_fake_lifecycle(
+        tmp_path
+    )
+    authority_root = _release_root_for_sha(environment, "c" * 40)
+    authority_snapshot, authority_paused = _write_maintenance_ledgers(authority_root)
+    original_previous = _previous_release_root(environment)
+    original_provenance = _write_maintenance_provenance(
+        release_root,
+        source_release_root=original_previous,
+        authoritative_snapshot=authority_snapshot,
+        authoritative_paused=authority_paused,
+    ).read_bytes()
+    _write_operator_ledgers(release_root, [baseline_id], [])
+    other_previous = _release_root_for_sha(environment, "d" * 40)
+    _write_maintenance_ledgers(other_previous)
+    _write_operator_ledgers(other_previous, [baseline_id], [])
+    environment["PREVIOUS_RELEASE_ROOT"] = str(other_previous)
+
+    completed, _ = _run_prepared_lifecycle(
+        project_root, environment, _stage_one_and_three_initialization()
+    )
+
+    assert completed.returncode != 0
+    assert "provenance" in completed.stderr
+    _, _, provenance = _maintenance_paths(release_root)
+    assert provenance.read_bytes() == original_provenance
+
+
+def test_release_tag_lock_rejects_concurrent_sha_before_any_compose_command(
+    tmp_path: Path,
+) -> None:
+    project_root, _, environment, _, _ = _prepare_fake_lifecycle(tmp_path)
+    lock_path = (
+        Path(environment["REPORT_ROOT"])
+        / "milestone-2b"
+        / "releases"
+        / TAG
+        / ".operator-lifecycle.lock"
+    )
+    lock_path.touch(mode=0o600)
+
+    with lock_path.open("w", encoding="utf-8") as lock_stream:
+        fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        completed, _ = _run_prepared_lifecycle(
+            project_root, environment, _stage_three_initialization()
+        )
+
+    assert completed.returncode != 0
+    assert "another SHA" in completed.stderr
+    assert not any(call and call[0] == "compose" for call in _docker_calls(environment))
+
+
+@pytest.mark.parametrize("unsafe_kind", ("symlink", "directory", "bad-mode"))
+def test_release_tag_lock_rejects_unsafe_existing_path_without_mutating_target(
+    tmp_path: Path,
+    unsafe_kind: str,
+) -> None:
+    project_root, _, environment, _, _ = _prepare_fake_lifecycle(tmp_path)
+    lock_path = _release_tag_lock_path(environment)
+    target = tmp_path / "lock-target"
+    if unsafe_kind == "symlink":
+        target.write_text("do-not-truncate\n", encoding="utf-8")
+        lock_path.symlink_to(target)
+    elif unsafe_kind == "directory":
+        lock_path.mkdir()
+    else:
+        lock_path.write_text("do-not-change-mode\n", encoding="utf-8")
+        lock_path.chmod(0o640)
+
+    completed, _ = _run_prepared_lifecycle(project_root, environment, ":")
+
+    assert completed.returncode != 0
+    if unsafe_kind == "symlink":
+        assert target.read_text(encoding="utf-8") == "do-not-truncate\n"
+    elif unsafe_kind == "bad-mode":
+        assert lock_path.read_text(encoding="utf-8") == "do-not-change-mode\n"
+        assert stat.S_IMODE(lock_path.stat().st_mode) == 0o640
+
+
+def test_release_tag_lock_preserves_existing_regular_file_contents(
+    tmp_path: Path,
+) -> None:
+    project_root, _, environment, _, _ = _prepare_fake_lifecycle(tmp_path)
+    lock_path = _release_tag_lock_path(environment)
+    lock_path.write_text("persistent-lock-metadata\n", encoding="utf-8")
+    lock_path.chmod(0o600)
+
+    completed, _ = _run_prepared_lifecycle(project_root, environment, ":")
+
+    assert completed.returncode == 0, completed.stderr
+    assert lock_path.read_text(encoding="utf-8") == "persistent-lock-metadata\n"
+
+
+def test_cross_sha_host_preflight_authorizes_only_running_compose_container_ports(
+    tmp_path: Path,
+) -> None:
+    project_root, _, environment, _, profiles = _prepare_fake_lifecycle(
+        tmp_path,
+        initial_profiles=("gpu0",),
+        include_baseline=False,
+    )
+    previous_root = _previous_release_root(environment)
+    _write_maintenance_ledgers(previous_root)
+    environment["PREVIOUS_RELEASE_ROOT"] = str(previous_root)
+    state_path = Path(environment["FAKE_DOCKER_STATE"]) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    expected_endpoints = sorted(
+        f"127.0.0.1:{port}"
+        for container_id in profiles["gpu0"]
+        for port in state["containers"][container_id]["published_ports"]
+    )
+    environment["EXPECTED_AUTHORIZED_ENDPOINTS"] = " ".join(expected_endpoints)
+    stage_one = _extract_scenario_bash_block(
+        "## 阶段 1：服务器预检、快照和暂停"
+    )
+
+    completed, _ = _run_prepared_lifecycle(project_root, environment, stage_one)
+
+    assert completed.returncode == 0, completed.stderr
+    authorized = (
+        Path(environment["FAKE_DOCKER_STATE"]) / "authorized-endpoints.log"
+    ).read_text(encoding="utf-8")
+    assert authorized == environment["EXPECTED_AUTHORIZED_ENDPOINTS"]
+
+
+def test_cross_sha_port_authority_scopes_shared_project_and_accepts_wildcard_dual_stack(
+    tmp_path: Path,
+) -> None:
+    project_root, _, environment, _, _ = _prepare_fake_lifecycle(
+        tmp_path,
+        include_baseline=False,
+    )
+    previous_root = _previous_release_root(environment)
+    _write_maintenance_ledgers(previous_root)
+    environment["PREVIOUS_RELEASE_ROOT"] = str(previous_root)
+    environment["EXPECTED_AUTHORIZED_ENDPOINTS"] = "0.0.0.0:18100 [::]:18100"
+    state_path = Path(environment["FAKE_DOCKER_STATE"]) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    control_id = _container_id(4000)
+    sibling_id = _container_id(4001)
+    state["containers"][control_id] = {
+        "project": "algorithm-scheduling-platform",
+        "service": "control-service",
+        "published_ports": [18100],
+        "inspect_ports": {
+            "18100/tcp": [
+                {"HostIp": "0.0.0.0", "HostPort": "18100"},
+                {"HostIp": "::", "HostPort": "18100"},
+            ]
+        },
+    }
+    state["containers"][sibling_id] = {
+        "project": "algorithm-scheduling-platform",
+        "service": "sibling-service",
+        "published_ports": [19000],
+    }
+    state["compose_documents"]["docker-compose.platform.yml"]["services"] = {
+        "control-service": {
+            "ports": [
+                {
+                    "published": "18100",
+                    "protocol": "tcp",
+                    "target": 18100,
+                }
+            ]
+        }
+    }
+    state["current"] = [control_id, sibling_id]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    stage_one = _extract_scenario_bash_block(
+        "## 阶段 1：服务器预检、快照和暂停"
+    )
+
+    completed, _ = _run_prepared_lifecycle(project_root, environment, stage_one)
+
+    assert completed.returncode == 0, completed.stderr
+    authorized = (
+        Path(environment["FAKE_DOCKER_STATE"]) / "authorized-endpoints.log"
+    ).read_text(encoding="utf-8")
+    assert authorized == environment["EXPECTED_AUTHORIZED_ENDPOINTS"]
+    inspect_calls = [call for call in _docker_calls(environment) if call[:1] == ["inspect"]]
+    assert ["inspect", control_id] in inspect_calls
+    assert all(sibling_id not in call for call in inspect_calls)
+
+
+def test_cross_sha_host_preflight_rejects_non_authoritative_compose_container(
+    tmp_path: Path,
+) -> None:
+    project_root, _, environment, _, profiles = _prepare_fake_lifecycle(
+        tmp_path,
+        include_baseline=False,
+    )
+    previous_root = _previous_release_root(environment)
+    _write_maintenance_ledgers(previous_root)
+    environment["PREVIOUS_RELEASE_ROOT"] = str(previous_root)
+    state_path = Path(environment["FAKE_DOCKER_STATE"]) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    rogue_id = _container_id(3000)
+    state["containers"][rogue_id] = {
+        **state["containers"][profiles["gpu0"][0]],
+        "project": "untrusted-project",
+        "force_compose_ps": True,
+    }
+    state["current"] = [rogue_id]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    stage_one = _extract_scenario_bash_block(
+        "## 阶段 1：服务器预检、快照和暂停"
+    )
+
+    completed, _ = _run_prepared_lifecycle(project_root, environment, stage_one)
+
+    assert completed.returncode != 0
+    assert "Compose" in completed.stderr
+    assert not (
+        Path(environment["FAKE_DOCKER_STATE"]) / "authorized-endpoints.log"
+    ).exists()
+
+
+def test_cross_sha_host_preflight_still_rejects_extra_occupied_required_port(
+    tmp_path: Path,
+) -> None:
+    project_root, _, environment, _, _ = _prepare_fake_lifecycle(
+        tmp_path,
+        initial_profiles=("gpu0",),
+        include_baseline=False,
+    )
+    previous_root = _previous_release_root(environment)
+    _write_maintenance_ledgers(previous_root)
+    environment["PREVIOUS_RELEASE_ROOT"] = str(previous_root)
+    environment["FAKE_UNAUTHORIZED_OCCUPIED_ENDPOINT"] = "127.0.0.2:18101"
+    stage_one = _extract_scenario_bash_block(
+        "## 阶段 1：服务器预检、快照和暂停"
+    )
+
+    completed, _ = _run_prepared_lifecycle(project_root, environment, stage_one)
+
+    assert completed.returncode == 75
+    authorized = (
+        Path(environment["FAKE_DOCKER_STATE"]) / "authorized-endpoints.log"
+    ).read_text(encoding="utf-8")
+    assert "127.0.0.2:18101" not in authorized.split()
+
+
+def test_fresh_host_preflight_does_not_authorize_occupied_ports(tmp_path: Path) -> None:
+    project_root, _, environment, _, _ = _prepare_fake_lifecycle(
+        tmp_path,
+        include_baseline=False,
+    )
+    stage_one = _extract_scenario_bash_block(
+        "## 阶段 1：服务器预检、快照和暂停"
+    )
+
+    completed, _ = _run_prepared_lifecycle(project_root, environment, stage_one)
+
+    assert completed.returncode == 0, completed.stderr
+    assert (
+        Path(environment["FAKE_DOCKER_STATE"]) / "authorized-endpoints.log"
+    ).read_text(encoding="utf-8") == ""
+
+
+def test_inherited_ledger_refresh_tracks_compose_replacement_ids_without_removing(
+    tmp_path: Path,
+) -> None:
+    project_root, release_root, environment, _, profiles = _prepare_fake_lifecycle(
+        tmp_path,
+        initial_profiles=("gpu0",),
+        include_baseline=False,
+        replace_profiles=("gpu0",),
+    )
+    previous_root = _previous_release_root(environment)
+    _write_operator_ledgers(previous_root, [], sorted(profiles["gpu0"]))
+    environment["PREVIOUS_RELEASE_ROOT"] = str(previous_root)
+    stage_three = _extract_scenario_bash_block("阶段 3：平台和逐卡算子拓扑")
+
+    completed, state = _run_prepared_lifecycle(project_root, environment, stage_three)
+
+    assert completed.returncode == 0, completed.stderr
+    replacements = state["replacements_on_up"]["gpu0"]
+    expected_new = sorted(
+        [*replacements.values()]
+        + [
+            container_id
+            for profile in ("gpu1", "gpu2", "cpu")
+            for container_id in profiles[profile]
+        ]
+    )
+    assert _ledger_ids(release_root, "baseline-operator-container-ids.txt") == []
+    assert _ledger_ids(release_root, "new-operator-container-ids.txt") == expected_new
+    assert all(old_id not in state["current"] for old_id in replacements)
+    assert not any(call and call[0] == "rm" for call in _docker_calls(environment))
+
+
+def test_previous_active_pause_is_not_resnapshotted_and_restore_uses_authoritative_path(
+    tmp_path: Path,
+) -> None:
+    project_root, release_root, environment, _, _ = _prepare_fake_lifecycle(tmp_path)
+    previous_root = _previous_release_root(environment)
+    previous_ledger_dir = previous_root / "container-maintenance"
+    previous_ledger_dir.mkdir(parents=True, mode=0o700)
+    previous_snapshot = previous_ledger_dir / "existing-containers.jsonl"
+    previous_paused = previous_ledger_dir / "existing-containers.jsonl.paused.jsonl"
+    previous_snapshot.write_text('{"name":"ocr-v6-amd"}\n', encoding="utf-8")
+    active_pause = '{"name":"ocr-v6-amd","was_running":true}\n'
+    previous_paused.write_text(active_pause, encoding="utf-8")
+    environment["PREVIOUS_RELEASE_ROOT"] = str(previous_root)
+    _write_operator_ledgers(release_root, [], [])
+    stage_one = _extract_scenario_bash_block(
+        "## 阶段 1：服务器预检、快照和暂停"
+    )
+    cleanup = _extract_scenario_bash_block(
+        "## 阶段 6：反例、压力、恢复和报告渲染"
+    )
+    ledger_dir = release_root / "container-maintenance"
+    cleanup_support = f"""
+BASELINE_OPERATOR_IDS={shlex.quote(str(ledger_dir / 'baseline-operator-container-ids.txt'))}
+NEW_OPERATOR_IDS={shlex.quote(str(ledger_dir / 'new-operator-container-ids.txt'))}
+validate_operator_id_file() {{ return 0; }}
+validate_operator_ledger_file() {{ return 0; }}
+validate_operator_identity() {{ return 0; }}
+assert_not_in_baseline() {{ return 0; }}
+"""
+
+    completed, _ = _run_prepared_lifecycle(
+        project_root,
+        environment,
+        f"{stage_one}\n{cleanup_support}\n{cleanup}",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert previous_paused.read_text(encoding="utf-8") == active_pause
+    assert not (Path(environment["FAKE_DOCKER_STATE"]) / "maintenance.log").exists()
+    restore_arguments = (
+        Path(environment["FAKE_DOCKER_STATE"]) / "restore-arguments.log"
+    ).read_text(encoding="utf-8").splitlines()
+    assert restore_arguments == [str(previous_snapshot), str(previous_paused)]
+    provenance = ledger_dir / "operator-maintenance-provenance.json"
+    assert stat.S_IMODE(provenance.stat().st_mode) == 0o400
+    assert json.loads(provenance.read_text(encoding="utf-8")) == {
+        "authoritative_paused_ledger": str(previous_paused),
+        "authoritative_snapshot": str(previous_snapshot),
+        "source_git_sha": "b" * 40,
+        "source_release_root": str(previous_root),
+    }
 
 
 def test_operator_profile_partial_up_publishes_difference_then_returns_original_status(

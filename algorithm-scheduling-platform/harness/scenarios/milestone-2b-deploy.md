@@ -7,7 +7,7 @@
 固定为：
 
 ```text
-preflight -> snapshot/pause -> infrastructure -> model staging/verify
+report init + Harness .venv -> preflight -> snapshot/pause -> infrastructure -> model staging/verify
 -> build 8 images + platform images -> runtime attestation
 -> compose gpu0/gpu1/gpu2/cpu + profile attestation
 -> GPU UUID/PID/cgroup -> restart/ONLINE -> 24 instance registration
@@ -60,7 +60,105 @@ MODEL_ASSET_SOURCE=/root/workspace/.algorithm-scheduling-assets/v1.0_260812
 RESTRICTED_REPORT_ROOT=/root/workspace/.algorithm-scheduling-restricted-reports
 REPORT_ROOT="$PWD/deploy/reports"
 RELEASE_ROOT="$REPORT_ROOT/milestone-2b/releases/$RELEASE_TAG/$EXPECTED_GIT_SHA"
+PREVIOUS_RELEASE_ROOT="${PREVIOUS_RELEASE_ROOT:-}"
+OPERATOR_LIFECYCLE_LOCK_PID=
+OPERATOR_LIFECYCLE_LOCK_CONTROL_FD=
+OPERATOR_LIFECYCLE_LOCK_READY_FD=
+
+validate_previous_release_root() {
+  local previous_sha
+  if [[ -z "$PREVIOUS_RELEASE_ROOT" ]]; then
+    return 0
+  fi
+  previous_sha="${PREVIOUS_RELEASE_ROOT##*/}"
+  if [[ ! "$previous_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "PREVIOUS_RELEASE_ROOT 必须以 40 位小写 Git SHA 结尾" >&2
+    return 1
+  fi
+  if [[ "$previous_sha" == "$EXPECTED_GIT_SHA" ]]; then
+    echo "PREVIOUS_RELEASE_ROOT 必须属于不同 Git SHA" >&2
+    return 1
+  fi
+  if [[ "$PREVIOUS_RELEASE_ROOT" != \
+    "$REPORT_ROOT/milestone-2b/releases/$RELEASE_TAG/$previous_sha" ]]; then
+    echo "PREVIOUS_RELEASE_ROOT 必须属于同一 REPORT_ROOT/release tag" >&2
+    return 1
+  fi
+  if [[ ! -d "$PREVIOUS_RELEASE_ROOT" || -L "$PREVIOUS_RELEASE_ROOT" ]]; then
+    echo "PREVIOUS_RELEASE_ROOT 必须是非 symlink 目录" >&2
+    return 1
+  fi
+}
+
+acquire_operator_lifecycle_lock() {
+  local release_tag_root lock_path lock_status holder_status=0
+  if operator_lifecycle_lock_is_held; then
+    return 0
+  fi
+  if [[ ! "$EXPECTED_GIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "EXPECTED_GIT_SHA 必须是 40 位小写 Git SHA" >&2
+    return 1
+  fi
+  release_tag_root="$REPORT_ROOT/milestone-2b/releases/$RELEASE_TAG"
+  if [[ "$RELEASE_ROOT" != "$release_tag_root/$EXPECTED_GIT_SHA" ]]; then
+    echo "RELEASE_ROOT 与 REPORT_ROOT/release tag/Git SHA 不一致" >&2
+    return 1
+  fi
+  if [[ ! -d "$release_tag_root" || -L "$release_tag_root" ]]; then
+    echo "release tag 目录必须是非 symlink 目录" >&2
+    return 1
+  fi
+  lock_path="$release_tag_root/.operator-lifecycle.lock"
+  coproc OPERATOR_LIFECYCLE_LOCK_HOLDER {
+    "$DEPLOY_PYTHON" deploy/scripts/operator_lifecycle.py hold-lock \
+      --release-tag-root "$release_tag_root" --lock-path "$lock_path"
+  }
+  OPERATOR_LIFECYCLE_LOCK_PID="$OPERATOR_LIFECYCLE_LOCK_HOLDER_PID"
+  OPERATOR_LIFECYCLE_LOCK_READY_FD="${OPERATOR_LIFECYCLE_LOCK_HOLDER[0]}"
+  OPERATOR_LIFECYCLE_LOCK_CONTROL_FD="${OPERATOR_LIFECYCLE_LOCK_HOLDER[1]}"
+  if ! IFS= read -r lock_status <&"$OPERATOR_LIFECYCLE_LOCK_READY_FD"; then
+    wait "$OPERATOR_LIFECYCLE_LOCK_PID" || holder_status=$?
+    release_operator_lifecycle_lock
+    echo "无法获取 release-tag 级算子维护锁 (status=$holder_status)" >&2
+    return 1
+  fi
+  exec {OPERATOR_LIFECYCLE_LOCK_READY_FD}<&-
+  if [[ "$lock_status" != "LOCKED" ]] || ! operator_lifecycle_lock_is_held; then
+    release_operator_lifecycle_lock
+    echo "release-tag 级算子维护锁未完成安全握手" >&2
+    return 1
+  fi
+}
+
+operator_lifecycle_lock_is_held() {
+  [[ -n "${OPERATOR_LIFECYCLE_LOCK_PID:-}" && \
+    -n "${OPERATOR_LIFECYCLE_LOCK_CONTROL_FD:-}" ]] && \
+    kill -0 "$OPERATOR_LIFECYCLE_LOCK_PID" 2>/dev/null
+}
+
+release_operator_lifecycle_lock() {
+  if [[ -n "${OPERATOR_LIFECYCLE_LOCK_READY_FD:-}" ]]; then
+    exec {OPERATOR_LIFECYCLE_LOCK_READY_FD}<&- || true
+  fi
+  if [[ -n "${OPERATOR_LIFECYCLE_LOCK_CONTROL_FD:-}" ]]; then
+    exec {OPERATOR_LIFECYCLE_LOCK_CONTROL_FD}>&- || true
+  fi
+  if [[ -n "${OPERATOR_LIFECYCLE_LOCK_PID:-}" ]]; then
+    wait "$OPERATOR_LIFECYCLE_LOCK_PID" || true
+  fi
+  OPERATOR_LIFECYCLE_LOCK_PID=
+  OPERATOR_LIFECYCLE_LOCK_CONTROL_FD=
+  OPERATOR_LIFECYCLE_LOCK_READY_FD=
+  return 0
+}
+
+trap release_operator_lifecycle_lock EXIT
 ```
+
+首次发布保持 `PREVIOUS_RELEASE_ROOT` 为空。同一 release tag 换 SHA 续跑时，
+在执行上述代码块前显式导出上一 SHA 的绝对 release 目录；例如
+`PREVIOUS_RELEASE_ROOT="$PWD/deploy/reports/milestone-2b/releases/v1.0_260812/<previous-40-char-sha>"`。
+不允许自动挑选“最新”目录。
 
 校验外部可信模型清单并初始化报告目录。不得在部署阶段运行 manifest 生成器或覆盖
 `$MODEL_ASSET_SOURCE/model-assets.manifest.json`：
@@ -74,6 +172,57 @@ deploy/scripts/prepare-report-directory \
   --external-manifest "$MODEL_ASSET_SOURCE/model-assets.manifest.json"
 ```
 
+clean clone 不携带项目 Python 环境。完成 release 目录初始化后、执行任何
+`preflight`、`verify-operator-registration` 或 `run-operator-smoke` 前，必须使用服务器
+`python3` 创建项目根 `.venv`，并只安装 `pyproject.toml` 的基础依赖。不得把“不使用
+`.env` 配置文件”误解为“不需要 `.venv` Python 环境”。
+
+版本证据先写入当前 release `preflight/` 下的同目录临时文件；只有 Python 和三个
+Harness 依赖均可导入并成功取得版本后，才原子发布正式 JSON。任何一步失败都由 strict
+mode 中止后续 preflight、profile 和 Smoke：
+
+```bash
+python3 -m venv "$PWD/.venv"
+"$PWD/.venv/bin/python" -m pip install .
+
+HARNESS_RUNTIME_EVIDENCE="$RELEASE_ROOT/preflight/harness-python-runtime.json"
+HARNESS_RUNTIME_TMP="$(
+  mktemp "$RELEASE_ROOT/preflight/.harness-python-runtime.XXXXXX"
+)"
+if ! (
+  "$PWD/.venv/bin/python" - <<'PY' >"$HARNESS_RUNTIME_TMP"
+from importlib import metadata
+import json
+import sys
+
+import httpx
+import websockets
+import yaml
+
+evidence = {
+    "python_executable": sys.executable,
+    "python_version": sys.version.split()[0],
+    "dependencies": {
+        "httpx": metadata.version("httpx"),
+        "PyYAML": metadata.version("PyYAML"),
+        "websockets": metadata.version("websockets"),
+    },
+}
+print(json.dumps(evidence, sort_keys=True))
+PY
+); then
+  rm -f -- "$HARNESS_RUNTIME_TMP"
+  exit 1
+fi
+chmod 0600 "$HARNESS_RUNTIME_TMP"
+mv -f -- "$HARNESS_RUNTIME_TMP" "$HARNESS_RUNTIME_EVIDENCE"
+export DEPLOY_PYTHON="$PWD/.venv/bin/python"
+```
+
+`$PWD` 在本场景中是 `algorithm-scheduling-platform` 的绝对路径，因此导出的
+`DEPLOY_PYTHON` 是项目 `.venv` 的绝对解释器路径。后续 wrapper 不得回退到缺少
+`httpx`、PyYAML 或 `websockets` 的系统 Python；证据 JSON 与本次 release/SHA 一一对应。
+
 `model-assets.manifest.json` 只归档到 Git 外的受限目录；报告只记录模型根、文件
 数和总字节数，不记录逐文件哈希或密钥元数据。ASR Offline、ASR Online、OCR、VBas、
 FaceRec、ScreenDet 六个模型根必须由外部 manifest 冻结；PPT Slice 和 Text Analysis
@@ -81,23 +230,76 @@ FaceRec、ScreenDet 六个模型根必须由外部 manifest 冻结；PPT Slice �
 
 ## 阶段 1：服务器预检、快照和暂停
 
+锁必须在 host preflight 和任何 snapshot/pause 之前以非阻塞方式获取，并由
+同一 Bash 会话持有到阶段 6 的唯一 restore 完成。Python holder 以目录
+FD 和 `O_NOFOLLOW` 打开锁，校验普通文件、当前 UID、`0600`、单链接及 inode
+后才把 FD 交给 `flock -n`；父 shell 通过控制管道持有 holder。
+
+fresh release 创建新维护账本；同 SHA 已有本地 snapshot/paused 时原地复用。
+换 SHA 时从立即前驱读取直接账本或 provenance：A→B→C 中 C 的 provenance
+记录立即前驱 B，但 authority path 仍指向原 snapshot 所在的 A。已存在的
+provenance 必须为当前 UID 所有的非 symlink `0400` 普通文件，与本次
+`PREVIOUS_RELEASE_ROOT` 不一致时 fail closed，不得改绑。
+
 ```bash
-EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" deploy/scripts/preflight host \
+acquire_operator_lifecycle_lock
+validate_previous_release_root
+
+if ! MAINTENANCE_STATE_OUTPUT="$(
+  "$DEPLOY_PYTHON" deploy/scripts/operator_lifecycle.py resolve-maintenance \
+    --report-root "$REPORT_ROOT" --release-tag "$RELEASE_TAG" \
+    --release-root "$RELEASE_ROOT" \
+    --previous-release-root "$PREVIOUS_RELEASE_ROOT"
+)"; then
+  exit 1
+fi
+mapfile -t MAINTENANCE_STATE_FIELDS <<<"$MAINTENANCE_STATE_OUTPUT"
+if ((${#MAINTENANCE_STATE_FIELDS[@]} != 4)); then
+  echo "算子维护状态解析结果不完整" >&2
+  exit 1
+fi
+MAINTENANCE_ACTION="${MAINTENANCE_STATE_FIELDS[0]}"
+MAINTENANCE_SOURCE_ROOT="${MAINTENANCE_STATE_FIELDS[1]}"
+SNAPSHOT="${MAINTENANCE_STATE_FIELDS[2]}"
+PAUSED_LEDGER="${MAINTENANCE_STATE_FIELDS[3]}"
+
+AUTHORIZED_OCCUPIED_ENDPOINTS=
+if [[ "$MAINTENANCE_ACTION" != "fresh" ]]; then
+  if ! AUTHORIZED_OCCUPIED_ENDPOINTS="$(
+    "$DEPLOY_PYTHON" deploy/scripts/operator_lifecycle.py \
+      authoritative-published-endpoints \
+      --platform-compose-file deploy/docker-compose.platform.yml \
+      --operator-compose-file deploy/docker-compose.operators.yml
+  )"; then
+    exit 1
+  fi
+fi
+AUTHORIZED_OCCUPIED_ENDPOINTS="$AUTHORIZED_OCCUPIED_ENDPOINTS" \
+  EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" deploy/scripts/preflight host \
   >"$RELEASE_ROOT/preflight/preflight.log" 2>&1
 
-SNAPSHOT="$RELEASE_ROOT/container-maintenance/existing-containers.jsonl"
-deploy/scripts/snapshot-existing-containers "$SNAPSHOT"
+if [[ "$MAINTENANCE_ACTION" == "inherit" ]]; then
+  "$DEPLOY_PYTHON" deploy/scripts/operator_lifecycle.py publish-provenance \
+    --report-root "$REPORT_ROOT" --release-tag "$RELEASE_TAG" \
+    --release-root "$RELEASE_ROOT" \
+    --source-release-root "$MAINTENANCE_SOURCE_ROOT" \
+    --snapshot "$SNAPSHOT" --paused "$PAUSED_LEDGER"
+elif [[ "$MAINTENANCE_ACTION" == "fresh" ]]; then
+  deploy/scripts/snapshot-existing-containers "$SNAPSHOT"
+  docker inspect ocr-v6-amd \
+    >"$RELEASE_ROOT/container-maintenance/ocr-v6-amd-before.json"
+  deploy/scripts/pause-existing-containers "$SNAPSHOT" ocr-v6-amd
+fi
 ```
 
-确认精确容器身份后，只暂停用户已允许的原 `ocr-v6-amd`；不要使用空选择器或按宽泛
-名称匹配：
-
-```bash
-docker inspect ocr-v6-amd >"$RELEASE_ROOT/container-maintenance/ocr-v6-amd-before.json"
-deploy/scripts/pause-existing-containers "$SNAPSHOT" ocr-v6-amd
-```
-
-暂停账本固定为 `${SNAPSHOT}.paused.jsonl`，必须保留到恢复完成。预检失败时停止
+确认精确容器身份后，fresh 路径只暂停用户已允许的原 `ocr-v6-amd`；不要使用
+空选择器或按宽泛名称匹配。权威暂停账本固定为 `$PAUSED_LEDGER`，必须保留到
+恢复完成。previous 路径只以不可替换方式写入权限 `0400` 的指针证据，不复制
+可变 paused ledger。fresh 路径强制以空 `AUTHORIZED_OCCUPIED_ENDPOINTS` 运行 host
+preflight；只有续跑才从权威 platform/operator Compose 渲染结果和按 service
+限定的运行容器中，经完整 ID、running、project/service 标签及端口映射校验后
+精确派生已占用的“监听地址+端口”端点。同端口的任何额外地址或地址族监听仍由
+preflight 逐条拒绝。预检失败时停止
 后续阶段，并将原因写入 `preflight` 报告，不得强行继续。
 
 ## 阶段 2：基础设施、模型资产和八镜像
@@ -219,11 +421,26 @@ Text Analysis 首轮因默认 PyPI 的连接重置和 15 秒读取超时失败�
 ## 阶段 3：平台和逐卡算子拓扑
 
 ```bash
+if ! operator_lifecycle_lock_is_held; then
+  echo "阶段 3 拒绝在未持有 release-tag 级维护锁时执行" >&2
+  exit 1
+fi
 BASELINE_OPERATOR_IDS="$RELEASE_ROOT/container-maintenance/baseline-operator-container-ids.txt"
 NEW_OPERATOR_IDS="$RELEASE_ROOT/container-maintenance/new-operator-container-ids.txt"
 LEDGER_DIR="$(dirname "$BASELINE_OPERATOR_IDS")"
 test "$LEDGER_DIR" = "$(dirname "$NEW_OPERATOR_IDS")"
 test -d "$LEDGER_DIR"
+
+BASELINE_LEDGER_PRESENT=0
+NEW_LEDGER_PRESENT=0
+[[ -e "$BASELINE_OPERATOR_IDS" || -L "$BASELINE_OPERATOR_IDS" ]] && \
+  BASELINE_LEDGER_PRESENT=1
+[[ -e "$NEW_OPERATOR_IDS" || -L "$NEW_OPERATOR_IDS" ]] && \
+  NEW_LEDGER_PRESENT=1
+if ((BASELINE_LEDGER_PRESENT != NEW_LEDGER_PRESENT)); then
+  echo "当前 release 存在 partial ledger；baseline/new 必须同时存在或同时不存在" >&2
+  exit 1
+fi
 
 OPERATOR_LEDGER_TEMPS=()
 cleanup_operator_ledger_temps() {
@@ -231,7 +448,13 @@ cleanup_operator_ledger_temps() {
     rm -f -- "${OPERATOR_LEDGER_TEMPS[@]}"
   fi
 }
-trap cleanup_operator_ledger_temps EXIT
+cleanup_operator_lifecycle() {
+  local original_status=$?
+  cleanup_operator_ledger_temps || true
+  release_operator_lifecycle_lock || true
+  return "$original_status"
+}
+trap cleanup_operator_lifecycle EXIT
 
 if ! OPERATOR_SERVICE_ALLOWLIST_TMP="$(
   mktemp "$LEDGER_DIR/.operator-service-allowlist.XXXXXX"
@@ -317,6 +540,30 @@ validate_operator_identity() {
   esac
 }
 
+validate_operator_ledger_file() {
+  local id_file="$1" container_id
+  if [[ ! -f "$id_file" || -L "$id_file" ]]; then
+    echo "算子账本必须是非 symlink 普通文件: $id_file" >&2
+    return 1
+  fi
+  if ! LC_ALL=C sort -u "$id_file" | cmp -s - "$id_file"; then
+    echo "算子账本必须按字节序排序且 ID 唯一: $id_file" >&2
+    return 1
+  fi
+  if ! validate_operator_id_file "$id_file"; then
+    return 1
+  fi
+  while IFS= read -r container_id || [[ -n "$container_id" ]]
+  do
+    if validate_operator_identity "$container_id"; then
+      :
+    else
+      echo "算子账本容器身份校验失败: $container_id" >&2
+      return 1
+    fi
+  done <"$id_file"
+}
+
 snapshot_current_operator_ids() {
   local output_file="$1"
   if ! docker compose -f deploy/docker-compose.operators.yml --profile '*' \
@@ -351,7 +598,7 @@ assert_not_in_baseline() {
 
 refresh_new_operator_ledger() {
   local CURRENT_TMP NEW_TMP container_id
-  if ! validate_operator_id_file "$BASELINE_OPERATOR_IDS"; then
+  if ! validate_operator_ledger_file "$BASELINE_OPERATOR_IDS"; then
     echo "baseline 账本校验失败" >&2
     return 1
   fi
@@ -411,15 +658,61 @@ start_operator_profile() {
   return 0
 }
 
-BASELINE_TMP="$(mktemp "$LEDGER_DIR/.baseline-operator-container-ids.XXXXXX")"
-OPERATOR_LEDGER_TEMPS+=("$BASELINE_TMP")
-NEW_TMP="$(mktemp "$LEDGER_DIR/.new-operator-container-ids.XXXXXX")"
-OPERATOR_LEDGER_TEMPS+=("$NEW_TMP")
-snapshot_current_operator_ids "$BASELINE_TMP"
-mv -f -- "$BASELINE_TMP" "$BASELINE_OPERATOR_IDS"
-: >"$NEW_TMP"
-validate_operator_id_file "$NEW_TMP"
-mv -f -- "$NEW_TMP" "$NEW_OPERATOR_IDS"
+if ((BASELINE_LEDGER_PRESENT == 1)); then
+  validate_operator_ledger_file "$BASELINE_OPERATOR_IDS"
+  validate_operator_ledger_file "$NEW_OPERATOR_IDS"
+  refresh_new_operator_ledger
+elif [[ -n "$PREVIOUS_RELEASE_ROOT" ]]; then
+  validate_previous_release_root
+  PREVIOUS_BASELINE_OPERATOR_IDS="$PREVIOUS_RELEASE_ROOT/container-maintenance/baseline-operator-container-ids.txt"
+  PREVIOUS_NEW_OPERATOR_IDS="$PREVIOUS_RELEASE_ROOT/container-maintenance/new-operator-container-ids.txt"
+  validate_operator_ledger_file "$PREVIOUS_BASELINE_OPERATOR_IDS"
+  validate_operator_ledger_file "$PREVIOUS_NEW_OPERATOR_IDS"
+
+  INHERIT_CURRENT_TMP="$(
+    mktemp "$LEDGER_DIR/.inherit-current-operator-container-ids.XXXXXX"
+  )"
+  OPERATOR_LEDGER_TEMPS+=("$INHERIT_CURRENT_TMP")
+  INHERIT_NEW_TMP="$(
+    mktemp "$LEDGER_DIR/.inherit-new-operator-container-ids.XXXXXX"
+  )"
+  OPERATOR_LEDGER_TEMPS+=("$INHERIT_NEW_TMP")
+  snapshot_current_operator_ids "$INHERIT_CURRENT_TMP"
+  if ! comm -23 "$INHERIT_CURRENT_TMP" "$PREVIOUS_BASELINE_OPERATOR_IDS" \
+    >"$INHERIT_NEW_TMP"; then
+    echo "无法重算 current 与 previous baseline 的差集" >&2
+    exit 1
+  fi
+  if ! cmp -s "$INHERIT_NEW_TMP" "$PREVIOUS_NEW_OPERATOR_IDS"; then
+    echo "current - previous baseline 必须与 previous new ledger 精确一致" >&2
+    exit 1
+  fi
+
+  BASELINE_TMP="$(mktemp "$LEDGER_DIR/.baseline-operator-container-ids.XXXXXX")"
+  OPERATOR_LEDGER_TEMPS+=("$BASELINE_TMP")
+  if ! cp -- "$PREVIOUS_BASELINE_OPERATOR_IDS" "$BASELINE_TMP"; then
+    echo "无法继承 previous baseline 账本" >&2
+    exit 1
+  fi
+  chmod 0600 "$BASELINE_TMP"
+  if ! cmp -s "$BASELINE_TMP" "$PREVIOUS_BASELINE_OPERATOR_IDS"; then
+    echo "previous baseline 继承内容不一致" >&2
+    exit 1
+  fi
+  mv -f -- "$BASELINE_TMP" "$BASELINE_OPERATOR_IDS"
+  refresh_new_operator_ledger
+else
+  BASELINE_TMP="$(mktemp "$LEDGER_DIR/.baseline-operator-container-ids.XXXXXX")"
+  OPERATOR_LEDGER_TEMPS+=("$BASELINE_TMP")
+  NEW_TMP="$(mktemp "$LEDGER_DIR/.new-operator-container-ids.XXXXXX")"
+  OPERATOR_LEDGER_TEMPS+=("$NEW_TMP")
+  snapshot_current_operator_ids "$BASELINE_TMP"
+  validate_operator_ledger_file "$BASELINE_TMP"
+  mv -f -- "$BASELINE_TMP" "$BASELINE_OPERATOR_IDS"
+  : >"$NEW_TMP"
+  validate_operator_ledger_file "$NEW_TMP"
+  mv -f -- "$NEW_TMP" "$NEW_OPERATOR_IDS"
+fi
 
 EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" \
   docker compose -f deploy/docker-compose.platform.yml up -d --build
@@ -457,6 +750,16 @@ test "$(wc -l <"$NEW_OPERATOR_IDS" | tr -d ' ')" = 24
 快照和 new 差集均先写入
 `container-maintenance/` 同目录的 `mktemp` 文件；全部校验后才原子 `mv`。任何失败
 都不得截断已发布的权威 ledger。
+
+当前 release 的 baseline/new 要么同时不存在，要么同时为非 symlink 普通文件；
+只存在一个时 fail closed。两者已完整存在表示同 SHA 恢复：保留原 baseline，
+只按当前 Docker 状态刷新 new。新 SHA 且显式给出 `PREVIOUS_RELEASE_ROOT` 时，
+previous root 必须属于同一 `REPORT_ROOT`/release tag 且以不同的 40 位 SHA 结尾；
+previous baseline/new 必须按字节序排序、ID 唯一，并通过 inspect 与 Compose
+project/service 身份校验。只有重算的 `current - previous baseline` 与 previous new
+逐字节一致时，才原子继承 previous baseline 并立即刷新当前 new。因此旧 SHA
+启动的算子仍属于本轮可清理集合；Compose 以同 service 替换容器 ID 后，下一次
+刷新会用新 ID 替换账本记录，不通过删除容器规避校验。
 
 `start_operator_profile` 不依赖 `set -e` 对 `docker compose up` 的默认处理。它先保留
 Compose 退出码，无论成功或 partial-up 失败都先刷新原子 ledger；刷新成功后，
@@ -630,8 +933,12 @@ canonical 2B 场景绝不对 platform/infrastructure 执行 `down` 或 `stop`。
 `docker inspect .Id` 精确一致，且 Compose project/service 标签匹配。禁止对 ledger 外容器执行操作：
 
 ```bash
-validate_operator_id_file "$BASELINE_OPERATOR_IDS"
-validate_operator_id_file "$NEW_OPERATOR_IDS"
+if ! operator_lifecycle_lock_is_held; then
+  echo "阶段 6 拒绝在未持有 release-tag 级维护锁时恢复" >&2
+  exit 1
+fi
+validate_operator_ledger_file "$BASELINE_OPERATOR_IDS"
+validate_operator_ledger_file "$NEW_OPERATOR_IDS"
 while IFS= read -r container_id || [[ -n "$container_id" ]]
 do
   if ! validate_operator_identity "$container_id"; then
@@ -645,12 +952,17 @@ while IFS= read -r container_id || [[ -n "$container_id" ]]
 do
   docker stop "$container_id"
 done <"$NEW_OPERATOR_IDS"
-deploy/scripts/restore-existing-containers "$SNAPSHOT" "${SNAPSHOT}.paused.jsonl"
+deploy/scripts/restore-existing-containers "$SNAPSHOT" "$PAUSED_LEDGER"
+release_operator_lifecycle_lock
 ```
 
 清理采用两遍处理：第一遍复用发布前的 `validate_operator_identity` 并排除 baseline；
 只有整份 new ledger 全部通过后，第二遍才逐个执行 `docker stop`。任一身份不合规时，
 不得停止其中任何容器。
+阶段 6 的 restore 仍使用阶段 1 选定的唯一 `$SNAPSHOT`/`$PAUSED_LEDGER`；
+previous 续跑不得把 active paused ledger 复制成另一份可变账本。release-tag 级锁在
+该 restore 成功后显式关闭 holder 控制管道并回收子进程；之前任一阶段退出则由
+`EXIT` trap 兜底释放。
 
 清理后确认原 `ocr-v6-amd` 恢复到快照状态。平台与四类基础设施继续运行；不得 prune、
 不得删除卷、不得删除 `/data/result`。whole-stack `down` 只允许出现在与本服务器隔离的

@@ -81,6 +81,30 @@ class PackagingSecurityTests(unittest.TestCase):
         self.assertIn('"setuptools==69.5.1"', dockerfile)
         self.assertIn("conda install -n asr -y libsndfile", dockerfile)
 
+    def test_release_requirements_pin_matching_torch_and_torchaudio(self):
+        requirements = Path("requirements.txt").read_text(encoding="utf-8").splitlines()
+        pytorch_requirements = [
+            requirement
+            for requirement in requirements
+            if requirement.startswith(("torch<", "torch=", "torch>", "torchaudio"))
+        ]
+
+        self.assertEqual(
+            ["torch==2.6.0", "torchaudio==2.6.0"],
+            pytorch_requirements,
+        )
+
+    def test_release_dockerfile_checks_matching_torch_and_torchaudio(self):
+        dockerfile = Path("docker/Dockerfile").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "COPY docker/verify_torch_runtime.py /tmp/verify_torch_runtime.py",
+            dockerfile,
+        )
+        self.assertIn("python /tmp/verify_torch_runtime.py", dockerfile)
+        self.assertIn("rm -f /tmp/verify_torch_runtime.py", dockerfile)
+        self.assertNotIn("RUN python - <<", dockerfile)
+
     def test_cython_dockerfile_removes_bytecode_caches(self):
         dockerfile = Path("docker/Dockerfile.cython").read_text(encoding="utf-8")
 

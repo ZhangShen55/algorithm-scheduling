@@ -41,6 +41,26 @@ EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" MODEL_ASSET_SOURCE="$MODEL_ASSET_SOURCE" \
 例外扩展到上述资产。报告根按
 `deploy/reports/milestone-2b/releases/{release_tag}/{git_sha}/` 归档。
 
+## Clean-clone Harness Python runtime
+
+`.env` 是本次部署明确不使用的配置文件；`.venv` 是 Harness wrapper 需要的
+Python 运行环境，两者不是同一个概念。canonical 里程碑 2B 始终准备并使用项目 `.venv`：
+
+```bash
+python3 -m venv "$PWD/.venv"
+"$PWD/.venv/bin/python" -m pip install .
+```
+
+`run-operator-smoke` 和 `verify-operator-registration` wrapper 的解释器选择顺序为
+`DEPLOY_PYTHON` -> 项目 `.venv/bin/python` -> `python3`。`preflight` 在项目 `.venv`
+存在时也优先使用它。回退解释器仍必须自身具备 Harness 依赖；wrapper
+只选择解释器，不会临时安装 `httpx`、PyYAML 或 `websockets`。因此系统
+`python3` 回退只用于已事先准备同等依赖的非 canonical 环境；服务器 clean clone
+必须遵循权威场景，在首次 preflight/Smoke 前创建 `.venv`，验证三个模块可
+导入，并将 Python/依赖版本原子记录到当前 release 的 `preflight/`
+证据中。完整可执行命令只以
+[`milestone-2b-deploy.md`](../harness/scenarios/milestone-2b-deploy.md) 为准。
+
 The platform Compose includes PostgreSQL, Kafka, Redis, MongoDB and all four platform
 services under the single `algorithm-scheduling-platform` project. They communicate
 over the explicitly named `algorithm-platform` network.
@@ -343,6 +363,9 @@ containers.
 逐卡启动顺序必须在 canonical 场景从发布变量到阶段 6 的同一 Bash 会话中进行，不能
 跳过阶段 1/2 后单独复制阶段 3。下列 `start_operator_profile` 在阶段 3 定义；不得把它
 替换成直接的 Compose `up`，也不要用 `down -v`：
+首次发布的 `PREVIOUS_RELEASE_ROOT` 为空；同 release tag 换 SHA 续跑时，必须在
+canonical 发布变量块前显式把它设为上一 SHA 的绝对 release 目录，不自动
+选择历史目录。
 
 ```bash
 docker compose -f deploy/docker-compose.infrastructure.yml up -d
@@ -414,6 +437,30 @@ current 快照和 new 差集都必须先写入 release `container-maintenance/` 
 验收结束只停止经 Compose project `algorithm-operators` 和 service 标签复核的本轮新增
 容器，不执行 `docker rm`；再用原 ledger 恢复 `ocr-v6-amd`。禁止 prune、`down -v`、
 删除任何卷或删除 `/data/result`。
+
+canonical 场景在任何 snapshot/pause 前获取同 release tag 共享的非阻塞
+`flock`；锁路径以 `O_NOFOLLOW` 打开并校验 UID、`0600`、单链接和 inode，
+holder 持有到阶段 6 restore 成功后才显式释放。同 SHA 已有完整本地
+snapshot/paused 时复用原账本。指定 previous release 时，可从其直接账本或
+provenance 继承原 authority；A→B→C 中 C 记录立即前驱 B，但 snapshot/paused
+仍指向 A。当前 release 只以不可替换方式写入当前 UID 所有、权限
+`0400` 的 provenance；同 SHA 续跑必须继续给出相同 immediate previous，
+不得改绑或复制可变 paused ledger。
+
+host preflight 在同一 tag 锁内执行。fresh 路径总是强制空
+`AUTHORIZED_OCCUPIED_ENDPOINTS`；只有 same-/cross-SHA 续跑才从权威 platform 和
+operator Compose 配置中按渲染的 service 精确查询 running 容器，验证完整
+ID、project/service 标签和实际端口映射后，从 Docker inspect 的实际绑定派生
+“监听地址+端口”授权集（例如 `127.0.0.1:18101`、`0.0.0.0:18100` 和
+`[::]:18100`）。旧的纯数字端口授权不生效；preflight 对 `ss` 的每条必需端口监听
+逐条精确匹配，因此同端口的其他地址或地址族占用仍 fail closed。
+
+当前 release 的 baseline/new 必须成对存在；只有一份时 fail closed。两份均存在时
+按同 SHA 恢复处理，保留 baseline 并只刷新 new。新 SHA 仅在 previous root 属于同一
+`REPORT_ROOT`/release tag、SHA 不同，且 previous baseline/new 的排序、ID、inspect、
+Compose 身份都合法时考虑继承。重算的 `current - previous baseline` 必须与
+previous new 精确一致；随后原子继承 baseline 并立即刷新 new。Compose 同 service
+换 ID 后仍按当前 ID 刷新，不删除容器规避身份校验。
 
 逐卡 Compose 后必须依次运行 `verify-gpu-instance`、`verify-operator-registration`
 和 `run-operator-smoke`，最后用报告 renderer 生成 JSON/Markdown 汇总。只执行

@@ -248,3 +248,55 @@ async def test_background_heartbeat_retries_after_transient_http_failure() -> No
         with suppress(httpx.HTTPError):
             await registry_client.stop()
         await registry_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_background_heartbeat_survives_python310_asyncio_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Python310AsyncioTimeoutError(Exception):
+        pass
+
+    heartbeat_attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal heartbeat_attempts
+        if request.url.path.endswith("/register"):
+            return httpx.Response(201, json={"instance_id": "ocr-gpu0"})
+        if request.url.path.endswith("/heartbeat"):
+            heartbeat_attempts += 1
+        return httpx.Response(200, json={"status": "ok"})
+
+    original_wait_for = asyncio.wait_for
+    wait_calls = 0
+
+    async def python310_wait_for(awaitable: object, timeout: float) -> object:
+        nonlocal wait_calls
+        wait_calls += 1
+        if wait_calls == 1:
+            close = getattr(awaitable, "close", None)
+            if close is not None:
+                close()
+            raise Python310AsyncioTimeoutError
+        return await original_wait_for(awaitable, timeout=timeout)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(asyncio, "TimeoutError", Python310AsyncioTimeoutError)
+    monkeypatch.setattr(asyncio, "wait_for", python310_wait_for)
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    registry_client = OperatorRegistryClient(
+        client_config(),
+        status_provider=lambda: OperatorRuntimeStatus(inflight=0, model_ready=True),
+        http_client=http_client,
+    )
+
+    try:
+        await registry_client.start()
+        for _ in range(20):
+            if heartbeat_attempts >= 2:
+                break
+            await asyncio.sleep(0)
+        assert heartbeat_attempts >= 2
+    finally:
+        with suppress(Python310AsyncioTimeoutError, httpx.HTTPError):
+            await registry_client.stop()
+        await registry_client.aclose()

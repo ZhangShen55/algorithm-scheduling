@@ -22,6 +22,7 @@ test_wav/
 *.mp3
 
 # 日志与运行时产物
+logs/
 *.log
 asr_stats.json
 asr_service.log

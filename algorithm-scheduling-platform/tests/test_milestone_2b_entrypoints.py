@@ -1,5 +1,7 @@
+import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -45,11 +47,94 @@ def test_gpu_entrypoints_set_process_name_one_worker_and_stable_port() -> None:
         source = path.read_text(encoding="utf-8")
 
         assert os.access(path, os.X_OK), relative
-        assert f'PROCESS_NAME="${{GPU_PROCESS_NAME:-{default_name}}}"' in source, relative
+        if relative == "facerec/docker/entrypoint.sh":
+            assert 'PROCESS_NAME="${GPU_PROCESS_NAME-facerec}"' in source, relative
+        else:
+            assert f'PROCESS_NAME="${{GPU_PROCESS_NAME:-{default_name}}}"' in source, relative
         assert 'WORKERS="${UVICORN_WORKERS:-' in source, relative
         assert default_port in source, relative
-        assert 'exec -a "$PROCESS_NAME"' in source, relative
+        if relative == "facerec/docker/entrypoint.sh":
+            assert 'exec "$PROCESS_NAME" -m uvicorn' in source, relative
+            assert 'exec -a "$PROCESS_NAME"' not in source, relative
+        else:
+            assert 'exec -a "$PROCESS_NAME"' in source, relative
         assert "--workers 1" in source, relative
+
+
+def test_facerec_entrypoint_uses_a_resolvable_named_python_for_spawn(
+    tmp_path: Path,
+) -> None:
+    source = (ROOT / "facerec/docker/entrypoint.sh").read_text(encoding="utf-8")
+
+    assert 'PYTHON_EXECUTABLE="$(command -v python3)"' in source
+    assert 'NAMED_PYTHON_DIR="/run/operator-python"' in source
+    assert 'NAMED_PYTHON="$NAMED_PYTHON_DIR/$PROCESS_NAME"' in source
+    assert '[[ -x "$PYTHON_EXECUTABLE" && -f "$PYTHON_EXECUTABLE" ]]' in source
+    assert 'ln -sfnT "$PYTHON_EXECUTABLE" "$NAMED_PYTHON"' in source
+    assert 'readlink -f "$NAMED_PYTHON"' in source
+    assert 'export PATH="$NAMED_PYTHON_DIR:$PATH"' in source
+
+    named_python = tmp_path / "facerec"
+    named_python.symlink_to(sys.executable)
+    probe = (
+        "import json,multiprocessing,os,pathlib,subprocess,sys;"
+        "proc=pathlib.Path('/proc/self/cmdline');"
+        "argv0=(proc.read_bytes().split(b'\\0',1)[0].decode() if proc.exists() "
+        "else subprocess.check_output(['ps','-o','command=','-p',str(os.getpid())],"
+        "text=True).split()[0]);"
+        "context=multiprocessing.get_context('spawn');queue=context.Queue();"
+        "child=context.Process(target=queue.put,args=('spawn-ok',));"
+        "child.start();child.join(10);value=queue.get(timeout=2);"
+        "print(json.dumps({'executable':sys.executable,'argv0':argv0,"
+        "'child_exitcode':child.exitcode,'child_value':value}));"
+        "queue.close();queue.join_thread()"
+    )
+    completed = subprocess.run(
+        ["bash", "-c", 'exec "$PROCESS_NAME" -c "$PYTHON_PROBE"'],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "PROCESS_NAME": "facerec",
+            "PYTHON_PROBE": probe,
+        },
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout)
+    assert Path(payload["executable"]).name == "facerec"
+    assert payload["argv0"] == "facerec"
+    assert payload["child_exitcode"] == 0
+    assert payload["child_value"] == "spawn-ok"
+
+
+def test_facerec_entrypoint_rejects_unsafe_process_names(tmp_path: Path) -> None:
+    fake_python = tmp_path / "python3"
+    fake_python.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_python.chmod(0o755)
+    entrypoint = ROOT / "facerec/docker/entrypoint.sh"
+
+    for invalid_name in ("", ".", "..", "-facerec", "face rec", "../facerec"):
+        completed = subprocess.run(
+            ["bash", str(entrypoint)],
+            cwd=ROOT,
+            env={
+                **os.environ,
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "GPU_PROCESS_NAME": invalid_name,
+                "UVICORN_WORKERS": "1",
+            },
+            text=True,
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+
+        assert completed.returncode != 0, invalid_name
+        assert "GPU process name contains unsafe characters" in completed.stderr
 
 
 def test_facerec_and_ocr_images_use_shell_entrypoints() -> None:

@@ -119,7 +119,8 @@ class OperatorRegistryClient:
                     self._stop_event.wait(),
                     timeout=self._config.heartbeat_interval_seconds,
                 )
-            except TimeoutError:
+            # Python 3.10 keeps this distinct from the built-in TimeoutError.
+            except asyncio.TimeoutError:  # noqa: UP041
                 pass
             if self._stop_event.is_set():
                 return

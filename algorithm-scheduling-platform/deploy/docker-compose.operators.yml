@@ -71,7 +71,7 @@ x-facerec: &facerec
   healthcheck:
     test:
       - CMD
-      - python
+      - python3
       - -c
       - >-
         import json,os,urllib.request;

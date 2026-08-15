@@ -4,7 +4,8 @@ funasr==1.2.6
 fastapi>=0.95.1
 httpx==0.28.1
 uvicorn
-torch>=1.13
+torch==2.6.0
+torchaudio==2.6.0
 numpy==1.26.4
 websockets==12.0
 simplejson==3.20.1

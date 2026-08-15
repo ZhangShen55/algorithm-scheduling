@@ -42,6 +42,9 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} && \
     pip install --no-cache-dir --retries 10 --timeout 60 --prefer-binary \
       -r /tmp/requirements.txt
+COPY docker/verify_torch_runtime.py /tmp/verify_torch_runtime.py
+RUN python /tmp/verify_torch_runtime.py && \
+    rm -f /tmp/verify_torch_runtime.py
 
 
 # ================== 运行层 ==================

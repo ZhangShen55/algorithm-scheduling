@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -1573,7 +1574,62 @@ def test_preflight_derives_occupied_ports_from_both_rendered_compose_documents(
     assert "unauthorized" in completed.stderr
 
 
-def test_preflight_accepts_an_exactly_authorized_compose_derived_port(
+@pytest.mark.parametrize(
+    ("displayed_endpoint", "authorized_endpoint"),
+    [
+        ("0.0.0.0:18100", "0.0.0.0:18100"),
+        ("127.0.0.1:18101", "127.0.0.1:18101"),
+        ("[::]:18100", "[::]:18100"),
+        (":::18100", "[::]:18100"),
+        ("*:18100", "0.0.0.0:18100"),
+        ("*:18100", "[::]:18100"),
+        ("127.0.0.1%lo:18101", "127.0.0.1:18101"),
+        ("[::]%lo:18100", "[::]:18100"),
+    ],
+)
+def test_preflight_accepts_an_exactly_authorized_compose_derived_endpoint(
+    fake_bin: Path,
+    tmp_path: Path,
+    displayed_endpoint: str,
+    authorized_endpoint: str,
+) -> None:
+    course, result = _separate_shared_roots(tmp_path)
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
+        REQUIRED_PORTS="",
+        SS_OUTPUT=f"LISTEN 0 128 {displayed_endpoint} 0.0.0.0:*\n",
+        AUTHORIZED_OCCUPIED_ENDPOINTS=authorized_endpoint,
+    )
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize(
+    "local_endpoint",
+    ["127.0.0.53%lo:53", "[fe80::1]%eth0:443", "fe80::1%eth0:443"],
+)
+def test_preflight_accepts_a_valid_scoped_unrelated_system_listener(
+    fake_bin: Path, tmp_path: Path, local_endpoint: str
+) -> None:
+    course, result = _separate_shared_roots(tmp_path)
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
+        REQUIRED_PORTS="",
+        SS_OUTPUT=f"LISTEN 0 128 {local_endpoint} 0.0.0.0:*\n",
+    )
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_preflight_rejects_a_scoped_concrete_address_not_in_the_authority(
     fake_bin: Path, tmp_path: Path
 ) -> None:
     course, result = _separate_shared_roots(tmp_path)
@@ -1582,13 +1638,247 @@ def test_preflight_accepts_an_exactly_authorized_compose_derived_port(
         COURSE_ROOT=str(course),
         RESULT_ROOT=str(result),
         REQUIRED_PORTS="",
-        SS_OUTPUT="LISTEN 0 128 0.0.0.0:18100 0.0.0.0:*\n",
-        AUTHORIZED_OCCUPIED_PORTS="18100",
+        SS_OUTPUT="LISTEN 0 128 127.0.0.2%lo:18101 0.0.0.0:*\n",
+        AUTHORIZED_OCCUPIED_ENDPOINTS="127.0.0.1:18101",
+    )
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode != 0
+    assert "127.0.0.2:18101" in completed.stderr
+    assert "unauthorized" in completed.stderr
+
+
+@pytest.mark.parametrize("peer_endpoint", ["0.0.0.0:*", "[::]:*", "*:*", ":::*"])
+def test_preflight_accepts_a_valid_peer_wildcard_endpoint(
+    fake_bin: Path, tmp_path: Path, peer_endpoint: str
+) -> None:
+    course, result = _separate_shared_roots(tmp_path)
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
+        REQUIRED_PORTS="",
+        SS_OUTPUT=f"LISTEN 0 128 127.0.0.1:53 {peer_endpoint}\n",
     )
 
     completed = _run("preflight", "host", environment=environment)
 
     assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize("peer_endpoint", ["8.8.8.8:53", "0.0.0.0:53"])
+def test_preflight_rejects_a_numeric_port_on_the_peer_endpoint(
+    fake_bin: Path, tmp_path: Path, peer_endpoint: str
+) -> None:
+    course, result = _separate_shared_roots(tmp_path)
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
+        REQUIRED_PORTS="",
+        SS_OUTPUT=f"LISTEN 0 128 127.0.0.1:53 {peer_endpoint}\n",
+    )
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode != 0
+    assert "socket endpoint" in completed.stderr
+
+
+@pytest.mark.parametrize("local_endpoint", ["127.0.0.1:*", "[::]:*", "*:*"])
+def test_preflight_rejects_a_wildcard_port_on_the_local_endpoint(
+    fake_bin: Path, tmp_path: Path, local_endpoint: str
+) -> None:
+    course, result = _separate_shared_roots(tmp_path)
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
+        REQUIRED_PORTS="",
+        SS_OUTPUT=f"LISTEN 0 128 {local_endpoint} 0.0.0.0:*\n",
+    )
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode != 0
+    assert "socket endpoint" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("socket_row", "reason"),
+    [
+        (
+            "LISTEN 0 128 127.0.0.1:53 0.0.0.0:* unexpected-column\n",
+            "listening socket row",
+        ),
+        ("LISTEN 0 128 127.0.0.1:53 invalid-peer\n", "socket endpoint"),
+    ],
+)
+def test_preflight_rejects_an_invalid_complete_socket_row(
+    fake_bin: Path, tmp_path: Path, socket_row: str, reason: str
+) -> None:
+    course, result = _separate_shared_roots(tmp_path)
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
+        REQUIRED_PORTS="",
+        SS_OUTPUT=socket_row,
+    )
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode != 0
+    assert reason in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "local_endpoint",
+    [
+        "127.0.0.53%bad/zone:53",
+        "[fe80::1]%bad%zone:443",
+        "[fe80::1]%:443",
+        "[fe80::1%eth0]:443",
+        "*%lo:443",
+        "[*]:443",
+    ],
+)
+def test_preflight_rejects_an_invalid_socket_scope_zone(
+    fake_bin: Path, tmp_path: Path, local_endpoint: str
+) -> None:
+    course, result = _separate_shared_roots(tmp_path)
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
+        REQUIRED_PORTS="",
+        SS_OUTPUT=f"LISTEN 0 128 {local_endpoint} 0.0.0.0:*\n",
+    )
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode != 0
+    assert "socket endpoint" in completed.stderr
+
+
+def test_preflight_does_not_honor_legacy_numeric_port_authorization(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    course, result = _separate_shared_roots(tmp_path)
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
+        REQUIRED_PORTS="",
+        SS_OUTPUT="LISTEN 0 128 127.0.0.1:18101 0.0.0.0:*\n",
+        AUTHORIZED_OCCUPIED_PORTS="18101",
+    )
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode != 0
+    assert "127.0.0.1:18101" in completed.stderr
+    assert "unauthorized" in completed.stderr
+
+
+def test_preflight_does_not_match_a_legacy_wildcard_to_a_concrete_authority(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    course, result = _separate_shared_roots(tmp_path)
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
+        REQUIRED_PORTS="",
+        SS_OUTPUT="LISTEN 0 128 *:18101 0.0.0.0:*\n",
+        AUTHORIZED_OCCUPIED_ENDPOINTS="127.0.0.1:18101",
+    )
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode != 0
+    assert "*:18101" in completed.stderr
+    assert "unauthorized" in completed.stderr
+
+
+def test_preflight_rejects_a_second_listener_on_an_authorized_port(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    course, result = _separate_shared_roots(tmp_path)
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
+        REQUIRED_PORTS="",
+        SS_OUTPUT=(
+            "LISTEN 0 128 127.0.0.1:18101 0.0.0.0:*\n"
+            "LISTEN 0 128 127.0.0.2:18101 0.0.0.0:*\n"
+        ),
+        AUTHORIZED_OCCUPIED_ENDPOINTS="127.0.0.1:18101",
+        AUTHORIZED_OCCUPIED_PORTS="18101",
+    )
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode != 0
+    assert "127.0.0.2:18101" in completed.stderr
+    assert "unauthorized" in completed.stderr
+
+
+def test_preflight_fails_closed_when_the_host_socket_parser_exits_nonzero(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    project_root = tmp_path / "platform"
+    scripts = project_root / "deploy/scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy2(SCRIPTS / "preflight", scripts / "preflight")
+    shutil.copy2(SCRIPTS / "preflight_checks.py", scripts / "preflight_checks.py")
+    parser_called = tmp_path / "host-sockets.called"
+    venv_bin = project_root / ".venv/bin"
+    venv_bin.mkdir(parents=True)
+    _write_executable(
+        venv_bin / "python",
+        """#!/usr/bin/env bash
+if [[ "${2:-}" == "host-sockets" ]]; then
+  printf called >"$PARSER_CALLED"
+  exit 77
+fi
+exec "$REAL_PYTHON" "$@"
+""",
+    )
+    _write_executable(
+        fake_bin / "awk",
+        """#!/usr/bin/env bash
+if [[ "$*" == *'$4 ~'* ]]; then
+  exit 77
+fi
+exec /usr/bin/awk "$@"
+""",
+    )
+    course, result = _separate_shared_roots(tmp_path)
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
+        REQUIRED_PORTS="",
+        SS_OUTPUT="LISTEN 0 128 127.0.0.2:18101 0.0.0.0:*\n",
+        AUTHORIZED_OCCUPIED_ENDPOINTS="127.0.0.1:18101",
+        PARSER_CALLED=str(parser_called),
+        REAL_PYTHON=sys.executable,
+    )
+
+    completed = subprocess.run(
+        [str(scripts / "preflight"), "host"],
+        cwd=project_root,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert parser_called.read_text(encoding="utf-8") == "called"
 
 
 @pytest.mark.parametrize("mutation", ["missing", "wrong-source", "read-only"])

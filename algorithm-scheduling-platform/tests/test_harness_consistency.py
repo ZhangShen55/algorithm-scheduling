@@ -45,6 +45,49 @@ def test_harness_contains_required_governance_files() -> None:
     }
 
 
+def test_milestone_2b_bootstraps_clean_clone_harness_python_before_commands() -> None:
+    scenario = (HARNESS_ROOT / "scenarios/milestone-2b-deploy.md").read_text(
+        encoding="utf-8"
+    )
+    required_fragments = (
+        'python3 -m venv "$PWD/.venv"',
+        '"$PWD/.venv/bin/python" -m pip install .',
+        "import httpx",
+        "import websockets",
+        "import yaml",
+        'metadata.version("httpx")',
+        'metadata.version("PyYAML")',
+        'metadata.version("websockets")',
+        'HARNESS_RUNTIME_EVIDENCE="$RELEASE_ROOT/preflight/harness-python-runtime.json"',
+        'mktemp "$RELEASE_ROOT/preflight/.harness-python-runtime.XXXXXX"',
+        'mv -f -- "$HARNESS_RUNTIME_TMP" "$HARNESS_RUNTIME_EVIDENCE"',
+        'export DEPLOY_PYTHON="$PWD/.venv/bin/python"',
+    )
+    for fragment in required_fragments:
+        assert fragment in scenario, f"canonical 2B 场景缺少 Harness Python 合同: {fragment}"
+
+    bootstrap_finished = scenario.index(
+        'export DEPLOY_PYTHON="$PWD/.venv/bin/python"'
+    )
+    first_preflight = scenario.index("deploy/scripts/preflight host")
+    first_registration = scenario.index("deploy/scripts/verify-operator-registration")
+    first_smoke = scenario.index("deploy/scripts/run-operator-smoke")
+    assert bootstrap_finished < first_preflight
+    assert bootstrap_finished < first_registration
+    assert bootstrap_finished < first_smoke
+
+
+def test_clean_clone_harness_python_contract_is_documented() -> None:
+    readme = (PROJECT_ROOT / "deploy/README.md").read_text(encoding="utf-8")
+    agents = (PROJECT_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "`DEPLOY_PYTHON` -> 项目 `.venv/bin/python` -> `python3`" in readme
+    assert "回退解释器仍必须自身具备 Harness 依赖" in readme
+    assert "canonical 里程碑 2B 始终准备并使用项目 `.venv`" in readme
+    assert "`.env` 与 `.venv` 含义不同" in agents
+    assert "clean clone 必须先准备项目 `.venv`" in agents
+
+
 def test_arch_003_preserves_registration_lease_and_invocation_directions() -> None:
     design = (PROJECT_ROOT.parent / "docs/算法功能调度平台总体设计-v2.md").read_text(
         encoding="utf-8"

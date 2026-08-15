@@ -37,6 +37,8 @@
 
 当前里程碑 2B 部署不使用 `.env`。用户已批准把部署模板、服务器登录合同和受控服务默认值提交到 Git；当前固定登录合同是 `root@192.168.29.11:22`，密码为 `kedacom_123`。该批准是明确例外，不表示模型解密密钥、Deploy Key/私钥、人脸原图、课程媒体、大型 fixture 或外部可信模型 manifest 可以进入 Git、Markdown、报告或镜像上下文。以后增加凭据时必须先判断是否属于已批准例外，不能笼统套用“所有敏感值只允许环境变量”或“所有密码都不得写入 Git”的旧规则。
 
+`.env` 与 `.venv` 含义不同：前者是本里程碑不使用的部署配置文件，后者是 Harness Python 运行环境。里程碑 2B 的 clean clone 必须先准备项目 `.venv`，从 `pyproject.toml` 安装基础依赖，验证 `httpx`、PyYAML 和 `websockets` 可导入，并在任何 preflight 或 Smoke 前把 Python/依赖版本原子写入当前 release 的 `preflight` 证据。
+
 由于 lifespan 会启动后台循环，`orchestrator-service` 和 `vision-orchestrator-service` 必须使用一个 Uvicorn worker。初始部署中的 `control-service` 和 `online-gateway-service` 也使用一个 worker；取得基于消息代理的运行证据后，再通过增加容器进行扩容。
 
 ## 禁止的捷径
@@ -53,7 +55,8 @@
 - Kafka 同时提供 `EXTERNAL://:9092` 与 `INTERNAL://:29092`，分别广播 `EXTERNAL://127.0.0.1:9092` 与 `INTERNAL://kafka:29092`。容器不得使用宿主机广播地址。
 - 发布构建必须显式传入完整 `EXPECTED_GIT_SHA`。四个平台运行容器通过 `preflight runtime --git-sha SHA` 校验最终镜像 revision；每个算子 profile 以及全 24 实例分别通过 `preflight operators --profile PROFILE --git-sha SHA` 和 `preflight operators --full --git-sha SHA` 校验。Smoke 的 `--git-sha` 只标记报告归属，不替代镜像 attestation。
 - 外部 `model-assets.manifest.json` 是交付可信基线。部署阶段只能执行 `stage-model-assets` 和 `verify-model-assets`，不得运行生成器覆盖基线；OCR 镜像内派生 manifest 仅供运行时校验，不是第二个交付权威。
-- canonical 2B 场景不得对 platform/infrastructure 执行 `down`，不得宽泛停止预存业务。先快照，只按同一账本暂停用户明确允许的原 `ocr-v6-amd`；baseline/current/new 容器 ID 账本必须经同目录临时文件、完整 ID/`docker inspect` 校验和原子替换发布。每次 profile `up` 无论成功、失败或 partial-up 都要先刷新账本再返回原状态；账本刷新失败时禁止 cleanup，待 Docker 恢复后基于 baseline 重新刷新。清理只停止本轮记录的新增算子容器，不删除容器，然后恢复原业务。禁止 prune、`down -v`、删除卷和删除 `/data/result`。
+- canonical 2B 场景不得对 platform/infrastructure 执行 `down`，不得宽泛停止预存业务。host preflight 和 snapshot/pause 前必须通过 `O_NOFOLLOW`、UID、`0600`、单链接和 inode 校验获取同 release tag 共享的非阻塞锁，并持有到阶段 6 唯一 restore 成功。fresh host preflight 强制空 `AUTHORIZED_OCCUPIED_ENDPOINTS`；续跑只从权威 platform/operator Compose 配置和经身份、running、端口映射核验的容器 Docker inspect 实际绑定精确派生“监听地址+端口”授权端点，preflight 逐条核对 `ss` 监听，旧纯数字端口授权不生效。首次发布只按同一账本暂停用户明确允许的原 `ocr-v6-amd`；同 SHA 续跑复用已有完整本地账本。换 SHA 续跑必须显式给出同 `REPORT_ROOT`/release tag 的立即前驱 `PREVIOUS_RELEASE_ROOT`，可通过前驱 provenance 继承更早的权威 snapshot/paused path；当前 release 只以不可替换方式写入当前 UID 所有的 `0400` provenance，记录立即前驱但保留原 authority，不得改绑、重新 snapshot/pause 或复制可变 paused ledger。
+- baseline/current/new 容器 ID 账本必须经同目录临时文件、排序、完整 ID/`docker inspect` 与 Compose 身份校验和原子替换发布。同 SHA 已有完整 baseline/new 时保留 baseline 并刷新 new，只有一份时 fail closed。换 SHA 只有在 `current - previous baseline` 与 previous new 精确一致后才原子继承 baseline 并立即刷新 new。每次 profile `up` 无论成功、失败或 partial-up 都要先刷新账本再返回原状态；账本刷新失败时禁止 cleanup，待 Docker 恢复后基于 baseline 重新刷新。清理只停止本轮记录的新增算子容器，不删除容器，然后恢复原业务。禁止 prune、`down -v`、删除卷和删除 `/data/result`。
 
 ## 验证层级
 

@@ -152,3 +152,11 @@ def _config_target(operator: str) -> str:
 
 def test_compose_declares_exact_three_gpu_and_three_cpu_operator_matrix() -> None:
     assert_operator_compose_matrix(load_operator_compose())
+
+
+def test_facerec_healthcheck_uses_the_interpreter_available_in_its_image() -> None:
+    services = load_operator_compose()["services"]
+
+    for gpu_index in range(3):
+        healthcheck = services[f"facerec-gpu{gpu_index}"]["healthcheck"]["test"]
+        assert healthcheck[:2] == ["CMD", "python3"]
