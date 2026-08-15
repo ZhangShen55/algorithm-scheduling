@@ -144,6 +144,38 @@ EXPECTED_DATABASE_INDEXES = {
     "idx_task_node_dependencies_prerequisite": "task_node_dependencies",
     "idx_operator_instance_events_instance_time": "operator_instance_events",
 }
+EXPECTED_PLATFORM_PORTS = {
+    "postgres": (5432, 5432, "tcp"),
+    "redis": (6379, 6379, "tcp"),
+    "kafka": (9092, 9092, "tcp"),
+    "mongodb": (27017, 27017, "tcp"),
+    "control-service": (18100, 18100, "tcp"),
+    "orchestrator-service": (18101, 18101, "tcp"),
+    "vision-orchestrator-service": (18102, 8010, "tcp"),
+    "online-gateway-service": (18103, 8001, "tcp"),
+}
+EXPECTED_OPERATOR_PORTS = {
+    **{
+        f"{operator}-gpu{gpu}": ((gpu + 1) * 10000 + suffix, target, "tcp")
+        for operator, target, suffix in (
+            ("asr-offline", 8083, 8083),
+            ("asr-online", 8084, 8084),
+            ("ocr", 8866, 8866),
+            ("vbas", 8981, 8981),
+            ("facerec", 8000, 8003),
+            ("screen-det", 8880, 8880),
+        )
+        for gpu in range(3)
+    },
+    **{
+        f"{operator}-cpu{index}": ((index + 1) * 10000 + suffix, target, "tcp")
+        for operator, target, suffix in (
+            ("ppt-slice", 9001, 9001),
+            ("text-analysis", 8000, 8000),
+        )
+        for index in range(3)
+    },
+}
 
 
 def _csv_text(rows: list[tuple[str, ...]]) -> str:
@@ -187,7 +219,8 @@ def _kafka_topic_output(
 
 
 def _platform_compose_config() -> dict[str, Any]:
-    def service(port: int, *, shared_storage: bool = False) -> dict[str, Any]:
+    def service(name: str, *, shared_storage: bool = False) -> dict[str, Any]:
+        published, target, protocol = EXPECTED_PLATFORM_PORTS[name]
         volumes: list[dict[str, Any]] = []
         if shared_storage:
             volumes = [
@@ -195,20 +228,30 @@ def _platform_compose_config() -> dict[str, Any]:
                 {"type": "bind", "source": "/data/result", "target": "/data/result"},
             ]
         return {
-            "ports": [{"published": str(port), "target": port, "protocol": "tcp"}],
+            "ports": [
+                {
+                    "published": str(published),
+                    "target": target,
+                    "protocol": protocol,
+                }
+            ],
             "volumes": volumes,
         }
 
     return {
         "services": {
-            "postgres": service(5432),
-            "redis": service(6379),
-            "kafka": service(9092),
-            "mongodb": service(27017),
-            "control-service": service(18100, shared_storage=True),
-            "orchestrator-service": service(18101, shared_storage=True),
-            "vision-orchestrator-service": service(18102, shared_storage=True),
-            "online-gateway-service": service(18103),
+            "postgres": service("postgres"),
+            "redis": service("redis"),
+            "kafka": service("kafka"),
+            "mongodb": service("mongodb"),
+            "control-service": service("control-service", shared_storage=True),
+            "orchestrator-service": service(
+                "orchestrator-service", shared_storage=True
+            ),
+            "vision-orchestrator-service": service(
+                "vision-orchestrator-service", shared_storage=True
+            ),
+            "online-gateway-service": service("online-gateway-service"),
         }
     }
 
@@ -245,10 +288,11 @@ def _operator_compose_config() -> dict[str, Any]:
         ("screen-det", 8880),
     )
     cpu_operators = (("ppt-slice", 9001, 15), ("text-analysis", 8000, 4))
-    published = 20000
     for operator, target in gpu_operators:
         for gpu in range(3):
             instance_id = f"{operator}-gpu{gpu}"
+            published, expected_target, protocol = EXPECTED_OPERATOR_PORTS[instance_id]
+            assert expected_target == target
             services[instance_id] = {
                 "profiles": [f"gpu{gpu}"],
                 "environment": environment(instance_id, target, 1, gpu=gpu),
@@ -269,7 +313,7 @@ def _operator_compose_config() -> dict[str, Any]:
                     {
                         "published": str(published),
                         "target": target,
-                        "protocol": "tcp",
+                        "protocol": protocol,
                     }
                 ],
                 "volumes": [
@@ -277,10 +321,11 @@ def _operator_compose_config() -> dict[str, Any]:
                     {"type": "bind", "source": "/data/result", "target": "/data/result"},
                 ],
             }
-            published += 1
     for operator, target, capacity in cpu_operators:
         for index in range(3):
             instance_id = f"{operator}-cpu{index}"
+            published, expected_target, protocol = EXPECTED_OPERATOR_PORTS[instance_id]
+            assert expected_target == target
             services[instance_id] = {
                 "profiles": ["cpu"],
                 "environment": environment(instance_id, target, capacity),
@@ -288,7 +333,7 @@ def _operator_compose_config() -> dict[str, Any]:
                     {
                         "published": str(published),
                         "target": target,
-                        "protocol": "tcp",
+                        "protocol": protocol,
                     }
                 ],
                 "volumes": [
@@ -296,7 +341,6 @@ def _operator_compose_config() -> dict[str, Any]:
                     {"type": "bind", "source": "/data/result", "target": "/data/result"},
                 ],
             }
-            published += 1
     return {"services": services}
 
 
@@ -306,6 +350,7 @@ def _operator_runtime_fixtures() -> tuple[dict[str, str], dict[str, dict[str, An
     for service_name, service in _operator_compose_config()["services"].items():
         container_id = hashlib.sha256(service_name.encode()).hexdigest()
         service_ids[service_name] = container_id
+        published, target, protocol = EXPECTED_OPERATOR_PORTS[service_name]
         environment = [f"{key}={value}" for key, value in service["environment"].items()]
         profiles = service["profiles"]
         gpu = profiles[0].removeprefix("gpu") if profiles[0].startswith("gpu") else None
@@ -328,7 +373,14 @@ def _operator_runtime_fixtures() -> tuple[dict[str, str], dict[str, dict[str, An
                 "Env": environment,
                 "Labels": {"com.docker.compose.service": service_name},
             },
-            "HostConfig": {"DeviceRequests": device_requests},
+            "HostConfig": {
+                "DeviceRequests": device_requests,
+                "PortBindings": {
+                    f"{target}/{protocol}": [
+                        {"HostIp": "0.0.0.0", "HostPort": str(published)}
+                    ]
+                },
+            },
             "Mounts": [
                 {
                     "Type": "bind",
@@ -440,6 +492,14 @@ def _base_environment(fake_bin: Path, **overrides: str) -> dict[str, str]:
     )
     environment.update(overrides)
     return environment
+
+
+def _separate_shared_roots(tmp_path: Path) -> tuple[Path, Path]:
+    course = tmp_path / "course"
+    result = tmp_path / "result"
+    course.mkdir(exist_ok=True)
+    result.mkdir(exist_ok=True)
+    return course, result
 
 
 def _install_preflight_stubs(fake_bin: Path) -> None:
@@ -920,10 +980,11 @@ def test_preflight_accepts_exactly_three_container_visible_gpus(
 def test_preflight_explicit_host_stage_matches_the_default(
     fake_bin: Path, tmp_path: Path
 ) -> None:
+    course, result = _separate_shared_roots(tmp_path)
     environment = _base_environment(
         fake_bin,
-        COURSE_ROOT=str(tmp_path),
-        RESULT_ROOT=str(tmp_path),
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
     )
 
     completed = _run("preflight", "host", environment=environment)
@@ -942,6 +1003,58 @@ def test_preflight_explicit_host_stage_matches_the_default(
     assert operator_command[-3:] == ["config", "--format", "json"]
 
 
+@pytest.mark.parametrize(
+    "relationship",
+    ["same", "course-contains-result", "result-contains-course", "symlink-alias"],
+)
+def test_preflight_rejects_overlapping_shared_roots(
+    fake_bin: Path, tmp_path: Path, relationship: str
+) -> None:
+    storage = tmp_path / "storage"
+    storage.mkdir()
+    if relationship == "same":
+        course = result = storage / "shared"
+        course.mkdir()
+    elif relationship == "course-contains-result":
+        course = storage / "course"
+        result = course / "persistent-result"
+        result.mkdir(parents=True)
+    elif relationship == "result-contains-course":
+        result = storage / "result"
+        course = result / "temporary-course"
+        course.mkdir(parents=True)
+    else:
+        course = storage / "course"
+        course.mkdir()
+        result = storage / "result-alias"
+        result.symlink_to(course, target_is_directory=True)
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
+    )
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode != 0
+    assert "overlap" in completed.stderr
+
+
+def test_preflight_accepts_normalized_separate_shared_roots(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    course, result = _separate_shared_roots(tmp_path)
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(course / ".." / "course"),
+        RESULT_ROOT=str(result / ".." / "result"),
+    )
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_preflight_ignores_runtime_banner_before_three_gpu_records(
     fake_bin: Path, tmp_path: Path
 ) -> None:
@@ -953,11 +1066,12 @@ def test_preflight_ignores_runtime_banner_before_three_gpu_records(
             "2, GPU-33333333-3333-3333-3333-333333333333",
         ]
     )
+    course, result = _separate_shared_roots(tmp_path)
     environment = _base_environment(
         fake_bin,
         GPU_OUTPUT=f"{banner}\n{gpu_records}",
-        COURSE_ROOT=str(tmp_path),
-        RESULT_ROOT=str(tmp_path),
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
         REQUIRED_PORTS="",
     )
 
@@ -990,11 +1104,12 @@ def test_preflight_ignores_runtime_banner_before_three_gpu_records(
 def test_preflight_rejects_duplicate_gpu_identity(
     fake_bin: Path, tmp_path: Path, gpu_output: str
 ) -> None:
+    course, result = _separate_shared_roots(tmp_path)
     environment = _base_environment(
         fake_bin,
         GPU_OUTPUT=gpu_output,
-        COURSE_ROOT=str(tmp_path),
-        RESULT_ROOT=str(tmp_path),
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
         REQUIRED_PORTS="",
     )
 
@@ -1071,11 +1186,12 @@ def test_preflight_rejects_unavailable_container_prerequisites(
 def test_preflight_rejects_any_gpu_count_other_than_three(
     fake_bin: Path, tmp_path: Path, gpu_output: str
 ) -> None:
+    course, result = _separate_shared_roots(tmp_path)
     environment = _base_environment(
         fake_bin,
         GPU_OUTPUT=gpu_output,
-        COURSE_ROOT=str(tmp_path),
-        RESULT_ROOT=str(tmp_path),
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
         REQUIRED_PORTS="",
     )
 
@@ -1102,6 +1218,7 @@ def test_preflight_rejects_any_gpu_count_other_than_three(
 def test_preflight_rejects_invalid_authoritative_operator_compose(
     fake_bin: Path, tmp_path: Path, mutation: str, message: str
 ) -> None:
+    course, result = _separate_shared_roots(tmp_path)
     document = _operator_compose_config()
     services = document["services"]
     gpu_service = services["asr-offline-gpu0"]
@@ -1140,8 +1257,8 @@ def test_preflight_rejects_invalid_authoritative_operator_compose(
         gpu_service["volumes"][1]["read_only"] = True
     environment = _base_environment(
         fake_bin,
-        COURSE_ROOT=str(tmp_path),
-        RESULT_ROOT=str(tmp_path),
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
         OPERATOR_COMPOSE_CONFIG=json.dumps(document),
     )
 
@@ -1152,10 +1269,91 @@ def test_preflight_rejects_invalid_authoritative_operator_compose(
 
 
 @pytest.mark.parametrize(
+    ("config_variable", "service_name"),
+    [
+        *(
+            ("PLATFORM_COMPOSE_CONFIG", service_name)
+            for service_name in EXPECTED_PLATFORM_PORTS
+        ),
+        *(
+            ("OPERATOR_COMPOSE_CONFIG", service_name)
+            for service_name in EXPECTED_OPERATOR_PORTS
+        ),
+    ],
+)
+def test_preflight_requires_canonical_port_mapping_for_every_service(
+    fake_bin: Path,
+    tmp_path: Path,
+    config_variable: str,
+    service_name: str,
+) -> None:
+    course, result = _separate_shared_roots(tmp_path)
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
+    )
+    document = json.loads(environment[config_variable])
+    del document["services"][service_name]["ports"]
+    environment[config_variable] = json.dumps(document)
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode != 0
+    assert service_name in completed.stderr
+    assert "port" in completed.stderr.lower()
+
+
+@pytest.mark.parametrize(
+    ("config_variable", "service_name"),
+    [
+        ("PLATFORM_COMPOSE_CONFIG", "vision-orchestrator-service"),
+        ("OPERATOR_COMPOSE_CONFIG", "asr-offline-gpu0"),
+    ],
+)
+@pytest.mark.parametrize(
+    "mutation",
+    ["extra", "published", "target", "protocol", "duplicate"],
+)
+def test_preflight_rejects_noncanonical_compose_port_mapping(
+    fake_bin: Path,
+    tmp_path: Path,
+    config_variable: str,
+    service_name: str,
+    mutation: str,
+) -> None:
+    course, result = _separate_shared_roots(tmp_path)
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
+    )
+    document = json.loads(environment[config_variable])
+    ports = document["services"][service_name]["ports"]
+    if mutation == "extra":
+        ports.append({"published": "65000", "target": 65000, "protocol": "tcp"})
+    elif mutation == "published":
+        ports[0]["published"] = "65001"
+    elif mutation == "target":
+        ports[0]["target"] += 1
+    elif mutation == "protocol":
+        ports[0]["protocol"] = "udp"
+    else:
+        ports.append(dict(ports[0]))
+    environment[config_variable] = json.dumps(document)
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode != 0
+    assert service_name in completed.stderr
+    assert "port" in completed.stderr.lower()
+
+
+@pytest.mark.parametrize(
     ("config_variable", "service", "port"),
     [
         ("PLATFORM_COMPOSE_CONFIG", "control-service", "18100"),
-        ("OPERATOR_COMPOSE_CONFIG", "asr-offline-gpu0", "20000"),
+        ("OPERATOR_COMPOSE_CONFIG", "asr-offline-gpu0", "18083"),
     ],
 )
 def test_preflight_derives_occupied_ports_from_both_rendered_compose_documents(
@@ -1165,10 +1363,11 @@ def test_preflight_derives_occupied_ports_from_both_rendered_compose_documents(
     service: str,
     port: str,
 ) -> None:
+    course, result = _separate_shared_roots(tmp_path)
     environment = _base_environment(
         fake_bin,
-        COURSE_ROOT=str(tmp_path),
-        RESULT_ROOT=str(tmp_path),
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
         REQUIRED_PORTS="",
         SS_OUTPUT=f"LISTEN 0 128 0.0.0.0:{port} 0.0.0.0:*\n",
     )
@@ -1185,10 +1384,11 @@ def test_preflight_derives_occupied_ports_from_both_rendered_compose_documents(
 def test_preflight_accepts_an_exactly_authorized_compose_derived_port(
     fake_bin: Path, tmp_path: Path
 ) -> None:
+    course, result = _separate_shared_roots(tmp_path)
     environment = _base_environment(
         fake_bin,
-        COURSE_ROOT=str(tmp_path),
-        RESULT_ROOT=str(tmp_path),
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
         REQUIRED_PORTS="",
         SS_OUTPUT="LISTEN 0 128 0.0.0.0:18100 0.0.0.0:*\n",
         AUTHORIZED_OCCUPIED_PORTS="18100",
@@ -1245,12 +1445,13 @@ def test_preflight_requires_each_shared_platform_service_mount(
 def test_preflight_rejects_duplicate_published_ports_across_compose_documents(
     fake_bin: Path, tmp_path: Path
 ) -> None:
+    course, result = _separate_shared_roots(tmp_path)
     document = _operator_compose_config()
     document["services"]["asr-offline-gpu0"]["ports"][0]["published"] = "18100"
     environment = _base_environment(
         fake_bin,
-        COURSE_ROOT=str(tmp_path),
-        RESULT_ROOT=str(tmp_path),
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
         OPERATOR_COMPOSE_CONFIG=json.dumps(document),
     )
 
@@ -1297,10 +1498,11 @@ def test_preflight_rejects_an_unwritable_required_directory(
 def test_preflight_rejects_dirty_or_unexpected_git_state(
     fake_bin: Path, tmp_path: Path, overrides: dict[str, str], message: str
 ) -> None:
+    course, result = _separate_shared_roots(tmp_path)
     environment = _base_environment(
         fake_bin,
-        COURSE_ROOT=str(tmp_path),
-        RESULT_ROOT=str(tmp_path),
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
         REQUIRED_PORTS="",
         **overrides,
     )
@@ -1314,10 +1516,11 @@ def test_preflight_rejects_dirty_or_unexpected_git_state(
 def test_preflight_rejects_an_unauthorized_required_port_occupant(
     fake_bin: Path, tmp_path: Path
 ) -> None:
+    course, result = _separate_shared_roots(tmp_path)
     environment = _base_environment(
         fake_bin,
-        COURSE_ROOT=str(tmp_path),
-        RESULT_ROOT=str(tmp_path),
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
         REQUIRED_PORTS="18100 18101",
         SS_OUTPUT="LISTEN 0 128 0.0.0.0:18100 0.0.0.0:*\n",
     )
@@ -1332,10 +1535,11 @@ def test_preflight_rejects_an_unauthorized_required_port_occupant(
 def test_preflight_rejects_missing_or_failed_socket_inspection(
     fake_bin: Path, tmp_path: Path
 ) -> None:
+    course, result = _separate_shared_roots(tmp_path)
     environment = _base_environment(
         fake_bin,
-        COURSE_ROOT=str(tmp_path),
-        RESULT_ROOT=str(tmp_path),
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
         REQUIRED_PORTS="18100",
         SS_EXIT="1",
     )
@@ -1350,10 +1554,11 @@ def test_preflight_rejects_missing_or_failed_socket_inspection(
 def test_preflight_requires_a_full_hex_expected_git_sha(
     fake_bin: Path, tmp_path: Path, expected_sha: str | None
 ) -> None:
+    course, result = _separate_shared_roots(tmp_path)
     environment = _base_environment(
         fake_bin,
-        COURSE_ROOT=str(tmp_path),
-        RESULT_ROOT=str(tmp_path),
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
         REQUIRED_PORTS="",
     )
     if expected_sha is None:
@@ -1370,10 +1575,11 @@ def test_preflight_requires_a_full_hex_expected_git_sha(
 def test_preflight_allows_explicit_unpinned_local_mode_with_a_warning(
     fake_bin: Path, tmp_path: Path
 ) -> None:
+    course, result = _separate_shared_roots(tmp_path)
     environment = _base_environment(
         fake_bin,
-        COURSE_ROOT=str(tmp_path),
-        RESULT_ROOT=str(tmp_path),
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
         REQUIRED_PORTS="",
         ALLOW_UNPINNED_GIT="true",
     )
@@ -1697,6 +1903,58 @@ def test_preflight_operators_profile_checks_only_selected_running_containers(
     }
 
 
+def test_preflight_operators_accepts_normalized_runtime_mount_sources(
+    fake_bin: Path, tmp_path: Path, readiness_server: Any
+) -> None:
+    base_url, state = readiness_server
+    instances = [
+        instance
+        for instance in _registered_operator_instances()
+        if instance["instance_id"].endswith("gpu0")
+    ]
+    state.update(_registration_responses(instances))
+    storage = tmp_path / "storage"
+    canonical_course = storage / "course"
+    canonical_result = storage / "result"
+    canonical_course.mkdir(parents=True)
+    canonical_result.mkdir()
+    course_alias = tmp_path / "course-alias"
+    course_alias.symlink_to(canonical_course, target_is_directory=True)
+    result_alias = canonical_result / ".." / "result"
+    document = _operator_compose_config()
+    for service in document["services"].values():
+        for mount in service["volumes"]:
+            if mount["target"] == "/data/course":
+                mount["source"] = str(course_alias)
+            elif mount["target"] == "/data/result":
+                mount["source"] = str(result_alias)
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(course_alias),
+        RESULT_ROOT=str(result_alias),
+        OPERATOR_COMPOSE_CONFIG=json.dumps(document),
+    )
+    service_ids = json.loads(environment["OPERATOR_SERVICE_IDS"])
+    inspections = json.loads(environment["OPERATOR_INSPECT_FIXTURES"])
+    for instance in instances:
+        mounts = inspections[service_ids[instance["instance_id"]]]["Mounts"]
+        next(
+            mount for mount in mounts if mount["Destination"] == "/data/course"
+        )["Source"] = str(canonical_course)
+        next(
+            mount for mount in mounts if mount["Destination"] == "/data/result"
+        )["Source"] = str(canonical_result)
+    environment["OPERATOR_INSPECT_FIXTURES"] = json.dumps(inspections)
+
+    completed = _run(
+        "preflight",
+        *_operator_preflight_arguments(tmp_path, base_url, "--profile", "gpu0"),
+        environment=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_preflight_operators_normalizes_list_environment_and_allows_system_extras(
     fake_bin: Path, tmp_path: Path, readiness_server: Any
 ) -> None:
@@ -1978,6 +2236,63 @@ def test_preflight_operators_rejects_runtime_drift_from_authoritative_compose(
 
     assert completed.returncode != 0
     assert message in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing",
+        "published",
+        "target",
+        "protocol",
+        "extra",
+        "duplicate",
+    ],
+)
+def test_preflight_operators_rejects_runtime_port_binding_drift(
+    fake_bin: Path,
+    tmp_path: Path,
+    readiness_server: Any,
+    mutation: str,
+) -> None:
+    base_url, state = readiness_server
+    instances = [
+        instance
+        for instance in _registered_operator_instances()
+        if instance["instance_id"].endswith("gpu0")
+    ]
+    state.update(_registration_responses(instances))
+    environment = _base_environment(fake_bin)
+    service_ids = json.loads(environment["OPERATOR_SERVICE_IDS"])
+    inspections = json.loads(environment["OPERATOR_INSPECT_FIXTURES"])
+    record = inspections[service_ids["asr-offline-gpu0"]]
+    bindings = record["HostConfig"]["PortBindings"]
+    if mutation == "missing":
+        record["HostConfig"]["PortBindings"] = {}
+    elif mutation == "published":
+        bindings["8083/tcp"][0]["HostPort"] = "65000"
+    elif mutation == "target":
+        bindings["8084/tcp"] = bindings.pop("8083/tcp")
+    elif mutation == "protocol":
+        bindings["8083/udp"] = bindings.pop("8083/tcp")
+    elif mutation == "extra":
+        bindings["9000/tcp"] = [
+            {"HostIp": "0.0.0.0", "HostPort": "65000"}
+        ]
+    else:
+        bindings["8083/tcp"].append(dict(bindings["8083/tcp"][0]))
+    environment["OPERATOR_INSPECT_FIXTURES"] = json.dumps(inspections)
+
+    completed = _run(
+        "preflight",
+        *_operator_preflight_arguments(
+            tmp_path, base_url, "--profile", "gpu0", timeout="0.2"
+        ),
+        environment=environment,
+    )
+
+    assert completed.returncode != 0
+    assert "port binding" in completed.stderr.lower()
 
 
 def test_preflight_operators_propagates_registration_or_first_heartbeat_failure(
