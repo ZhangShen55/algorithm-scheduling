@@ -5,6 +5,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import threading
 import time
 from csv import writer
@@ -213,6 +214,27 @@ def _platform_compose_config() -> dict[str, Any]:
 
 
 def _operator_compose_config() -> dict[str, Any]:
+    def environment(
+        instance_id: str, target: int, capacity: int, *, gpu: int | None = None
+    ) -> dict[str, str]:
+        values = {
+            "OPERATOR_PORT": str(target),
+            "PORT": str(target),
+            "PLATFORM_REGISTRATION_ENABLED": "true",
+            "PLATFORM_CONTROL_SERVICE_URL": "http://control-service:18100",
+            "PLATFORM_INSTANCE_ID": instance_id,
+            "PLATFORM_SERVICE_URL": f"http://{instance_id}:{target}",
+            "PLATFORM_DECLARED_CAPACITY": str(capacity),
+        }
+        if gpu is not None:
+            values.update(
+                {
+                    "PLATFORM_GPU_ID": str(gpu),
+                    "NVIDIA_VISIBLE_DEVICES": str(gpu),
+                }
+            )
+        return values
+
     services: dict[str, Any] = {}
     gpu_operators = (
         ("asr-offline", 8083),
@@ -222,18 +244,14 @@ def _operator_compose_config() -> dict[str, Any]:
         ("facerec", 8000),
         ("screen-det", 8880),
     )
-    cpu_operators = (("ppt-slice", 9001), ("text-analysis", 8000))
+    cpu_operators = (("ppt-slice", 9001, 15), ("text-analysis", 8000, 4))
     published = 20000
     for operator, target in gpu_operators:
         for gpu in range(3):
             instance_id = f"{operator}-gpu{gpu}"
             services[instance_id] = {
                 "profiles": [f"gpu{gpu}"],
-                "environment": {
-                    "PLATFORM_INSTANCE_ID": instance_id,
-                    "PLATFORM_GPU_ID": str(gpu),
-                    "NVIDIA_VISIBLE_DEVICES": str(gpu),
-                },
+                "environment": environment(instance_id, target, 1, gpu=gpu),
                 "deploy": {
                     "resources": {
                         "reservations": {
@@ -260,12 +278,12 @@ def _operator_compose_config() -> dict[str, Any]:
                 ],
             }
             published += 1
-    for operator, target in cpu_operators:
+    for operator, target, capacity in cpu_operators:
         for index in range(3):
             instance_id = f"{operator}-cpu{index}"
             services[instance_id] = {
                 "profiles": ["cpu"],
-                "environment": {"PLATFORM_INSTANCE_ID": instance_id},
+                "environment": environment(instance_id, target, capacity),
                 "ports": [
                     {
                         "published": str(published),
@@ -1181,23 +1199,39 @@ def test_preflight_accepts_an_exactly_authorized_compose_derived_port(
     assert completed.returncode == 0, completed.stderr
 
 
+@pytest.mark.parametrize("mutation", ["missing", "wrong-source", "read-only"])
+@pytest.mark.parametrize("target", ["/data/course", "/data/result"])
 @pytest.mark.parametrize(
     "service_name",
     ["control-service", "orchestrator-service", "vision-orchestrator-service"],
 )
-def test_preflight_requires_each_shared_platform_service_to_bind_result_root(
-    fake_bin: Path, tmp_path: Path, service_name: str
+def test_preflight_requires_each_shared_platform_service_mount(
+    fake_bin: Path,
+    tmp_path: Path,
+    service_name: str,
+    target: str,
+    mutation: str,
 ) -> None:
+    course = tmp_path / "course"
+    result = tmp_path / "result"
+    course.mkdir()
+    result.mkdir()
     document = _platform_compose_config()
-    document["services"][service_name]["volumes"] = [
-        mount
-        for mount in document["services"][service_name]["volumes"]
-        if mount["target"] != "/data/result"
-    ]
+    volumes = document["services"][service_name]["volumes"]
+    if mutation == "missing":
+        document["services"][service_name]["volumes"] = [
+            mount for mount in volumes if mount["target"] != target
+        ]
+    else:
+        mount = next(mount for mount in volumes if mount["target"] == target)
+        if mutation == "wrong-source":
+            mount["source"] = "/wrong/shared-root"
+        else:
+            mount["read_only"] = True
     environment = _base_environment(
         fake_bin,
-        COURSE_ROOT=str(tmp_path),
-        RESULT_ROOT=str(tmp_path),
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
         PLATFORM_COMPOSE_CONFIG=json.dumps(document),
     )
 
@@ -1205,7 +1239,7 @@ def test_preflight_requires_each_shared_platform_service_to_bind_result_root(
 
     assert completed.returncode != 0
     assert service_name in completed.stderr
-    assert "/data/result" in completed.stderr
+    assert target in completed.stderr
 
 
 def test_preflight_rejects_duplicate_published_ports_across_compose_documents(
@@ -1663,6 +1697,82 @@ def test_preflight_operators_profile_checks_only_selected_running_containers(
     }
 
 
+def test_preflight_operators_normalizes_list_environment_and_allows_system_extras(
+    fake_bin: Path, tmp_path: Path, readiness_server: Any
+) -> None:
+    base_url, state = readiness_server
+    instances = [
+        instance
+        for instance in _registered_operator_instances()
+        if instance["instance_id"].endswith("gpu0")
+    ]
+    state.update(_registration_responses(instances))
+    document = _operator_compose_config()
+    service = document["services"]["asr-offline-gpu0"]
+    service["environment"] = [
+        f"{key}={value}" for key, value in service["environment"].items()
+    ]
+    environment = _base_environment(
+        fake_bin,
+        OPERATOR_COMPOSE_CONFIG=json.dumps(document),
+    )
+    service_ids = json.loads(environment["OPERATOR_SERVICE_IDS"])
+    inspections = json.loads(environment["OPERATOR_INSPECT_FIXTURES"])
+    inspections[service_ids["asr-offline-gpu0"]]["Config"]["Env"].append(
+        "PATH=/usr/local/bin:/usr/bin"
+    )
+    environment["OPERATOR_INSPECT_FIXTURES"] = json.dumps(inspections)
+
+    completed = _run(
+        "preflight",
+        *_operator_preflight_arguments(tmp_path, base_url, "--profile", "gpu0"),
+        environment=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "PLATFORM_SERVICE_URL",
+        "PLATFORM_CONTROL_SERVICE_URL",
+        "PLATFORM_DECLARED_CAPACITY",
+        "PLATFORM_REGISTRATION_ENABLED",
+        "OPERATOR_PORT",
+        "PORT",
+    ],
+)
+def test_preflight_operators_rejects_compose_declared_environment_drift(
+    fake_bin: Path, tmp_path: Path, readiness_server: Any, key: str
+) -> None:
+    base_url, state = readiness_server
+    instances = [
+        instance
+        for instance in _registered_operator_instances()
+        if instance["instance_id"].endswith("gpu0")
+    ]
+    state.update(_registration_responses(instances))
+    environment = _base_environment(fake_bin)
+    service_ids = json.loads(environment["OPERATOR_SERVICE_IDS"])
+    inspections = json.loads(environment["OPERATOR_INSPECT_FIXTURES"])
+    values = inspections[service_ids["asr-offline-gpu0"]]["Config"]["Env"]
+    assert any(value.startswith(f"{key}=") for value in values)
+    inspections[service_ids["asr-offline-gpu0"]]["Config"]["Env"] = [
+        f"{key}=drifted" if value.startswith(f"{key}=") else value for value in values
+    ]
+    environment["OPERATOR_INSPECT_FIXTURES"] = json.dumps(inspections)
+
+    completed = _run(
+        "preflight",
+        *_operator_preflight_arguments(tmp_path, base_url, "--profile", "gpu0"),
+        environment=environment,
+    )
+
+    assert completed.returncode != 0
+    assert key in completed.stderr
+
+
 def test_preflight_operators_rejects_an_unknown_profile_before_container_inspection(
     fake_bin: Path, tmp_path: Path, readiness_server: Any
 ) -> None:
@@ -1680,22 +1790,101 @@ def test_preflight_operators_rejects_an_unknown_profile_before_container_inspect
     assert not any(command[1] == "inspect" for command in _commands(environment))
 
 
-@pytest.mark.parametrize("selection", ["--profile=gpu0", "--instance=ocr-gpu0"])
+@pytest.mark.parametrize(
+    "selection",
+    [
+        ("--profile=gpu0",),
+        ("--instance=ocr-gpu0",),
+        ("--prof", "gpu0"),
+        ("--inst", "ocr-gpu0"),
+        ("--expected-com", "rogue-compose.yml"),
+    ],
+)
 def test_preflight_operators_rejects_ambiguous_selection_syntax_before_inspection(
-    fake_bin: Path, tmp_path: Path, readiness_server: Any, selection: str
+    fake_bin: Path,
+    tmp_path: Path,
+    readiness_server: Any,
+    selection: tuple[str, ...],
 ) -> None:
     base_url, _ = readiness_server
     environment = _base_environment(fake_bin)
 
     completed = _run(
         "preflight",
-        *_operator_preflight_arguments(tmp_path, base_url, selection, timeout="0.05"),
+        *_operator_preflight_arguments(
+            tmp_path, base_url, *selection, timeout="0.05"
+        ),
         environment=environment,
     )
 
     assert completed.returncode != 0
     assert "full/profile selection" in completed.stderr
     assert not any(command[1] == "inspect" for command in _commands(environment))
+
+
+def test_preflight_helper_rejects_abbreviated_profile_option(tmp_path: Path) -> None:
+    compose_json = tmp_path / "operators.json"
+    compose_json.write_text(json.dumps(_operator_compose_config()), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "preflight_checks.py"),
+            "operator-selection",
+            "--course-root",
+            "/data/course",
+            "--result-root",
+            "/data/result",
+            "--prof",
+            "gpu0",
+            str(compose_json),
+        ],
+        cwd=PLATFORM_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "unrecognized arguments: --prof" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("--prof", "gpu0"),
+        ("--inst", "ocr-gpu0"),
+        ("--expected-com", "rogue-compose.yml"),
+    ],
+)
+def test_registration_verifier_rejects_abbreviated_long_options(
+    tmp_path: Path, option: str, value: str
+) -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "verify_operator_registration.py"),
+            "--control-url",
+            "http://127.0.0.1:9",
+            "--release-tag",
+            "v1.0_260812",
+            "--git-sha",
+            "a" * 40,
+            "--reports-root",
+            str(tmp_path / "reports"),
+            "--timeout-seconds",
+            "0",
+            option,
+            value,
+        ],
+        cwd=PLATFORM_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert f"unrecognized arguments: {option}" in completed.stderr
 
 
 def test_preflight_operators_rejects_a_missing_selected_running_container(

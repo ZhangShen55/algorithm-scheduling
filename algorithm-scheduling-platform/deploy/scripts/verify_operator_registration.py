@@ -39,7 +39,10 @@ OPERATOR_CONTRACTS = {
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="验证里程碑 2B 的 24 个算子实例")
+    parser = argparse.ArgumentParser(
+        description="验证里程碑 2B 的 24 个算子实例",
+        allow_abbrev=False,
+    )
     parser.add_argument("--control-url", required=True)
     parser.add_argument("--release-tag", required=True)
     parser.add_argument("--git-sha", required=True)

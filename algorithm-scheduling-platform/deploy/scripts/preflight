@@ -196,6 +196,7 @@ run_operators() {
         ;;
       --profile)
         (( $# >= 2 )) || fail "--profile requires a value"
+        [[ "$2" != --* ]] || fail "--profile requires a value"
         [[ "$full_requested" == "false" ]] || fail "--full and --profile are mutually exclusive"
         selection_args+=(--profile "$2")
         shift 2
@@ -203,9 +204,18 @@ run_operators() {
       --profile=*|--instance|--instance=*|--expected-compose|--expected-compose=*)
         fail "operators preflight only supports the authoritative full/profile selection"
         ;;
-      *)
+      --control-url|--release-tag|--git-sha|--reports-root|--timeout-seconds|--poll-seconds|--request-timeout-seconds)
+        (( $# >= 2 )) || fail "$1 requires a value"
+        [[ "$2" != --* ]] || fail "$1 requires a value"
+        registration_args+=("$1" "$2")
+        shift 2
+        ;;
+      --control-url=*|--release-tag=*|--git-sha=*|--reports-root=*|--timeout-seconds=*|--poll-seconds=*|--request-timeout-seconds=*)
         registration_args+=("$1")
         shift
+        ;;
+      *)
+        fail "operators preflight only supports the authoritative full/profile selection"
         ;;
     esac
   done

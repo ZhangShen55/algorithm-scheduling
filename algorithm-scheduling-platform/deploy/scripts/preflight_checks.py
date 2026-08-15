@@ -305,12 +305,24 @@ def _services(document: Any, label: str) -> dict[str, dict[str, Any]]:
 
 def _environment(service: dict[str, Any], instance_id: str) -> dict[str, str]:
     environment = service.get("environment", {})
-    if not isinstance(environment, dict) or any(
-        not isinstance(key, str) or not isinstance(value, (str, int))
-        for key, value in environment.items()
-    ):
-        raise PreflightError(f"operator environment is invalid: {instance_id}")
-    return {key: str(value) for key, value in environment.items()}
+    if isinstance(environment, dict):
+        if any(
+            not isinstance(key, str) or not isinstance(value, (str, int))
+            for key, value in environment.items()
+        ):
+            raise PreflightError(f"operator environment is invalid: {instance_id}")
+        return {key: str(value) for key, value in environment.items()}
+    if isinstance(environment, list):
+        result: dict[str, str] = {}
+        for entry in environment:
+            if not isinstance(entry, str):
+                raise PreflightError(f"operator environment is invalid: {instance_id}")
+            key, separator, value = entry.partition("=")
+            if not separator or not key or key in result:
+                raise PreflightError(f"operator environment is invalid: {instance_id}")
+            result[key] = value
+        return result
+    raise PreflightError(f"operator environment is invalid: {instance_id}")
 
 
 def _reservation_devices(service: dict[str, Any], instance_id: str) -> list[dict[str, Any]]:
@@ -479,21 +491,28 @@ def validate_host_compose(
     operator_services = _services(operator_document, "operator")
     _validate_operator_services(operator_services, course_root=course_root, result_root=result_root)
 
-    required_result_services = {
+    required_shared_storage_services = {
         "control-service",
         "orchestrator-service",
         "vision-orchestrator-service",
     }
-    for service_name in sorted(required_result_services):
+    required_mounts = {
+        "/data/course": course_root,
+        "/data/result": result_root,
+    }
+    for service_name in sorted(required_shared_storage_services):
         if service_name not in platform_services:
             raise PreflightError(f"platform Compose service is missing: {service_name}")
-        _validate_bind_mount(
-            service_name,
-            platform_services[service_name],
-            target="/data/result",
-            expected_source=result_root,
-        )
+        for target, expected_source in required_mounts.items():
+            _validate_bind_mount(
+                service_name,
+                platform_services[service_name],
+                target=target,
+                expected_source=expected_source,
+            )
     for service_name, service in platform_services.items():
+        if service_name in required_shared_storage_services:
+            continue
         volumes = service.get("volumes", []) or []
         if not isinstance(volumes, list):
             raise PreflightError(f"platform Compose volumes are invalid: {service_name}")
@@ -688,6 +707,16 @@ def validate_operator_runtime(
                 )
             ):
                 raise PreflightError(f"running container GPU request is wrong: {service_name}")
+        mismatched_environment = sorted(
+            key
+            for key, expected_value in expected_environment.items()
+            if actual_environment.get(key) != expected_value
+        )
+        if mismatched_environment:
+            raise PreflightError(
+                "running container environment does not match Compose: "
+                f"{service_name}: {mismatched_environment[0]}"
+            )
         _validate_actual_mount(
             actual[service_name],
             service_name,
@@ -710,29 +739,29 @@ def _load_json(path: Path) -> Any:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(allow_abbrev=False)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("gpus")
-    compose = subparsers.add_parser("host-compose")
+    subparsers.add_parser("gpus", allow_abbrev=False)
+    compose = subparsers.add_parser("host-compose", allow_abbrev=False)
     compose.add_argument("--course-root", required=True)
     compose.add_argument("--result-root", required=True)
     compose.add_argument("platform_json", type=Path)
     compose.add_argument("operator_json", type=Path)
-    readiness = subparsers.add_parser("readiness")
+    readiness = subparsers.add_parser("readiness", allow_abbrev=False)
     readiness.add_argument("--timeout", type=float, default=5.0)
     readiness.add_argument("urls", nargs="+")
-    database = subparsers.add_parser("database")
+    database = subparsers.add_parser("database", allow_abbrev=False)
     database.add_argument("tables_csv", type=Path)
     database.add_argument("columns_csv", type=Path)
     database.add_argument("indexes_csv", type=Path)
-    topics = subparsers.add_parser("topics")
+    topics = subparsers.add_parser("topics", allow_abbrev=False)
     topics.add_argument("--config", type=Path, required=True)
-    selection = subparsers.add_parser("operator-selection")
+    selection = subparsers.add_parser("operator-selection", allow_abbrev=False)
     selection.add_argument("--course-root", required=True)
     selection.add_argument("--result-root", required=True)
     selection.add_argument("--profile", action="append", default=[])
     selection.add_argument("operator_json", type=Path)
-    runtime = subparsers.add_parser("operator-runtime")
+    runtime = subparsers.add_parser("operator-runtime", allow_abbrev=False)
     runtime.add_argument("--course-root", required=True)
     runtime.add_argument("--result-root", required=True)
     runtime.add_argument("--profile", action="append", default=[])
