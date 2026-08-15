@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import subprocess
+import threading
 import time
+from csv import writer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +23,370 @@ SCRIPT_NAMES = (
     "restore-existing-containers",
 )
 
+GPU_UUIDS = (
+    "GPU-11111111-1111-1111-1111-111111111111",
+    "GPU-22222222-2222-2222-2222-222222222222",
+    "GPU-33333333-3333-3333-3333-333333333333",
+)
+
+EXPECTED_DATABASE_COLUMNS = {
+    "course_jobs": ("id", "task_id", "input_snapshot", "created_at", "updated_at"),
+    "course_task_types": (
+        "id",
+        "task_id",
+        "task_type",
+        "status",
+        "priority",
+        "reason",
+        "request_payload",
+        "effective_params",
+        "requested_at",
+        "started_at",
+        "finished_at",
+        "updated_at",
+    ),
+    "task_nodes": (
+        "id",
+        "course_task_type_id",
+        "node_code",
+        "status",
+        "priority",
+        "reason",
+        "required_capability",
+        "prerequisite_count",
+        "completed_prerequisite_count",
+        "attempt",
+        "ready_at",
+        "claimed_by",
+        "claim_token",
+        "claimed_at",
+        "started_at",
+        "finished_at",
+        "created_at",
+        "updated_at",
+    ),
+    "node_results": (
+        "task_node_id",
+        "result",
+        "artifact_path",
+        "artifact_count",
+        "progress",
+        "effective_params",
+        "result_version",
+        "created_at",
+        "updated_at",
+    ),
+    "node_work_items": (
+        "id",
+        "task_node_id",
+        "item_key",
+        "ordinal",
+        "status",
+        "reason",
+        "result",
+        "attempt",
+        "created_at",
+        "updated_at",
+    ),
+    "outbox_events": (
+        "event_id",
+        "aggregate_type",
+        "aggregate_id",
+        "event_type",
+        "payload",
+        "available_at",
+        "published_at",
+        "publish_attempts",
+        "last_error",
+        "created_at",
+        "claim_token",
+        "claimed_at",
+    ),
+    "operator_instances": (
+        "instance_id",
+        "operator_code",
+        "capabilities",
+        "service_url",
+        "model_version",
+        "api_version",
+        "declared_capacity",
+        "labels",
+        "desired_state",
+        "last_registered_at",
+        "last_heartbeat_at",
+        "unregistered_at",
+        "created_at",
+        "updated_at",
+    ),
+    "operator_instance_events": (
+        "id",
+        "instance_id",
+        "event_type",
+        "event_payload",
+        "occurred_at",
+    ),
+    "visual_fallback_values": (
+        "id",
+        "course_task_type_id",
+        "metric_code",
+        "value",
+        "created_at",
+    ),
+    "task_node_dependencies": ("node_id", "prerequisite_node_id"),
+}
+
+EXPECTED_DATABASE_INDEXES = {
+    "idx_task_nodes_ready_claim": "task_nodes",
+    "idx_course_task_types_task_query": "course_task_types",
+    "idx_task_nodes_task_query": "task_nodes",
+    "idx_outbox_events_pending_scan": "outbox_events",
+    "idx_task_node_dependencies_prerequisite": "task_node_dependencies",
+    "idx_operator_instance_events_instance_time": "operator_instance_events",
+}
+
+
+def _csv_text(rows: list[tuple[str, ...]]) -> str:
+    stream = io.StringIO()
+    csv_writer = writer(stream, lineterminator="\n")
+    csv_writer.writerows(rows)
+    return stream.getvalue()
+
+
+def _database_table_rows() -> list[tuple[str, ...]]:
+    return [(table, f"{table}中文说明") for table in EXPECTED_DATABASE_COLUMNS]
+
+
+def _database_column_rows() -> list[tuple[str, ...]]:
+    return [
+        (table, column, f"{column}中文说明")
+        for table, columns in EXPECTED_DATABASE_COLUMNS.items()
+        for column in columns
+    ]
+
+
+def _database_index_rows() -> list[tuple[str, ...]]:
+    return [(table, index) for index, table in EXPECTED_DATABASE_INDEXES.items()]
+
+
+def _kafka_topic_output(
+    *,
+    topics: tuple[str, ...] = (
+        "algorithm.course.commands",
+        "algorithm.visual.commands",
+        "algorithm.visual.events",
+    ),
+    partitions: int = 1,
+    replicas: int = 1,
+) -> str:
+    return "\n".join(
+        f"Topic: {topic}\tTopicId: id-{index}\tPartitionCount: {partitions}"
+        f"\tReplicationFactor: {replicas}\tConfigs:"
+        for index, topic in enumerate(topics)
+    )
+
+
+def _platform_compose_config() -> dict[str, Any]:
+    def service(port: int, *, shared_storage: bool = False) -> dict[str, Any]:
+        volumes: list[dict[str, Any]] = []
+        if shared_storage:
+            volumes = [
+                {"type": "bind", "source": "/data/course", "target": "/data/course"},
+                {"type": "bind", "source": "/data/result", "target": "/data/result"},
+            ]
+        return {
+            "ports": [{"published": str(port), "target": port, "protocol": "tcp"}],
+            "volumes": volumes,
+        }
+
+    return {
+        "services": {
+            "postgres": service(5432),
+            "redis": service(6379),
+            "kafka": service(9092),
+            "mongodb": service(27017),
+            "control-service": service(18100, shared_storage=True),
+            "orchestrator-service": service(18101, shared_storage=True),
+            "vision-orchestrator-service": service(18102, shared_storage=True),
+            "online-gateway-service": service(18103),
+        }
+    }
+
+
+def _operator_compose_config() -> dict[str, Any]:
+    services: dict[str, Any] = {}
+    gpu_operators = (
+        ("asr-offline", 8083),
+        ("asr-online", 8084),
+        ("ocr", 8866),
+        ("vbas", 8981),
+        ("facerec", 8000),
+        ("screen-det", 8880),
+    )
+    cpu_operators = (("ppt-slice", 9001), ("text-analysis", 8000))
+    published = 20000
+    for operator, target in gpu_operators:
+        for gpu in range(3):
+            instance_id = f"{operator}-gpu{gpu}"
+            services[instance_id] = {
+                "profiles": [f"gpu{gpu}"],
+                "environment": {
+                    "PLATFORM_INSTANCE_ID": instance_id,
+                    "PLATFORM_GPU_ID": str(gpu),
+                    "NVIDIA_VISIBLE_DEVICES": str(gpu),
+                },
+                "deploy": {
+                    "resources": {
+                        "reservations": {
+                            "devices": [
+                                {
+                                    "driver": "nvidia",
+                                    "device_ids": [str(gpu)],
+                                    "capabilities": ["gpu"],
+                                }
+                            ]
+                        }
+                    }
+                },
+                "ports": [
+                    {
+                        "published": str(published),
+                        "target": target,
+                        "protocol": "tcp",
+                    }
+                ],
+                "volumes": [
+                    {"type": "bind", "source": "/data/course", "target": "/data/course"},
+                    {"type": "bind", "source": "/data/result", "target": "/data/result"},
+                ],
+            }
+            published += 1
+    for operator, target in cpu_operators:
+        for index in range(3):
+            instance_id = f"{operator}-cpu{index}"
+            services[instance_id] = {
+                "profiles": ["cpu"],
+                "environment": {"PLATFORM_INSTANCE_ID": instance_id},
+                "ports": [
+                    {
+                        "published": str(published),
+                        "target": target,
+                        "protocol": "tcp",
+                    }
+                ],
+                "volumes": [
+                    {"type": "bind", "source": "/data/course", "target": "/data/course"},
+                    {"type": "bind", "source": "/data/result", "target": "/data/result"},
+                ],
+            }
+            published += 1
+    return {"services": services}
+
+
+def _operator_runtime_fixtures() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+    service_ids: dict[str, str] = {}
+    inspections: dict[str, dict[str, Any]] = {}
+    for service_name, service in _operator_compose_config()["services"].items():
+        container_id = hashlib.sha256(service_name.encode()).hexdigest()
+        service_ids[service_name] = container_id
+        environment = [f"{key}={value}" for key, value in service["environment"].items()]
+        profiles = service["profiles"]
+        gpu = profiles[0].removeprefix("gpu") if profiles[0].startswith("gpu") else None
+        device_requests: list[dict[str, Any]] = []
+        if gpu is not None:
+            device_requests = [
+                {
+                    "Driver": "nvidia",
+                    "Count": 0,
+                    "DeviceIDs": [gpu],
+                    "Capabilities": [["gpu"]],
+                    "Options": {},
+                }
+            ]
+        inspections[container_id] = {
+            "Id": container_id,
+            "Name": f"/algorithm-operators-{service_name}-1",
+            "State": {"Running": True, "Status": "running"},
+            "Config": {
+                "Env": environment,
+                "Labels": {"com.docker.compose.service": service_name},
+            },
+            "HostConfig": {"DeviceRequests": device_requests},
+            "Mounts": [
+                {
+                    "Type": "bind",
+                    "Source": "/data/course",
+                    "Destination": "/data/course",
+                    "RW": True,
+                },
+                {
+                    "Type": "bind",
+                    "Source": "/data/result",
+                    "Destination": "/data/result",
+                    "RW": True,
+                },
+            ],
+        }
+    return service_ids, inspections
+
+
+def _registered_operator_instances() -> list[dict[str, Any]]:
+    contracts = {
+        "asr-offline": ("asr_offline", ["asr_offline"], 8083, 1),
+        "asr-online": ("asr_online", ["asr_online"], 8084, 1),
+        "ocr": ("ocr", ["ocr"], 8866, 1),
+        "vbas": ("vbas", ["student_behavior", "teacher_behavior"], 8981, 1),
+        "facerec": ("facerec", ["recognize"], 8000, 1),
+        "screen-det": ("screen_det", ["detect_all"], 8880, 1),
+        "ppt-slice": ("ppt_slice", ["ppt_slice"], 9001, 15),
+        "text-analysis": (
+            "text_analysis",
+            ["course_overviews", "extract_keywords"],
+            8000,
+            4,
+        ),
+    }
+    instances: list[dict[str, Any]] = []
+    for prefix, (code, capabilities, port, capacity) in contracts.items():
+        kind = "cpu" if prefix in {"ppt-slice", "text-analysis"} else "gpu"
+        for index in range(3):
+            instance_id = f"{prefix}-{kind}{index}"
+            instances.append(
+                {
+                    "instance_id": instance_id,
+                    "operator_code": code,
+                    "capabilities": capabilities,
+                    "service_url": f"http://{instance_id}:{port}",
+                    "declared_capacity": capacity,
+                    "labels": {"gpu": str(index)} if kind == "gpu" else {},
+                    "lifecycle": "ONLINE",
+                    "inflight": 0,
+                    "model_ready": True,
+                    "last_heartbeat_at": "2026-08-12T00:00:01Z",
+                }
+            )
+    return instances
+
+
+def _registration_responses(
+    instances: list[dict[str, Any]],
+) -> dict[str, tuple[int, dict[str, Any] | list[dict[str, Any]]]]:
+    responses: dict[str, tuple[int, dict[str, Any] | list[dict[str, Any]]]] = {
+        "/ops/operator-instances": (200, instances)
+    }
+    for instance in instances:
+        instance_id = instance["instance_id"]
+        responses[f"/ops/operator-instances/{instance_id}/events?limit=100"] = (
+            200,
+            [
+                {"event_type": "REGISTERED"},
+                {
+                    "event_type": "HEARTBEAT_SUMMARY",
+                    "event_payload": {"model_ready": True},
+                },
+            ],
+        )
+    return responses
+
 
 def _write_executable(path: Path, source: str) -> None:
     path.write_text(source, encoding="utf-8")
@@ -26,19 +394,30 @@ def _write_executable(path: Path, source: str) -> None:
 
 
 def _base_environment(fake_bin: Path, **overrides: str) -> dict[str, str]:
+    operator_service_ids, operator_inspections = _operator_runtime_fixtures()
     environment = os.environ.copy()
     environment.update(
         {
             "PATH": f"{fake_bin}:{environment['PATH']}",
             "COMMAND_LOG": str(fake_bin / "commands.jsonl"),
             "DF_AVAILABLE_KIB": str(200 * 1024 * 1024),
-            "GPU_OUTPUT": "0\n1\n2",
+            "GPU_OUTPUT": "\n".join(
+                f"{index}, {gpu_uuid}" for index, gpu_uuid in enumerate(GPU_UUIDS)
+            ),
             "GIT_SHA": "a" * 40,
             "GIT_STATUS": "",
             "EXPECTED_GIT_SHA": "a" * 40,
             "SS_OUTPUT": "",
             "DOCKER_PS_IDS": "",
             "DOCKER_INSPECT_FIXTURES": "{}",
+            "PLATFORM_COMPOSE_CONFIG": json.dumps(_platform_compose_config()),
+            "OPERATOR_COMPOSE_CONFIG": json.dumps(_operator_compose_config()),
+            "DB_TABLES_OUTPUT": _csv_text(_database_table_rows()),
+            "DB_COLUMNS_OUTPUT": _csv_text(_database_column_rows()),
+            "DB_INDEXES_OUTPUT": _csv_text(_database_index_rows()),
+            "KAFKA_TOPICS_OUTPUT": _kafka_topic_output(),
+            "OPERATOR_SERVICE_IDS": json.dumps(operator_service_ids),
+            "OPERATOR_INSPECT_FIXTURES": json.dumps(operator_inspections),
         }
     )
     environment.update(overrides)
@@ -97,6 +476,46 @@ if args == ["version"]:
     raise SystemExit(int(os.environ.get("DOCKER_VERSION_EXIT", "0")))
 if args == ["compose", "version"]:
     raise SystemExit(int(os.environ.get("COMPOSE_VERSION_EXIT", "0")))
+if args[:1] == ["compose"] and "config" in args:
+    variable = (
+        "OPERATOR_COMPOSE_CONFIG"
+        if any("docker-compose.operators.yml" in argument for argument in args)
+        else "PLATFORM_COMPOSE_CONFIG"
+    )
+    document = json.loads(os.environ[variable])
+    for service in document.get("services", {}).values():
+        for mount in service.get("volumes", []):
+            if mount.get("source") == "/data/course":
+                mount["source"] = os.environ.get("COURSE_ROOT", "/data/course")
+            elif mount.get("source") == "/data/result":
+                mount["source"] = os.environ.get("RESULT_ROOT", "/data/result")
+    print(json.dumps(document))
+    raise SystemExit(int(os.environ.get("COMPOSE_CONFIG_EXIT", "0")))
+if args[:1] == ["compose"] and "exec" in args:
+    if "postgres" in args and "psql" in args:
+        command = args[-1]
+        if "col_description" in command:
+            print(os.environ.get("DB_COLUMNS_OUTPUT", ""), end="")
+        elif "pg_indexes" in command:
+            print(os.environ.get("DB_INDEXES_OUTPUT", ""), end="")
+        elif "obj_description" in command:
+            print(os.environ.get("DB_TABLES_OUTPUT", ""), end="")
+        else:
+            raise SystemExit(65)
+        raise SystemExit(int(os.environ.get("PSQL_EXIT", "0")))
+    if "kafka" in args and any(argument.endswith("/kafka-topics.sh") for argument in args):
+        print(os.environ.get("KAFKA_TOPICS_OUTPUT", ""))
+        raise SystemExit(int(os.environ.get("KAFKA_TOPICS_EXIT", "0")))
+if args[:1] == ["compose"] and "ps" in args:
+    if os.environ.get("COMPOSE_PS_EXIT", "0") != "0":
+        raise SystemExit(int(os.environ["COMPOSE_PS_EXIT"]))
+    service_ids = json.loads(os.environ.get("OPERATOR_SERVICE_IDS", "{}"))
+    quiet_index = args.index("-q")
+    for service in args[quiet_index + 1:]:
+        container_id = service_ids.get(service)
+        if container_id:
+            print(container_id)
+    raise SystemExit(0)
 if args[:1] == ["run"]:
     print(os.environ.get("GPU_OUTPUT", ""))
     raise SystemExit(int(os.environ.get("GPU_RUN_EXIT", "0")))
@@ -115,6 +534,18 @@ if args == ["ps", "-aq"]:
             raise SystemExit(70)
     print(os.environ.get("DOCKER_PS_IDS", ""))
     raise SystemExit(int(os.environ.get("DOCKER_PS_EXIT", "0")))
+if args[:1] == ["inspect"] and len(args) >= 2:
+    operator_fixtures = json.loads(os.environ.get("OPERATOR_INSPECT_FIXTURES", "{}"))
+    if all(container_id in operator_fixtures for container_id in args[1:]):
+        records = [operator_fixtures[container_id] for container_id in args[1:]]
+        for record in records:
+            for mount in record.get("Mounts", []):
+                if mount.get("Source") == "/data/course":
+                    mount["Source"] = os.environ.get("COURSE_ROOT", "/data/course")
+                elif mount.get("Source") == "/data/result":
+                    mount["Source"] = os.environ.get("RESULT_ROOT", "/data/result")
+        print(json.dumps(records))
+        raise SystemExit(int(os.environ.get("OPERATOR_INSPECT_EXIT", "0")))
 if args[:1] == ["inspect"] and len(args) == 2:
     if args[1] == os.environ.get("BLOCK_INSPECT_ID"):
         entered = Path(os.environ["INSPECT_ENTERED_PATH"])
@@ -403,6 +834,37 @@ def fake_bin(tmp_path: Path) -> Path:
     return path
 
 
+@pytest.fixture
+def readiness_server() -> Any:
+    state: dict[str, tuple[int, Any]] = {
+        "/control": (200, {"status": "ready"}),
+        "/orchestrator": (200, {"status": "ready"}),
+    }
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            status, payload = state.get(self.path, (404, {"status": "missing"}))
+            body = json.dumps(payload).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: Any) -> None:
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", state
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_preflight_accepts_exactly_three_container_visible_gpus(
     fake_bin: Path, tmp_path: Path
 ) -> None:
@@ -423,7 +885,105 @@ def test_preflight_accepts_exactly_three_container_visible_gpus(
 
     assert completed.returncode == 0, completed.stderr
     assert "preflight: PASS" in completed.stdout
-    assert any(command[1] == "run" and "--gpus" in command for command in _commands(environment))
+    assert [
+        "docker",
+        "run",
+        "--rm",
+        "--gpus",
+        "all",
+        "--entrypoint",
+        "nvidia-smi",
+        "nvidia/cuda:12.4.1-base-ubuntu22.04",
+        "--query-gpu=index,uuid",
+        "--format=csv,noheader,nounits",
+    ] in _commands(environment)
+
+
+def test_preflight_explicit_host_stage_matches_the_default(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(tmp_path),
+        RESULT_ROOT=str(tmp_path),
+    )
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "preflight host: PASS" in completed.stdout
+    compose_commands = [command for command in _commands(environment) if "config" in command]
+    assert len(compose_commands) == 2
+    operator_command = next(
+        command
+        for command in compose_commands
+        if any("docker-compose.operators.yml" in argument for argument in command)
+    )
+    assert "--profile" in operator_command
+    assert "*" in operator_command
+    assert operator_command[-3:] == ["config", "--format", "json"]
+
+
+def test_preflight_ignores_runtime_banner_before_three_gpu_records(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    banner = "\n".join(f"arbitrary runtime banner line {index}" for index in range(9))
+    gpu_records = "\n".join(
+        [
+            "0, GPU-11111111-1111-1111-1111-111111111111",
+            "1, GPU-22222222-2222-2222-2222-222222222222",
+            "2, GPU-33333333-3333-3333-3333-333333333333",
+        ]
+    )
+    environment = _base_environment(
+        fake_bin,
+        GPU_OUTPUT=f"{banner}\n{gpu_records}",
+        COURSE_ROOT=str(tmp_path),
+        RESULT_ROOT=str(tmp_path),
+        REQUIRED_PORTS="",
+    )
+
+    completed = _run("preflight", environment=environment)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "preflight: PASS" in completed.stdout
+
+
+@pytest.mark.parametrize(
+    "gpu_output",
+    [
+        "\n".join(
+            [
+                "0, GPU-11111111-1111-1111-1111-111111111111",
+                "0, GPU-22222222-2222-2222-2222-222222222222",
+                "2, GPU-33333333-3333-3333-3333-333333333333",
+            ]
+        ),
+        "\n".join(
+            [
+                "0, GPU-11111111-1111-1111-1111-111111111111",
+                "1, GPU-11111111-1111-1111-1111-111111111111",
+                "2, GPU-33333333-3333-3333-3333-333333333333",
+            ]
+        ),
+    ],
+    ids=["duplicate-index", "duplicate-uuid"],
+)
+def test_preflight_rejects_duplicate_gpu_identity(
+    fake_bin: Path, tmp_path: Path, gpu_output: str
+) -> None:
+    environment = _base_environment(
+        fake_bin,
+        GPU_OUTPUT=gpu_output,
+        COURSE_ROOT=str(tmp_path),
+        RESULT_ROOT=str(tmp_path),
+        REQUIRED_PORTS="",
+    )
+
+    completed = _run("preflight", environment=environment)
+
+    assert completed.returncode != 0
+    assert "unique" in completed.stderr
 
 
 def test_preflight_stops_before_docker_when_root_disk_is_below_threshold(
@@ -469,7 +1029,27 @@ def test_preflight_rejects_unavailable_container_prerequisites(
     assert message in completed.stderr
 
 
-@pytest.mark.parametrize("gpu_output", ["0\n1", "0\n1\n2\n3"])
+@pytest.mark.parametrize(
+    "gpu_output",
+    [
+        "\n".join(f"{index}, {GPU_UUIDS[index]}" for index in range(2)),
+        "\n".join(
+            [
+                *(f"{index}, {GPU_UUIDS[index]}" for index in range(3)),
+                "3, GPU-44444444-4444-4444-4444-444444444444",
+            ]
+        ),
+        "nine lines of output\nwithout a valid GPU record",
+        "\n".join(
+            [
+                f"0, {GPU_UUIDS[0]}",
+                f"1, {GPU_UUIDS[1]}",
+                "2, GPU-not-a-uuid",
+            ]
+        ),
+    ],
+    ids=["two", "four", "no-valid-records", "malformed-uuid"],
+)
 def test_preflight_rejects_any_gpu_count_other_than_three(
     fake_bin: Path, tmp_path: Path, gpu_output: str
 ) -> None:
@@ -485,6 +1065,166 @@ def test_preflight_rejects_any_gpu_count_other_than_three(
 
     assert completed.returncode != 0
     assert "exactly 3 GPUs" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("missing-service", "24"),
+        ("mismatched-instance-id", "instance ID"),
+        ("gpu-profile", "GPU"),
+        ("gpu-environment", "GPU"),
+        ("gpu-reservation", "GPU"),
+        ("cpu-environment", "CPU"),
+        ("cpu-reservation", "CPU"),
+        ("result-not-bind", "/data/result"),
+        ("result-read-only", "/data/result"),
+    ],
+)
+def test_preflight_rejects_invalid_authoritative_operator_compose(
+    fake_bin: Path, tmp_path: Path, mutation: str, message: str
+) -> None:
+    document = _operator_compose_config()
+    services = document["services"]
+    gpu_service = services["asr-offline-gpu0"]
+    cpu_service = services["ppt-slice-cpu0"]
+    if mutation == "missing-service":
+        del services["asr-offline-gpu0"]
+    elif mutation == "mismatched-instance-id":
+        gpu_service["environment"]["PLATFORM_INSTANCE_ID"] = "asr-offline-gpu1"
+    elif mutation == "gpu-profile":
+        gpu_service["profiles"] = ["gpu1"]
+    elif mutation == "gpu-environment":
+        gpu_service["environment"]["NVIDIA_VISIBLE_DEVICES"] = "1"
+    elif mutation == "gpu-reservation":
+        gpu_service["deploy"]["resources"]["reservations"]["devices"][0][
+            "device_ids"
+        ] = ["1"]
+    elif mutation == "cpu-environment":
+        cpu_service["environment"]["PLATFORM_GPU_ID"] = "0"
+    elif mutation == "cpu-reservation":
+        cpu_service["deploy"] = {
+            "resources": {
+                "reservations": {
+                    "devices": [
+                        {
+                            "driver": "nvidia",
+                            "device_ids": ["0"],
+                            "capabilities": ["gpu"],
+                        }
+                    ]
+                }
+            }
+        }
+    elif mutation == "result-not-bind":
+        gpu_service["volumes"][1]["type"] = "volume"
+    elif mutation == "result-read-only":
+        gpu_service["volumes"][1]["read_only"] = True
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(tmp_path),
+        RESULT_ROOT=str(tmp_path),
+        OPERATOR_COMPOSE_CONFIG=json.dumps(document),
+    )
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode != 0
+    assert message in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("config_variable", "service", "port"),
+    [
+        ("PLATFORM_COMPOSE_CONFIG", "control-service", "18100"),
+        ("OPERATOR_COMPOSE_CONFIG", "asr-offline-gpu0", "20000"),
+    ],
+)
+def test_preflight_derives_occupied_ports_from_both_rendered_compose_documents(
+    fake_bin: Path,
+    tmp_path: Path,
+    config_variable: str,
+    service: str,
+    port: str,
+) -> None:
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(tmp_path),
+        RESULT_ROOT=str(tmp_path),
+        REQUIRED_PORTS="",
+        SS_OUTPUT=f"LISTEN 0 128 0.0.0.0:{port} 0.0.0.0:*\n",
+    )
+    document = json.loads(environment[config_variable])
+    assert document["services"][service]["ports"][0]["published"] == port
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode != 0
+    assert port in completed.stderr
+    assert "unauthorized" in completed.stderr
+
+
+def test_preflight_accepts_an_exactly_authorized_compose_derived_port(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(tmp_path),
+        RESULT_ROOT=str(tmp_path),
+        REQUIRED_PORTS="",
+        SS_OUTPUT="LISTEN 0 128 0.0.0.0:18100 0.0.0.0:*\n",
+        AUTHORIZED_OCCUPIED_PORTS="18100",
+    )
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize(
+    "service_name",
+    ["control-service", "orchestrator-service", "vision-orchestrator-service"],
+)
+def test_preflight_requires_each_shared_platform_service_to_bind_result_root(
+    fake_bin: Path, tmp_path: Path, service_name: str
+) -> None:
+    document = _platform_compose_config()
+    document["services"][service_name]["volumes"] = [
+        mount
+        for mount in document["services"][service_name]["volumes"]
+        if mount["target"] != "/data/result"
+    ]
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(tmp_path),
+        RESULT_ROOT=str(tmp_path),
+        PLATFORM_COMPOSE_CONFIG=json.dumps(document),
+    )
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode != 0
+    assert service_name in completed.stderr
+    assert "/data/result" in completed.stderr
+
+
+def test_preflight_rejects_duplicate_published_ports_across_compose_documents(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    document = _operator_compose_config()
+    document["services"]["asr-offline-gpu0"]["ports"][0]["published"] = "18100"
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(tmp_path),
+        RESULT_ROOT=str(tmp_path),
+        OPERATOR_COMPOSE_CONFIG=json.dumps(document),
+    )
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode != 0
+    assert "duplicate published port" in completed.stderr
+    assert "18100" in completed.stderr
 
 
 @pytest.mark.parametrize("directory_name", ["course", "result"])
@@ -615,10 +1355,469 @@ def test_preflight_probes_required_directories_with_real_fsynced_io() -> None:
     source = (SCRIPTS / "preflight").read_text(encoding="utf-8")
 
     assert "PREFLIGHT_WRITABLE_CHECK_BIN" not in source
+    assert "REQUIRED_PORTS" not in source
     assert "os.open" in source
     assert "O_EXCL" in source
     assert "os.fsync" in source
     assert "os.unlink" in source
+
+
+def test_preflight_runtime_checks_readiness_schema_indexes_and_topics_read_only(
+    fake_bin: Path, readiness_server: Any
+) -> None:
+    base_url, _ = readiness_server
+    environment = _base_environment(
+        fake_bin,
+        CONTROL_READINESS_URL=f"{base_url}/control",
+        ORCHESTRATOR_READINESS_URL=f"{base_url}/orchestrator",
+    )
+
+    completed = _run("preflight", "runtime", environment=environment)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "preflight runtime: PASS" in completed.stdout
+    commands = _commands(environment)
+    psql_commands = [command for command in commands if "psql" in command]
+    assert len(psql_commands) == 3
+    assert all("SELECT" in command[-1] for command in psql_commands)
+    assert all(
+        "PGOPTIONS=-c default_transaction_read_only=on" in command
+        for command in psql_commands
+    )
+    kafka_commands = [
+        command
+        for command in commands
+        if any(argument.endswith("/kafka-topics.sh") for argument in command)
+    ]
+    assert len(kafka_commands) == 1
+    assert "--describe" in kafka_commands[0]
+    serialized = "\n".join(" ".join(command) for command in commands).lower()
+    for forbidden in (" create ", " alter ", " drop ", "--create"):
+        assert forbidden not in f" {serialized} "
+
+
+@pytest.mark.parametrize("service", ["control", "orchestrator"])
+def test_preflight_runtime_rejects_unready_required_services_before_catalog_queries(
+    fake_bin: Path, readiness_server: Any, service: str
+) -> None:
+    base_url, state = readiness_server
+    state[f"/{service}"] = (503, {"status": "not_ready"})
+    environment = _base_environment(
+        fake_bin,
+        CONTROL_READINESS_URL=f"{base_url}/control",
+        ORCHESTRATOR_READINESS_URL=f"{base_url}/orchestrator",
+    )
+
+    completed = _run("preflight", "runtime", environment=environment)
+
+    assert completed.returncode != 0
+    assert "readiness" in completed.stderr
+    assert not any("psql" in command for command in _commands(environment))
+
+
+@pytest.mark.parametrize(
+    ("environment_key", "rows", "message"),
+    [
+        ("DB_TABLES_OUTPUT", _database_table_rows()[1:], "table"),
+        (
+            "DB_TABLES_OUTPUT",
+            [(table, "English only") for table in EXPECTED_DATABASE_COLUMNS],
+            "Chinese comment",
+        ),
+        ("DB_COLUMNS_OUTPUT", _database_column_rows()[1:], "column"),
+        (
+            "DB_COLUMNS_OUTPUT",
+            [
+                (table, column, "English only")
+                for table, columns in EXPECTED_DATABASE_COLUMNS.items()
+                for column in columns
+            ],
+            "Chinese comment",
+        ),
+        ("DB_INDEXES_OUTPUT", _database_index_rows()[1:], "index"),
+    ],
+    ids=[
+        "missing-table",
+        "table-comment",
+        "missing-column",
+        "column-comment",
+        "missing-index",
+    ],
+)
+def test_preflight_runtime_rejects_incomplete_database_catalog(
+    fake_bin: Path,
+    readiness_server: Any,
+    environment_key: str,
+    rows: list[tuple[str, ...]],
+    message: str,
+) -> None:
+    base_url, _ = readiness_server
+    environment = _base_environment(
+        fake_bin,
+        CONTROL_READINESS_URL=f"{base_url}/control",
+        ORCHESTRATOR_READINESS_URL=f"{base_url}/orchestrator",
+        **{environment_key: _csv_text(rows)},
+    )
+
+    completed = _run("preflight", "runtime", environment=environment)
+
+    assert completed.returncode != 0
+    assert message in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("topic_output", "message"),
+    [
+        (
+            _kafka_topic_output(
+                topics=("algorithm.course.commands", "algorithm.visual.commands")
+            ),
+            "topic",
+        ),
+        (_kafka_topic_output(partitions=2), "partition"),
+        (_kafka_topic_output(replicas=2), "replication"),
+    ],
+    ids=["missing-topic", "partitions", "replicas"],
+)
+def test_preflight_runtime_rejects_invalid_kafka_topic_metadata(
+    fake_bin: Path,
+    readiness_server: Any,
+    topic_output: str,
+    message: str,
+) -> None:
+    base_url, _ = readiness_server
+    environment = _base_environment(
+        fake_bin,
+        CONTROL_READINESS_URL=f"{base_url}/control",
+        ORCHESTRATOR_READINESS_URL=f"{base_url}/orchestrator",
+        KAFKA_TOPICS_OUTPUT=topic_output,
+    )
+
+    completed = _run("preflight", "runtime", environment=environment)
+
+    assert completed.returncode != 0
+    assert message in completed.stderr
+
+
+def test_preflight_runtime_rejects_noncanonical_topics_even_when_broker_matches(
+    fake_bin: Path, tmp_path: Path, readiness_server: Any
+) -> None:
+    config = tmp_path / "orchestrator.toml"
+    config.write_text(
+        """[kafka]
+course_command_topic = "custom.course.commands"
+visual_command_topic = "custom.visual.commands"
+visual_event_topic = "custom.visual.events"
+topic_partitions = 1
+topic_replication_factor = 1
+""",
+        encoding="utf-8",
+    )
+    base_url, _ = readiness_server
+    environment = _base_environment(
+        fake_bin,
+        CONTROL_READINESS_URL=f"{base_url}/control",
+        ORCHESTRATOR_READINESS_URL=f"{base_url}/orchestrator",
+        ORCHESTRATOR_CONFIG_PATH=str(config),
+        KAFKA_TOPICS_OUTPUT=_kafka_topic_output(
+            topics=(
+                "custom.course.commands",
+                "custom.visual.commands",
+                "custom.visual.events",
+            )
+        ),
+    )
+
+    completed = _run("preflight", "runtime", environment=environment)
+
+    assert completed.returncode != 0
+    assert "canonical" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"PSQL_EXIT": "1"}, "PostgreSQL"),
+        ({"KAFKA_TOPICS_EXIT": "1"}, "Kafka"),
+    ],
+)
+def test_preflight_runtime_rejects_failed_read_only_inspection_commands(
+    fake_bin: Path,
+    readiness_server: Any,
+    overrides: dict[str, str],
+    message: str,
+) -> None:
+    base_url, _ = readiness_server
+    environment = _base_environment(
+        fake_bin,
+        CONTROL_READINESS_URL=f"{base_url}/control",
+        ORCHESTRATOR_READINESS_URL=f"{base_url}/orchestrator",
+        **overrides,
+    )
+
+    completed = _run("preflight", "runtime", environment=environment)
+
+    assert completed.returncode != 0
+    assert message in completed.stderr
+
+
+def _operator_preflight_arguments(
+    tmp_path: Path, control_url: str, *selection: str, timeout: str = "1"
+) -> tuple[str, ...]:
+    return (
+        "operators",
+        *selection,
+        "--control-url",
+        control_url,
+        "--release-tag",
+        "v1.0_260812",
+        "--git-sha",
+        "a" * 40,
+        "--reports-root",
+        str(tmp_path / "reports"),
+        "--timeout-seconds",
+        timeout,
+        "--poll-seconds",
+        "0.01",
+        "--request-timeout-seconds",
+        "0.2",
+    )
+
+
+def test_preflight_operators_full_checks_running_topology_and_registration(
+    fake_bin: Path, tmp_path: Path, readiness_server: Any
+) -> None:
+    base_url, state = readiness_server
+    instances = _registered_operator_instances()
+    state.update(_registration_responses(instances))
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(tmp_path / "course"),
+        RESULT_ROOT=str(tmp_path / "result"),
+    )
+
+    completed = _run(
+        "preflight",
+        *_operator_preflight_arguments(tmp_path, base_url, "--full"),
+        environment=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "preflight operators: PASS" in completed.stdout
+    assert "verify-gpu-instance" in completed.stdout
+    assert "smoke" in completed.stdout
+    commands = _commands(environment)
+    ps_command = next(command for command in commands if "ps" in command)
+    assert "--no-trunc" in ps_command
+    assert len(ps_command[ps_command.index("-q") + 1 :]) == 24
+    inspect_command = next(command for command in commands if command[1] == "inspect")
+    assert len(inspect_command[2:]) == 24
+    assert not any(
+        action in command[1:]
+        for command in commands
+        for action in ("up", "start", "run", "exec")
+    )
+
+
+def test_preflight_operators_profile_checks_only_selected_running_containers(
+    fake_bin: Path, tmp_path: Path, readiness_server: Any
+) -> None:
+    base_url, state = readiness_server
+    instances = [
+        instance
+        for instance in _registered_operator_instances()
+        if instance["instance_id"].endswith("gpu0")
+    ]
+    state.update(_registration_responses(instances))
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(tmp_path / "course"),
+        RESULT_ROOT=str(tmp_path / "result"),
+    )
+
+    completed = _run(
+        "preflight",
+        *_operator_preflight_arguments(tmp_path, base_url, "--profile", "gpu0"),
+        environment=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    ps_command = next(command for command in _commands(environment) if "ps" in command)
+    selected = ps_command[ps_command.index("-q") + 1 :]
+    assert len(selected) == 6
+    assert all(service.endswith("gpu0") for service in selected)
+    report = (
+        tmp_path
+        / "reports"
+        / "milestone-2b"
+        / "releases"
+        / "v1.0_260812"
+        / ("a" * 40)
+        / "registration"
+        / "operator-registration-profile-gpu0.json"
+    )
+    assert json.loads(report.read_text(encoding="utf-8"))["summary"] == {
+        "expected": 6,
+        "observed": 6,
+        "valid": 6,
+    }
+
+
+def test_preflight_operators_rejects_an_unknown_profile_before_container_inspection(
+    fake_bin: Path, tmp_path: Path, readiness_server: Any
+) -> None:
+    base_url, _ = readiness_server
+    environment = _base_environment(fake_bin)
+
+    completed = _run(
+        "preflight",
+        *_operator_preflight_arguments(tmp_path, base_url, "--profile", "gpu9"),
+        environment=environment,
+    )
+
+    assert completed.returncode != 0
+    assert "profile" in completed.stderr
+    assert not any(command[1] == "inspect" for command in _commands(environment))
+
+
+@pytest.mark.parametrize("selection", ["--profile=gpu0", "--instance=ocr-gpu0"])
+def test_preflight_operators_rejects_ambiguous_selection_syntax_before_inspection(
+    fake_bin: Path, tmp_path: Path, readiness_server: Any, selection: str
+) -> None:
+    base_url, _ = readiness_server
+    environment = _base_environment(fake_bin)
+
+    completed = _run(
+        "preflight",
+        *_operator_preflight_arguments(tmp_path, base_url, selection, timeout="0.05"),
+        environment=environment,
+    )
+
+    assert completed.returncode != 0
+    assert "full/profile selection" in completed.stderr
+    assert not any(command[1] == "inspect" for command in _commands(environment))
+
+
+def test_preflight_operators_rejects_a_missing_selected_running_container(
+    fake_bin: Path, tmp_path: Path, readiness_server: Any
+) -> None:
+    base_url, _ = readiness_server
+    environment = _base_environment(fake_bin)
+    service_ids = json.loads(environment["OPERATOR_SERVICE_IDS"])
+    del service_ids["asr-offline-gpu0"]
+    environment["OPERATOR_SERVICE_IDS"] = json.dumps(service_ids)
+
+    completed = _run(
+        "preflight",
+        *_operator_preflight_arguments(
+            tmp_path, base_url, "--profile", "gpu0", timeout="0.05"
+        ),
+        environment=environment,
+    )
+
+    assert completed.returncode != 0
+    assert "running container" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("profile", "instance_id", "mutation", "message"),
+    [
+        ("gpu0", "asr-offline-gpu0", "stopped", "running"),
+        ("gpu0", "asr-offline-gpu0", "instance-id", "instance ID"),
+        ("gpu0", "asr-offline-gpu0", "gpu-environment", "GPU"),
+        ("gpu0", "asr-offline-gpu0", "gpu-reservation", "GPU"),
+        ("gpu0", "asr-offline-gpu0", "course-mount", "/data/course"),
+        ("gpu0", "asr-offline-gpu0", "result-mount", "/data/result"),
+        ("cpu", "ppt-slice-cpu0", "cpu-environment", "CPU"),
+        ("cpu", "ppt-slice-cpu0", "cpu-reservation", "CPU"),
+    ],
+)
+def test_preflight_operators_rejects_runtime_drift_from_authoritative_compose(
+    fake_bin: Path,
+    tmp_path: Path,
+    readiness_server: Any,
+    profile: str,
+    instance_id: str,
+    mutation: str,
+    message: str,
+) -> None:
+    base_url, _ = readiness_server
+    environment = _base_environment(fake_bin)
+    service_ids = json.loads(environment["OPERATOR_SERVICE_IDS"])
+    inspections = json.loads(environment["OPERATOR_INSPECT_FIXTURES"])
+    record = inspections[service_ids[instance_id]]
+    if mutation == "stopped":
+        record["State"] = {"Running": False, "Status": "exited"}
+    elif mutation == "instance-id":
+        record["Config"]["Env"] = [
+            "PLATFORM_INSTANCE_ID=wrong" if value.startswith("PLATFORM_INSTANCE_ID=") else value
+            for value in record["Config"]["Env"]
+        ]
+    elif mutation == "gpu-environment":
+        record["Config"]["Env"] = [
+            "NVIDIA_VISIBLE_DEVICES=1"
+            if value.startswith("NVIDIA_VISIBLE_DEVICES=")
+            else value
+            for value in record["Config"]["Env"]
+        ]
+    elif mutation == "gpu-reservation":
+        record["HostConfig"]["DeviceRequests"][0]["DeviceIDs"] = ["1"]
+    elif mutation == "course-mount":
+        record["Mounts"][0]["Type"] = "volume"
+    elif mutation == "result-mount":
+        record["Mounts"][1]["RW"] = False
+    elif mutation == "cpu-environment":
+        record["Config"]["Env"].append("PLATFORM_GPU_ID=0")
+    elif mutation == "cpu-reservation":
+        record["HostConfig"]["DeviceRequests"] = [
+            {
+                "Driver": "nvidia",
+                "Count": 0,
+                "DeviceIDs": ["0"],
+                "Capabilities": [["gpu"]],
+            }
+        ]
+    environment["OPERATOR_INSPECT_FIXTURES"] = json.dumps(inspections)
+
+    completed = _run(
+        "preflight",
+        *_operator_preflight_arguments(
+            tmp_path, base_url, "--profile", profile, timeout="0.05"
+        ),
+        environment=environment,
+    )
+
+    assert completed.returncode != 0
+    assert message in completed.stderr
+
+
+def test_preflight_operators_propagates_registration_or_first_heartbeat_failure(
+    fake_bin: Path, tmp_path: Path, readiness_server: Any
+) -> None:
+    base_url, state = readiness_server
+    instances = [
+        instance
+        for instance in _registered_operator_instances()
+        if instance["instance_id"].endswith("gpu0")
+    ]
+    state["/ops/operator-instances"] = (200, instances)
+    for instance in instances:
+        state[f"/ops/operator-instances/{instance['instance_id']}/events?limit=100"] = (
+            200,
+            [{"event_type": "REGISTERED"}],
+        )
+    environment = _base_environment(fake_bin)
+
+    completed = _run(
+        "preflight",
+        *_operator_preflight_arguments(
+            tmp_path, base_url, "--profile", "gpu0", timeout="0.08"
+        ),
+        environment=environment,
+    )
+
+    assert completed.returncode != 0
+    assert "heartbeat" in completed.stderr.lower() or "\u5fc3\u8df3" in completed.stderr
 
 
 def test_snapshot_writes_a_complete_read_only_jsonl_record(
