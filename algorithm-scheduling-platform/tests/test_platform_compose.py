@@ -2,6 +2,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -30,7 +31,14 @@ OFFLINE_INSTALL_RUN = (
     "algorithm-scheduling-platform"
 )
 FFMPEG_INSTALL_RUN = (
-    "RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg "
+    'RUN sed -i -e "s|http://deb.debian.org/debian-security|'
+    '${DEBIAN_SECURITY_MIRROR}|g" '
+    '-e "s|http://deb.debian.org/debian|${DEBIAN_MIRROR}|g" '
+    "/etc/apt/sources.list.d/debian.sources "
+    "&& apt-get -o Acquire::Retries=10 -o Acquire::http::Timeout=300 "
+    "-o Acquire::https::Timeout=300 update "
+    "&& apt-get -o Acquire::Retries=10 -o Acquire::http::Timeout=300 "
+    "-o Acquire::https::Timeout=300 install -y --no-install-recommends ffmpeg "
     "&& rm -rf /var/lib/apt/lists/*"
 )
 
@@ -51,7 +59,7 @@ def _render_compose(compose_path: Path) -> dict[str, object]:
         capture_output=True,
         text=True,
     )
-    return json.loads(result.stdout)
+    return cast(dict[str, object], json.loads(result.stdout))
 
 
 def test_platform_compose_closes_the_four_service_single_machine_topology() -> None:
@@ -77,7 +85,7 @@ def test_platform_include_renders_one_infrastructure_project_and_volume_set() ->
 
     assert rendered["name"] == "algorithm-scheduling-platform"
     assert rendered["name"] == infrastructure["name"]
-    assert set(rendered["services"]) == {
+    assert set(cast(dict[str, object], rendered["services"])) == {
         "postgres",
         "kafka",
         "redis",
@@ -93,8 +101,8 @@ def test_platform_include_renders_one_infrastructure_project_and_volume_set() ->
         "redis_data",
         "mongodb_data",
     }
-    assert set(rendered["volumes"]) == expected_volumes
-    assert set(infrastructure["volumes"]) == expected_volumes
+    assert set(cast(dict[str, object], rendered["volumes"])) == expected_volumes
+    assert set(cast(dict[str, object], infrastructure["volumes"])) == expected_volumes
 
 
 def test_platform_compose_uses_container_addresses_and_shared_storage() -> None:
@@ -191,7 +199,10 @@ def _assert_platform_dockerfile_contract(
         "COPY",
         "RUN",
     ], service
-    expected_runtime_names = ["FROM", "ENV", "WORKDIR", "RUN"]
+    expected_runtime_names = ["FROM"]
+    if service == "orchestrator_service":
+        expected_runtime_names.extend(["ARG", "ARG"])
+    expected_runtime_names.extend(["ENV", "WORKDIR", "RUN"])
     if service == "orchestrator_service":
         expected_runtime_names.append("RUN")
     expected_runtime_names.extend(["COPY", "COPY", "EXPOSE", "CMD"])
@@ -212,6 +223,13 @@ def _assert_platform_dockerfile_contract(
     ], service
     assert _instructions_named(builder, "RUN") == [WHEEL_BUILD_RUN], service
 
+    expected_runtime_args: list[str] = []
+    if service == "orchestrator_service":
+        expected_runtime_args = [
+            "ARG DEBIAN_MIRROR=https://mirrors.aliyun.com/debian",
+            "ARG DEBIAN_SECURITY_MIRROR=https://mirrors.aliyun.com/debian-security",
+        ]
+    assert _instructions_named(runtime, "ARG") == expected_runtime_args, service
     assert _instructions_named(runtime, "ENV") == [
         "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1"
     ], service
