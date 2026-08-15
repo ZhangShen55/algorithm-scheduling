@@ -1,38 +1,69 @@
-# OCR v6 Linux Docker 部署
+# OCR v6 Linux Docker 部署手册
 
-本文面向已经取得 `ocr_v6_amd.tar` 的 Linux 运维人员。最终交付镜像为
-`linux/amd64` Cython 保护版本 `ocr:v6_amd`。正式 `config.toml` 不在镜像中，必须由
-宿主机只读挂载。Cython 用于提高源码阅读和逆向门槛，不是密码学加密。
+本文面向拿到离线镜像包的 Linux 部署和运维人员。正式交付物为：
 
-## 1. 检查环境
+- `ocr_v6_amd.tar`：`linux/amd64`、Cython 保护版镜像；
+- `ocr_v6_amd.tar.sha256`：离线包摘要；
+- `config.toml.example`：宿主机配置示例；
+- `smoke_test.py`、`load_test.py` 和测试图片：验收工具。
+
+镜像标签固定为 `ocr:v6_amd`。正式配置不在镜像内，必须从宿主机只读挂载。该平台镜像
+还要求每个 OCR 容器传入 `REQUIRE_GPU=true`，用于在启动阶段阻止未映射 GPU 的误部署。
+
+## 1. 加载镜像
+
+在交付目录执行的第一条命令是：
+
+```bash
+docker load -i ocr_v6_amd.tar
+```
+
+随后校验离线包和镜像。交付摘要应为
+`8201d9234eeac95cc993f76d74890f0dbbce4910a018e2db6ba0472790822cd9`：
+
+```bash
+sha256sum -c ocr_v6_amd.tar.sha256
+docker image inspect ocr:v6_amd --format '{{.Id}} {{.Architecture}} {{.Os}}'
+```
+
+正确结果：
+
+```text
+ocr_v6_amd.tar: OK
+sha256:bba69f2ab3f9521c3d5dde8d3f3803a52f673925d3204552738347c8ff3d5abe amd64 linux
+```
+
+摘要、架构或镜像 ID 不一致时停止部署并重新取得交付包，不要继续启动容器。
+
+## 2. 检查 GPU 环境
 
 ```bash
 uname -m
 docker version --format '{{.Server.Version}}'
 nvidia-smi -L
-docker run --rm --gpus '"device=2"' nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi -L
+docker run --rm --gpus '"device=0"' nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi -L
 ```
 
-主机必须为 `x86_64`，Docker、NVIDIA 驱动和 NVIDIA Container Toolkit 必须可用。
-本文以物理 GPU 2（RTX 3090）为例。
-
-## 2. 校验并加载离线镜像
-
-交付目录至少包含 `ocr_v6_amd.tar`、`ocr_v6_amd.tar.sha256` 和配置示例。执行：
+必须满足：主机为 `x86_64`，Docker、NVIDIA 驱动和 NVIDIA Container Toolkit 均可用。
+记录准备使用的物理 GPU 编号，确认显存没有被未知进程占满：
 
 ```bash
-cd /opt/ocr-v6
-sha256sum -c ocr_v6_amd.tar.sha256
-docker load -i ocr_v6_amd.tar
-docker image inspect ocr:v6_amd --format '{{.Id}} {{.Architecture}} {{.Os}}'
+nvidia-smi --query-gpu=index,name,memory.total,memory.used,utilization.gpu --format=csv
+nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv
 ```
 
-校验必须输出 `ocr_v6_amd.tar: OK`，镜像架构必须为 `amd64 linux`。摘要不一致时停止
-加载并重新传输 tar 包。
+## 3. 创建配置
 
-## 3. 创建宿主机配置
+创建部署目录并从交付示例生成正式配置：
 
-在 `/opt/ocr-v6/config.toml` 写入：
+```bash
+mkdir -p /opt/ocr-v6
+cp config.toml.example /opt/ocr-v6/config.toml
+chmod 640 /opt/ocr-v6/config.toml
+```
+
+建议先使用以下完整配置。每个容器只映射一张物理 GPU，因此容器内统一使用
+`device = "cuda:0"`，与宿主机物理 GPU 编号无关。
 
 ```toml
 [application]
@@ -45,18 +76,13 @@ port = 8866
 workers = 1
 
 [ocr]
-# 物理 GPU 2 单独映射后，在容器中编号为 0
 device = "cuda:0"
-# 以下两个字段仅 CPU 模式生效
 cpu_threads = 8
 enable_mkldnn = false
 detection_model_dir = "models/PP-OCRv6_medium_det"
 recognition_model_dir = "models/PP-OCRv6_medium_rec"
-# RTX 3090 实测推荐值
 recognition_batch_size = 4
-# 当前镜像未安装 UltraInfer
 enable_hpi = false
-# 单引擎串行推理，并发请求在入口排队
 max_concurrency = 1
 image_max_bytes = 20971520
 
@@ -80,24 +106,42 @@ max_size_mb = 100
 backup_count = 3
 ```
 
-关键参数：
+### 参数决策表
 
-| 参数 | 说明 |
-| --- | --- |
-| `device` | `cpu`、`cuda:<容器逻辑编号>` 或已适配环境中的 `npu:<容器逻辑编号>` |
-| `recognition_batch_size` | 单次送入识别模型的文本区域数；增大可能提高吞吐，也会增加显存 |
-| `enable_hpi` | Paddle 高性能推理开关；本镜像保持 `false` |
-| `max_concurrency` | 同时进入推理流程的请求数；单引擎部署保持 `1` |
-| `limit_side_len` | 检测前缩放边长上限；越大越利于小字，也更耗时 |
-| `threshold`、`box_threshold` | 文本像素候选阈值和文本框置信度阈值 |
-| `unclip_ratio` | 文本框向外扩张比例 |
-| `formula.enabled` | 公式识别服务端总开关 |
-| 公式 `recognition_batch_size` | 公式识别批量，本次固定为 `1` |
+| 参数 | 部署决策 | 推荐值与说明 |
+| --- | --- | --- |
+| `application.name` | 按需修改 | 用于服务标识；没有平台命名要求时保持默认 |
+| `application.version` | 保持默认 | 当前镜像为 `PP-OCRv6` |
+| `server.host` | 保持默认 | 容器内必须监听 `0.0.0.0` |
+| `server.port` | 保持默认 | 容器内固定 `8866`，宿主机端口由 `docker run` 决定 |
+| `server.workers` | 保持默认 | 固定 `1`，多实例通过多个容器实现 |
+| `ocr.device` | 必须修改/确认 | GPU 容器只映射一张卡时必须为 `cuda:0` |
+| `cpu_threads`、`enable_mkldnn` | 保持默认 | 只在 `device = "cpu"` 时生效，GPU 部署忽略 |
+| 两个 OCR 模型目录 | 保持默认 | 模型已在镜像内，禁止改成宿主机随意路径 |
+| OCR `recognition_batch_size` | 保持默认 | RTX 3090 已验证推荐 `4`；其他显卡先用 `4` 再压测 |
+| `enable_hpi` | 保持默认 | 必须为 `false`，当前镜像没有 UltraInfer |
+| `max_concurrency` | 保持默认 | 必须为 `1`；单引擎串行推理，入口并发会排队 |
+| `image_max_bytes` | 按需修改 | 默认 20 MiB；增大时同步调整 Nginx 请求体上限 |
+| `limit_side_len` | 按需修改 | 默认 `960`；增大可能提高小字召回，也会增加耗时和显存 |
+| `threshold` | 按需修改 | 默认 `0.3`；降低会增加召回和噪声 |
+| `box_threshold` | 保持默认 | 默认 `0.5`，过滤低置信度文本框 |
+| `unclip_ratio` | 按需修改 | 默认 `1.5`，控制文本框向外扩张比例 |
+| `formula.enabled` | 按需修改 | 默认关闭；只有业务需要公式识别时改为 `true` |
+| 两个公式模型目录 | 保持默认 | 模型已在镜像内 |
+| 公式 `recognition_batch_size` | 保持默认 | 固定 `1`，不套用 OCR batch 值 |
+| `layout_threshold` | 按需修改 | 默认 `0.5`，公式布局区域阈值 |
+| `logging.level` | 按需修改 | 生产推荐 `INFO`，排障时临时改为 `DEBUG` |
+| `logging.directory` | 保持默认 | 容器内为 `/app/logs` |
+| `max_size_mb`、`backup_count` | 保持默认 | 应用日志 100 MiB、保留 3 个；Docker 日志单独轮转 |
 
-## 4. 启动容器
+## 4. 选择部署拓扑
+
+### 4.1 单卡单实例
+
+单卡单实例不需要 Nginx，直接把宿主机 `8866` 映射到容器。以下示例使用宿主机物理
+GPU 2；该卡在容器内变成逻辑 GPU 0，因此配置仍为 `device = "cuda:0"`。
 
 ```bash
-docker rm -f ocr-v6-amd 2>/dev/null || true
 docker run -d \
   --name ocr-v6-amd \
   --restart unless-stopped \
@@ -111,40 +155,204 @@ docker run -d \
   ocr:v6_amd
 ```
 
-`--gpus '"device=2"'` 只暴露物理 GPU 2，因此配置使用逻辑 `cuda:0`。`REQUIRE_GPU=true`
-保留平台的 GPU 启动门禁。查看状态和日志：
+### 4.2 单卡多实例
+
+同一张物理 GPU 可以启动多个 OCR 容器。每个容器只映射一张物理 GPU，配置均使用
+`device = "cuda:0"`。后端只绑定宿主机回环地址，不能直接暴露到外部网络。
+
+以下示例在物理 GPU 0 上启动两个实例：
 
 ```bash
-docker ps --filter name=ocr-v6-amd
-docker logs --tail 200 -f ocr-v6-amd
+docker run -d \
+  --name ocr-v6-gpu0-1 \
+  --restart unless-stopped \
+  --gpus '"device=0"' \
+  -e REQUIRE_GPU=true \
+  -p 127.0.0.1:8867:8866 \
+  -v "/opt/ocr-v6/config.toml:/app/config.toml:ro" \
+  --log-driver json-file --log-opt max-size=100m --log-opt max-file=3 \
+  ocr:v6_amd
+
+docker run -d \
+  --name ocr-v6-gpu0-2 \
+  --restart unless-stopped \
+  --gpus '"device=0"' \
+  -e REQUIRE_GPU=true \
+  -p 127.0.0.1:8868:8866 \
+  -v "/opt/ocr-v6/config.toml:/app/config.toml:ro" \
+  --log-driver json-file --log-opt max-size=100m --log-opt max-file=3 \
+  ocr:v6_amd
 ```
 
-### 启动成功日志
+单卡多实例必须通过第 5 节的 Docker Nginx 提供统一入口。Nginx upstream 中只保留
+`8867` 和 `8868` 两个后端。
 
-容器必须保持 `Up`，日志至少包含：
+### 4.3 多卡多实例
+
+下面以两张物理 GPU、每卡两个实例为例。前两个容器与单卡示例相同，再启动：
+
+```bash
+docker run -d \
+  --name ocr-v6-gpu1-1 \
+  --restart unless-stopped \
+  --gpus '"device=1"' \
+  -e REQUIRE_GPU=true \
+  -p 127.0.0.1:8869:8866 \
+  -v "/opt/ocr-v6/config.toml:/app/config.toml:ro" \
+  --log-driver json-file --log-opt max-size=100m --log-opt max-file=3 \
+  ocr:v6_amd
+
+docker run -d \
+  --name ocr-v6-gpu1-2 \
+  --restart unless-stopped \
+  --gpus '"device=1"' \
+  -e REQUIRE_GPU=true \
+  -p 127.0.0.1:8870:8866 \
+  -v "/opt/ocr-v6/config.toml:/app/config.toml:ro" \
+  --log-driver json-file --log-opt max-size=100m --log-opt max-file=3 \
+  ocr:v6_amd
+```
+
+确认四个后端均为 `Up`，并且每个容器内只看到一张逻辑 GPU 0：
+
+```bash
+docker ps --filter name=ocr-v6-gpu
+docker exec ocr-v6-gpu0-1 nvidia-smi -L
+docker exec ocr-v6-gpu0-2 nvidia-smi -L
+docker exec ocr-v6-gpu1-1 nvidia-smi -L
+docker exec ocr-v6-gpu1-2 nvidia-smi -L
+curl --fail http://127.0.0.1:8867/ocr/getVersion
+curl --fail http://127.0.0.1:8868/ocr/getVersion
+curl --fail http://127.0.0.1:8869/ocr/getVersion
+curl --fail http://127.0.0.1:8870/ocr/getVersion
+```
+
+## 5. 使用 Docker Nginx 提供统一入口
+
+多实例需要 Nginx；单卡单实例不需要。本文验证的 Nginx 镜像为
+`nginx:1.27-alpine`。联网服务器可拉取，离线服务器应由交付方同时提供 Nginx tar 包。
+
+```bash
+docker pull nginx:1.27-alpine
+docker image inspect nginx:1.27-alpine --format '{{.Id}} {{.Architecture}}'
+```
+
+创建 `/opt/ocr-v6/nginx.conf`：
+
+```nginx
+events {
+    worker_connections 1024;
+}
+
+http {
+    log_format upstream_json escape=json
+        '{"time":"$time_iso8601","remote_addr":"$remote_addr",'
+        '"request":"$request","status":$status,'
+        '"upstream_addr":"$upstream_addr","upstream_status":"$upstream_status",'
+        '"request_time":$request_time,'
+        '"upstream_response_time":"$upstream_response_time"}';
+
+    access_log /dev/stdout upstream_json;
+    error_log /dev/stderr warn;
+
+    upstream ocr_backend {
+        least_conn;
+        server 127.0.0.1:8867 max_fails=3 fail_timeout=30s;
+        server 127.0.0.1:8868 max_fails=3 fail_timeout=30s;
+        server 127.0.0.1:8869 max_fails=3 fail_timeout=30s;
+        server 127.0.0.1:8870 max_fails=3 fail_timeout=30s;
+        keepalive 32;
+    }
+
+    server {
+        listen 8866;
+        client_max_body_size 25m;
+
+        location = /nginx-health {
+            access_log off;
+            return 200 "ok\n";
+        }
+
+        location / {
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $host;
+            proxy_connect_timeout 5s;
+            proxy_read_timeout 180s;
+            proxy_send_timeout 180s;
+            proxy_next_upstream error timeout http_502 http_503 http_504;
+            proxy_next_upstream_tries 4;
+            proxy_pass http://ocr_backend;
+        }
+    }
+}
+```
+
+单卡双实例时删除 `8869`、`8870` 两行。先检查配置，再启动 Nginx 容器：
+
+```bash
+docker run --rm \
+  --network host \
+  -v "/opt/ocr-v6/nginx.conf:/etc/nginx/nginx.conf:ro" \
+  nginx:1.27-alpine nginx -t
+
+docker run -d \
+  --name ocr-nginx \
+  --restart unless-stopped \
+  --network host \
+  -v "/opt/ocr-v6/nginx.conf:/etc/nginx/nginx.conf:ro" \
+  --log-driver json-file \
+  --log-opt max-size=100m \
+  --log-opt max-file=3 \
+  nginx:1.27-alpine
+```
+
+`--network host` 让 Nginx 容器访问宿主机回环后端；Nginx 对外监听 `8866`，OCR 后端端口
+仍仅绑定 `127.0.0.1`。生产防火墙只需放行统一入口 `8866`。
+
+检查统一入口与分流日志：
+
+```bash
+curl --fail http://127.0.0.1:8866/nginx-health
+curl --fail http://127.0.0.1:8866/ocr/getVersion
+docker logs --tail 200 ocr-nginx
+```
+
+访问日志中的 `$upstream_addr` 应出现多个后端地址。修改 upstream 后执行无中断重载：
+
+```bash
+docker exec ocr-nginx nginx -t
+docker exec ocr-nginx nginx -s reload
+```
+
+## 6. 验收服务
+
+### 6.1 启动成功判定
+
+每个 OCR 容器必须保持 `Up`，日志包含：
 
 ```text
+Creating model: ('PP-OCRv6_medium_det', '/app/models/PP-OCRv6_medium_det', None)
+Creating model: ('PP-OCRv6_medium_rec', '/app/models/PP-OCRv6_medium_rec', None)
 Application startup complete.
 Uvicorn running on http://0.0.0.0:8866
 ```
 
-RTX 3090 验收时还应看到检测和识别模型初始化日志。
-
-## 5. 验证服务
-
 ```bash
-docker exec ocr-v6-amd nvidia-smi -L
-docker exec ocr-v6-amd python -c 'import paddle; print(paddle.__version__); print(paddle.device.get_device())'
-docker exec ocr-v6-amd sh -c 'cd /app/models && sha256sum -c manifest.sha256'
+docker logs --tail 200 ocr-v6-amd
 curl --fail --show-error http://127.0.0.1:8866/ocr/getVersion
 python3 /opt/ocr-v6/smoke_test.py \
   --base-url http://127.0.0.1:8866 \
   --image /opt/ocr-v6/ocr-test.jpg
 ```
 
-容器内只应列出一张 RTX 3090，编号为 GPU 0；Paddle 设备应为 `gpu:0`。配置中
-`formula.enabled = false` 时，请求 `enable_formula=true` 会在 `formula_results` 返回未启用
-信息。要验证真实公式识别，先将服务端开关设为 `true`，重启后执行：
+多实例时只测试 Nginx 的统一入口，不把回环后端地址交给业务调用方。
+
+### 6.2 公式开关
+
+默认 `formula.enabled = false`。请求传 `enable_formula=true` 时，`formula_results` 返回能力
+未启用信息，但原有 OCR 响应结构不变。确需公式识别时修改为 `true`，逐个重启 OCR 容器，
+再用公式图片验收：
 
 ```bash
 python3 /opt/ocr-v6/smoke_test.py \
@@ -153,338 +361,129 @@ python3 /opt/ocr-v6/smoke_test.py \
   --enable-formula
 ```
 
-检查 Cython 最终镜像不包含核心源码和构建工具：
+公式模型会额外占用显存，启用后必须重新压测并评估每卡实例数。
+
+## 7. 常见失败日志与判断
+
+以下清单覆盖配置文件不存在、GPU 不可用、模型异常、端口占用和 Nginx 后端故障。
+
+| 现象或日志 | 判定 | 处理 |
+| --- | --- | --- |
+| `配置文件不存在：/app/config.toml` | 配置未挂载或路径错误 | 检查宿主机文件和 `docker inspect <容器> --format '{{json .Mounts}}'` |
+| `GPU 设备 cuda:0 不可用` | GPU 映射、驱动或 Toolkit 异常 | 对比宿主机和容器内 `nvidia-smi -L`，检查 `DeviceRequests` |
+| `检测模型目录不存在`、`模型文件摘要不一致` | 镜像或模型损坏 | 停止该镜像，重新加载摘要正确的 tar，不在容器内替换单个模型 |
+| `port is already allocated`、`address already in use` | 宿主机端口冲突 | 用 `ss -lntp` 和 `docker ps` 找到占用方，不能直接停止未知业务 |
+| Nginx `connect() failed (111: Connection refused)` | 某 OCR 后端不可用 | 检查对应容器；其他健康后端会重试，访问日志可见 `502, 200` |
+| Nginx `no live upstreams` 或统一入口返回 `502` | 全部后端不可用 | 恢复至少一个 OCR 容器后再验收 |
+| `request body is buffered to a temporary file` | 大请求体写入 Nginx 临时文件的告警 | 请求返回 200 时不是失败；检查容器磁盘空间和请求体大小 |
+| `FatalError: Termination signal` 后再次启动成功 | 人工重启产生的 SIGTERM | 以随后出现启动成功日志且接口返回 200 为准 |
+
+常用排查命令：
 
 ```bash
-docker run --rm --entrypoint sh ocr:v6_amd -c '
-  test -n "$(find /app/app -type f -name "*.so" -print -quit)" &&
-  test -z "$(find /app/app -type f -name "*.py" ! -name "__init__.py" -print -quit)" &&
-  test -z "$(find /app -type f \( -name "*.c" -o -name "*.cpp" -o -name "*.o" \) -print -quit)" &&
-  test ! -e /app/config.toml &&
-  test ! -e /app/.build &&
-  ! command -v gcc &&
-  ! python -m pip show Cython
-'
-```
-
-RTX 3090 固定图片矩阵覆盖 OCR batch `1/4/8/16` 和客户端并发 `1/2/4/8/16`，20 组
-均为 100% 成功且无 HTTP 5xx。推荐 `recognition_batch_size = 4`、客户端并发 `2`，独立
-复验为 `13.468 QPS`、P95 `152.716 ms`。完整数据见
-`docs/ocr-v6-rtx3090-benchmark.md`。
-
-## 6. 常见失败日志
-
-### 配置文件不存在
-
-```text
-app.core.exceptions.ConfigurationError: 配置文件不存在：/app/config.toml
-```
-
-使用 `docker inspect ocr-v6-amd --format '{{json .Mounts}}'` 检查只读挂载。
-
-### GPU 不可用
-
-```text
-app.core.exceptions.ConfigurationError: GPU 设备 cuda:0 不可用
-```
-
-使用 `nvidia-smi -L`、`docker inspect ocr-v6-amd --format '{{json .HostConfig.DeviceRequests}}'`
-和 `docker exec ocr-v6-amd nvidia-smi -L` 核对物理卡、映射和容器逻辑编号。
-
-### 模型缺失或摘要错误
-
-```text
-app.core.exceptions.ConfigurationError: 检测模型目录不存在：/app/models/not-found-det
-```
-
-模型校验还可能报告 `模型文件不存在`、`模型文件摘要不一致` 或 `模型清单缺少必需项`。
-重新取得校验通过的 tar 包，不要在容器内替换单个模型文件。
-
-### 端口占用
-
-```text
-Bind for 0.0.0.0:8866 failed: port is already allocated.
-```
-
-使用 `ss -lntp | grep ':8866'` 和
-`docker ps --format '{{.ID}} {{.Names}} {{.Ports}}' | grep 8866` 定位占用方。
-
-主动重启时可能出现 `FatalError: Termination signal`；如果随后重新出现
-`Application startup complete.` 且接口通过，这是正常 SIGTERM 重启。
-
-## 7. 日常运维
-
-```bash
+docker ps -a --filter name=ocr
 docker logs --tail 200 ocr-v6-amd
-docker inspect ocr-v6-amd --format '{{.LogPath}}'
-docker exec ocr-v6-amd tail -n 100 /app/logs/ocr-service.log
-watch -n 1 nvidia-smi
-docker restart ocr-v6-amd
-docker stop ocr-v6-amd
-docker rm ocr-v6-amd
+docker logs --tail 200 ocr-nginx
+docker inspect ocr-v6-amd --format '{{json .HostConfig.DeviceRequests}}'
+ss -lntp | grep ':8866'
+nvidia-smi
 ```
 
-## 8. 升级与回滚
+## 8. 性能与每卡实例数
 
-升级前保留当前 tar、摘要文件和配置副本。回滚时精确停止并删除当前容器，重新加载保留的
-tar，再使用第 4 节命令启动：
+RTX 3090 单容器固定图片压测的已验证推荐值为：
+
+- `recognition_batch_size = 4`；
+- `max_concurrency = 1`；
+- 客户端并发 `2`；
+- `13.468 QPS`，P95 `152.716 ms`，100% 成功且无 HTTP 5xx。
+
+Docker Nginx 真机验证使用两张 RTX 4090 D、每卡两个 OCR 容器、客户端并发 8、40 个
+计量请求，得到 `39.259 QPS`、P95 `249.816 ms`、100% 成功。停止一个后端后再次执行
+40 个请求仍为 100% 成功、HTTP 5xx 为 0，并观察到 `502, 200` 的重试链。该短测用于
+证明容器拓扑、分流和故障转移可行，不是生产容量承诺，也不能直接与 RTX 3090 报告对比。
+
+每张卡可以启动多个 OCR 容器，但同卡多实例会争用计算和显存，不保证比单实例更快。
+生产必须从每卡 1 个实例开始，使用真实业务图片记录 QPS、P95、错误率和显存，再逐个增加
+实例。出现 OOM、5xx、结果异常或 P95 明显恶化时立即回退上一个实例数。
+
+压测示例：
+
+```bash
+python3 /opt/ocr-v6/load_test.py \
+  --ip 127.0.0.1 \
+  --port 8866 \
+  --image /opt/ocr-v6/ocr-test.jpg \
+  --concurrency 8 \
+  --warmup 10 \
+  --requests 100 \
+  --output /opt/ocr-v6/load-test-result.json
+```
+
+## 9. 日常运维
+
+```bash
+docker ps --filter name=ocr
+docker stats --no-stream
+docker logs --tail 200 ocr-nginx
+nvidia-smi
+curl --fail http://127.0.0.1:8866/ocr/getVersion
+```
+
+多实例维护时一次只重启一个后端，并在操作后检查统一入口：
+
+```bash
+docker restart ocr-v6-gpu0-1
+docker logs --tail 100 ocr-v6-gpu0-1
+curl --fail http://127.0.0.1:8866/ocr/getVersion
+```
+
+验证 Nginx 故障转移时可停止一个后端，确认统一入口仍正常后再恢复：
+
+```bash
+docker stop ocr-v6-gpu0-1
+curl --fail http://127.0.0.1:8866/ocr/getVersion
+docker start ocr-v6-gpu0-1
+```
+
+## 10. 升级与回滚
+
+升级前保留当前 tar、摘要、配置和镜像 ID，不要覆盖唯一可用的回滚包。多实例采用逐容器
+升级：一次停止一个后端，加载新镜像并以原 GPU、端口、配置重新启动，验收通过后再处理
+下一个。最后重载 Nginx 并执行真实 OCR 压测。
+
+回滚时加载保留的旧 tar，按第 4 节原 GPU 和端口逐个恢复容器。单实例回滚命令为：
 
 ```bash
 docker stop ocr-v6-amd
 docker rm ocr-v6-amd
 docker load -i /opt/ocr-v6/ocr_v6_amd.tar
-```
-
-不要删除 `/opt/ocr-v6/ocr_v6_amd.tar`，不得执行 `docker system prune`，也不得删除服务器上
-任何 `algorithm*` 镜像。
-
-## 9. 维护构建与 NPU
-
-以下命令均从项目根目录执行。先准备正式配置：
-
-```bash
-cp config.toml.example config.toml
-python scripts/verify_models.py
-```
-
-`config.toml` 已列入 `.gitignore` 和 `.dockerignore`；初始化 Git 后不会被默认跟踪，也不会进入 Docker 构建上下文，只能通过宿主机只读挂载进入容器。
-
-需要提供公式能力时，在宿主机配置中启用项目本地公式模型：
-
-```toml
-[formula]
-enabled = true
-layout_model_dir = "models/PP-DocLayout_plus-L"
-recognition_model_dir = "models/PP-FormulaNet_plus-M"
-recognition_batch_size = 1
-layout_threshold = 0.5
-```
-
-两个公式模型的运行文件合计约 716 MiB，已随项目模型目录进入构建上下文。服务端开关开启后，请求字段 `enable_formula` 还须设为 `true` 才执行公式推理。
-
-## CPU/NVIDIA GPU 镜像
-
-`docker/Dockerfile` 提供两种构建模式：
-
-- 默认普通模式：保留 Python 源码，便于开发、排障和回滚；
-- Cython 模式：显式传入 `--build-arg cython=yes`，核心功能模块编译为 Linux 原生扩展，最终镜像不保留对应 `.py` 源码。
-
-Cython 只提高源码阅读和逆向门槛，不是密码学加密，也不代表产物不可逆向。源码仓库仍是开发、测试和代码审查的唯一来源。
-
-普通 x86_64 Linux 镜像：
-
-```bash
-OCR_MODEL_MANIFEST_SECRET=/secure/build-inputs/ocr-runtime-manifest.sha256
-docker build \
-  --platform linux/amd64 \
-  --secret id=ocr_model_manifest,src="$OCR_MODEL_MANIFEST_SECRET" \
-  -f docker/Dockerfile \
-  -t jy-ocr-v6-service:3.0-source \
-  .
-```
-
-Cython 编译保护镜像：
-
-```bash
-OCR_MODEL_MANIFEST_SECRET=/secure/build-inputs/ocr-runtime-manifest.sha256
-docker build \
-  --platform linux/amd64 \
-  --secret id=ocr_model_manifest,src="$OCR_MODEL_MANIFEST_SECRET" \
-  --build-arg cython=yes \
-  -f docker/Dockerfile \
-  -t jy-ocr-v6-service:3.0-cython \
-  .
-```
-
-不传 `cython` 与显式传入 `--build-arg cython=no` 等价。其他值会中止构建，例如：
-
-```bash
-docker build \
-  --platform linux/amd64 \
-  --build-arg cython=true \
-  -f docker/Dockerfile \
-  -t jy-ocr-v6-service:invalid \
-  .
-```
-
-该命令必须报告 `cython must be "yes" or "no"`。镜像使用 Paddle 官方中文文档提供的 `ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddle:3.3.0-gpu-cuda11.8-cudnn8.9`。镜像体积较大，首次跨架构构建需要预留足够磁盘和下载时间。
-
-`ocr_model_manifest` 是构建必需的 BuildKit secret。`OCR_MODEL_MANIFEST_SECRET` 必须是工作树和
-外部模型根之外的临时投影文件；禁止在项目 `models/` 或外部 `ocr/models/` 内生成
-`manifest.sha256`。调度平台发布应直接使用 `deploy/scripts/build-images`，由它从 Git
-工作树外的权威 `model-assets.manifest.json` 投影 OCR 子集、设置 `0600` 权限并在构建
-结束后清理。镜像会在依赖安装和应用导入前按该清单校验模型的精确文件集与
-SHA-256，并仅保留运行时引擎需要的派生清单。
-
-### CPU 运行
-
-确认 `config.toml` 中：
-
-```toml
-[ocr]
-device = "cpu"
-```
-
-启动：
-
-```bash
 docker run -d \
-  --name ocr-v6 \
-  -p 8866:8866 \
-  -v "$(pwd)/config.toml:/app/config.toml:ro" \
-  --log-driver json-file \
-  --log-opt max-size=100m \
-  --log-opt max-file=3 \
-  jy-ocr-v6-service:3.0-source
-```
-
-Apple Silicon 运行该 x86_64 镜像时追加 `--platform linux/amd64`。该方式用于功能验收，不作为性能基准。
-
-### 暴露全部 NVIDIA GPU
-
-例如使用容器逻辑 GPU 2：
-
-```toml
-[ocr]
-device = "cuda:2"
-```
-
-```bash
-docker run -d \
-  --name ocr-v6 \
-  --gpus all \
-  -p 8866:8866 \
-  -v "$(pwd)/config.toml:/app/config.toml:ro" \
-  --log-driver json-file \
-  --log-opt max-size=100m \
-  --log-opt max-file=3 \
-  jy-ocr-v6-service:3.0-cython
-```
-
-### 只暴露一张物理 GPU
-
-例如只暴露宿主机物理 GPU 2：
-
-```bash
-docker run -d \
-  --name ocr-v6 \
+  --name ocr-v6-amd \
+  --restart unless-stopped \
   --gpus '"device=2"' \
+  -e REQUIRE_GPU=true \
   -p 8866:8866 \
-  -v "$(pwd)/config.toml:/app/config.toml:ro" \
-  --log-driver json-file \
-  --log-opt max-size=100m \
-  --log-opt max-file=3 \
-  jy-ocr-v6-service:3.0-cython
+  -v "/opt/ocr-v6/config.toml:/app/config.toml:ro" \
+  --log-driver json-file --log-opt max-size=100m --log-opt max-file=3 \
+  ocr:v6_amd
 ```
 
-此时物理 GPU 2 通常映射为容器逻辑 GPU 0，因此配置通常写 `device = "cuda:0"`。最终编号以容器内 `nvidia-smi -L` 为准。应用会在调用 PaddleOCR 和公式流水线时将 `cuda:<编号>` 转换为 Paddle 使用的 `gpu:<编号>`。
+## 11. 停止与清理
 
-## NPU 镜像
-
-NPU 镜像当前处于待确认状态。只有明确 Ascend 型号、驱动、CANN 基础镜像和 PaddleCustomDevice 兼容版本后，才能锁定 `requirements.npu.txt` 并执行：
+单实例：
 
 ```bash
-docker build \
-  --build-arg NPU_BASE_IMAGE=<已确认的-CANN-基础镜像> \
-  -f docker/Dockerfile.npu \
-  -t jy-ocr-v6-service:npu-3.0 \
-  .
+docker stop ocr-v6-amd
+docker rm ocr-v6-amd
 ```
 
-运行命令结构如下，尖括号内容必须按目标服务器官方容器部署说明替换：
+多实例与 Nginx：
 
 ```bash
-docker run -d \
-  --name ocr-v6-npu \
-  <Ascend-设备映射与-CANN-运行参数> \
-  -p 8866:8866 \
-  -v "$(pwd)/config.toml:/app/config.toml:ro" \
-  --log-driver json-file \
-  --log-opt max-size=100m \
-  --log-opt max-file=3 \
-  jy-ocr-v6-service:npu-3.0
+docker rm -f ocr-nginx
+docker rm -f ocr-v6-gpu0-1 ocr-v6-gpu0-2 ocr-v6-gpu1-1 ocr-v6-gpu1-2
 ```
 
-正式验收前配置为 `device = "npu:<容器逻辑编号>"`。当前命令是待补参数的结构，不可直接用于生产。
-
-## 配置挂载检查
-
-不挂载 `/app/config.toml` 时，容器应明确报错并退出：
-
-```bash
-docker run --rm jy-ocr-v6-service:3.0-source
-docker run --rm jy-ocr-v6-service:3.0-cython
-```
-
-挂载有效配置后，应用读取其中的端口、设备和模型参数。模型相对路径以 `/app/config.toml` 所在目录为基准，因此示例中的 `models/...` 会解析为镜像内 `/app/models/...`。
-
-## 接口与模型验证
-
-查看启动日志：
-
-```bash
-docker logs -f ocr-v6
-```
-
-验证版本接口：
-
-```bash
-curl http://127.0.0.1:8866/ocr/getVersion
-```
-
-验证两个接口：
-
-```bash
-python scripts/smoke_test.py --base-url http://127.0.0.1:8866
-```
-
-宿主机配置已启用公式能力时，验证公式请求：
-
-```bash
-python scripts/smoke_test.py \
-  --base-url http://127.0.0.1:8866 \
-  --image tests/fixtures/formula-document.png \
-  --enable-formula
-```
-
-Mac CPU 上一次包含首次四模型加载和推理的真实公式集成测试约 86 秒，该记录不是容器或生产环境性能指标。NVIDIA GPU 和 Ascend NPU 的公式能力仍须分别在对应真机、驱动和运行时中验证。
-
-## 镜像内容检查
-
-普通镜像应保留功能源码：
-
-```bash
-docker run --rm --entrypoint sh jy-ocr-v6-service:3.0-source -c '
-  test -n "$(find /app/app -type f -name "*.py" ! -name "__init__.py" -print -quit)"
-'
-```
-
-Cython 镜像应包含原生扩展，且不包含核心源码、编译中间产物、编译器、Cython、依赖清单、构建脚本或正式配置：
-
-```bash
-docker run --rm --entrypoint sh jy-ocr-v6-service:3.0-cython -c '
-  test -n "$(find /app/app -type f -name "*.so" -print -quit)" &&
-  test -z "$(find /app/app -type f -name "*.py" ! -name "__init__.py" -print -quit)" &&
-  test -z "$(find /app -type f \( -name "*.c" -o -name "*.cpp" -o -name "*.o" \) -print -quit)" &&
-  test ! -e /app/config.toml &&
-  test ! -e /tmp/requirements &&
-  test ! -e /app/.build &&
-  ! command -v gcc &&
-  ! python -m pip show Cython
-'
-```
-
-两种镜像都可以用摘要文件重新校验模型：
-
-```bash
-docker exec ocr-v6 sh -c 'cd /app/models && sha256sum -c manifest.sha256'
-```
-
-## 停止与删除新容器
-
-```bash
-docker stop ocr-v6
-docker rm ocr-v6
-```
-
-NPU 容器使用名称 `ocr-v6-npu`。这些操作只针对新服务，不涉及原有 OCR 容器。
+停止或删除容器不会删除 tar、配置和镜像。不得执行 `docker system prune`，不得删除
+`ocr_v6_amd.tar`，也不得删除服务器上任何 `algorithm*` 镜像。

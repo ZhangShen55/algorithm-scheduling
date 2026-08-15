@@ -160,9 +160,8 @@ def test_formula_models_are_part_of_the_verified_docker_model_assets():
 def test_linux_delivery_guide_starts_from_the_offline_tar():
     content = (PROJECT_ROOT / "docker" / "README.md").read_text(encoding="utf-8")
 
-    tar_position = content.index("ocr_v6_amd.tar")
-    build_position = content.index("docker build")
-    assert tar_position < build_position
+    assert "ocr_v6_amd.tar" in content
+    assert "docker build" not in content
     assert "sha256sum -c ocr_v6_amd.tar.sha256" in content
     assert "docker load -i ocr_v6_amd.tar" in content
 
@@ -188,6 +187,63 @@ def test_linux_delivery_guide_covers_gpu_run_and_operations():
         "端口占用",
         "docker stop ocr-v6-amd",
         "回滚",
+    )
+    for fragment in required_fragments:
+        assert fragment in content
+
+
+def test_linux_delivery_guide_is_an_operations_only_runbook():
+    content = (PROJECT_ROOT / "docker" / "README.md").read_text(encoding="utf-8")
+    first_bash_block = re.search(r"```bash\n(.*?)\n```", content, re.DOTALL)
+
+    assert first_bash_block is not None
+    assert first_bash_block.group(1).lstrip().startswith(
+        "docker load -i ocr_v6_amd.tar"
+    )
+    assert "docker build" not in content
+    for decision in ("必须修改", "保持默认", "按需修改", "RTX 3090"):
+        assert decision in content
+
+
+def test_linux_delivery_guide_covers_single_and_multi_gpu_topologies():
+    content = (PROJECT_ROOT / "docker" / "README.md").read_text(encoding="utf-8")
+
+    required_fragments = (
+        "单卡单实例",
+        "单卡多实例",
+        "多卡多实例",
+        "每个容器只映射一张物理 GPU",
+        'device = "cuda:0"',
+        "127.0.0.1:8867:8866",
+        "127.0.0.1:8868:8866",
+        "127.0.0.1:8869:8866",
+        "127.0.0.1:8870:8866",
+        "从每卡 1 个实例开始",
+        "QPS",
+        "P95",
+        "OOM",
+    )
+    for fragment in required_fragments:
+        assert fragment in content
+
+
+def test_linux_delivery_guide_runs_nginx_in_docker():
+    content = (PROJECT_ROOT / "docker" / "README.md").read_text(encoding="utf-8")
+
+    required_fragments = (
+        "nginx:1.27-alpine",
+        "--name ocr-nginx",
+        "--network host",
+        "least_conn;",
+        "client_max_body_size 25m;",
+        "proxy_connect_timeout 5s;",
+        "proxy_read_timeout 180s;",
+        "proxy_send_timeout 180s;",
+        "max_fails=3 fail_timeout=30s",
+        "$upstream_addr",
+        "docker logs --tail 200 ocr-nginx",
+        "docker stop ocr-v6-gpu0-1",
+        "docker rm -f ocr-nginx",
     )
     for fragment in required_fragments:
         assert fragment in content
