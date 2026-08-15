@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 import yaml  # type: ignore[import-untyped]
 
@@ -1212,6 +1213,148 @@ def test_smoke_runner_emits_bound_activity_events_around_each_real_request(
         )
 
 
+def test_facerec_activity_covers_only_target_recognize_and_pairs_on_failure(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "face.png"
+    image.write_bytes(b"face-image")
+    events: list[str] = []
+    observations: list[tuple[str, str, str, bool]] = []
+    active = False
+
+    def activity(event: str) -> None:
+        nonlocal active
+        if event == "start":
+            assert not active
+            active = True
+        else:
+            assert event == "finish" and active
+            active = False
+        events.append(event)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observations.append((request.method, request.url.host, request.url.path, active))
+        if request.method == "POST" and request.url.path == "/persons":
+            return httpx.Response(
+                200,
+                json={
+                    "status_code": 200,
+                    "message": "created",
+                    "data": {"photo_path": ""},
+                },
+            )
+        if request.method == "POST" and request.url.path == "/recognize":
+            return httpx.Response(500, json={"detail": "injected recognition failure"})
+        if request.method == "DELETE" and request.url.path == "/persons/delete":
+            return httpx.Response(
+                200,
+                json={
+                    "status_code": 200,
+                    "message": "deleted",
+                    "data": {"deleted_count": 1},
+                },
+            )
+        if request.method == "GET" and request.url.path == "/persons":
+            return httpx.Response(
+                200,
+                json={
+                    "status_code": 200,
+                    "message": "listed",
+                    "data": {"persons": []},
+                },
+            )
+        raise AssertionError(f"unexpected FaceRec request: {request.method} {request.url}")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(RuntimeError, match="FaceRec recognize HTTP 500"):
+            SMOKE_MODULE.smoke_facerec(
+                http,
+                json.dumps(
+                    ["http://create.test", "http://recognize.test", "http://manage.test"]
+                ),
+                {"facerec_image": image},
+                1.0,
+                activity=activity,
+            )
+
+    assert events == ["start", "finish"]
+    assert observations == [
+        ("POST", "create.test", "/persons", False),
+        ("POST", "recognize.test", "/recognize", True),
+        ("DELETE", "manage.test", "/persons/delete", False),
+        ("GET", "manage.test", "/persons", False),
+    ]
+    assert not active
+
+
+def test_asr_online_activity_starts_with_first_send_after_preparation_and_finishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio = tmp_path / "online.wav"
+    with wave.open(str(audio), "wb") as stream:
+        stream.setnchannels(1)
+        stream.setsampwidth(2)
+        stream.setframerate(16000)
+        stream.writeframes(b"\x01\x00" * 1600)
+
+    events: list[str] = []
+    observations: dict[str, bool] = {}
+    active = False
+
+    def activity(event: str) -> None:
+        nonlocal active
+        if event == "start":
+            assert not active
+            active = True
+        else:
+            assert event == "finish" and active
+            active = False
+        events.append(event)
+
+    real_wave_open = wave.open
+
+    def observed_wave_open(*args: Any, **kwargs: Any) -> Any:
+        observations["wav_read"] = active
+        return real_wave_open(*args, **kwargs)
+
+    class Socket:
+        async def send(self, _: bytes) -> None:
+            observations["first_send"] = active
+            raise RuntimeError("injected send failure")
+
+        async def recv(self) -> str:
+            raise AssertionError("recv must not run after the injected send failure")
+
+    class Connection:
+        async def __aenter__(self) -> Socket:
+            observations["connect"] = active
+            return Socket()
+
+        async def __aexit__(self, *_: object) -> None:
+            observations["close"] = active
+
+    monkeypatch.setattr(SMOKE_MODULE.wave, "open", observed_wave_open)
+    monkeypatch.setattr(SMOKE_MODULE.websockets, "connect", lambda *_, **__: Connection())
+
+    with pytest.raises(RuntimeError, match="injected send failure"):
+        SMOKE_MODULE.smoke_asr_online(
+            object(),
+            "ws://asr-online.test",
+            {"asr_online_audio": audio},
+            1.0,
+            activity=activity,
+        )
+
+    assert observations == {
+        "wav_read": False,
+        "connect": False,
+        "first_send": True,
+        "close": False,
+    }
+    assert events == ["start", "finish"]
+    assert not active
+
+
 @pytest.mark.parametrize(
     ("arguments", "expected"),
     (
@@ -1588,6 +1731,50 @@ def test_smoke_runner_rejects_fixture_hash_mismatch(tmp_path: Path) -> None:
         completed = _run_smoke(tmp_path, http_url, ws_url, manifest, cases="asr_offline")
     assert completed.returncode != 0
     assert "SHA-256" in completed.stderr
+
+
+def test_ocr_only_smoke_does_not_access_or_stage_unselected_ppt_fixture(
+    tmp_path: Path,
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    ppt = next(item for item in document["fixtures"] if item["fixture_id"] == "ppt_video")
+    (manifest.parent / "fixtures" / ppt["source"]).unlink()
+
+    with _WebSocketServer() as ws_url, _Server({}, _smoke_handler(tmp_path)) as http_url:
+        completed = _run_smoke(tmp_path, http_url, ws_url, manifest, cases="ocr")
+
+    assert completed.returncode == 0, completed.stderr
+    assert {path.name for path in (tmp_path / "staged").iterdir()} == {"ocr_image.jpg"}
+    assert not Path(ppt["server_target"]).exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    (
+        ("bytes", True, "fixture bytes"),
+        ("bytes", -1, "fixture bytes"),
+        ("bytes", "10", "fixture bytes"),
+        ("sha256", "0" * 63, "fixture sha256"),
+        ("sha256", "g" * 64, "fixture sha256"),
+    ),
+)
+def test_fixture_staging_validates_unselected_fixture_metadata(
+    tmp_path: Path, field: str, value: object, expected: str
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    ppt = next(item for item in document["fixtures"] if item["fixture_id"] == "ppt_video")
+    ppt[field] = value
+    manifest.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=expected):
+        load_and_stage_fixtures(
+            manifest,
+            manifest.parent / "fixtures",
+            tmp_path / "staged",
+            required_fixture_ids={"ocr_image"},
+        )
 
 
 def test_fixture_staging_rejects_existing_destination_symlink_with_same_content(

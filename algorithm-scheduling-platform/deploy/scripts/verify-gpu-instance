@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import secrets
@@ -34,6 +35,7 @@ ACTIVITY_FIELDS = {
     "attempt",
 }
 MAX_ACTIVITY_BUFFER_BYTES = 64 * 1024
+MAX_TRIGGER_TIMEOUT_SECONDS = 24 * 60 * 60
 
 
 def _parse_args() -> argparse.Namespace:
@@ -468,6 +470,7 @@ class _ActivityProtocol:
         self.buffer = bytearray()
         self.active: dict[str, Any] | None = None
         self.completed: list[dict[str, Any]] = []
+        self.first_started_monotonic: float | None = None
 
     def drain(self, descriptor: int) -> None:
         while True:
@@ -513,6 +516,8 @@ class _ActivityProtocol:
         if event == "start":
             if self.active is not None or attempt != len(self.completed) + 1:
                 raise VerificationError("activity 协议 start 顺序不合法")
+            if self.first_started_monotonic is None:
+                self.first_started_monotonic = time.monotonic()
             self.active = {
                 "attempt": attempt,
                 "started_at": datetime.now(timezone.utc).isoformat(),  # noqa: UP017
@@ -658,14 +663,25 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
         trigger_process_group_id = trigger.pid
         os.close(activity_write_fd)
         activity_write_fd = -1
-        sample_deadline = time.monotonic() + arguments.sample_window
+        sample_deadline: float | None = None
         trigger_deadline = time.monotonic() + arguments.trigger_timeout
         while trigger.poll() is None:
             activity.drain(activity_read_fd)
             now = time.monotonic()
             if now >= trigger_deadline:
                 raise VerificationError("真实推理触发命令超时")
-            if activity.active is None or now >= sample_deadline:
+            if (
+                sample_deadline is None
+                and activity.first_started_monotonic is not None
+            ):
+                sample_deadline = (
+                    activity.first_started_monotonic + arguments.sample_window
+                )
+            if (
+                activity.active is None
+                or sample_deadline is None
+                or now >= sample_deadline
+            ):
                 time.sleep(arguments.sample_interval)
                 continue
             current_inspect = _inspect(arguments.container)
@@ -882,6 +898,11 @@ def main() -> int:
             raise VerificationError("physical GPU 索引不能为负数")
         if arguments.sample_window <= 0 or arguments.sample_interval <= 0:
             raise VerificationError("采样时间和间隔必须大于 0")
+        if (
+            not math.isfinite(arguments.trigger_timeout)
+            or not 0 < arguments.trigger_timeout <= MAX_TRIGGER_TIMEOUT_SECONDS
+        ):
+            raise VerificationError("trigger timeout 必须大于 0 且不超过 86400 秒")
         if not 0.01 <= arguments.command_timeout <= 120:
             raise VerificationError("command timeout 必须介于 0.01 到 120 秒")
         COMMAND_TIMEOUT_SECONDS = arguments.command_timeout

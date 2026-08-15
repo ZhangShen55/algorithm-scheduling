@@ -181,6 +181,7 @@ def emit(event, **overrides):
     payload.update(overrides)
     os.write(int(fd_value), (json.dumps(payload) + "\\n").encode())
 
+time.sleep(float(os.environ.get("ACTIVITY_PREP_SECONDS", "0")))
 if mode == "valid":
     emit("start")
 elif mode == "wrong_operator":
@@ -198,11 +199,18 @@ elif mode == "start_only":
 elif mode == "finished_then_sleep":
     emit("start")
     emit("finish")
+elif mode == "two_attempts":
+    emit("start")
+    emit("finish")
+    time.sleep(float(os.environ.get("BETWEEN_ACTIVITY_SECONDS", "0")))
+    emit("start", attempt=2)
 marker.write_text("running", encoding="utf-8")
 time.sleep(float(os.environ.get("TRIGGER_SECONDS", "0.25")))
 marker.unlink(missing_ok=True)
 if mode == "valid":
     emit("finish")
+elif mode == "two_attempts":
+    emit("finish", attempt=2)
 """,
         encoding="utf-8",
     )
@@ -367,6 +375,45 @@ def test_verifier_records_synchronous_cuda_pid_and_exact_container_mapping(
         "<trigger-executable> <redacted-arguments>",
     ]
     assert gpu_runtime["output"].stat().st_mode & 0o777 == 0o600
+
+
+def test_sample_window_starts_after_first_valid_activity_start(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    gpu_runtime["env"]["ACTIVITY_PREP_SECONDS"] = "0.75"
+
+    completed = _run(gpu_runtime, "--trigger-timeout", "2")
+
+    assert completed.returncode == 0, completed.stderr
+    report = _report(gpu_runtime)
+    assert report["status"] == "PASS"
+    assert report["activity"]["attempts"][0]["sample_count"] >= 1
+
+
+def test_sample_window_does_not_reset_for_later_activity_attempt(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    gpu_runtime["env"].update(
+        {
+            "ACTIVITY_MODE": "two_attempts",
+            "BETWEEN_ACTIVITY_SECONDS": "0.75",
+        }
+    )
+
+    completed = _run(gpu_runtime, "--trigger-timeout", "2")
+
+    assert completed.returncode != 0
+    assert "同步采样" in _report(gpu_runtime)["reason"]
+
+
+@pytest.mark.parametrize("value", ("0", "-1", "nan", "inf", "86400.01"))
+def test_verifier_rejects_unbounded_trigger_timeout(
+    gpu_runtime: dict[str, Any], value: str
+) -> None:
+    completed = _run(gpu_runtime, "--trigger-timeout", value)
+
+    assert completed.returncode != 0
+    assert "trigger timeout" in completed.stderr
 
 
 @pytest.mark.parametrize(

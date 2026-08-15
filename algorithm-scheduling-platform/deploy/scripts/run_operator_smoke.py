@@ -19,7 +19,8 @@ import threading
 import time
 import uuid
 import wave
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
@@ -34,10 +35,12 @@ WORKSPACE_ROOT = PLATFORM_ROOT.parent
 DEFAULT_CASES = PLATFORM_ROOT / "deploy" / "operator-smoke-cases.json"
 TAG_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 SHA_PATTERN = re.compile(r"[0-9a-fA-F]{40}")
+SHA256_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
 FIXTURE_FIELDS = {"fixture_id", "source_kind", "source", "server_target", "bytes", "sha256"}
 CASE_FIELDS = {"case_id", "operator_code", "fixtures", "checks"}
 ACTIVITY_FD_ENV = "GPU_EVIDENCE_ACTIVITY_FD"
 ACTIVITY_NONCE_ENV = "GPU_EVIDENCE_ACTIVITY_NONCE"
+ActivityEmitter = Callable[[str], None]
 
 
 def parse_args() -> argparse.Namespace:
@@ -130,6 +133,39 @@ def emit_activity(
     while view:
         written = os.write(descriptor, view)
         view = view[written:]
+
+
+def bind_activity(
+    channel: tuple[int, str],
+    *,
+    operator_code: str,
+    instance_id: str,
+    run_id: str,
+    attempt: int,
+) -> ActivityEmitter:
+    def bound(event: str) -> None:
+        emit_activity(
+            channel,
+            event=event,
+            operator_code=operator_code,
+            instance_id=instance_id,
+            run_id=run_id,
+            attempt=attempt,
+        )
+
+    return bound
+
+
+@contextmanager
+def activity_window(activity: ActivityEmitter | None) -> Iterator[None]:
+    if activity is None:
+        yield
+        return
+    activity("start")
+    try:
+        yield
+    finally:
+        activity("finish")
 
 
 def reject_symlink_chain(path: Path, name: str) -> None:
@@ -374,6 +410,7 @@ def load_and_stage_fixtures(
     external_root: Path,
     target_root: Path,
     *,
+    required_fixture_ids: set[str] | None = None,
     _after_source_open: Callable[[Path], None] | None = None,
 ) -> tuple[dict[str, Path], dict[str, str]]:
     reject_symlink_chain(manifest_path, "fixture manifest")
@@ -387,6 +424,7 @@ def load_and_stage_fixtures(
     if not isinstance(fixtures, list):
         raise ValueError("fixture manifest fixtures 必须是数组")
     staged: dict[str, Path] = {}
+    declared: set[str] = set()
     missing: dict[str, str] = {}
     missing_entries = manifest["missing_fixtures"]
     if not isinstance(missing_entries, list):
@@ -399,14 +437,14 @@ def load_and_stage_fixtures(
         if not reason or fixture_id in missing:
             raise ValueError("missing fixture 原因为空或 fixture_id 重复")
         missing[fixture_id] = reason
-    target_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    reject_symlink_chain(target_root, "fixture 目标根")
+    target_ready = False
     for item in fixtures:
         if not isinstance(item, dict) or set(item) != FIXTURE_FIELDS:
             raise ValueError("fixture manifest 包含未知或缺失字段")
         fixture_id = safe_component(str(item["fixture_id"]), TAG_PATTERN, "fixture_id")
-        if fixture_id in staged:
+        if fixture_id in declared:
             raise ValueError(f"fixture_id 重复: {fixture_id}")
+        declared.add(fixture_id)
         source_kind = item["source_kind"]
         relative = safe_relative(str(item["source"]), "fixture source")
         if source_kind == "external":
@@ -416,10 +454,29 @@ def load_and_stage_fixtures(
         else:
             raise ValueError(f"未知 fixture source_kind: {source_kind}")
         source = source_root / relative
-        expected = (item["bytes"], item["sha256"])
+        expected_bytes = item["bytes"]
+        if (
+            not isinstance(expected_bytes, int)
+            or isinstance(expected_bytes, bool)
+            or expected_bytes < 0
+        ):
+            raise ValueError(f"fixture bytes 必须是非负整数: {fixture_id}")
+        expected_sha256 = item["sha256"]
+        if (
+            not isinstance(expected_sha256, str)
+            or SHA256_PATTERN.fullmatch(expected_sha256) is None
+        ):
+            raise ValueError(f"fixture sha256 必须是 64 位十六进制字符串: {fixture_id}")
+        expected = (expected_bytes, expected_sha256.lower())
         destination = Path(str(item["server_target"]))
         if not destination.is_absolute() or not inside(destination, target_root):
             raise ValueError(f"fixture server_target 越出目标根: {fixture_id}")
+        if required_fixture_ids is not None and fixture_id not in required_fixture_ids:
+            continue
+        if not target_ready:
+            target_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            reject_symlink_chain(target_root, "fixture 目标根")
+            target_ready = True
         destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         reject_symlink_chain(destination.parent, "fixture 目标目录")
         source_fd = open_regular_relative(source_root, relative, "fixture source")
@@ -435,7 +492,7 @@ def load_and_stage_fixtures(
         finally:
             os.close(source_fd)
         staged[fixture_id] = destination
-    if set(staged) & set(missing):
+    if declared & set(missing):
         raise ValueError("fixture 不能同时声明为可用和缺失")
     return staged, missing
 
@@ -525,28 +582,40 @@ def require_http(response: httpx.Response, name: str) -> dict[str, Any]:
 
 
 def smoke_asr_offline(
-    http: httpx.Client, endpoint: str, fixtures: dict[str, Path], _: float
+    http: httpx.Client,
+    endpoint: str,
+    fixtures: dict[str, Path],
+    _: float,
+    *,
+    activity: ActivityEmitter | None = None,
 ) -> dict[str, Any]:
     path = fixtures["asr_offline_audio"]
     with path.open("rb") as stream:
-        response = http.post(
-            endpoint.rstrip("/") + "/v1.1.8/seacraft_asr",
-            files={"audioFile": (path.name, stream, "audio/wav")},
-            data={
-                "language": "auto",
-                "showSpk": "true",
-                "showEmotion": "true",
-                "showRoleIdentify": "false",
-                "wordTimestamps": "false",
-            },
-        )
+        with activity_window(activity):
+            response = http.post(
+                endpoint.rstrip("/") + "/v1.1.8/seacraft_asr",
+                files={"audioFile": (path.name, stream, "audio/wav")},
+                data={
+                    "language": "auto",
+                    "showSpk": "true",
+                    "showEmotion": "true",
+                    "showRoleIdentify": "false",
+                    "wordTimestamps": "false",
+                },
+            )
     body = require_http(response, "ASR Offline")
     if body.get("code") not in {None, 0} or not body.get("text") or not body.get("segments"):
         raise RuntimeError("ASR Offline 未返回非空 text/segments")
     return {"segment_count": len(body["segments"]), "text_non_empty": True}
 
 
-async def _online(endpoint: str, audio: Path, timeout: float) -> dict[str, Any]:
+async def _online(
+    endpoint: str,
+    audio: Path,
+    timeout: float,
+    *,
+    activity: ActivityEmitter | None = None,
+) -> dict[str, Any]:
     with wave.open(str(audio), "rb") as stream:
         if (stream.getframerate(), stream.getnchannels(), stream.getsampwidth()) != (16000, 1, 2):
             raise RuntimeError("ASR Online fixture 必须是 16kHz 单声道 PCM16 WAV")
@@ -554,36 +623,59 @@ async def _online(endpoint: str, audio: Path, timeout: float) -> dict[str, Any]:
     url = endpoint.rstrip("/") + "/v1.0.1/seacraft_asr_online"
     texts: list[str] = []
     async with websockets.connect(url, open_timeout=timeout, close_timeout=timeout) as socket:
-        for offset in range(0, len(pcm), 7680 * 2):
-            await socket.send(pcm[offset : offset + 7680 * 2])
-            response = json.loads(await asyncio.wait_for(socket.recv(), timeout))
-            if response.get("text"):
-                texts.append(str(response["text"]))
-            if texts:
-                break
+        started = False
+        try:
+            for offset in range(0, len(pcm), 7680 * 2):
+                if not started and activity is not None:
+                    activity("start")
+                    started = True
+                await socket.send(pcm[offset : offset + 7680 * 2])
+                response = json.loads(await asyncio.wait_for(socket.recv(), timeout))
+                if response.get("text"):
+                    texts.append(str(response["text"]))
+                if texts:
+                    break
+        finally:
+            if started and activity is not None:
+                activity("finish")
     if not texts:
         raise RuntimeError("ASR Online 未返回增量文本")
     return {"incremental_messages": len(texts), "text_non_empty": True}
 
 
 def smoke_asr_online(
-    _: httpx.Client, endpoint: str, fixtures: dict[str, Path], timeout: float
+    _: httpx.Client,
+    endpoint: str,
+    fixtures: dict[str, Path],
+    timeout: float,
+    *,
+    activity: ActivityEmitter | None = None,
 ) -> dict[str, Any]:
-    return asyncio.run(_online(endpoint, fixtures["asr_online_audio"], timeout))
+    return asyncio.run(
+        _online(endpoint, fixtures["asr_online_audio"], timeout, activity=activity)
+    )
 
 
 def smoke_ocr(
-    http: httpx.Client, endpoint: str, fixtures: dict[str, Path], _: float
+    http: httpx.Client,
+    endpoint: str,
+    fixtures: dict[str, Path],
+    _: float,
+    *,
+    activity: ActivityEmitter | None = None,
 ) -> dict[str, Any]:
-    body = require_http(
-        http.post(
+    image = base64.b64encode(fixtures["ocr_image"].read_bytes()).decode()
+    with activity_window(activity):
+        response = http.post(
             endpoint.rstrip("/") + "/ocr/prediction",
             json={
                 "key": ["smoke-image"],
-                "value": [base64.b64encode(fixtures["ocr_image"].read_bytes()).decode()],
+                "value": [image],
                 "enable_formula": False,
             },
-        ),
+        )
+    body = require_http(
+        response,
         "OCR",
     )
     if body.get("err_no") != 0 or len(body.get("value") or []) != 1:
@@ -595,7 +687,12 @@ def smoke_ocr(
 
 
 def smoke_vbas(
-    http: httpx.Client, endpoint: str, fixtures: dict[str, Path], _: float
+    http: httpx.Client,
+    endpoint: str,
+    fixtures: dict[str, Path],
+    _: float,
+    *,
+    activity: ActivityEmitter | None = None,
 ) -> dict[str, Any]:
     payload = {
         "ImageList": [{"StoragePath": data_url(fixtures["vbas_image"]), "ImageId": "smoke-frame"}],
@@ -603,30 +700,39 @@ def smoke_vbas(
         "batch_id": "smoke-batch",
     }
     checks = {}
-    for role in ("student", "teacher"):
-        body = require_http(
-            http.post(endpoint.rstrip("/") + f"/ImageDetect/{role}/v1.0.0", json=payload),
-            f"VBas {role}",
-        )
-        status = body.get("StatusObject")
-        data = body.get("DataList")
-        if not isinstance(status, dict) or status.get("StatusCode") != 0:
-            raise RuntimeError(f"VBas {role} 顶层 StatusCode 不是 0")
-        if not isinstance(data, list) or len(data) != 1:
-            raise RuntimeError(f"VBas {role} DataList 未映射输入图片")
-        image_status = data[0].get("StatusObject") if isinstance(data[0], dict) else None
-        if (
-            not isinstance(image_status, dict)
-            or image_status.get("StatusCode") != 0
-            or image_status.get("ImageId") != "smoke-frame"
-        ):
-            raise RuntimeError(f"VBas {role} 图片 StatusCode 或 ImageId 不匹配")
-        checks[role] = len(data)
+    with activity_window(activity):
+        for role in ("student", "teacher"):
+            body = require_http(
+                http.post(
+                    endpoint.rstrip("/") + f"/ImageDetect/{role}/v1.0.0",
+                    json=payload,
+                ),
+                f"VBas {role}",
+            )
+            status = body.get("StatusObject")
+            data = body.get("DataList")
+            if not isinstance(status, dict) or status.get("StatusCode") != 0:
+                raise RuntimeError(f"VBas {role} 顶层 StatusCode 不是 0")
+            if not isinstance(data, list) or len(data) != 1:
+                raise RuntimeError(f"VBas {role} DataList 未映射输入图片")
+            image_status = data[0].get("StatusObject") if isinstance(data[0], dict) else None
+            if (
+                not isinstance(image_status, dict)
+                or image_status.get("StatusCode") != 0
+                or image_status.get("ImageId") != "smoke-frame"
+            ):
+                raise RuntimeError(f"VBas {role} 图片 StatusCode 或 ImageId 不匹配")
+            checks[role] = len(data)
     return checks
 
 
 def smoke_facerec(
-    http: httpx.Client, endpoint: str, fixtures: dict[str, Path], _: float
+    http: httpx.Client,
+    endpoint: str,
+    fixtures: dict[str, Path],
+    _: float,
+    *,
+    activity: ActivityEmitter | None = None,
 ) -> dict[str, Any]:
     endpoints = json.loads(endpoint)
     if not isinstance(endpoints, list) or len(endpoints) != 3:
@@ -659,12 +765,11 @@ def smoke_facerec(
         if data.get("photo_path") not in {None, ""}:
             raise RuntimeError("FaceRec save_person_photo=false 未生效")
         created = True
-        recognized = require_http(
-            http.post(
+        with activity_window(activity):
+            recognize_response = http.post(
                 recognize_endpoint + "/recognize", json={"photo": image, "targets": [number]}
-            ),
-            "FaceRec recognize",
-        )
+            )
+        recognized = require_http(recognize_response, "FaceRec recognize")
         matches = (recognized.get("data") or {}).get("match")
         if (
             recognized.get("status_code") != 200
@@ -727,13 +832,21 @@ def smoke_facerec(
 
 
 def smoke_screen_det(
-    http: httpx.Client, endpoint: str, fixtures: dict[str, Path], _: float
+    http: httpx.Client,
+    endpoint: str,
+    fixtures: dict[str, Path],
+    _: float,
+    *,
+    activity: ActivityEmitter | None = None,
 ) -> dict[str, Any]:
-    body = require_http(
-        http.post(
+    image = base64.b64encode(fixtures["screen_det_image"].read_bytes()).decode()
+    with activity_window(activity):
+        response = http.post(
             endpoint.rstrip("/") + "/detect_all",
-            json={"image": base64.b64encode(fixtures["screen_det_image"].read_bytes()).decode()},
-        ),
+            json={"image": image},
+        )
+    body = require_http(
+        response,
         "ScreenDet",
     )
     required = {"tilt", "screen", "quality_abnormal", "occlusion"}
@@ -763,14 +876,15 @@ def smoke_ppt(
     callback_listen_host: str,
     callback_advertise_base_url: str,
     result_root: Path,
+    activity: ActivityEmitter | None = None,
 ) -> dict[str, Any]:
     operator_task_id = "smoke-ppt-" + uuid.uuid4().hex
     with CallbackCapture(
         listen_host=callback_listen_host,
         advertise_base_url=callback_advertise_base_url,
     ) as callback:
-        accepted = require_http(
-            http.post(
+        with activity_window(activity):
+            accepted_response = http.post(
                 endpoint.rstrip("/") + "/LocalVideoPPTSliceTasks/v1.0.0",
                 json={
                     "video_path": str(fixtures["ppt_video"]),
@@ -779,7 +893,9 @@ def smoke_ppt(
                     "result_callback_uri": callback.url,
                     "threshold": 0.98,
                 },
-            ),
+            )
+        accepted = require_http(
+            accepted_response,
             "PPT Slice",
         )
         if accepted.get("status") != 50:
@@ -816,7 +932,15 @@ def smoke_ppt(
         return {"terminal_status": 60, "slide_count": count, "manifest_verified": True}
 
 
-def smoke_text(http: httpx.Client, endpoint: str, _: dict[str, Path], __: float) -> dict[str, Any]:
+def smoke_text(
+    http: httpx.Client,
+    endpoint: str,
+    _: dict[str, Path],
+    __: float,
+    *,
+    activity: ActivityEmitter | None = None,
+) -> dict[str, Any]:
+    del activity
     keywords = require_http(
         http.post(
             endpoint.rstrip("/") + "/v1/extract_keywords", json={"text": "函数与图像课堂内容"}
@@ -1017,12 +1141,13 @@ def main() -> int:
             if args.callback_advertise_base_url is None:
                 raise ValueError("PPT Slice Smoke 必须指定 --callback-advertise-base-url")
             validate_callback_advertise_base_url(args.callback_advertise_base_url)
+        needed = {fixture for case in selected for fixture in case["fixtures"]}
         fixtures, missing_fixtures = load_and_stage_fixtures(
             args.fixture_manifest,
             args.external_fixture_root,
             args.fixture_target_root,
+            required_fixture_ids=needed,
         )
-        needed = {fixture for case in selected for fixture in case["fixtures"]}
         undeclared = needed - set(fixtures) - set(missing_fixtures)
         if undeclared:
             raise ValueError(f"fixture manifest 未声明: {sorted(undeclared)}")
@@ -1096,39 +1221,37 @@ def main() -> int:
                     hold_deadline = time.monotonic() + args.hold_seconds
                     while len(attempts) < args.repeat or time.monotonic() < hold_deadline:
                         attempt_number = len(attempts) + 1
-                        emit_activity(
-                            activity_channel,
-                            event="start",
-                            operator_code=code,
-                            instance_id=str(instance_id),
-                            run_id=str(run_id),
-                            attempt=attempt_number,
-                        )
-                        try:
-                            if code == "ppt_slice":
-                                attempt = smoke_ppt(
-                                    http,
-                                    endpoint_value,
-                                    fixtures,
-                                    args.timeout_seconds,
-                                    callback_listen_host=args.callback_listen_host,
-                                    callback_advertise_base_url=str(
-                                        args.callback_advertise_base_url
-                                    ),
-                                    result_root=args.result_root,
-                                )
-                            else:
-                                attempt = RUNNERS[code](
-                                    http, endpoint_value, fixtures, args.timeout_seconds
-                                )
-                        finally:
-                            emit_activity(
+                        attempt_activity = (
+                            bind_activity(
                                 activity_channel,
-                                event="finish",
                                 operator_code=code,
                                 instance_id=str(instance_id),
                                 run_id=str(run_id),
                                 attempt=attempt_number,
+                            )
+                            if activity_channel is not None
+                            else None
+                        )
+                        if code == "ppt_slice":
+                            attempt = smoke_ppt(
+                                http,
+                                endpoint_value,
+                                fixtures,
+                                args.timeout_seconds,
+                                callback_listen_host=args.callback_listen_host,
+                                callback_advertise_base_url=str(
+                                    args.callback_advertise_base_url
+                                ),
+                                result_root=args.result_root,
+                                activity=attempt_activity,
+                            )
+                        else:
+                            attempt = RUNNERS[code](
+                                http,
+                                endpoint_value,
+                                fixtures,
+                                args.timeout_seconds,
+                                activity=attempt_activity,
                             )
                         attempts.append(attempt)
                     summary = {
