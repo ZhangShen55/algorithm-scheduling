@@ -36,6 +36,8 @@ TAG_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 SHA_PATTERN = re.compile(r"[0-9a-fA-F]{40}")
 FIXTURE_FIELDS = {"fixture_id", "source_kind", "source", "server_target", "bytes", "sha256"}
 CASE_FIELDS = {"case_id", "operator_code", "fixtures", "checks"}
+ACTIVITY_FD_ENV = "GPU_EVIDENCE_ACTIVITY_FD"
+ACTIVITY_NONCE_ENV = "GPU_EVIDENCE_ACTIVITY_NONCE"
 
 
 def parse_args() -> argparse.Namespace:
@@ -79,6 +81,55 @@ def resolve_run_id(value: str | None) -> str | None:
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         return f"auto-{timestamp}-{uuid.uuid4().hex}"
     return safe_component(value, TAG_PATTERN, "run ID")
+
+
+def load_activity_channel() -> tuple[int, str] | None:
+    descriptor_value = os.environ.get(ACTIVITY_FD_ENV)
+    nonce = os.environ.get(ACTIVITY_NONCE_ENV)
+    if descriptor_value is None and nonce is None:
+        return None
+    if descriptor_value is None or nonce is None or not nonce or "\n" in nonce:
+        raise ValueError("GPU activity 通道环境变量不完整")
+    try:
+        descriptor = int(descriptor_value)
+        metadata = os.fstat(descriptor)
+    except (OSError, ValueError) as error:
+        raise ValueError("GPU activity 通道文件描述符无效") from error
+    if descriptor < 0 or not stat.S_ISFIFO(metadata.st_mode):
+        raise ValueError("GPU activity 通道必须是 inherited pipe")
+    return descriptor, nonce
+
+
+def emit_activity(
+    channel: tuple[int, str] | None,
+    *,
+    event: str,
+    operator_code: str,
+    instance_id: str,
+    run_id: str,
+    attempt: int,
+) -> None:
+    if channel is None:
+        return
+    descriptor, nonce = channel
+    data = (
+        json.dumps(
+            {
+                "event": event,
+                "nonce": nonce,
+                "operator_code": operator_code,
+                "instance_id": instance_id,
+                "run_id": run_id,
+                "attempt": attempt,
+            },
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode()
+    view = memoryview(data)
+    while view:
+        written = os.write(descriptor, view)
+        view = view[written:]
 
 
 def reject_symlink_chain(path: Path, name: str) -> None:
@@ -168,6 +219,28 @@ def load_endpoints(value: str) -> dict[str, Any]:
     return document
 
 
+def normalized_http_origin(value: Any) -> tuple[str, str, int]:
+    if not isinstance(value, str):
+        raise ValueError("HTTP endpoint 必须是字符串")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError("HTTP endpoint 端口不合法") from error
+    scheme = parsed.scheme.lower()
+    hostname = parsed.hostname.lower() if parsed.hostname is not None else None
+    if (
+        scheme not in {"http", "https"}
+        or hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or bool(parsed.query)
+        or bool(parsed.fragment)
+    ):
+        raise ValueError("HTTP endpoint 协议或 origin 不合法")
+    return scheme, hostname, port or (443 if scheme == "https" else 80)
+
+
 def resolve_endpoint(
     endpoints: dict[str, Any], code: str, instance_id: str | None
 ) -> tuple[Any, str]:
@@ -180,7 +253,13 @@ def resolve_endpoint(
         raise ValueError(f"{code} 未配置目标实例 endpoint: {instance_id}")
     if code != "facerec":
         return configured[instance_id], instance_id
-    if len(configured) != 3 or len(set(configured.values())) != 3:
+    if len(configured) != 3:
+        raise ValueError("FaceRec Smoke 必须配置三个不同实例")
+    try:
+        origins = {normalized_http_origin(value) for value in configured.values()}
+    except ValueError as error:
+        raise ValueError("FaceRec Smoke 必须配置三个不同实例") from error
+    if len(origins) != 3:
         raise ValueError("FaceRec Smoke 必须配置三个不同实例")
     others = [value for key, value in sorted(configured.items()) if key != instance_id]
     if len(others) != 2:
@@ -550,7 +629,13 @@ def smoke_facerec(
     http: httpx.Client, endpoint: str, fixtures: dict[str, Path], _: float
 ) -> dict[str, Any]:
     endpoints = json.loads(endpoint)
-    if not isinstance(endpoints, list) or len(endpoints) != 3 or len(set(endpoints)) != 3:
+    if not isinstance(endpoints, list) or len(endpoints) != 3:
+        raise RuntimeError("FaceRec Smoke 必须配置三个不同实例")
+    try:
+        origins = {normalized_http_origin(item) for item in endpoints}
+    except ValueError as error:
+        raise RuntimeError("FaceRec Smoke 必须配置三个不同实例") from error
+    if len(origins) != 3:
         raise RuntimeError("FaceRec Smoke 必须配置三个不同实例")
     create_endpoint, recognize_endpoint, manage_endpoint = [
         str(item).rstrip("/") for item in endpoints
@@ -893,6 +978,11 @@ def main() -> int:
             if not instance_id.startswith(INSTANCE_PREFIXES[selected_code]):
                 raise ValueError("实例 ID 与算子不匹配")
         selected = [case for case in all_cases if case["operator_code"] in selected_codes]
+        activity_channel = load_activity_channel()
+        if activity_channel is not None and (
+            args.operator is None or instance_id is None or run_id is None or len(selected) != 1
+        ):
+            raise ValueError("GPU activity 通道只支持单个逐实例 Smoke")
         resolved_endpoints: dict[str, Any] = {}
         targets: dict[str, str] = {}
         for case in selected:
@@ -901,20 +991,15 @@ def main() -> int:
             resolved_endpoints[code] = endpoint
             targets[code] = target
             if case["operator_code"] == "facerec":
-                if (
-                    not isinstance(endpoint, list)
-                    or len(endpoint) != 3
-                    or len(set(endpoint)) != 3
-                    or any(
-                        urlsplit(str(item)).scheme not in {"http", "https"}
-                        or not urlsplit(str(item)).netloc
-                        or urlsplit(str(item)).username is not None
-                        or urlsplit(str(item)).password is not None
-                        or bool(urlsplit(str(item)).query)
-                        or bool(urlsplit(str(item)).fragment)
-                        for item in endpoint
-                    )
-                ):
+                if not isinstance(endpoint, list) or len(endpoint) != 3:
+                    raise ValueError("FaceRec Smoke 必须配置三个不同实例")
+                try:
+                    origins = {normalized_http_origin(item) for item in endpoint}
+                except ValueError as error:
+                    raise ValueError(
+                        "FaceRec Smoke 必须配置三个不同实例"
+                    ) from error
+                if len(origins) != 3:
                     raise ValueError("FaceRec Smoke 必须配置三个不同实例")
                 continue
             parsed = urlsplit(str(endpoint))
@@ -1010,21 +1095,40 @@ def main() -> int:
                     attempts: list[dict[str, Any]] = []
                     hold_deadline = time.monotonic() + args.hold_seconds
                     while len(attempts) < args.repeat or time.monotonic() < hold_deadline:
-                        if code == "ppt_slice":
-                            attempt = smoke_ppt(
-                                http,
-                                endpoint_value,
-                                fixtures,
-                                args.timeout_seconds,
-                                callback_listen_host=args.callback_listen_host,
-                                callback_advertise_base_url=str(
-                                    args.callback_advertise_base_url
-                                ),
-                                result_root=args.result_root,
-                            )
-                        else:
-                            attempt = RUNNERS[code](
-                                http, endpoint_value, fixtures, args.timeout_seconds
+                        attempt_number = len(attempts) + 1
+                        emit_activity(
+                            activity_channel,
+                            event="start",
+                            operator_code=code,
+                            instance_id=str(instance_id),
+                            run_id=str(run_id),
+                            attempt=attempt_number,
+                        )
+                        try:
+                            if code == "ppt_slice":
+                                attempt = smoke_ppt(
+                                    http,
+                                    endpoint_value,
+                                    fixtures,
+                                    args.timeout_seconds,
+                                    callback_listen_host=args.callback_listen_host,
+                                    callback_advertise_base_url=str(
+                                        args.callback_advertise_base_url
+                                    ),
+                                    result_root=args.result_root,
+                                )
+                            else:
+                                attempt = RUNNERS[code](
+                                    http, endpoint_value, fixtures, args.timeout_seconds
+                                )
+                        finally:
+                            emit_activity(
+                                activity_channel,
+                                event="finish",
+                                operator_code=code,
+                                instance_id=str(instance_id),
+                                run_id=str(run_id),
+                                attempt=attempt_number,
                             )
                         attempts.append(attempt)
                     summary = {

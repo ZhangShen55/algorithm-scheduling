@@ -161,11 +161,48 @@ raise SystemExit(64)
     )
     trigger = tmp_path / "trigger.py"
     trigger.write_text(
-        """import os, pathlib, time
+        """import json, os, pathlib, time
 marker = pathlib.Path(os.environ["TRIGGER_MARKER"])
+mode = os.environ.get("ACTIVITY_MODE", "valid")
+fd_value = os.environ.get("GPU_EVIDENCE_ACTIVITY_FD")
+nonce = os.environ.get("GPU_EVIDENCE_ACTIVITY_NONCE")
+
+def emit(event, **overrides):
+    if fd_value is None or nonce is None:
+        return
+    payload = {
+        "event": event,
+        "nonce": nonce,
+        "operator_code": os.environ.get("ACTIVITY_OPERATOR", "asr_offline"),
+        "instance_id": "asr-offline-gpu0",
+        "run_id": "gpu0-asr-run",
+        "attempt": 1,
+    }
+    payload.update(overrides)
+    os.write(int(fd_value), (json.dumps(payload) + "\\n").encode())
+
+if mode == "valid":
+    emit("start")
+elif mode == "wrong_operator":
+    emit("start", operator_code="ocr")
+elif mode == "wrong_instance":
+    emit("start", instance_id="asr-offline-gpu1")
+elif mode == "wrong_nonce":
+    emit("start", nonce="wrong-nonce")
+elif mode == "malformed" and fd_value is not None:
+    os.write(int(fd_value), b"not-json\\n")
+elif mode == "finish_first":
+    emit("finish")
+elif mode == "start_only":
+    emit("start")
+elif mode == "finished_then_sleep":
+    emit("start")
+    emit("finish")
 marker.write_text("running", encoding="utf-8")
 time.sleep(float(os.environ.get("TRIGGER_SECONDS", "0.25")))
 marker.unlink(missing_ok=True)
+if mode == "valid":
+    emit("finish")
 """,
         encoding="utf-8",
     )
@@ -307,6 +344,20 @@ def test_verifier_records_synchronous_cuda_pid_and_exact_container_mapping(
     assert report["memory_mib"]["before"] == 100
     assert report["memory_mib"]["during"] == 100
     assert report["trigger"] == {"executable": Path(sys.executable).name, "argument_count": 1}
+    assert report["activity"] == {
+        "protocol": "inherited-fd-v1",
+        "operator_code": "asr_offline",
+        "instance_id": "asr-offline-gpu0",
+        "run_id": "gpu0-asr-run",
+        "attempts": [
+            {
+                "attempt": 1,
+                "sample_count": len(report["synchronous_samples"]),
+                "started_at": report["activity"]["attempts"][0]["started_at"],
+                "finished_at": report["activity"]["attempts"][0]["finished_at"],
+            }
+        ],
+    }
     assert report["commands"] == [
         "docker inspect <container>",
         "docker top <container> -eo pid",
@@ -316,6 +367,38 @@ def test_verifier_records_synchronous_cuda_pid_and_exact_container_mapping(
         "<trigger-executable> <redacted-arguments>",
     ]
     assert gpu_runtime["output"].stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize(
+    "activity_mode",
+    (
+        "no_activity",
+        "finished_then_sleep",
+        "wrong_operator",
+        "wrong_instance",
+        "wrong_nonce",
+        "malformed",
+        "finish_first",
+        "start_only",
+    ),
+)
+def test_verifier_rejects_non_request_activity_protocol(
+    gpu_runtime: dict[str, Any], activity_mode: str
+) -> None:
+    gpu_runtime["env"]["ACTIVITY_MODE"] = activity_mode
+
+    completed = _run(gpu_runtime)
+
+    assert completed.returncode != 0
+    report = _report(gpu_runtime)
+    assert report["status"] == "FAIL"
+    assert "activity" in report["reason"].lower() or "活动" in report["reason"]
+    assert report["activity"] == {
+        "protocol": "inherited-fd-v1",
+        "operator_code": "asr_offline",
+        "instance_id": "asr-offline-gpu0",
+    }
+    assert "wrong-nonce" not in json.dumps(report)
 
 
 def test_verifier_accepts_exact_cgroup_v1_mapping(gpu_runtime: dict[str, Any]) -> None:
@@ -438,6 +521,7 @@ def _run_with_process(
         "--sample-interval", "0.02", *extra,
     ]
     runtime["env"]["FAKE_PROCESS_ROWS_DURING"] = f"GPU-A, 2000, {process_name}, 300"
+    runtime["env"]["ACTIVITY_OPERATOR"] = process_name
     return subprocess.run(command, env=runtime["env"], text=True, capture_output=True, check=False)
 
 
@@ -792,9 +876,14 @@ def test_verifier_kills_trigger_process_group_when_helper_command_fails(
     )
     parent = gpu_runtime["tmp_path"] / "parent.py"
     parent.write_text(
-        "import os,subprocess,sys,time\n"
+        "import json,os,subprocess,sys,time\n"
         "open(os.environ['PARENT_PID_FILE'],'w').write(str(os.getpid()))\n"
         "subprocess.Popen([sys.executable,os.environ['CHILD_SCRIPT']])\n"
+        "event={'event':'start','nonce':os.environ['GPU_EVIDENCE_ACTIVITY_NONCE'],"
+        "'operator_code':'asr_offline','instance_id':'asr-offline-gpu0',"
+        "'run_id':'cleanup-run','attempt':1}\n"
+        "os.write(int(os.environ['GPU_EVIDENCE_ACTIVITY_FD']),"
+        "(json.dumps(event)+'\\n').encode())\n"
         "open(os.environ['TRIGGER_MARKER'],'w').write('running')\n"
         "time.sleep(60)\n",
         encoding="utf-8",

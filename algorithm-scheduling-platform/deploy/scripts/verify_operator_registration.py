@@ -9,11 +9,11 @@ import os
 import re
 import stat
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
@@ -78,27 +78,69 @@ def ensure_private_dir(path: Path) -> Path:
 
 def atomic_json(path: Path, payload: dict[str, Any]) -> None:
     ensure_private_dir(path.parent)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = Path(temporary_name)
+    content = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode()
+    temporary = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
+    descriptor: int | None = None
+    published = False
     try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+        )
         os.fchmod(descriptor, 0o600)
-        content = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode()
-        with os.fdopen(descriptor, "wb", closefd=True) as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        descriptor = -1
-        os.replace(temporary, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        view = memoryview(content)
+        while view:
+            written = os.write(descriptor, view)
+            view = view[written:]
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        try:
+            os.link(temporary, path, follow_symlinks=False)
+            published = True
+        except FileExistsError:
+            try:
+                existing_descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            except OSError as error:
+                raise ValueError(f"注册报告已存在且不可安全读取: {path}") from error
+            try:
+                if not stat.S_ISREG(os.fstat(existing_descriptor).st_mode):
+                    raise ValueError(f"注册报告已存在且不是普通文件: {path}")
+                chunks: list[bytes] = []
+                while chunk := os.read(existing_descriptor, 65536):
+                    chunks.append(chunk)
+            finally:
+                os.close(existing_descriptor)
+            if b"".join(chunks) != content:
+                raise ValueError(
+                    f"注册报告已存在不同内容，write-once 拒绝覆盖: {path}"
+                ) from None
+            return
+        directory_fd = os.open(
+            path.parent,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
+        )
         try:
             os.fsync(directory_fd)
         finally:
             os.close(directory_fd)
     finally:
-        if descriptor >= 0:
+        if descriptor is not None:
             os.close(descriptor)
-        if temporary.exists():
+        try:
             temporary.unlink()
+        except FileNotFoundError:
+            pass
+        if published:
+            directory_fd = os.open(
+                path.parent,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
+            )
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
 
 
 def load_expected(path: Path) -> dict[str, dict[str, Any]]:

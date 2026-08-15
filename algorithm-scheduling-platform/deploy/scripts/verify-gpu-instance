@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import secrets
 import signal
 import stat
 import subprocess
@@ -22,6 +23,17 @@ class VerificationError(RuntimeError):
 
 
 COMMAND_TIMEOUT_SECONDS = 15.0
+ACTIVITY_FD_ENV = "GPU_EVIDENCE_ACTIVITY_FD"
+ACTIVITY_NONCE_ENV = "GPU_EVIDENCE_ACTIVITY_NONCE"
+ACTIVITY_FIELDS = {
+    "event",
+    "nonce",
+    "operator_code",
+    "instance_id",
+    "run_id",
+    "attempt",
+}
+MAX_ACTIVITY_BUFFER_BYTES = 64 * 1024
 
 
 def _parse_args() -> argparse.Namespace:
@@ -447,6 +459,108 @@ def _redacted_command(argv: Sequence[str]) -> dict[str, Any]:
     return {"executable": Path(argv[0]).name, "argument_count": len(argv) - 1}
 
 
+class _ActivityProtocol:
+    def __init__(self, *, nonce: str, operator_code: str, instance_id: str) -> None:
+        self.nonce = nonce
+        self.operator_code = operator_code
+        self.instance_id = instance_id
+        self.run_id: str | None = None
+        self.buffer = bytearray()
+        self.active: dict[str, Any] | None = None
+        self.completed: list[dict[str, Any]] = []
+
+    def drain(self, descriptor: int) -> None:
+        while True:
+            try:
+                chunk = os.read(descriptor, 4096)
+            except BlockingIOError:
+                break
+            if not chunk:
+                break
+            self.buffer.extend(chunk)
+            if len(self.buffer) > MAX_ACTIVITY_BUFFER_BYTES:
+                raise VerificationError("activity 协议数据超过上限")
+        while b"\n" in self.buffer:
+            line, _, remainder = self.buffer.partition(b"\n")
+            self.buffer = bytearray(remainder)
+            self._accept(bytes(line))
+
+    def _accept(self, line: bytes) -> None:
+        try:
+            payload = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise VerificationError("activity 协议事件不是合法 JSON") from error
+        if not isinstance(payload, dict) or set(payload) != ACTIVITY_FIELDS:
+            raise VerificationError("activity 协议事件字段不完整")
+        if payload["nonce"] != self.nonce:
+            raise VerificationError("activity 协议 nonce 不一致")
+        if payload["operator_code"] != self.operator_code:
+            raise VerificationError("activity 协议 operator_code 与验证目标不一致")
+        if payload["instance_id"] != self.instance_id:
+            raise VerificationError("activity 协议 instance_id 与验证目标不一致")
+        run_id = payload["run_id"]
+        if not isinstance(run_id, str) or not run_id:
+            raise VerificationError("activity 协议 run_id 为空")
+        _require_component(run_id, "activity run_id")
+        if self.run_id is None:
+            self.run_id = run_id
+        elif run_id != self.run_id:
+            raise VerificationError("activity 协议 run_id 在同一轮发生变化")
+        attempt = payload["attempt"]
+        if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt <= 0:
+            raise VerificationError("activity 协议 attempt 必须是正整数")
+        event = payload["event"]
+        if event == "start":
+            if self.active is not None or attempt != len(self.completed) + 1:
+                raise VerificationError("activity 协议 start 顺序不合法")
+            self.active = {
+                "attempt": attempt,
+                "started_at": datetime.now(timezone.utc).isoformat(),  # noqa: UP017
+                "samples": [],
+            }
+            return
+        if event != "finish":
+            raise VerificationError("activity 协议 event 不受支持")
+        if self.active is None or attempt != self.active["attempt"]:
+            raise VerificationError("activity 协议 finish 顺序不合法")
+        self.active["finished_at"] = datetime.now(timezone.utc).isoformat()  # noqa: UP017
+        self.completed.append(self.active)
+        self.active = None
+
+    def add_sample(self, sample: dict[str, Any]) -> None:
+        if self.active is not None:
+            samples = self.active["samples"]
+            if isinstance(samples, list):
+                samples.append(sample)
+
+    def finalize(self) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        if self.buffer:
+            raise VerificationError("activity 协议存在未完整事件")
+        if self.active is not None:
+            raise VerificationError("activity 协议缺少 finish 事件")
+        if not self.completed or self.run_id is None:
+            raise VerificationError("未收到有效 activity 请求窗口")
+        samples = [sample for window in self.completed for sample in window["samples"]]
+        if not samples:
+            raise VerificationError("activity 请求窗口内未获得目标 CUDA PID 同步采样")
+        metadata = {
+            "protocol": "inherited-fd-v1",
+            "operator_code": self.operator_code,
+            "instance_id": self.instance_id,
+            "run_id": self.run_id,
+            "attempts": [
+                {
+                    "attempt": window["attempt"],
+                    "sample_count": len(window["samples"]),
+                    "started_at": window["started_at"],
+                    "finished_at": window["finished_at"],
+                }
+                for window in self.completed
+            ],
+        }
+        return samples, metadata
+
+
 def _process_group_exists(process_group_id: int) -> bool:
     try:
         os.killpg(process_group_id, 0)
@@ -510,17 +624,50 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
     before_rows = _process_rows(gpu["uuid"])
     argv = _load_argv(arguments.trigger_file)
     report["trigger"] = _redacted_command(argv)
-    trigger = subprocess.Popen(
-        argv,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    trigger_process_group_id = trigger.pid
-    samples: list[dict[str, Any]] = []
-    deadline = time.monotonic() + arguments.sample_window
+    activity_read_fd, activity_write_fd = os.pipe()
+    trigger: subprocess.Popen[Any] | None = None
+    trigger_process_group_id: int | None = None
     try:
-        while trigger.poll() is None and time.monotonic() < deadline:
+        os.set_blocking(activity_read_fd, False)
+        activity_nonce = secrets.token_hex(32)
+        activity = _ActivityProtocol(
+            nonce=activity_nonce,
+            operator_code=arguments.process_name,
+            instance_id=arguments.instance_id,
+        )
+        report["activity"] = {
+            "protocol": "inherited-fd-v1",
+            "operator_code": arguments.process_name,
+            "instance_id": arguments.instance_id,
+        }
+        trigger_environment = os.environ.copy()
+        trigger_environment.update(
+            {
+                ACTIVITY_FD_ENV: str(activity_write_fd),
+                ACTIVITY_NONCE_ENV: activity_nonce,
+            }
+        )
+        trigger = subprocess.Popen(
+            argv,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            env=trigger_environment,
+            pass_fds=(activity_write_fd,),
+        )
+        trigger_process_group_id = trigger.pid
+        os.close(activity_write_fd)
+        activity_write_fd = -1
+        sample_deadline = time.monotonic() + arguments.sample_window
+        trigger_deadline = time.monotonic() + arguments.trigger_timeout
+        while trigger.poll() is None:
+            activity.drain(activity_read_fd)
+            now = time.monotonic()
+            if now >= trigger_deadline:
+                raise VerificationError("真实推理触发命令超时")
+            if activity.active is None or now >= sample_deadline:
+                time.sleep(arguments.sample_interval)
+                continue
             current_inspect = _inspect(arguments.container)
             if current_inspect.get("Id") != container_id:
                 raise VerificationError("容器在同步采样期间发生重启或替换")
@@ -541,8 +688,9 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
                     for row in _gpu_rows()
                     if row["index"] == arguments.physical_gpu
                 )
-                if trigger.poll() is None:
-                    samples.append(
+                activity.drain(activity_read_fd)
+                if trigger.poll() is None and activity.active is not None:
+                    activity.add_sample(
                         {
                             "timestamp": datetime.now(timezone.utc).isoformat(),  # noqa: UP017
                             "gpu_memory_mib": memory,
@@ -550,18 +698,21 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
                         }
                     )
             time.sleep(arguments.sample_interval)
-        remaining = max(0.0, arguments.trigger_timeout)
-        try:
-            return_code = trigger.wait(timeout=remaining)
-        except subprocess.TimeoutExpired as error:
-            trigger.terminate()
-            raise VerificationError("真实推理触发命令超时") from error
+        activity.drain(activity_read_fd)
+        return_code = trigger.wait(timeout=0)
         if return_code != 0:
             raise VerificationError(f"真实推理触发命令失败，退出码 {return_code}")
+        samples, activity_metadata = activity.finalize()
     finally:
-        _terminate_process_group(trigger, trigger_process_group_id)
-    if not samples:
-        raise VerificationError("真实推理期间未获得目标 CUDA PID 同步采样")
+        try:
+            if activity_write_fd >= 0:
+                os.close(activity_write_fd)
+        finally:
+            try:
+                if trigger is not None and trigger_process_group_id is not None:
+                    _terminate_process_group(trigger, trigger_process_group_id)
+            finally:
+                os.close(activity_read_fd)
     final_inspect = _inspect(arguments.container)
     if final_inspect.get("Id") != container_id:
         raise VerificationError("容器在验证期间发生重启或替换")
@@ -596,6 +747,7 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
                 }
                 for row in before_rows
             ],
+            "activity": activity_metadata,
             "synchronous_samples": samples,
         }
     )

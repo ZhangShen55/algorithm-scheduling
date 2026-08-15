@@ -13,7 +13,9 @@ import urllib.request
 import uuid
 import wave
 from base64 import b64decode
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -36,6 +38,7 @@ assert REGISTRATION_SPEC is not None and REGISTRATION_SPEC.loader is not None
 REGISTRATION_MODULE = importlib.util.module_from_spec(REGISTRATION_SPEC)
 REGISTRATION_SPEC.loader.exec_module(REGISTRATION_MODULE)
 load_registration_expected = REGISTRATION_MODULE.load_expected
+registration_atomic_json = REGISTRATION_MODULE.atomic_json
 
 SMOKE_SPEC = importlib.util.spec_from_file_location(
     "task9_run_operator_smoke", SCRIPTS / "run_operator_smoke.py"
@@ -116,6 +119,12 @@ class _Server:
         self.httpd.shutdown()
         self.thread.join(timeout=3)
         self.httpd.server_close()
+
+
+@contextmanager
+def _face_servers(handler: Any) -> Iterator[list[str]]:
+    with ExitStack() as stack:
+        yield [stack.enter_context(_Server({}, handler)) for _ in range(3)]
 
 
 def _expected_instances() -> list[dict[str, Any]]:
@@ -339,6 +348,47 @@ def test_registration_verifier_accepts_exact_ready_heartbeat_topology(tmp_path: 
     assert report["git_sha"] == SHA
     assert report["summary"] == {"expected": 24, "observed": 24, "valid": 24}
     assert stat.S_IMODE(output.stat().st_mode) == 0o600
+
+
+def test_registration_report_publish_is_idempotent_but_rejects_divergent_rerun(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "registration.json"
+    first = {"status": "通过", "sequence": 1}
+    divergent = {"status": "失败", "sequence": 2}
+
+    registration_atomic_json(output, first)
+    original = output.read_bytes()
+    registration_atomic_json(output, first)
+    with pytest.raises(ValueError, match="已存在|write-once"):
+        registration_atomic_json(output, divergent)
+
+    assert output.read_bytes() == original
+
+
+def test_registration_report_concurrent_divergent_writers_keep_first_bytes(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "registration.json"
+    payloads = [
+        {"writer": "first", "sequence": 1},
+        {"writer": "second", "sequence": 2},
+    ]
+
+    def publish(payload: dict[str, Any]) -> tuple[str, bytes]:
+        try:
+            registration_atomic_json(output, payload)
+        except ValueError:
+            return "rejected", b""
+        return "published", output.read_bytes()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(publish, payloads))
+
+    assert sorted(status for status, _ in results) == ["published", "rejected"]
+    published_bytes = next(data for status, data in results if status == "published")
+    assert output.read_bytes() == published_bytes
+    assert list(output.parent.glob(f".{output.name}.*.tmp")) == []
 
 
 @pytest.mark.parametrize(
@@ -964,6 +1014,8 @@ def _run_smoke(
     endpoints_as_file: bool = False,
     endpoint_overrides: dict[str, Any] | None = None,
     extra_arguments: tuple[str, ...] = (),
+    environment: dict[str, str] | None = None,
+    pass_fds: tuple[int, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     endpoints = {
         code: http_url
@@ -1028,6 +1080,8 @@ def _run_smoke(
         capture_output=True,
         check=False,
         timeout=15,
+        env=environment,
+        pass_fds=pass_fds,
     )
 
 
@@ -1095,6 +1149,67 @@ def test_smoke_runner_supports_file_endpoint_and_append_only_instance_run(
         tmp_path / "endpoints.json"
     )
     assert reproduction[reproduction.index("--run-id") + 1] == "auto"
+
+
+def test_smoke_runner_emits_bound_activity_events_around_each_real_request(
+    tmp_path: Path,
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    read_fd, write_fd = os.pipe()
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "GPU_EVIDENCE_ACTIVITY_FD": str(write_fd),
+            "GPU_EVIDENCE_ACTIVITY_NONCE": "verifier-generated-nonce",
+        }
+    )
+    try:
+        with _WebSocketServer() as ws_url, _Server({}, _smoke_handler(tmp_path)) as http_url:
+            completed = _run_smoke(
+                tmp_path,
+                http_url,
+                ws_url,
+                manifest,
+                cases="ocr",
+                endpoint_overrides={"ocr": {"ocr-gpu0": http_url}},
+                extra_arguments=(
+                    "--operator",
+                    "ocr",
+                    "--instance",
+                    "ocr-gpu0",
+                    "--run-id",
+                    "activity-run",
+                    "--repeat",
+                    "2",
+                ),
+                environment=environment,
+                pass_fds=(write_fd,),
+            )
+    finally:
+        os.close(write_fd)
+    try:
+        raw_events = b""
+        while chunk := os.read(read_fd, 65536):
+            raw_events += chunk
+    finally:
+        os.close(read_fd)
+
+    assert completed.returncode == 0, completed.stderr
+    events = [json.loads(line) for line in raw_events.splitlines()]
+    assert [event["event"] for event in events] == ["start", "finish", "start", "finish"]
+    for attempt, pair in enumerate((events[:2], events[2:]), start=1):
+        assert all(
+            event
+            == {
+                "event": event["event"],
+                "nonce": "verifier-generated-nonce",
+                "operator_code": "ocr",
+                "instance_id": "ocr-gpu0",
+                "run_id": "activity-run",
+                "attempt": attempt,
+            }
+            for event in pair
+        )
 
 
 @pytest.mark.parametrize(
@@ -1192,13 +1307,15 @@ def test_instance_smoke_rejects_instance_id_from_another_operator(
 
 def test_smoke_runner_calls_all_eight_operator_contracts_and_redacts(tmp_path: Path) -> None:
     manifest = _fixture_manifest(tmp_path)
-    with _WebSocketServer() as ws_url, _Server({}, _smoke_handler(tmp_path)) as http_url:
+    handler = _smoke_handler(tmp_path)
+    with _WebSocketServer() as ws_url, _face_servers(handler) as face_endpoints:
+        http_url = face_endpoints[0]
         completed = _run_smoke(
             tmp_path,
             http_url,
             ws_url,
             manifest,
-            face_endpoints=[http_url, http_url + "/b", http_url + "/c"],
+            face_endpoints=face_endpoints,
         )
 
     assert completed.returncode == 0, completed.stderr
@@ -1263,16 +1380,17 @@ def test_facerec_requires_three_distinct_instances_and_exact_created_match(
     other = tmp_path / "wrong"
     other.mkdir()
     wrong_manifest = _fixture_manifest(other)
-    with _WebSocketServer() as ws_url, _Server(
-        {}, _smoke_handler(other, wrong_face=True)
-    ) as http_url:
+    with _WebSocketServer() as ws_url, _face_servers(
+        _smoke_handler(other, wrong_face=True)
+    ) as face_endpoints:
+        http_url = face_endpoints[0]
         wrong = _run_smoke(
             other,
             http_url,
             ws_url,
             wrong_manifest,
             cases="facerec",
-            face_endpoints=[http_url, http_url + "/b", http_url + "/c"],
+            face_endpoints=face_endpoints,
         )
     assert wrong.returncode != 0
     assert "刚创建" in wrong.stderr
@@ -1280,19 +1398,86 @@ def test_facerec_requires_three_distinct_instances_and_exact_created_match(
     missing = tmp_path / "missing-managed-face"
     missing.mkdir()
     missing_manifest = _fixture_manifest(missing)
-    with _WebSocketServer() as ws_url, _Server(
-        {}, _smoke_handler(missing, missing_managed_face=True)
-    ) as http_url:
+    with _WebSocketServer() as ws_url, _face_servers(
+        _smoke_handler(missing, missing_managed_face=True)
+    ) as face_endpoints:
+        http_url = face_endpoints[0]
         absent = _run_smoke(
             missing,
             http_url,
             ws_url,
             missing_manifest,
             cases="facerec",
-            face_endpoints=[http_url, http_url + "/b", http_url + "/c"],
+            face_endpoints=face_endpoints,
         )
     assert absent.returncode != 0
     assert "实例 C" in absent.stderr and "刚创建" in absent.stderr
+
+
+@pytest.mark.parametrize(
+    "endpoints",
+    (
+        [
+            "http://face.example:8003",
+            "http://face.example:8003/",
+            "http://face.example:8003//",
+        ],
+        [
+            "http://FACE.EXAMPLE",
+            "http://face.example:80/",
+            "http://Face.Example//",
+        ],
+    ),
+)
+def test_facerec_resolve_endpoint_rejects_same_normalized_origin(
+    endpoints: list[str],
+) -> None:
+    configured = {
+        f"facerec-gpu{index}": endpoint for index, endpoint in enumerate(endpoints)
+    }
+
+    with pytest.raises(ValueError, match="三个不同实例"):
+        SMOKE_MODULE.resolve_endpoint(
+            {"facerec": configured}, "facerec", "facerec-gpu0"
+        )
+
+
+@pytest.mark.parametrize(
+    "endpoints",
+    (
+        [
+            "http://face.example:8003",
+            "http://face.example:8003/",
+            "http://face.example:8003//",
+        ],
+        [
+            "http://FACE.EXAMPLE",
+            "http://face.example:80/",
+            "http://Face.Example//",
+        ],
+    ),
+)
+def test_facerec_runner_rejects_same_normalized_origin(endpoints: list[str]) -> None:
+    with pytest.raises(RuntimeError, match="三个不同实例"):
+        SMOKE_MODULE.smoke_facerec(object(), json.dumps(endpoints), {}, 1)
+
+
+def test_facerec_resolve_endpoint_accepts_three_distinct_ports() -> None:
+    configured = {
+        f"facerec-gpu{index}": f"http://face.example:{8003 + index}/"
+        for index in range(3)
+    }
+
+    endpoints, target = SMOKE_MODULE.resolve_endpoint(
+        {"facerec": configured}, "facerec", "facerec-gpu1"
+    )
+
+    assert target == "facerec-gpu1"
+    assert {SMOKE_MODULE.normalized_http_origin(item) for item in endpoints} == {
+        ("http", "face.example", 8003),
+        ("http", "face.example", 8004),
+        ("http", "face.example", 8005),
+    }
 
 
 @pytest.mark.parametrize(
@@ -1356,16 +1541,17 @@ def test_facerec_cleanup_failure_is_reported(
     tmp_path: Path, handler_kwargs: dict[str, bool], expected: str
 ) -> None:
     manifest = _fixture_manifest(tmp_path)
-    with _WebSocketServer() as ws_url, _Server(
-        {}, _smoke_handler(tmp_path, **handler_kwargs)
-    ) as http_url:
+    with _WebSocketServer() as ws_url, _face_servers(
+        _smoke_handler(tmp_path, **handler_kwargs)
+    ) as face_endpoints:
+        http_url = face_endpoints[0]
         completed = _run_smoke(
             tmp_path,
             http_url,
             ws_url,
             manifest,
             cases="facerec",
-            face_endpoints=[http_url, http_url + "/b", http_url + "/c"],
+            face_endpoints=face_endpoints,
         )
     assert completed.returncode != 0
     assert expected in completed.stderr
