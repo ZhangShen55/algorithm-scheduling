@@ -167,6 +167,37 @@ wheel。但 PyTorch 随后仍需下载约十余个 CUDA 12.4 拆分 wheel 和 Tr
 后续七镜像未开始。该中止是历史事实，但判定规则已被本节新策略取代：0.2-0.6 MB/s
 仍是明确进展，不再构成中止理由。不得把单个 ASR 真机推理通过外推为八镜像通过。
 
+### 八镜像最终构建结果（2026-08-15）
+
+Wheel 和基础镜像允许在 Docker build 内在线下载的策略已取得真实证据。FaceRec 从 Paddle
+Wheel 页面完整下载并安装约 1362.1 MB 的
+`fastdeploy_gpu_python-1.0.7-cp310-cp310-manylinux1_x86_64.whl`；只要网络、缓存、磁盘
+写入或相关进程存在进展，三个独立监控任务均保持等待，没有因下载耗时中断构建。
+
+Text Analysis 首轮因默认 PyPI 的连接重置和 15 秒读取超时失败。增加可覆盖的清华索引、
+300 秒超时、10 次重试和 Wheel 优先后，依赖安装通过；随后发现 PyArmor 试用许可证无法
+以默认强度处理 `app/models/entities.py`。批准的方案 A 将 PyArmor 固定为 `8.5.12`，其余
+57 个源码文件保持默认强度混淆，`entities.py` 单独以 `--obf-code 0` 混淆并安装回同一
+产物目录。运行镜像不包含该文件的明文副本，但该文件的函数级保护强度低于其余源码。
+
+提交 `e65dd576b3b53b73a874bb131449ef031423057b` 已在目标 x86_64 服务器完成统一构建。
+以下八个 `v1.0_260812` 镜像均存在，逐个 inspect 的
+`org.opencontainers.image.revision` 全部精确等于该提交：
+
+- `seacraft-asr-offline`
+- `seacraft-asr-online`
+- `algorithm-ocr`
+- `algorithm-vbas`
+- `algorithm-facerec`
+- `algorithm-screen-det`
+- `algorithm-ppt-slice`
+- `algorithm-text-analysis`
+
+统一构建日志终态为 `PASS: eight images built and inspected`。Text Analysis 成品镜像额外完成
+导入和启动 Smoke：`app.main:app`、`ModelCard` 均可导入，产物文本中不存在明文
+`class ModelCard`，容器启动后 `GET /openapi.json` 返回 HTTP 200。阶段 2 至此完成；该结论
+不包含后续 24 实例、GPU 真实性、注册、真实推理、压力、恢复和完整泳道。
+
 ## 阶段 3：平台和逐卡算子拓扑
 
 ```bash
@@ -266,9 +297,9 @@ deploy/scripts/restore-existing-containers "$SNAPSHOT" "${SNAPSHOT}.paused.jsonl
   --output-markdown "$RELEASE_ROOT/summary/report.md"
 ```
 
-## 未执行声明
+## 当前未执行声明
 
-在本台 MacBook 上只能运行 `test_milestone_2b_*`、平台全量测试、服务测试、静态
-lint/type/compile、Compose 解析、Shell 语法和严格 OpenSpec 校验。未连接远端，
-因此不能声明真实 x86_64/三卡、八镜像构建、24 实例注册、GPU PID、真实模型/课程媒体、
-反例/压力/恢复或完整离线/在线泳道通过。
+本地静态、单元和部署合同测试已执行；目标 x86_64 服务器的模型资产校验与八镜像构建也已
+执行，不能再表述为“未连接远端”或“八镜像未构建”。当前尚未完成的是平台/基础设施和
+24 个算子实例拓扑、18 个 GPU 实例真实性、注册与心跳、八类真实模型/课程媒体 Smoke、
+反例、压力、恢复和完整离线/在线泳道。后续报告必须继续逐项给出真实证据或中文未执行原因。

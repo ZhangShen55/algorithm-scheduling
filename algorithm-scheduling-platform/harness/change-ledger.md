@@ -1,5 +1,29 @@
 # Change Ledger
 
+## 2026-08-15 - 八镜像构建完成与 Text Analysis 试用版混淆边界
+
+- 下载故障：提交 `e66a07136e9c594cf8fec3d125ff69e48ca4904e` 的真实构建已完成前七个
+  镜像，Text Analysis 的 builder/runtime 通过默认 PyPI 并行安装依赖时连续发生连接重置和
+  15 秒读取超时，最终把没有取得 `pydantic` 候选报告为 `No matching distribution found`。
+  修复为可覆盖的清华 PyPI 索引，并对三处网络 pip 安装统一使用 300 秒超时、10 次重试和
+  Wheel 优先；后续真机构建确认 requirements 和 PyArmor 均从该索引成功下载。
+- 混淆故障：下载修复后的提交 `f2ef468d02aea4221b79986fb512732fdf8621b0` 已完成前七个
+  新 revision 镜像，但未锁版本的 PyArmor 实际解析为 `9.2.6 trial`，在处理
+  `app/models/entities.py` 时报告 `out of license`。隔离复验确认 `8.5.12 trial` 默认强度
+  仍在同一文件失败；排除该文件后，其余 57 个源码文件可全部混淆，且该文件单独使用
+  `--obf-code 0` 可成功生成混淆产物。
+- 修复边界：Text Analysis 锁定 `PyArmor 8.5.12`；递归阶段只排除超限的
+  `app/models/entities.py`，随后以 `--obf-code 0` 单独处理并将产物安装回统一的
+  `/build/obf`。运行镜像仍只复制混淆目录，不复制明文 `entities.py`。这一个数据模型文件
+  关闭函数级混淆，保护强度低于其余源码；后续若提供商业许可证，应恢复全量默认强度。
+- 最终证据：提交 `e65dd576b3b53b73a874bb131449ef031423057b` 在 x86_64 目标服务器
+  完成统一 `build-images`，八个 `v1.0_260812` 镜像逐一 inspect，OCI revision 全部精确匹配，
+  日志终态为 `PASS: eight images built and inspected`。Text Analysis 成品镜像可导入
+  `app.main:app` 和 `ModelCard`，容器内产物不含明文 `class ModelCard`；实际启动后
+  `GET /openapi.json` 返回 HTTP 200。构建期间根盘最低值未越过 100 GiB 门禁，无 OOM。
+- 证据范围：本记录完成阶段 2 的八镜像构建和 Text Analysis 启动 Smoke；24 实例拓扑、
+  三卡 GPU 真实性、注册、八类真实推理、反例、压力、恢复及完整泳道仍属于后续阶段。
+
 ## 2026-08-14 - ASR Offline 运行配置收敛与固定日志
 
 - 决策：`/get_status` 的 `appVersion` 改为代码常量 `asr:latest`，不再从 TOML 读取；保留
