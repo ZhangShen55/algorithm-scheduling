@@ -9,6 +9,7 @@ import stat
 import subprocess
 import threading
 import time
+import urllib.request
 import uuid
 import wave
 from base64 import b64decode
@@ -301,6 +302,28 @@ def test_registration_verifier_accepts_instance_subset_among_other_rows(
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report["selection"] == {"mode": "instance", "values": ["ocr-gpu0"]}
     assert report["summary"] == {"expected": 1, "observed": 1, "valid": 1}
+
+
+def test_registration_instance_subset_rejects_rogue_instance(
+    tmp_path: Path,
+) -> None:
+    instances = _expected_instances()
+    instances.append(
+        {
+            **instances[0],
+            "instance_id": "rogue-gpu0",
+            "service_url": "http://rogue-gpu0:9999",
+        }
+    )
+    with _Server(_events(instances)) as url:
+        completed = _run_registration(
+            tmp_path,
+            url,
+            timeout="0.08",
+            extra_arguments=("--instance", "ocr-gpu0"),
+        )
+    assert completed.returncode != 0
+    assert "rogue-gpu0" in completed.stderr
 
 
 def test_registration_verifier_accepts_exact_ready_heartbeat_topology(tmp_path: Path) -> None:
@@ -644,6 +667,49 @@ def test_smoke_entrypoint_and_manifest_are_strict() -> None:
     assert all("checks" in case and case["checks"] for case in manifest["cases"])
 
 
+def test_gpu_acceptance_docs_contain_complete_executable_commands() -> None:
+    readme = (DEPLOY / "README.md").read_text(encoding="utf-8")
+    scenario = (
+        PLATFORM_ROOT / "harness/scenarios/milestone-2b-deploy.md"
+    ).read_text(encoding="utf-8")
+    for required in (
+        "--release-tag",
+        "--git-sha",
+        "--reports-root",
+        "--fixture-manifest",
+        "--external-fixture-root",
+        "--fixture-target-root",
+        "--result-root",
+        "--endpoints-json",
+        "--operator",
+        "--instance",
+        "--run-id",
+        "auto",
+        "--repeat",
+        "--hold-seconds",
+        "--instance-id",
+    ):
+        assert required in readme
+    assert "run-operator-smoke is delivered by the later" not in readme
+    assert "http://192.168.29.11:19090" in scenario
+    trigger_line = next(
+        line
+        for line in scenario.splitlines()
+        if line.startswith("[") and "run-operator-smoke" in line
+    )
+    trigger_argv = json.loads(trigger_line)
+    for option, value in (
+        ("--operator", "asr_offline"),
+        ("--instance", "asr-offline-gpu0"),
+        ("--run-id", "auto"),
+        ("--repeat", "1"),
+        ("--hold-seconds", "30"),
+    ):
+        option_index = trigger_argv.index(option)
+        assert trigger_argv[option_index + 1] == value
+    assert "--instance-id asr-offline-gpu0" in scenario
+
+
 def _fixture_manifest(tmp_path: Path) -> Path:
     source_root = tmp_path / "fixtures"
     source_root.mkdir(mode=0o700)
@@ -969,13 +1035,12 @@ def test_smoke_runner_supports_file_endpoint_and_append_only_instance_run(
     tmp_path: Path,
 ) -> None:
     manifest = _fixture_manifest(tmp_path)
-    calls = 0
+    call_times: list[float] = []
     base_handler = _smoke_handler(tmp_path)
 
     def counted_handler(path: str, headers: Any, body: bytes) -> tuple[int, Any]:
-        nonlocal calls
         if path == "/ocr/prediction":
-            calls += 1
+            call_times.append(time.monotonic())
         return base_handler(path, headers, body)
 
     with _WebSocketServer() as ws_url, _Server({}, counted_handler) as http_url:
@@ -996,7 +1061,7 @@ def test_smoke_runner_supports_file_endpoint_and_append_only_instance_run(
                 "--repeat",
                 "2",
                 "--hold-seconds",
-                "0.01",
+                "0.08",
             ),
         )
         run_root = (
@@ -1009,8 +1074,6 @@ def test_smoke_runner_supports_file_endpoint_and_append_only_instance_run(
         )
         cases = json.loads((run_root / "cases.json").read_text(encoding="utf-8"))
         reproduction = shlex.split(cases[0]["command"])
-        run_id_index = reproduction.index("--run-id") + 1
-        reproduction[run_id_index] = "gpu0-ocr-replay"
         replay = subprocess.run(
             reproduction,
             cwd=PLATFORM_ROOT,
@@ -1021,15 +1084,17 @@ def test_smoke_runner_supports_file_endpoint_and_append_only_instance_run(
 
     assert completed.returncode == 0, completed.stderr
     assert replay.returncode == 0, replay.stderr
-    assert calls == 4
+    assert len(call_times) > 4
+    assert call_times[-1] - call_times[0] >= 0.12
     report = json.loads((run_root / "ocr.json").read_text(encoding="utf-8"))
     assert report["target"] == "ocr-gpu0"
     assert report["summary"]["repeat"] == 2
-    assert len(report["summary"]["attempts"]) == 2
+    assert len(report["summary"]["attempts"]) > 2
     assert cases[0]["target"] == "ocr-gpu0"
     assert reproduction[reproduction.index("--endpoints-json") + 1] == str(
         tmp_path / "endpoints.json"
     )
+    assert reproduction[reproduction.index("--run-id") + 1] == "auto"
 
 
 @pytest.mark.parametrize(
@@ -1250,6 +1315,30 @@ def test_ppt_callback_advertise_rejects_non_http_or_userinfo(
     assert completed.returncode != 0
     assert "callback advertise" in completed.stderr
     assert "password" not in completed.stderr
+
+
+def test_callback_capture_binds_explicit_advertise_port_and_receives_post(
+    unused_tcp_port: int,
+) -> None:
+    payload = {"operator_task_id": "ppt-callback-test", "status": 60}
+    advertise_base_url = f"http://192.168.29.11:{unused_tcp_port}"
+
+    with SMOKE_MODULE.CallbackCapture(
+        listen_host="127.0.0.1",
+        advertise_base_url=advertise_base_url,
+    ) as callback:
+        assert callback.server.server_address[1] == unused_tcp_port
+        assert callback.url == f"{advertise_base_url}/terminal"
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{unused_tcp_port}/terminal",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=2) as response:
+            assert response.status == 204
+        assert callback.event.wait(1)
+        assert callback.payload == payload
 
 
 @pytest.mark.parametrize(

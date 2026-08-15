@@ -376,6 +376,17 @@ def main() -> int:
                     expected,
                     strict_observed=selection["mode"] == "full",
                 )
+                if isinstance(rows, list):
+                    rogue = sorted(
+                        {
+                            str(row.get("instance_id"))
+                            for row in rows
+                            if isinstance(row, dict)
+                            and row.get("instance_id") not in authoritative
+                        }
+                    )
+                    if rogue:
+                        last_issues.append("实例不在 Compose 权威清单: " + ", ".join(rogue))
                 if not last_issues:
                     last_issues.extend(
                         heartbeat_issues(

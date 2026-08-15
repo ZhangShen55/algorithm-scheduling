@@ -679,6 +679,41 @@ def test_stopped_mode_rejects_recreated_container_id(
     assert "容器 ID" in _report(gpu_runtime)["reason"]
 
 
+@pytest.mark.parametrize("mismatch_source", ("argument", "inspect"))
+def test_stopped_mode_requires_three_way_instance_id_match(
+    gpu_runtime: dict[str, Any], mismatch_source: str
+) -> None:
+    initial = _run(gpu_runtime, "--instance-id", "asr-offline-gpu0")
+    assert initial.returncode == 0, initial.stderr
+    prior = gpu_runtime["output"]
+    recovery_output = prior.parent.parent / f"recovery/{mismatch_source}.json"
+    recovery_output.parent.mkdir(exist_ok=True)
+    gpu_runtime["output"] = recovery_output
+    inspect = _base_inspect(running=False)
+    instance_argument = "asr-offline-gpu0"
+    if mismatch_source == "argument":
+        instance_argument = "asr-offline-gpu1"
+    else:
+        inspect["Config"]["Env"][0] = "PLATFORM_INSTANCE_ID=asr-offline-gpu1"
+    gpu_runtime["inspect_path"].write_text(json.dumps(inspect), encoding="utf-8")
+    gpu_runtime["env"]["FAKE_PROCESS_ROWS_BEFORE"] = ""
+    completed = _run(
+        gpu_runtime,
+        "--instance-id",
+        instance_argument,
+        "--assert-stopped",
+        "--evidence",
+        str(prior),
+    )
+    assert completed.returncode != 0
+    report = _report(gpu_runtime)
+    assert "instance" in report["reason"].lower() or "实例" in report["reason"]
+    expected_target = (
+        "asr-offline-gpu1" if mismatch_source == "inspect" else "asr-offline-gpu0"
+    )
+    assert report["target"]["instance_id"] == expected_target
+
+
 def test_stopped_mode_rejects_prior_evidence_stored_under_wrong_sha(
     gpu_runtime: dict[str, Any],
 ) -> None:

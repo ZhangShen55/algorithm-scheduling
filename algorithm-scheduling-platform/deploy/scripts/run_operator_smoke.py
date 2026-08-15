@@ -72,6 +72,15 @@ def safe_component(value: str, pattern: re.Pattern[str], name: str) -> str:
     return value
 
 
+def resolve_run_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if value == "auto":
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        return f"auto-{timestamp}-{uuid.uuid4().hex}"
+    return safe_component(value, TAG_PATTERN, "run ID")
+
+
 def reject_symlink_chain(path: Path, name: str) -> None:
     absolute = path.absolute()
     for candidate in (*reversed(absolute.parents), absolute):
@@ -388,7 +397,8 @@ class CallbackCapture:
         self.advertise_scheme = parsed.scheme
         self.advertise_host = parsed.hostname
         self.advertise_port = parsed.port
-        self.server = ThreadingHTTPServer((listen_host, 0), Handler)
+        listen_port = self.advertise_port if self.advertise_port is not None else 0
+        self.server = ThreadingHTTPServer((listen_host, listen_port), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
     def __enter__(self) -> CallbackCapture:
@@ -827,8 +837,7 @@ def reproduction_command(
         command.extend(("--operator", code, "--instance", str(args.instance)))
     else:
         command.extend(("--cases", code))
-    if args.run_id is not None:
-        command.extend(("--run-id", str(args.run_id)))
+    command.extend(("--run-id", "auto"))
     if args.repeat != 1:
         command.extend(("--repeat", str(args.repeat)))
     if args.hold_seconds:
@@ -865,11 +874,7 @@ def main() -> int:
             if args.instance is not None
             else None
         )
-        run_id = (
-            safe_component(args.run_id, TAG_PATTERN, "run ID")
-            if args.run_id is not None
-            else None
-        )
+        run_id = resolve_run_id(args.run_id)
         if instance_id is not None and run_id is None:
             raise ValueError("逐实例 Smoke 必须指定 --run-id 以隔离追加证据")
         endpoints = load_endpoints(args.endpoints_json)
@@ -1002,8 +1007,9 @@ def main() -> int:
                         if code == "facerec"
                         else str(resolved_endpoints[code])
                     )
-                    attempts = []
-                    for _ in range(args.repeat):
+                    attempts: list[dict[str, Any]] = []
+                    hold_deadline = time.monotonic() + args.hold_seconds
+                    while len(attempts) < args.repeat or time.monotonic() < hold_deadline:
                         if code == "ppt_slice":
                             attempt = smoke_ppt(
                                 http,
@@ -1021,9 +1027,13 @@ def main() -> int:
                                 http, endpoint_value, fixtures, args.timeout_seconds
                             )
                         attempts.append(attempt)
-                    summary = {**attempts[-1], "repeat": args.repeat, "attempts": attempts}
-                    if args.hold_seconds:
-                        time.sleep(args.hold_seconds)
+                    summary = {
+                        **attempts[-1],
+                        "repeat": args.repeat,
+                        "attempt_count": len(attempts),
+                        "hold_seconds": args.hold_seconds,
+                        "attempts": attempts,
+                    }
                     evidence_payload = {
                         "schema_version": 1,
                         "evidence_type": "operator_smoke",

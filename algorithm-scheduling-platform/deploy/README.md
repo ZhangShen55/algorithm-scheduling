@@ -228,25 +228,37 @@ smoke request is still running. The trigger file is a JSON argv array and is exe
 without a shell; command arguments are not copied into the report:
 
 ```bash
-cat >/tmp/asr-offline-gpu0-trigger.json <<'JSON'
-["/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/scripts/run-operator-smoke", "--operator", "asr_offline", "--instance", "asr-offline-gpu0"]
+cat >/tmp/asr-offline-gpu0-trigger.json <<JSON
+["/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/scripts/run-operator-smoke", "--release-tag", "${RELEASE_TAG}", "--git-sha", "${RELEASE_GIT_SHA}", "--reports-root", "/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/reports", "--fixture-manifest", "/root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/manifest.json", "--external-fixture-root", "/root/workspace/.algorithm-scheduling-fixtures/v1.0_260812", "--fixture-target-root", "/data/course/_harness/fixtures", "--result-root", "/data/result/_harness", "--endpoints-json", "/root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/endpoints.json", "--operator", "asr_offline", "--instance", "asr-offline-gpu0", "--run-id", "auto", "--repeat", "1", "--hold-seconds", "30"]
 JSON
 
 deploy/scripts/verify-gpu-instance \
   --container asr-offline-gpu0 \
+  --instance-id asr-offline-gpu0 \
   --physical-gpu 0 \
   --process-name asr_offline \
   --trigger-file /tmp/asr-offline-gpu0-trigger.json \
   --output "deploy/reports/milestone-2b/releases/${RELEASE_TAG}/${RELEASE_GIT_SHA}/gpu-instances/asr-offline-gpu0.json"
 ```
 
-`run-operator-smoke` is delivered by the later smoke Harness task; do not replace it
-with `sleep` or a health request. A PASS requires a target CUDA PID sampled while that
-real trigger is alive, an exact full-container-ID cgroup mapping and a matching process
-name. After stopping the same container, use `--assert-stopped --evidence <prior-json>`
-and write the new report under the release `recovery/` directory. Existing reports are
-never overwritten. Local fake-runtime tests prove verifier behavior only; they do not
-prove that the target NVIDIA server or any operator passed GPU acceptance.
+Do not replace the real Smoke trigger with `sleep` or a health request. A PASS requires
+a target CUDA PID sampled while that trigger is issuing inference requests, an exact
+full-container-ID cgroup mapping and a matching process name. After stopping the same
+container, run the complete stopped check:
+
+```bash
+deploy/scripts/verify-gpu-instance \
+  --container asr-offline-gpu0 \
+  --instance-id asr-offline-gpu0 \
+  --physical-gpu 0 \
+  --process-name asr_offline \
+  --assert-stopped \
+  --evidence "deploy/reports/milestone-2b/releases/${RELEASE_TAG}/${RELEASE_GIT_SHA}/gpu-instances/asr-offline-gpu0.json" \
+  --output "deploy/reports/milestone-2b/releases/${RELEASE_TAG}/${RELEASE_GIT_SHA}/recovery/asr-offline-gpu0-stopped.json"
+```
+
+Existing reports are never overwritten. Local fake-runtime tests prove verifier behavior
+only; they do not prove that the target NVIDIA server or any operator passed GPU acceptance.
 
 Current VBas and ScreenDet deployment uses plain models. Their encrypted directories
 and keys are excluded from image contexts. If encrypted mode is introduced later, pass

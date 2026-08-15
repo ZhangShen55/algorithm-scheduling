@@ -222,8 +222,13 @@ worker；同一实例 ID 不得被两个容器复用。容器配置只读挂载 
 shell；输出只能写入当前 release 的 `gpu-instances/`，不能覆盖已有证据：
 
 ```bash
+cat >/tmp/asr-offline-gpu0-trigger.json <<JSON
+["/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/scripts/run-operator-smoke", "--release-tag", "${RELEASE_TAG}", "--git-sha", "${EXPECTED_GIT_SHA}", "--reports-root", "${REPORT_ROOT}", "--fixture-manifest", "/root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/manifest.json", "--external-fixture-root", "/root/workspace/.algorithm-scheduling-fixtures/v1.0_260812", "--fixture-target-root", "/data/course/_harness/fixtures", "--result-root", "/data/result/_harness", "--endpoints-json", "/root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/endpoints.json", "--operator", "asr_offline", "--instance", "asr-offline-gpu0", "--run-id", "auto", "--repeat", "1", "--hold-seconds", "30"]
+JSON
+
 deploy/scripts/verify-gpu-instance \
-  --container asr-offline-gpu0 --physical-gpu 0 --process-name asr_offline \
+  --container asr-offline-gpu0 --instance-id asr-offline-gpu0 \
+  --physical-gpu 0 --process-name asr_offline \
   --trigger-file /tmp/asr-offline-gpu0-trigger.json \
   --output "$RELEASE_ROOT/gpu-instances/asr-offline-gpu0.json"
 ```
@@ -259,7 +264,7 @@ deploy/scripts/run-operator-smoke \
   --external-fixture-root /root/workspace/.algorithm-scheduling-fixtures/v1.0_260812 \
   --fixture-target-root /data/course/_harness/fixtures \
   --result-root /data/result/_harness \
-  --callback-advertise-base-url http://127.0.0.1:19090 \
+  --callback-advertise-base-url http://192.168.29.11:19090 \
   --endpoints-json /root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/endpoints.json
 ```
 

@@ -644,11 +644,20 @@ def _verify_stopped(arguments: argparse.Namespace, report: dict[str, Any]) -> No
     evidence = _read_prior_evidence(arguments.evidence)
     container = evidence.get("container", {})
     gpu = evidence.get("gpu", {})
+    inspect = _inspect(arguments.container)
+    current_instance_id = _environment(inspect).get("PLATFORM_INSTANCE_ID")
+    if not isinstance(current_instance_id, str) or not current_instance_id:
+        raise VerificationError("当前 stopped 容器缺少 PLATFORM_INSTANCE_ID")
+    report["target"]["instance_id"] = current_instance_id
     if container.get("name") != arguments.container:
         raise VerificationError("先前证据的容器名与参数不一致")
+    prior_instance_id = container.get("instance_id")
+    if arguments.instance_id != prior_instance_id:
+        raise VerificationError("参数 instance ID 与先前证据不一致")
+    if current_instance_id != prior_instance_id:
+        raise VerificationError("当前容器 PLATFORM_INSTANCE_ID 与先前证据不一致")
     if gpu.get("physical_index") != arguments.physical_gpu:
         raise VerificationError("先前证据的物理 GPU 与参数不一致")
-    inspect = _inspect(arguments.container)
     if inspect.get("State", {}).get("Running") is True:
         raise VerificationError("--assert-stopped 时目标容器仍在运行")
     if inspect.get("Id") != container.get("id"):
