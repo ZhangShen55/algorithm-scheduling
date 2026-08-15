@@ -19,13 +19,13 @@ def setup_logging() -> None:
     for h in root.handlers[:]:
         root.removeHandler(h)
 
-    # 2. 创建固定目录的按日日志归档，保留近7天
+    # 2. 创建固定目录的按日日志归档，当日加六个归档不超过7天
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     file_hdl = TimedRotatingFileHandler(
         LOG_DIR / "asr_service.log",
         when="midnight",
         interval=1,
-        backupCount=7,
+        backupCount=6,
         encoding="utf-8",
     )
     console_hdl = logging.StreamHandler(sys.stdout)

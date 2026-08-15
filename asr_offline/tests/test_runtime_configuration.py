@@ -41,7 +41,7 @@ class RuntimeConfigurationTests(unittest.TestCase):
             settings._cfg.clear()
             settings._cfg.update(original_config)
 
-    def test_logging_uses_fixed_daily_rotation_with_seven_backups(self) -> None:
+    def test_logging_keeps_at_most_seven_calendar_days(self) -> None:
         from app.core import logging as asr_logging
 
         root = logging.getLogger()
@@ -63,7 +63,8 @@ class RuntimeConfigurationTests(unittest.TestCase):
                 ]
                 self.assertEqual(len(rotating_handlers), 1)
                 self.assertEqual(rotating_handlers[0].when, "MIDNIGHT")
-                self.assertEqual(rotating_handlers[0].backupCount, 7)
+                # The active daily file plus six rotated files cover no more than seven days.
+                self.assertEqual(rotating_handlers[0].backupCount, 6)
                 self.assertEqual(Path(rotating_handlers[0].baseFilename), log_dir / "asr_service.log")
         finally:
             for handler in root.handlers[:]:

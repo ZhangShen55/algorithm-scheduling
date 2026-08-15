@@ -120,7 +120,7 @@ open_mul_lang = true       # 法语 Faster-Whisper 转写
 
 `/get_status` 中的 `appVersion` 固定为 `asr:latest`。`device="cpu"` 时模型使用
 `ngpu=0`，`device="cuda:<index>"` 时使用 `ngpu=1`，两者均不再由配置文件传入。日志固定写入
-项目根目录下的 `logs/asr_service.log`，按本地时间每日轮转并保留最近 7 个归档文件。
+项目根目录下的 `logs/asr_service.log`，按本地时间每日轮转并保留当日活动日志和前 6 个归档文件。
 
 > 实时转写（WebSocket）已拆分为独立项目 `jy-algorithm-app-asr-online`，不在本仓库内提供。
 
@@ -133,6 +133,8 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8083 --workers 1
 # 生产模式（单端点，多实例由多容器注册）
 CONFIG_PATH=./config.toml bash docker/start.sh
 ```
+
+对已导出为 tar 包的 GPU 镜像，请按 [Docker 部署说明](docker/部署说明.md) 从 `docker load -i` 导入、验收和回滚。
 
 ## 📡 API 使用示例
 
@@ -301,14 +303,13 @@ docker run -d \
   --gpus '"device=1"' \
   -p 8083:8083 \
   -v /path/to/config.toml:/config.toml:ro \
-  -e CONFIG_PATH=/config.toml \
   seacraft-asr
 ```
 
 | 项 | 说明 |
 |----|------|
 | `-p 8083:8083` | 独立离线 ASR Uvicorn 端点 |
-| `CONFIG_PATH` | 与 `core/config.py`、start.sh 共用，须为 TOML |
+| 配置文件 | 固定挂载至 `/config.toml:ro`，启动脚本会自动读取 |
 | 模型目录 | 已内置在镜像 `/app/model`，无需挂载 |
 
 ## 📊 监控指标
