@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+import yaml  # type: ignore[import-untyped]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = PROJECT_ROOT.parent
@@ -202,7 +203,7 @@ def _assert_platform_dockerfile_contract(
     expected_runtime_names = ["FROM"]
     if service == "orchestrator_service":
         expected_runtime_names.extend(["ARG", "ARG"])
-    expected_runtime_names.extend(["ENV", "WORKDIR", "RUN"])
+    expected_runtime_names.extend(["ARG", "LABEL", "ENV", "WORKDIR", "RUN"])
     if service == "orchestrator_service":
         expected_runtime_names.append("RUN")
     expected_runtime_names.extend(["COPY", "COPY", "EXPOSE", "CMD"])
@@ -229,7 +230,11 @@ def _assert_platform_dockerfile_contract(
             "ARG DEBIAN_MIRROR=https://mirrors.aliyun.com/debian",
             "ARG DEBIAN_SECURITY_MIRROR=https://mirrors.aliyun.com/debian-security",
         ]
+    expected_runtime_args.append("ARG EXPECTED_GIT_SHA")
     assert _instructions_named(runtime, "ARG") == expected_runtime_args, service
+    assert _instructions_named(runtime, "LABEL") == [
+        'LABEL org.opencontainers.image.revision="${EXPECTED_GIT_SHA}"'
+    ], service
     assert _instructions_named(runtime, "ENV") == [
         "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1"
     ], service
@@ -328,3 +333,22 @@ def test_platform_compose_builds_and_mounts_root_level_services() -> None:
     for service in PLATFORM_SERVICE_NAMES:
         assert f"dockerfile: {service}/docker/Dockerfile" in compose
         assert f"../../{service}/config.toml:/config/config.toml:ro" in compose
+
+
+def test_platform_compose_limits_host_exposure_and_passes_optional_revision_arg() -> None:
+    document = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
+    services = document["services"]
+    expected_ports = {
+        "control-service": ["18100:18100"],
+        "orchestrator-service": ["127.0.0.1:18101:18101"],
+        "vision-orchestrator-service": ["127.0.0.1:18102:8010"],
+        "online-gateway-service": ["18103:8001"],
+    }
+
+    for service_name, ports in expected_ports.items():
+        service = services[service_name]
+        assert service["ports"] == ports
+        assert service["build"]["args"] == {
+            "EXPECTED_GIT_SHA": "${EXPECTED_GIT_SHA:-}"
+        }
+    assert "${EXPECTED_GIT_SHA:?" not in COMPOSE_PATH.read_text(encoding="utf-8")

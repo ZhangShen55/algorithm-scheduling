@@ -24,6 +24,8 @@ FROM python:3.11-slim
 
 ARG DEBIAN_MIRROR=https://mirrors.aliyun.com/debian
 ARG DEBIAN_SECURITY_MIRROR=https://mirrors.aliyun.com/debian-security
+ARG EXPECTED_GIT_SHA
+LABEL org.opencontainers.image.revision="${EXPECTED_GIT_SHA}"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1

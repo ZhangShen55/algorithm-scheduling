@@ -1,6 +1,6 @@
 from pathlib import Path
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_PATH = PROJECT_ROOT / "deploy/docker-compose.infrastructure.yml"
@@ -26,9 +26,9 @@ def test_compose_defines_persistent_postgres_kafka_redis_and_mongodb() -> None:
 def test_compose_documents_stable_host_ports() -> None:
     document = yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
 
-    assert "5432:5432" in document["services"]["postgres"]["ports"]
-    assert "9092:9092" in document["services"]["kafka"]["ports"]
-    assert "6379:6379" in document["services"]["redis"]["ports"]
+    assert "127.0.0.1:5432:5432" in document["services"]["postgres"]["ports"]
+    assert "127.0.0.1:9092:9092" in document["services"]["kafka"]["ports"]
+    assert "127.0.0.1:6379:6379" in document["services"]["redis"]["ports"]
     assert "127.0.0.1:27017:27017" in document["services"]["mongodb"]["ports"]
 
     instructions = DEPLOYMENT_DOC.read_text(encoding="utf-8")
@@ -48,6 +48,8 @@ def test_kafka_advertises_distinct_host_and_container_listeners() -> None:
     assert "EXTERNAL://127.0.0.1:9092" in environment["KAFKA_ADVERTISED_LISTENERS"]
     assert "INTERNAL://kafka:29092" in environment["KAFKA_ADVERTISED_LISTENERS"]
     assert environment["KAFKA_INTER_BROKER_LISTENER_NAME"] == "INTERNAL"
+    assert "EXTERNAL://127.0.0.1:9092" not in environment["KAFKA_LISTENERS"]
+    assert "INTERNAL://127.0.0.1:29092" not in environment["KAFKA_LISTENERS"]
 
     instructions = DEPLOYMENT_DOC.read_text(encoding="utf-8")
     assert "kafka:29092" in instructions

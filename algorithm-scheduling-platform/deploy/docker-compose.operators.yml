@@ -113,7 +113,7 @@ services:
   asr-offline-gpu0:
     <<: *asr-offline
     profiles: [gpu0]
-    ports: ["18083:8083"]
+    ports: ["127.0.0.1:18083:8083"]
     environment:
       OPERATOR_PORT: "8083"
       PORT: "8083"
@@ -134,7 +134,7 @@ services:
   asr-offline-gpu1:
     <<: *asr-offline
     profiles: [gpu1]
-    ports: ["28083:8083"]
+    ports: ["127.0.0.1:28083:8083"]
     environment:
       OPERATOR_PORT: "8083"
       PORT: "8083"
@@ -155,7 +155,7 @@ services:
   asr-offline-gpu2:
     <<: *asr-offline
     profiles: [gpu2]
-    ports: ["38083:8083"]
+    ports: ["127.0.0.1:38083:8083"]
     environment:
       OPERATOR_PORT: "8083"
       PORT: "8083"
@@ -176,7 +176,7 @@ services:
   asr-online-gpu0:
     <<: *asr-online
     profiles: [gpu0]
-    ports: ["18084:8084"]
+    ports: ["127.0.0.1:18084:8084"]
     environment:
       OPERATOR_PORT: "8084"
       PORT: "8084"
@@ -197,7 +197,7 @@ services:
   asr-online-gpu1:
     <<: *asr-online
     profiles: [gpu1]
-    ports: ["28084:8084"]
+    ports: ["127.0.0.1:28084:8084"]
     environment:
       OPERATOR_PORT: "8084"
       PORT: "8084"
@@ -218,7 +218,7 @@ services:
   asr-online-gpu2:
     <<: *asr-online
     profiles: [gpu2]
-    ports: ["38084:8084"]
+    ports: ["127.0.0.1:38084:8084"]
     environment:
       OPERATOR_PORT: "8084"
       PORT: "8084"
@@ -239,7 +239,7 @@ services:
   ocr-gpu0:
     <<: *ocr
     profiles: [gpu0]
-    ports: ["18866:8866"]
+    ports: ["127.0.0.1:18866:8866"]
     environment:
       OPERATOR_PORT: "8866"
       CONFIG_PATH: /app/config.toml
@@ -259,7 +259,7 @@ services:
   ocr-gpu1:
     <<: *ocr
     profiles: [gpu1]
-    ports: ["28866:8866"]
+    ports: ["127.0.0.1:28866:8866"]
     environment:
       OPERATOR_PORT: "8866"
       CONFIG_PATH: /app/config.toml
@@ -279,7 +279,7 @@ services:
   ocr-gpu2:
     <<: *ocr
     profiles: [gpu2]
-    ports: ["38866:8866"]
+    ports: ["127.0.0.1:38866:8866"]
     environment:
       OPERATOR_PORT: "8866"
       CONFIG_PATH: /app/config.toml
@@ -299,7 +299,7 @@ services:
   vbas-gpu0:
     <<: *vbas
     profiles: [gpu0]
-    ports: ["18981:8981"]
+    ports: ["127.0.0.1:18981:8981"]
     environment:
       OPERATOR_PORT: "8981"
       CONFIG_PATH: /workspace/config.toml
@@ -319,7 +319,7 @@ services:
   vbas-gpu1:
     <<: *vbas
     profiles: [gpu1]
-    ports: ["28981:8981"]
+    ports: ["127.0.0.1:28981:8981"]
     environment:
       OPERATOR_PORT: "8981"
       CONFIG_PATH: /workspace/config.toml
@@ -339,7 +339,7 @@ services:
   vbas-gpu2:
     <<: *vbas
     profiles: [gpu2]
-    ports: ["38981:8981"]
+    ports: ["127.0.0.1:38981:8981"]
     environment:
       OPERATOR_PORT: "8981"
       CONFIG_PATH: /workspace/config.toml
@@ -359,7 +359,7 @@ services:
   facerec-gpu0:
     <<: *facerec
     profiles: [gpu0]
-    ports: ["18003:8000"]
+    ports: ["127.0.0.1:18003:8000"]
     environment:
       OPERATOR_PORT: "8000"
       CONFIG_PATH: /config/config.toml
@@ -381,7 +381,7 @@ services:
   facerec-gpu1:
     <<: *facerec
     profiles: [gpu1]
-    ports: ["28003:8000"]
+    ports: ["127.0.0.1:28003:8000"]
     environment:
       OPERATOR_PORT: "8000"
       CONFIG_PATH: /config/config.toml
@@ -403,7 +403,7 @@ services:
   facerec-gpu2:
     <<: *facerec
     profiles: [gpu2]
-    ports: ["38003:8000"]
+    ports: ["127.0.0.1:38003:8000"]
     environment:
       OPERATOR_PORT: "8000"
       CONFIG_PATH: /config/config.toml
@@ -425,7 +425,7 @@ services:
   screen-det-gpu0:
     <<: *screen-det
     profiles: [gpu0]
-    ports: ["18880:8880"]
+    ports: ["127.0.0.1:18880:8880"]
     environment:
       OPERATOR_PORT: "8880"
       CONFIG_PATH: /app/config.toml
@@ -445,7 +445,7 @@ services:
   screen-det-gpu1:
     <<: *screen-det
     profiles: [gpu1]
-    ports: ["28880:8880"]
+    ports: ["127.0.0.1:28880:8880"]
     environment:
       OPERATOR_PORT: "8880"
       CONFIG_PATH: /app/config.toml
@@ -465,7 +465,7 @@ services:
   screen-det-gpu2:
     <<: *screen-det
     profiles: [gpu2]
-    ports: ["38880:8880"]
+    ports: ["127.0.0.1:38880:8880"]
     environment:
       OPERATOR_PORT: "8880"
       CONFIG_PATH: /app/config.toml
@@ -485,7 +485,7 @@ services:
   ppt-slice-cpu0:
     <<: *ppt-slice
     profiles: [cpu]
-    ports: ["19001:9001"]
+    ports: ["127.0.0.1:19001:9001"]
     environment:
       OPERATOR_PORT: "9001"
       CONFIG_PATH: /workspace/config.toml
@@ -500,7 +500,7 @@ services:
   ppt-slice-cpu1:
     <<: *ppt-slice
     profiles: [cpu]
-    ports: ["29001:9001"]
+    ports: ["127.0.0.1:29001:9001"]
     environment:
       OPERATOR_PORT: "9001"
       CONFIG_PATH: /workspace/config.toml
@@ -515,7 +515,7 @@ services:
   ppt-slice-cpu2:
     <<: *ppt-slice
     profiles: [cpu]
-    ports: ["39001:9001"]
+    ports: ["127.0.0.1:39001:9001"]
     environment:
       OPERATOR_PORT: "9001"
       CONFIG_PATH: /workspace/config.toml
@@ -530,7 +530,7 @@ services:
   text-analysis-cpu0:
     <<: *text-analysis
     profiles: [cpu]
-    ports: ["18000:8000"]
+    ports: ["127.0.0.1:18000:8000"]
     environment:
       OPERATOR_PORT: "8000"
       CONFIG_PATH: /app/config.toml
@@ -545,7 +545,7 @@ services:
   text-analysis-cpu1:
     <<: *text-analysis
     profiles: [cpu]
-    ports: ["28000:8000"]
+    ports: ["127.0.0.1:28000:8000"]
     environment:
       OPERATOR_PORT: "8000"
       CONFIG_PATH: /app/config.toml
@@ -560,7 +560,7 @@ services:
   text-analysis-cpu2:
     <<: *text-analysis
     profiles: [cpu]
-    ports: ["38000:8000"]
+    ports: ["127.0.0.1:38000:8000"]
     environment:
       OPERATOR_PORT: "8000"
       CONFIG_PATH: /app/config.toml

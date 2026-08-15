@@ -149,16 +149,19 @@ EXPECTED_KAFKA_TOPICS = (
     "algorithm.visual.commands",
     "algorithm.visual.events",
 )
+GIT_SHA_PATTERN = re.compile(r"[0-9a-fA-F]{40}")
+DOCKER_IMAGE_ID_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
+REVISION_LABEL = "org.opencontainers.image.revision"
 WILDCARD_HOST = "*"
 PortMapping = tuple[int, int, str, str]
 EXPECTED_PLATFORM_PORT_MAPPINGS = {
-    "postgres": (5432, 5432, "tcp", WILDCARD_HOST),
-    "redis": (6379, 6379, "tcp", WILDCARD_HOST),
-    "kafka": (9092, 9092, "tcp", WILDCARD_HOST),
+    "postgres": (5432, 5432, "tcp", "127.0.0.1"),
+    "redis": (6379, 6379, "tcp", "127.0.0.1"),
+    "kafka": (9092, 9092, "tcp", "127.0.0.1"),
     "mongodb": (27017, 27017, "tcp", "127.0.0.1"),
     "control-service": (18100, 18100, "tcp", WILDCARD_HOST),
-    "orchestrator-service": (18101, 18101, "tcp", WILDCARD_HOST),
-    "vision-orchestrator-service": (18102, 8010, "tcp", WILDCARD_HOST),
+    "orchestrator-service": (18101, 18101, "tcp", "127.0.0.1"),
+    "vision-orchestrator-service": (18102, 8010, "tcp", "127.0.0.1"),
     "online-gateway-service": (18103, 8001, "tcp", WILDCARD_HOST),
 }
 EXPECTED_OPERATOR_PORT_MAPPINGS = {
@@ -167,7 +170,7 @@ EXPECTED_OPERATOR_PORT_MAPPINGS = {
             (gpu + 1) * 10000 + suffix,
             target,
             "tcp",
-            WILDCARD_HOST,
+            "127.0.0.1",
         )
         for operator, target, suffix in (
             ("asr-offline", 8083, 8083),
@@ -184,7 +187,7 @@ EXPECTED_OPERATOR_PORT_MAPPINGS = {
             (index + 1) * 10000 + suffix,
             target,
             "tcp",
-            WILDCARD_HOST,
+            "127.0.0.1",
         )
         for operator, target, suffix in (
             ("ppt-slice", 9001, 9001),
@@ -855,10 +858,12 @@ def _validate_actual_mount(
 def validate_operator_runtime(
     operator_document: Any,
     inspection_document: Any,
+    image_inspection_document: Any,
     *,
     profiles: list[str],
     course_root: str,
     result_root: str,
+    expected_git_sha: str,
 ) -> None:
     course_root, result_root = _validate_shared_roots(course_root, result_root)
     services, selected = _select_operator_services(
@@ -866,6 +871,15 @@ def validate_operator_runtime(
         profiles=profiles,
         course_root=course_root,
         result_root=result_root,
+    )
+    image_ids = runtime_container_image_ids(
+        inspection_document,
+        expected_services=selected,
+    )
+    validate_image_revisions(
+        image_inspection_document,
+        expected_image_ids=image_ids,
+        expected_git_sha=expected_git_sha,
     )
     if not isinstance(inspection_document, list) or any(
         not isinstance(record, dict) for record in inspection_document
@@ -981,6 +995,123 @@ def validate_operator_runtime(
         )
 
 
+def normalize_git_sha(value: str) -> str:
+    if GIT_SHA_PATTERN.fullmatch(value) is None:
+        raise PreflightError("Git SHA must be a full 40-character hexadecimal revision")
+    return value.lower()
+
+
+def runtime_container_image_ids(
+    inspection_document: Any,
+    *,
+    expected_services: list[str],
+) -> list[str]:
+    if not expected_services or len(expected_services) != len(set(expected_services)):
+        raise PreflightError("expected runtime Compose services must be unique and non-empty")
+    if not isinstance(inspection_document, list) or any(
+        not isinstance(record, dict) for record in inspection_document
+    ):
+        raise PreflightError("docker inspect output must be a JSON array")
+    if len(inspection_document) != len(expected_services):
+        raise PreflightError(
+            f"expected exactly {len(expected_services)} running runtime containers; "
+            f"found {len(inspection_document)}"
+        )
+
+    actual: dict[str, str] = {}
+    container_ids: set[str] = set()
+    for record in inspection_document:
+        container_id = record.get("Id")
+        if (
+            not isinstance(container_id, str)
+            or re.fullmatch(r"[0-9a-f]{64}", container_id) is None
+            or container_id in container_ids
+        ):
+            raise PreflightError("running container IDs must be unique full Docker IDs")
+        container_ids.add(container_id)
+        state = record.get("State")
+        if (
+            not isinstance(state, dict)
+            or state.get("Running") is not True
+            or state.get("Status") != "running"
+        ):
+            raise PreflightError(f"runtime container is not running: {container_id}")
+        config = record.get("Config")
+        labels = config.get("Labels") if isinstance(config, dict) else None
+        service_name = (
+            labels.get("com.docker.compose.service") if isinstance(labels, dict) else None
+        )
+        if not isinstance(service_name, str) or service_name in actual:
+            raise PreflightError("runtime container Compose service labels must be unique")
+        image_id = record.get("Image")
+        if (
+            not isinstance(image_id, str)
+            or DOCKER_IMAGE_ID_PATTERN.fullmatch(image_id) is None
+        ):
+            raise PreflightError(
+                f"runtime container has no immutable Docker image ID: {service_name}"
+            )
+        actual[service_name] = image_id
+    if set(actual) != set(expected_services):
+        raise PreflightError(
+            "running container services do not match the expected Compose services"
+        )
+    return list(dict.fromkeys(actual[service] for service in sorted(expected_services)))
+
+
+def validate_image_revisions(
+    inspection_document: Any,
+    *,
+    expected_image_ids: list[str],
+    expected_git_sha: str,
+) -> None:
+    expected_git_sha = normalize_git_sha(expected_git_sha)
+    if (
+        not expected_image_ids
+        or len(expected_image_ids) != len(set(expected_image_ids))
+        or any(
+            DOCKER_IMAGE_ID_PATTERN.fullmatch(image_id) is None
+            for image_id in expected_image_ids
+        )
+    ):
+        raise PreflightError("expected Docker image IDs must be unique immutable IDs")
+    if not isinstance(inspection_document, list) or any(
+        not isinstance(record, dict) for record in inspection_document
+    ):
+        raise PreflightError("docker image inspect output must be a JSON array")
+    if len(inspection_document) != len(expected_image_ids):
+        raise PreflightError(
+            f"expected exactly {len(expected_image_ids)} inspected images; "
+            f"found {len(inspection_document)}"
+        )
+
+    actual: dict[str, dict[str, Any]] = {}
+    for record in inspection_document:
+        image_id = record.get("Id")
+        if (
+            not isinstance(image_id, str)
+            or DOCKER_IMAGE_ID_PATTERN.fullmatch(image_id) is None
+            or image_id in actual
+        ):
+            raise PreflightError("inspected Docker image IDs must be unique immutable IDs")
+        actual[image_id] = record
+    if set(actual) != set(expected_image_ids):
+        raise PreflightError("inspected Docker images do not match running container images")
+
+    for image_id in expected_image_ids:
+        config = actual[image_id].get("Config")
+        labels = config.get("Labels") if isinstance(config, dict) else None
+        revision = labels.get(REVISION_LABEL) if isinstance(labels, dict) else None
+        if not isinstance(revision, str) or not revision:
+            raise PreflightError(f"image revision label is missing: {image_id}")
+        if GIT_SHA_PATTERN.fullmatch(revision) is None:
+            raise PreflightError(f"image revision label is invalid: {image_id}")
+        if revision.lower() != expected_git_sha:
+            raise PreflightError(
+                f"image revision does not match expected Git SHA: {image_id}"
+            )
+
+
 def _load_json(path: Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -1015,8 +1146,17 @@ def parse_args() -> argparse.Namespace:
     runtime.add_argument("--course-root", required=True)
     runtime.add_argument("--result-root", required=True)
     runtime.add_argument("--profile", action="append", default=[])
+    runtime.add_argument("--git-sha", required=True)
+    runtime.add_argument("--image-inspection-json", type=Path, required=True)
     runtime.add_argument("operator_json", type=Path)
     runtime.add_argument("inspection_json", type=Path)
+    container_images = subparsers.add_parser("container-images", allow_abbrev=False)
+    container_images.add_argument("--service", action="append", required=True)
+    container_images.add_argument("inspection_json", type=Path)
+    image_revisions = subparsers.add_parser("image-revisions", allow_abbrev=False)
+    image_revisions.add_argument("--git-sha", required=True)
+    image_revisions.add_argument("--image-id", action="append", required=True)
+    image_revisions.add_argument("inspection_json", type=Path)
     return parser.parse_args()
 
 
@@ -1055,9 +1195,23 @@ def main() -> int:
             validate_operator_runtime(
                 _load_json(args.operator_json),
                 _load_json(args.inspection_json),
+                _load_json(args.image_inspection_json),
                 profiles=args.profile,
                 course_root=args.course_root,
                 result_root=args.result_root,
+                expected_git_sha=args.git_sha,
+            )
+        elif args.command == "container-images":
+            image_ids = runtime_container_image_ids(
+                _load_json(args.inspection_json),
+                expected_services=args.service,
+            )
+            print(" ".join(image_ids))
+        elif args.command == "image-revisions":
+            validate_image_revisions(
+                _load_json(args.inspection_json),
+                expected_image_ids=args.image_id,
+                expected_git_sha=args.git_sha,
             )
     except PreflightError as error:
         print(f"preflight: FAIL: {error}", file=sys.stderr)

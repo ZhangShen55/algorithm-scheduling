@@ -25,6 +25,13 @@ has_word() {
   return 1
 }
 
+normalize_git_sha() {
+  local value="$1"
+  [[ "$value" =~ ^[0-9a-fA-F]{40}$ ]] || \
+    fail "Git SHA is required and must be a full 40-character hexadecimal revision"
+  NORMALIZED_GIT_SHA="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+}
+
 run_host() {
 min_root_free_gib="${MIN_ROOT_FREE_GIB:-100}"
 [[ "$min_root_free_gib" =~ ^[0-9]+$ ]] || fail "MIN_ROOT_FREE_GIB must be a non-negative integer"
@@ -133,9 +140,79 @@ printf 'preflight: PASS\n'
 }
 
 run_runtime() {
-  (( $# == 0 )) || fail "usage: preflight runtime"
+  runtime_git_sha=""
+  runtime_git_sha_set=false
+  while (( $# > 0 )); do
+    case "$1" in
+      --git-sha)
+        (( $# >= 2 )) || fail "--git-sha requires a value"
+        [[ "$2" != --* ]] || fail "--git-sha requires a value"
+        [[ "$runtime_git_sha_set" == "false" ]] || fail "--git-sha cannot be repeated"
+        runtime_git_sha="$2"
+        runtime_git_sha_set=true
+        shift 2
+        ;;
+      --git-sha=*)
+        [[ "$runtime_git_sha_set" == "false" ]] || fail "--git-sha cannot be repeated"
+        runtime_git_sha="${1#*=}"
+        runtime_git_sha_set=true
+        shift
+        ;;
+      *)
+        fail "usage: preflight runtime [--git-sha SHA]"
+        ;;
+    esac
+  done
+  if [[ "$runtime_git_sha_set" == "true" ]]; then
+    normalize_git_sha "$runtime_git_sha"
+  else
+    normalize_git_sha "${EXPECTED_GIT_SHA:-}"
+  fi
+  expected_git_sha="$NORMALIZED_GIT_SHA"
+
   command -v docker >/dev/null 2>&1 || fail "docker command is unavailable"
+  docker version >/dev/null 2>&1 || fail "Docker daemon is unavailable"
   docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is unavailable"
+
+  platform_compose="${deploy_root}/docker-compose.platform.yml"
+  platform_services=(
+    control-service
+    orchestrator-service
+    vision-orchestrator-service
+    online-gateway-service
+  )
+  if ! running_output="$(docker compose --project-directory "$deploy_root" \
+    -f "$platform_compose" ps --no-trunc --status running -q \
+    "${platform_services[@]}")"; then
+    fail "platform running container inspection failed"
+  fi
+  read -r -a running_containers <<<"$(printf '%s\n' "$running_output" | tr '\n' ' ')"
+  (( ${#running_containers[@]} == ${#platform_services[@]} )) || fail \
+    "platform services require exactly ${#platform_services[@]} running containers; found ${#running_containers[@]}"
+  if ! inspection_json="$(docker inspect "${running_containers[@]}")"; then
+    fail "docker inspect failed for platform containers"
+  fi
+  service_args=()
+  for service_name in "${platform_services[@]}"; do
+    service_args+=(--service "$service_name")
+  done
+  if ! image_id_output="$("$preflight_python" "$preflight_checks" container-images \
+    "${service_args[@]}" <(printf '%s' "$inspection_json"))"; then
+    exit 1
+  fi
+  read -r -a image_ids <<<"$image_id_output"
+  (( ${#image_ids[@]} > 0 )) || fail "platform image selection is empty"
+  if ! image_inspection_json="$(docker image inspect "${image_ids[@]}")"; then
+    fail "docker image inspect failed for platform images"
+  fi
+  image_args=()
+  for image_id in "${image_ids[@]}"; do
+    image_args+=(--image-id "$image_id")
+  done
+  "$preflight_python" "$preflight_checks" image-revisions \
+    --git-sha "$expected_git_sha" "${image_args[@]}" \
+    <(printf '%s' "$image_inspection_json") || exit 1
+  printf 'preflight: OK: platform image revisions\n'
 
   control_readiness_url="${CONTROL_READINESS_URL:-http://127.0.0.1:18100/ops/readiness}"
   orchestrator_readiness_url="${ORCHESTRATOR_READINESS_URL:-http://127.0.0.1:18101/ops/readiness}"
@@ -144,7 +221,6 @@ run_runtime() {
     "$control_readiness_url" "$orchestrator_readiness_url" || exit 1
   printf 'preflight: OK: control and orchestrator readiness\n'
 
-  platform_compose="${deploy_root}/docker-compose.platform.yml"
   postgres_user="${PREFLIGHT_POSTGRES_USER:-algorithm}"
   postgres_database="${PREFLIGHT_POSTGRES_DATABASE:-algorithm}"
   table_query="SELECT c.relname, pg_catalog.obj_description(c.oid, 'pg_class') FROM pg_catalog.pg_class AS c JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace WHERE n.nspname = current_schema() AND c.relkind = 'r' ORDER BY c.relname"
@@ -184,6 +260,8 @@ run_runtime() {
 
 run_operators() {
   full_requested=false
+  operator_git_sha=""
+  operator_git_sha_set=false
   selection_args=()
   registration_args=()
   while (( $# > 0 )); do
@@ -204,13 +282,27 @@ run_operators() {
       --profile=*|--instance|--instance=*|--expected-compose|--expected-compose=*)
         fail "operators preflight only supports the authoritative full/profile selection"
         ;;
-      --control-url|--release-tag|--git-sha|--reports-root|--timeout-seconds|--poll-seconds|--request-timeout-seconds)
+      --git-sha)
+        (( $# >= 2 )) || fail "--git-sha requires a value"
+        [[ "$2" != --* ]] || fail "--git-sha requires a value"
+        [[ "$operator_git_sha_set" == "false" ]] || fail "--git-sha cannot be repeated"
+        operator_git_sha="$2"
+        operator_git_sha_set=true
+        shift 2
+        ;;
+      --git-sha=*)
+        [[ "$operator_git_sha_set" == "false" ]] || fail "--git-sha cannot be repeated"
+        operator_git_sha="${1#*=}"
+        operator_git_sha_set=true
+        shift
+        ;;
+      --control-url|--release-tag|--reports-root|--timeout-seconds|--poll-seconds|--request-timeout-seconds)
         (( $# >= 2 )) || fail "$1 requires a value"
         [[ "$2" != --* ]] || fail "$1 requires a value"
         registration_args+=("$1" "$2")
         shift 2
         ;;
-      --control-url=*|--release-tag=*|--git-sha=*|--reports-root=*|--timeout-seconds=*|--poll-seconds=*|--request-timeout-seconds=*)
+      --control-url=*|--release-tag=*|--reports-root=*|--timeout-seconds=*|--poll-seconds=*|--request-timeout-seconds=*)
         registration_args+=("$1")
         shift
         ;;
@@ -219,6 +311,12 @@ run_operators() {
         ;;
     esac
   done
+
+  [[ "$operator_git_sha_set" == "true" ]] || \
+    fail "Git SHA is required and must be a full 40-character hexadecimal revision"
+  normalize_git_sha "$operator_git_sha"
+  expected_git_sha="$NORMALIZED_GIT_SHA"
+  registration_args+=(--git-sha "$expected_git_sha")
 
   command -v docker >/dev/null 2>&1 || fail "docker command is unavailable"
   docker version >/dev/null 2>&1 || fail "Docker daemon is unavailable"
@@ -249,11 +347,27 @@ run_operators() {
   if ! inspection_json="$(docker inspect "${running_containers[@]}")"; then
     fail "docker inspect failed for selected operator containers"
   fi
+  service_args=()
+  for service_name in "${selected_services[@]}"; do
+    service_args+=(--service "$service_name")
+  done
+  if ! image_id_output="$("$preflight_python" "$preflight_checks" container-images \
+    "${service_args[@]}" <(printf '%s' "$inspection_json"))"; then
+    exit 1
+  fi
+  read -r -a image_ids <<<"$image_id_output"
+  (( ${#image_ids[@]} > 0 )) || fail "operator image selection is empty"
+  if ! image_inspection_json="$(docker image inspect "${image_ids[@]}")"; then
+    fail "docker image inspect failed for selected operator images"
+  fi
   "$preflight_python" "$preflight_checks" operator-runtime \
     --course-root "$course_root" --result-root "$result_root" \
+    --git-sha "$expected_git_sha" \
+    --image-inspection-json <(printf '%s' "$image_inspection_json") \
     "${selection_args[@]}" \
     <(printf '%s' "$operator_compose_json") \
     <(printf '%s' "$inspection_json") || exit 1
+  printf 'preflight: OK: selected operator image revisions\n'
   printf 'preflight: OK: selected running operator containers match Compose\n'
 
   "${deploy_root}/scripts/verify-operator-registration" \

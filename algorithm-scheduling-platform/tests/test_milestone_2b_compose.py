@@ -1,7 +1,7 @@
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 PLATFORM_ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_PATH = PLATFORM_ROOT / "deploy/docker-compose.operators.yml"
@@ -21,7 +21,9 @@ CPU_OPERATORS = {
 
 
 def load_operator_compose() -> dict[str, Any]:
-    return yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
+    return cast(
+        dict[str, Any], yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
+    )
 
 
 def expected_service_names() -> set[str]:
@@ -55,7 +57,9 @@ def assert_operator_compose_matrix(compose: dict[str, Any]) -> None:
             service = services[name]
             environment = service["environment"]
             assert service["profiles"] == [f"gpu{gpu_index}"]
-            assert service["ports"] == [f"{base_port + gpu_index * 10000}:{container_port}"]
+            assert service["ports"] == [
+                f"127.0.0.1:{base_port + gpu_index * 10000}:{container_port}"
+            ]
             assert service["image"].endswith(":v1.0_260812}")
             assert environment["PLATFORM_REGISTRATION_ENABLED"] == "true"
             assert environment["PLATFORM_CONTROL_SERVICE_URL"] == "http://control-service:18100"
@@ -110,7 +114,7 @@ def assert_operator_compose_matrix(compose: dict[str, Any]) -> None:
             environment = service["environment"]
             assert service["profiles"] == ["cpu"]
             assert service["ports"] == [
-                f"{base_port + instance_index * 10000}:{container_port}"
+                f"127.0.0.1:{base_port + instance_index * 10000}:{container_port}"
             ]
             assert service["image"].endswith(":v1.0_260812}")
             assert environment["PLATFORM_REGISTRATION_ENABLED"] == "true"

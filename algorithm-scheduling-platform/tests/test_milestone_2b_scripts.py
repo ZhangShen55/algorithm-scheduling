@@ -146,13 +146,13 @@ EXPECTED_DATABASE_INDEXES = {
 }
 WILDCARD_HOST = "*"
 EXPECTED_PLATFORM_PORTS = {
-    "postgres": (5432, 5432, "tcp", WILDCARD_HOST),
-    "redis": (6379, 6379, "tcp", WILDCARD_HOST),
-    "kafka": (9092, 9092, "tcp", WILDCARD_HOST),
+    "postgres": (5432, 5432, "tcp", "127.0.0.1"),
+    "redis": (6379, 6379, "tcp", "127.0.0.1"),
+    "kafka": (9092, 9092, "tcp", "127.0.0.1"),
     "mongodb": (27017, 27017, "tcp", "127.0.0.1"),
     "control-service": (18100, 18100, "tcp", WILDCARD_HOST),
-    "orchestrator-service": (18101, 18101, "tcp", WILDCARD_HOST),
-    "vision-orchestrator-service": (18102, 8010, "tcp", WILDCARD_HOST),
+    "orchestrator-service": (18101, 18101, "tcp", "127.0.0.1"),
+    "vision-orchestrator-service": (18102, 8010, "tcp", "127.0.0.1"),
     "online-gateway-service": (18103, 8001, "tcp", WILDCARD_HOST),
 }
 EXPECTED_OPERATOR_PORTS = {
@@ -161,7 +161,7 @@ EXPECTED_OPERATOR_PORTS = {
             (gpu + 1) * 10000 + suffix,
             target,
             "tcp",
-            WILDCARD_HOST,
+            "127.0.0.1",
         )
         for operator, target, suffix in (
             ("asr-offline", 8083, 8083),
@@ -178,7 +178,7 @@ EXPECTED_OPERATOR_PORTS = {
             (index + 1) * 10000 + suffix,
             target,
             "tcp",
-            WILDCARD_HOST,
+            "127.0.0.1",
         )
         for operator, target, suffix in (
             ("ppt-slice", 9001, 9001),
@@ -303,7 +303,9 @@ def _operator_compose_config() -> dict[str, Any]:
     for operator, target in gpu_operators:
         for gpu in range(3):
             instance_id = f"{operator}-gpu{gpu}"
-            published, expected_target, protocol, _ = EXPECTED_OPERATOR_PORTS[instance_id]
+            published, expected_target, protocol, host_ip = EXPECTED_OPERATOR_PORTS[
+                instance_id
+            ]
             assert expected_target == target
             services[instance_id] = {
                 "profiles": [f"gpu{gpu}"],
@@ -326,6 +328,7 @@ def _operator_compose_config() -> dict[str, Any]:
                         "published": str(published),
                         "target": target,
                         "protocol": protocol,
+                        "host_ip": host_ip,
                     }
                 ],
                 "volumes": [
@@ -336,7 +339,9 @@ def _operator_compose_config() -> dict[str, Any]:
     for operator, target, capacity in cpu_operators:
         for index in range(3):
             instance_id = f"{operator}-cpu{index}"
-            published, expected_target, protocol, _ = EXPECTED_OPERATOR_PORTS[instance_id]
+            published, expected_target, protocol, host_ip = EXPECTED_OPERATOR_PORTS[
+                instance_id
+            ]
             assert expected_target == target
             services[instance_id] = {
                 "profiles": ["cpu"],
@@ -346,6 +351,7 @@ def _operator_compose_config() -> dict[str, Any]:
                         "published": str(published),
                         "target": target,
                         "protocol": protocol,
+                        "host_ip": host_ip,
                     }
                 ],
                 "volumes": [
@@ -362,6 +368,8 @@ def _operator_runtime_fixtures() -> tuple[dict[str, str], dict[str, dict[str, An
     for service_name, service in _operator_compose_config()["services"].items():
         container_id = hashlib.sha256(service_name.encode()).hexdigest()
         service_ids[service_name] = container_id
+        image_family = service_name.rsplit("-", 1)[0]
+        image_id = f"sha256:{hashlib.sha256(image_family.encode()).hexdigest()}"
         published, target, protocol, _ = EXPECTED_OPERATOR_PORTS[service_name]
         environment = [f"{key}={value}" for key, value in service["environment"].items()]
         profiles = service["profiles"]
@@ -379,6 +387,7 @@ def _operator_runtime_fixtures() -> tuple[dict[str, str], dict[str, dict[str, An
             ]
         inspections[container_id] = {
             "Id": container_id,
+            "Image": image_id,
             "Name": f"/algorithm-operators-{service_name}-1",
             "State": {"Running": True, "Status": "running"},
             "Config": {
@@ -389,7 +398,7 @@ def _operator_runtime_fixtures() -> tuple[dict[str, str], dict[str, dict[str, An
                 "DeviceRequests": device_requests,
                 "PortBindings": {
                     f"{target}/{protocol}": [
-                        {"HostIp": "", "HostPort": str(published)}
+                        {"HostIp": "127.0.0.1", "HostPort": str(published)}
                     ]
                 },
             },
@@ -409,6 +418,45 @@ def _operator_runtime_fixtures() -> tuple[dict[str, str], dict[str, dict[str, An
             ],
         }
     return service_ids, inspections
+
+
+def _platform_runtime_fixtures() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+    service_ids: dict[str, str] = {}
+    inspections: dict[str, dict[str, Any]] = {}
+    for service_name in (
+        "control-service",
+        "orchestrator-service",
+        "vision-orchestrator-service",
+        "online-gateway-service",
+    ):
+        container_id = hashlib.sha256(f"container:{service_name}".encode()).hexdigest()
+        image_id = f"sha256:{hashlib.sha256(f'image:{service_name}'.encode()).hexdigest()}"
+        service_ids[service_name] = container_id
+        inspections[container_id] = {
+            "Id": container_id,
+            "Image": image_id,
+            "Name": f"/algorithm-scheduling-platform-{service_name}-1",
+            "State": {"Running": True, "Status": "running"},
+            "Config": {
+                "Labels": {"com.docker.compose.service": service_name},
+            },
+        }
+    return service_ids, inspections
+
+
+def _image_inspection_fixtures(
+    *inspection_sets: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    return {
+        record["Image"]: {
+            "Id": record["Image"],
+            "Config": {
+                "Labels": {"org.opencontainers.image.revision": "a" * 40}
+            },
+        }
+        for inspections in inspection_sets
+        for record in inspections.values()
+    }
 
 
 def _registered_operator_instances() -> list[dict[str, Any]]:
@@ -477,6 +525,7 @@ def _write_executable(path: Path, source: str) -> None:
 
 def _base_environment(fake_bin: Path, **overrides: str) -> dict[str, str]:
     operator_service_ids, operator_inspections = _operator_runtime_fixtures()
+    platform_service_ids, platform_inspections = _platform_runtime_fixtures()
     default_course_root = fake_bin.parent / "default-course-root"
     default_result_root = fake_bin.parent / "default-result-root"
     default_course_root.mkdir(exist_ok=True)
@@ -504,6 +553,11 @@ def _base_environment(fake_bin: Path, **overrides: str) -> dict[str, str]:
             "KAFKA_TOPICS_OUTPUT": _kafka_topic_output(),
             "OPERATOR_SERVICE_IDS": json.dumps(operator_service_ids),
             "OPERATOR_INSPECT_FIXTURES": json.dumps(operator_inspections),
+            "PLATFORM_SERVICE_IDS": json.dumps(platform_service_ids),
+            "PLATFORM_INSPECT_FIXTURES": json.dumps(platform_inspections),
+            "IMAGE_INSPECT_FIXTURES": json.dumps(
+                _image_inspection_fixtures(operator_inspections, platform_inspections)
+            ),
             "COURSE_ROOT": str(default_course_root),
             "RESULT_ROOT": str(default_result_root),
         }
@@ -605,13 +659,24 @@ if args[:1] == ["compose"] and "exec" in args:
 if args[:1] == ["compose"] and "ps" in args:
     if os.environ.get("COMPOSE_PS_EXIT", "0") != "0":
         raise SystemExit(int(os.environ["COMPOSE_PS_EXIT"]))
-    service_ids = json.loads(os.environ.get("OPERATOR_SERVICE_IDS", "{}"))
+    variable = (
+        "OPERATOR_SERVICE_IDS"
+        if any("docker-compose.operators.yml" in argument for argument in args)
+        else "PLATFORM_SERVICE_IDS"
+    )
+    service_ids = json.loads(os.environ.get(variable, "{}"))
     quiet_index = args.index("-q")
     for service in args[quiet_index + 1:]:
         container_id = service_ids.get(service)
         if container_id:
             print(container_id)
     raise SystemExit(0)
+if args[:2] == ["image", "inspect"] and len(args) >= 3:
+    fixtures = json.loads(os.environ.get("IMAGE_INSPECT_FIXTURES", "{}"))
+    if not all(image_id in fixtures for image_id in args[2:]):
+        raise SystemExit(1)
+    print(json.dumps([fixtures[image_id] for image_id in args[2:]]))
+    raise SystemExit(int(os.environ.get("IMAGE_INSPECT_EXIT", "0")))
 if args[:1] == ["run"]:
     print(os.environ.get("GPU_OUTPUT", ""))
     raise SystemExit(int(os.environ.get("GPU_RUN_EXIT", "0")))
@@ -631,9 +696,12 @@ if args == ["ps", "-aq"]:
     print(os.environ.get("DOCKER_PS_IDS", ""))
     raise SystemExit(int(os.environ.get("DOCKER_PS_EXIT", "0")))
 if args[:1] == ["inspect"] and len(args) >= 2:
-    operator_fixtures = json.loads(os.environ.get("OPERATOR_INSPECT_FIXTURES", "{}"))
-    if all(container_id in operator_fixtures for container_id in args[1:]):
-        records = [operator_fixtures[container_id] for container_id in args[1:]]
+    runtime_fixtures = {
+        **json.loads(os.environ.get("OPERATOR_INSPECT_FIXTURES", "{}")),
+        **json.loads(os.environ.get("PLATFORM_INSPECT_FIXTURES", "{}")),
+    }
+    if all(container_id in runtime_fixtures for container_id in args[1:]):
+        records = [runtime_fixtures[container_id] for container_id in args[1:]]
         for record in records:
             for mount in record.get("Mounts", []):
                 if mount.get("Source") == "/data/course":
@@ -1411,7 +1479,7 @@ def test_preflight_rejects_noncanonical_compose_port_mapping(
     elif mutation == "protocol":
         ports[0]["protocol"] = "udp"
     elif mutation == "host-ip":
-        ports[0]["host_ip"] = "127.0.0.1"
+        ports[0]["host_ip"] = "0.0.0.0"
     elif mutation == "invalid-host-ip":
         ports[0]["host_ip"] = "not-an-ip"
     elif mutation == "wrong-type-host-ip":
@@ -1741,6 +1809,22 @@ def test_preflight_runtime_checks_readiness_schema_indexes_and_topics_read_only(
     assert completed.returncode == 0, completed.stderr
     assert "preflight runtime: PASS" in completed.stdout
     commands = _commands(environment)
+    platform_services = {
+        "control-service",
+        "orchestrator-service",
+        "vision-orchestrator-service",
+        "online-gateway-service",
+    }
+    ps_command = next(command for command in commands if "ps" in command)
+    assert set(ps_command[ps_command.index("-q") + 1 :]) == platform_services
+    container_inspect = next(command for command in commands if command[1] == "inspect")
+    platform_ids = json.loads(environment["PLATFORM_SERVICE_IDS"])
+    assert set(container_inspect[2:]) == set(platform_ids.values())
+    image_inspect = next(command for command in commands if command[1:3] == ["image", "inspect"])
+    platform_inspections = json.loads(environment["PLATFORM_INSPECT_FIXTURES"])
+    assert set(image_inspect[3:]) == {
+        record["Image"] for record in platform_inspections.values()
+    }
     psql_commands = [command for command in commands if "psql" in command]
     assert len(psql_commands) == 3
     assert all("SELECT" in command[-1] for command in psql_commands)
@@ -1755,9 +1839,93 @@ def test_preflight_runtime_checks_readiness_schema_indexes_and_topics_read_only(
     ]
     assert len(kafka_commands) == 1
     assert "--describe" in kafka_commands[0]
+    assert commands.index(image_inspect) < commands.index(psql_commands[0])
     serialized = "\n".join(" ".join(command) for command in commands).lower()
     for forbidden in (" create ", " alter ", " drop ", "--create"):
         assert forbidden not in f" {serialized} "
+
+
+@pytest.mark.parametrize(
+    ("label_mutation", "expected_message"),
+    [("missing", "missing"), ("mismatch", "does not match")],
+)
+def test_preflight_runtime_rejects_platform_revision_before_readiness_and_catalogs(
+    fake_bin: Path,
+    readiness_server: Any,
+    label_mutation: str,
+    expected_message: str,
+) -> None:
+    base_url, state = readiness_server
+    state["/control"] = (503, {"status": "not_ready"})
+    environment = _base_environment(
+        fake_bin,
+        CONTROL_READINESS_URL=f"{base_url}/control",
+        ORCHESTRATOR_READINESS_URL=f"{base_url}/orchestrator",
+    )
+    images = json.loads(environment["IMAGE_INSPECT_FIXTURES"])
+    platform_records = json.loads(environment["PLATFORM_INSPECT_FIXTURES"])
+    image_id = next(iter(platform_records.values()))["Image"]
+    labels = images[image_id]["Config"]["Labels"]
+    if label_mutation == "missing":
+        labels.pop("org.opencontainers.image.revision")
+    else:
+        labels["org.opencontainers.image.revision"] = "b" * 40
+    environment["IMAGE_INSPECT_FIXTURES"] = json.dumps(images)
+
+    completed = _run("preflight", "runtime", environment=environment)
+
+    assert completed.returncode != 0
+    assert "revision" in completed.stderr.lower()
+    assert expected_message in completed.stderr
+    assert not any("psql" in command for command in _commands(environment))
+
+
+@pytest.mark.parametrize("git_sha", [None, "short", "g" * 40])
+def test_preflight_runtime_requires_a_full_revision_before_docker_inspection(
+    fake_bin: Path,
+    git_sha: str | None,
+) -> None:
+    environment = _base_environment(fake_bin)
+    environment.pop("EXPECTED_GIT_SHA")
+    arguments: tuple[str, ...] = ("runtime",)
+    if git_sha is not None:
+        arguments = ("runtime", "--git-sha", git_sha)
+
+    completed = _run("preflight", *arguments, environment=environment)
+
+    assert completed.returncode != 0
+    assert "Git SHA" in completed.stderr
+    assert not any(command[1] == "inspect" for command in _commands(environment))
+
+
+def test_preflight_runtime_prefers_and_normalizes_explicit_revision(
+    fake_bin: Path, readiness_server: Any
+) -> None:
+    base_url, _ = readiness_server
+    environment = _base_environment(
+        fake_bin,
+        EXPECTED_GIT_SHA="invalid-environment-value",
+        CONTROL_READINESS_URL=f"{base_url}/control",
+        ORCHESTRATOR_READINESS_URL=f"{base_url}/orchestrator",
+    )
+
+    completed = _run(
+        "preflight", "runtime", "--git-sha", "A" * 40, environment=environment
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_preflight_runtime_does_not_fallback_when_explicit_revision_is_empty(
+    fake_bin: Path,
+) -> None:
+    environment = _base_environment(fake_bin, EXPECTED_GIT_SHA="a" * 40)
+
+    completed = _run("preflight", "runtime", "--git-sha=", environment=environment)
+
+    assert completed.returncode != 0
+    assert "Git SHA" in completed.stderr
+    assert not any(command[1] == "inspect" for command in _commands(environment))
 
 
 @pytest.mark.parametrize("service", ["control", "orchestrator"])
@@ -1974,7 +2142,6 @@ def _run_operator_helper_with_roots(
         str(result_root),
         "--profile",
         "gpu0",
-        str(operator_json),
     ]
     if command == "operator-runtime":
         service_ids, inspections = _operator_runtime_fixtures()
@@ -1991,11 +2158,29 @@ def _run_operator_helper_with_roots(
             for mount in inspections[service_ids[service_name]]["Mounts"]:
                 mount["Source"] = canonical_sources[mount["Destination"]]
         inspection_json = tmp_path / "operator-runtime.inspections.json"
+        selected_inspections = {
+            service_ids[name]: inspections[service_ids[name]] for name in selected
+        }
         inspection_json.write_text(
-            json.dumps([inspections[service_ids[name]] for name in selected]),
+            json.dumps(list(selected_inspections.values())), encoding="utf-8"
+        )
+        image_json = tmp_path / "operator-runtime.images.json"
+        image_json.write_text(
+            json.dumps(list(_image_inspection_fixtures(selected_inspections).values())),
             encoding="utf-8",
         )
-        arguments.append(str(inspection_json))
+        arguments.extend(
+            [
+                "--git-sha",
+                "a" * 40,
+                "--image-inspection-json",
+                str(image_json),
+                str(operator_json),
+                str(inspection_json),
+            ]
+        )
+    else:
+        arguments.append(str(operator_json))
     return subprocess.run(
         arguments,
         cwd=PLATFORM_ROOT,
@@ -2003,6 +2188,45 @@ def _run_operator_helper_with_roots(
         capture_output=True,
         check=False,
     )
+
+
+def test_preflight_passes_revision_evidence_to_operator_runtime() -> None:
+    source = (SCRIPTS / "preflight").read_text(encoding="utf-8")
+    operator_runtime_call = source.split(
+        '"$preflight_python" "$preflight_checks" operator-runtime', 1
+    )[1].split("printf 'preflight: OK: selected running", 1)[0]
+
+    assert '--git-sha "$expected_git_sha"' in operator_runtime_call
+    assert "--image-inspection-json" in operator_runtime_call
+
+
+def test_operator_runtime_helper_requires_revision_evidence(tmp_path: Path) -> None:
+    operator_json = tmp_path / "operators.json"
+    inspection_json = tmp_path / "inspections.json"
+    operator_json.write_text(json.dumps(_operator_compose_config()), encoding="utf-8")
+    inspection_json.write_text("[]", encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "preflight_checks.py"),
+            "operator-runtime",
+            "--course-root",
+            str(tmp_path),
+            "--result-root",
+            str(tmp_path),
+            str(operator_json),
+            str(inspection_json),
+        ],
+        cwd=PLATFORM_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "--git-sha" in completed.stderr
+    assert "--image-inspection-json" in completed.stderr
 
 
 @pytest.mark.parametrize("command", ["operator-selection", "operator-runtime"])
@@ -2077,6 +2301,10 @@ def test_preflight_operators_full_checks_running_topology_and_registration(
     assert len(ps_command[ps_command.index("-q") + 1 :]) == 24
     inspect_command = next(command for command in commands if command[1] == "inspect")
     assert len(inspect_command[2:]) == 24
+    image_command = next(
+        command for command in commands if command[1:3] == ["image", "inspect"]
+    )
+    assert len(image_command[3:]) == 8
     assert not any(
         action in command[1:]
         for command in commands
@@ -2112,6 +2340,12 @@ def test_preflight_operators_profile_checks_only_selected_running_containers(
     selected = ps_command[ps_command.index("-q") + 1 :]
     assert len(selected) == 6
     assert all(service.endswith("gpu0") for service in selected)
+    image_command = next(
+        command
+        for command in _commands(environment)
+        if command[1:3] == ["image", "inspect"]
+    )
+    assert len(image_command[3:]) == 6
     report = (
         tmp_path
         / "reports"
@@ -2127,6 +2361,123 @@ def test_preflight_operators_profile_checks_only_selected_running_containers(
         "observed": 6,
         "valid": 6,
     }
+
+
+def test_preflight_operators_cpu_profile_verifies_all_six_instances_and_two_images(
+    fake_bin: Path, tmp_path: Path, readiness_server: Any
+) -> None:
+    base_url, state = readiness_server
+    instances = [
+        instance
+        for instance in _registered_operator_instances()
+        if "-cpu" in instance["instance_id"]
+    ]
+    state.update(_registration_responses(instances))
+    environment = _base_environment(fake_bin)
+
+    completed = _run(
+        "preflight",
+        *_operator_preflight_arguments(tmp_path, base_url, "--profile", "cpu"),
+        environment=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    commands = _commands(environment)
+    ps_command = next(command for command in commands if "ps" in command)
+    assert len(ps_command[ps_command.index("-q") + 1 :]) == 6
+    image_command = next(
+        command for command in commands if command[1:3] == ["image", "inspect"]
+    )
+    assert len(image_command[3:]) == 2
+
+
+def test_preflight_operators_ignores_wrong_revision_on_unselected_profile(
+    fake_bin: Path, tmp_path: Path, readiness_server: Any
+) -> None:
+    base_url, state = readiness_server
+    instances = [
+        instance
+        for instance in _registered_operator_instances()
+        if instance["instance_id"].endswith("gpu0")
+    ]
+    state.update(_registration_responses(instances))
+    environment = _base_environment(fake_bin)
+    operator_records = json.loads(environment["OPERATOR_INSPECT_FIXTURES"])
+    images = json.loads(environment["IMAGE_INSPECT_FIXTURES"])
+    unselected = next(
+        record
+        for record in operator_records.values()
+        if record["Config"]["Labels"]["com.docker.compose.service"] == "ppt-slice-cpu0"
+    )
+    images[unselected["Image"]]["Config"]["Labels"][
+        "org.opencontainers.image.revision"
+    ] = "b" * 40
+    environment["IMAGE_INSPECT_FIXTURES"] = json.dumps(images)
+
+    completed = _run(
+        "preflight",
+        *_operator_preflight_arguments(tmp_path, base_url, "--profile", "gpu0"),
+        environment=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize("label_mutation", ["missing", "mismatch"])
+def test_preflight_operators_rejects_selected_revision_before_registration_http(
+    fake_bin: Path,
+    tmp_path: Path,
+    readiness_server: Any,
+    label_mutation: str,
+) -> None:
+    base_url, _ = readiness_server
+    environment = _base_environment(fake_bin)
+    service_ids = json.loads(environment["OPERATOR_SERVICE_IDS"])
+    records = json.loads(environment["OPERATOR_INSPECT_FIXTURES"])
+    images = json.loads(environment["IMAGE_INSPECT_FIXTURES"])
+    image_id = records[service_ids["asr-offline-gpu0"]]["Image"]
+    labels = images[image_id]["Config"]["Labels"]
+    if label_mutation == "missing":
+        labels.pop("org.opencontainers.image.revision")
+    else:
+        labels["org.opencontainers.image.revision"] = "b" * 40
+    environment["IMAGE_INSPECT_FIXTURES"] = json.dumps(images)
+
+    completed = _run(
+        "preflight",
+        *_operator_preflight_arguments(
+            tmp_path, base_url, "--profile", "gpu0", timeout="0.05"
+        ),
+        environment=environment,
+    )
+
+    assert completed.returncode != 0
+    assert "revision" in completed.stderr.lower()
+    assert not list((tmp_path / "reports").rglob("operator-registration-*.json"))
+
+
+@pytest.mark.parametrize("git_sha", [None, "short", "g" * 40])
+def test_preflight_operators_requires_a_full_revision_before_container_inspection(
+    fake_bin: Path,
+    tmp_path: Path,
+    readiness_server: Any,
+    git_sha: str | None,
+) -> None:
+    base_url, _ = readiness_server
+    arguments = list(
+        _operator_preflight_arguments(tmp_path, base_url, "--profile", "gpu0")
+    )
+    index = arguments.index("--git-sha")
+    del arguments[index : index + 2]
+    if git_sha is not None:
+        arguments[index:index] = ["--git-sha", git_sha]
+    environment = _base_environment(fake_bin)
+
+    completed = _run("preflight", *arguments, environment=environment)
+
+    assert completed.returncode != 0
+    assert "Git SHA" in completed.stderr
+    assert not any(command[1] == "inspect" for command in _commands(environment))
 
 
 def test_preflight_operators_accepts_normalized_runtime_mount_sources(
@@ -2509,7 +2860,7 @@ def test_preflight_operators_rejects_runtime_drift_from_authoritative_compose(
         "published",
         "target",
         "protocol",
-        "host-ip-loopback",
+        "host-ip-wildcard",
         "host-ip-invalid",
         "mixed-host-ip",
         "extra",
@@ -2541,13 +2892,13 @@ def test_preflight_operators_rejects_runtime_port_binding_drift(
         bindings["8084/tcp"] = bindings.pop("8083/tcp")
     elif mutation == "protocol":
         bindings["8083/udp"] = bindings.pop("8083/tcp")
-    elif mutation == "host-ip-loopback":
-        bindings["8083/tcp"][0]["HostIp"] = "127.0.0.1"
+    elif mutation == "host-ip-wildcard":
+        bindings["8083/tcp"][0]["HostIp"] = ""
     elif mutation == "host-ip-invalid":
         bindings["8083/tcp"][0]["HostIp"] = "not-an-ip"
     elif mutation == "mixed-host-ip":
         bindings["8083/tcp"].append(
-            {"HostIp": "127.0.0.1", "HostPort": "18083"}
+            {"HostIp": "0.0.0.0", "HostPort": "18083"}
         )
     elif mutation == "extra":
         bindings["9000/tcp"] = [
@@ -2567,12 +2918,10 @@ def test_preflight_operators_rejects_runtime_port_binding_drift(
     assert "port binding" in completed.stderr.lower()
 
 
-@pytest.mark.parametrize("additional_host_ip", ["", "0.0.0.0", "::"])
-def test_preflight_operators_deduplicates_equivalent_wildcard_bindings(
+def test_preflight_operators_rejects_duplicate_loopback_bindings(
     fake_bin: Path,
     tmp_path: Path,
     readiness_server: Any,
-    additional_host_ip: str,
 ) -> None:
     base_url, state = readiness_server
     instances = [
@@ -2588,7 +2937,7 @@ def test_preflight_operators_deduplicates_equivalent_wildcard_bindings(
         "PortBindings"
     ]
     bindings["8083/tcp"].append(
-        {"HostIp": additional_host_ip, "HostPort": "18083"}
+        {"HostIp": "127.0.0.1", "HostPort": "18083"}
     )
     environment["OPERATOR_INSPECT_FIXTURES"] = json.dumps(inspections)
 
@@ -2600,10 +2949,11 @@ def test_preflight_operators_deduplicates_equivalent_wildcard_bindings(
         environment=environment,
     )
 
-    assert completed.returncode == 0, completed.stderr
+    assert completed.returncode != 0
+    assert "port binding" in completed.stderr.lower()
 
 
-def test_preflight_operators_accepts_omitted_runtime_wildcard_host_ip(
+def test_preflight_operators_rejects_omitted_runtime_loopback_host_ip(
     fake_bin: Path,
     tmp_path: Path,
     readiness_server: Any,
@@ -2632,7 +2982,8 @@ def test_preflight_operators_accepts_omitted_runtime_wildcard_host_ip(
         environment=environment,
     )
 
-    assert completed.returncode == 0, completed.stderr
+    assert completed.returncode != 0
+    assert "port binding" in completed.stderr.lower()
 
 
 def test_preflight_operators_propagates_registration_or_first_heartbeat_failure(

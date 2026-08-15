@@ -22,6 +22,9 @@ RUN --mount=type=cache,id=algorithm-platform-pip-cache,target=/root/.cache/pip,s
 
 FROM python:3.11-slim
 
+ARG EXPECTED_GIT_SHA
+LABEL org.opencontainers.image.revision="${EXPECTED_GIT_SHA}"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
