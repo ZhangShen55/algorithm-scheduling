@@ -1,5 +1,30 @@
 # Change Ledger
 
+## 2026-08-15 - OCR v6 AMD64 离线镜像与 RTX 3090 参数收敛
+
+- 交付目标：源项目 `main@e7fb26f1a24c75d2a1623a52a9aa379e2e6771da` 整理唯一 Cython
+  保护镜像 `ocr:v6_amd`，保存为 `ocr_v6_amd.tar`；算法功能调度同步基于
+  `codex/milestone-2b-three-gpu-deployment@cc790b9` 语义合并，不覆盖平台专属运行资产。
+- 镜像证据：Linux AMD64 镜像 ID 为
+  `sha256:bba69f2ab3f9521c3d5dde8d3f3803a52f673925d3204552738347c8ff3d5abe`；tar
+  大小 `12,806,246,400` 字节，SHA-256 为
+  `8201d9234eeac95cc993f76d74890f0dbbce4910a018e2db6ba0472790822cd9`。镜像包含 16 个
+  核心原生扩展，不含核心源码、编译中间文件、构建工具或正式配置。
+- 契约影响：`/ocr/getVersion`、`/ocr/prediction`、响应字段、端口和设备格式不变；正式配置
+  继续只读挂载。示例配置回填 `recognition_batch_size = 4`、`max_concurrency = 1`、
+  `enable_hpi = false`、公式 batch `1` 和 `box_threshold = 0.5`。
+- RTX 3090 证据：在 `192.168.29.11` 的物理 GPU 2 上完成 batch `1/4/8/16` 与客户端
+  并发 `1/2/4/8/16` 的 20 组固定矩阵，共 2,000 个计量请求；全部成功且无 5xx，内容摘要
+  一致。推荐 batch `4`、客户端并发 `2`，独立复验 `13.468 QPS`、P95 `152.716 ms`。
+  公式路径识别 28 个公式，单请求约 `9.806 s`；容器重启前后 OCR 一致。
+- 同步与清理：压测工具、配置注释、Linux 部署文档、测试和报告按允许清单同步。目标
+  `app.main:app`、operator runtime、`REQUIRE_GPU`、registry wheel、BuildKit secret、正式
+  配置、模型和 NPU Dockerfile 均保留。只精确删除 OCR 中间标签，服务器全部
+  `algorithm*` 镜像保持不变，未执行全局清理。
+- 证据等级与风险：达到静态/单元/契约、完整镜像构建、真实 NVIDIA GPU 推理、固定矩阵压测
+  和重启层级。Cython 不是密码学加密；结果基于单张固定 OCR 图片，上线后仍需按真实图片集
+  复测吞吐、P95、显存和内容一致性。
+
 ## 2026-08-15 - 八镜像构建完成与 Text Analysis 试用版混淆边界
 
 - 下载故障：提交 `e66a07136e9c594cf8fec3d125ff69e48ca4904e` 的真实构建已完成前七个

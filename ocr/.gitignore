@@ -16,3 +16,7 @@ output/
 
 # 模型运行文件单独交付，只提交说明和摘要清单。
 models/*/
+
+# Docker 离线交付物只保留在构建机，不提交到源码仓库。
+/ocr_v6_amd.tar
+/ocr_v6_amd.tar.sha256

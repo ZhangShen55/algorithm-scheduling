@@ -139,10 +139,59 @@ docker run -d --name ocr-v6-cython-gpu-check \
 - 四个容器重启后版本接口和真实 OCR 再次通过，重启前后 OCR 响应逐字一致。
 - 每组结束后精确删除验收容器；最终无本次活跃容器，三张 GPU 均恢复到 `3 MiB`。
 
+## AMD64 离线交付与 RTX 3090 压测（2026-08-15）
+
+本次在源项目以 `--platform linux/amd64 --build-arg cython=yes` 生成唯一交付标签
+`ocr:v6_amd`，再保存为 `ocr_v6_amd.tar`。本机 Docker manifest-list ID 为
+`sha256:ca25c2aa073495fe4be377f433475c1c5e542d7f63897a35aba9cf5a4d8d3203`；Linux
+加载后的 AMD64 镜像 ID 为
+`sha256:bba69f2ab3f9521c3d5dde8d3f3803a52f673925d3204552738347c8ff3d5abe`。
+tar 大小为 `12,806,246,400` 字节，SHA-256 为
+`8201d9234eeac95cc993f76d74890f0dbbce4910a018e2db6ba0472790822cd9`，本机与服务器
+复校验一致。
+
+最终镜像包含 16 个核心原生扩展和四套模型的 12 个受校验文件；不包含核心 `.py`、
+C/C++/目标文件、构建目录、Cython、gcc、g++、make 或 `/app/config.toml`。正式配置通过
+只读挂载提供。服务器正式容器 `ocr-v6-amd` 只映射物理 GPU 2（RTX 3090），容器内使用
+逻辑 `cuda:0`；固定 `enable_hpi = false`、`max_concurrency = 1`，客户端并发由单引擎
+排队处理。
+
+压测从服务器本机发起，OCR batch 为 `1/4/8/16`，客户端并发为 `1/2/4/8/16`；每组
+10 次预热、100 次计量，共 2,000 个计量请求。各 batch 按并发 `1/2/4/8/16` 的 QPS
+矩阵如下：
+
+| Batch | 5 组 QPS |
+| ---: | --- |
+| 1 | `11.107 / 12.687 / 12.840 / 12.959 / 13.007` |
+| 4 | `12.669 / 14.062 / 14.075 / 14.173 / 13.926` |
+| 8 | `12.449 / 13.834 / 13.808 / 13.839 / 13.908` |
+| 16 | `12.580 / 14.107 / 13.857 / 14.030 / 13.833` |
+
+20 组全部 100% 成功、0 个 HTTP 5xx，内容摘要均为 `8c763fa078097ca0`，GPU 总显存
+约 `1043 MiB`。按 95% 峰值规则选择最小合格参数，最终推荐
+`recognition_batch_size = 4` 和客户端并发 `2`；服务端 `max_concurrency` 仍为 `1`。
+推荐组合独立复验 100/100 成功，`13.468 QPS`，P95 `152.716 ms`。
+
+公式路径独立启用后识别出 28 个公式，单请求约 `9.806 s`，GPU 显存约 `2191 MiB`。
+容器重启前后版本接口和真实 OCR 均通过，响应摘要一致。隔离临时容器还真实复现了配置
+缺失、GPU 不可用、模型目录缺失和端口占用日志；未影响正式容器。
+
+清理只按明确标签执行：本机保留 `ocr:v6_amd`、tar 和 `jy-ocr-service:local`；服务器保留
+`ocr:v6_amd`、tar、正式容器和全部 `algorithm*` 镜像，未执行 `docker system prune`。
+源/目标 `models/manifest.sha256` 摘要均为
+`818231294db3ca1d430660640fd60cf9f29f1d7decf6f1affb5466bc03365a27`，同步没有读取、
+复制或删除模型及目标正式配置。目标平台入口、operator runtime、`REQUIRE_GPU`、registry
+wheel、BuildKit `ocr_model_manifest` secret 和 NPU Dockerfile 均保留。
+
+完整环境、20 组延迟分位数、显存、公式、重启和失败日志见
+`ocr/docs/ocr-v6-rtx3090-benchmark.md`。该结论达到静态/单元/契约、完整 AMD64 镜像构建、
+真实 RTX 3090 推理、固定矩阵压测和容器重启层级；单图片夹具不代表所有生产图片分布。
+
 ## 证据结论
 
 - 静态、单元与契约测试：符合。
 - MacBook CPU / Docker `linux/amd64` 构建与真实 OCR：符合。
 - 双项目允许清单同步及平台专属能力保留：符合。
 - 真实 NVIDIA GPU、显存、公式路径和重启：符合。
+- `ocr:v6_amd` 离线 tar、RTX 3090 固定矩阵和推荐配置：符合。
 - 综合结论：符合。

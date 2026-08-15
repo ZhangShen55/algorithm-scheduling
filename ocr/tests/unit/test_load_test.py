@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 
 import httpx
@@ -70,8 +71,18 @@ def test_run_load_test_respects_request_count_and_concurrency(tmp_path):
         await asyncio.sleep(0.001)
         active -= 1
         if request_id == 3:
-            return load_test.RequestResult(False, 2.0, "OCR 接口返回错误：busy")
-        return load_test.RequestResult(True, 1.0)
+            return load_test.RequestResult(
+                False,
+                2.0,
+                "HTTP 503",
+                status_code=503,
+            )
+        return load_test.RequestResult(
+            True,
+            1.0,
+            status_code=200,
+            response_digest="abc123",
+        )
 
     config = load_test.LoadTestConfig(
         ip="127.0.0.1",
@@ -90,7 +101,9 @@ def test_run_load_test_respects_request_count_and_concurrency(tmp_path):
     assert report.completed_requests == 8
     assert report.successful_requests == 7
     assert report.failed_requests == 1
-    assert report.errors == {"OCR 接口返回错误：busy": 1}
+    assert report.errors == {"HTTP 503": 1}
+    assert report.http_5xx_count == 1
+    assert report.response_digests == {"abc123": 7}
     assert max_active == 3
 
 
@@ -168,3 +181,40 @@ def test_calculate_latency_statistics():
         "p99": 39.7,
         "max": 40.0,
     }
+
+
+def test_response_digest_separates_content_from_confidence():
+    first = {
+        "value": [
+            json.dumps(
+                [
+                    {
+                        "text": "华南农业大学",
+                        "confidence": 0.94,
+                        "text_region": [[0, 0], [10, 0], [10, 5], [0, 5]],
+                    }
+                ]
+            )
+        ],
+        "formula_results": [],
+    }
+    second = {
+        "value": [
+            json.dumps(
+                [
+                    {
+                        "text": "华南农业大学",
+                        "confidence": 0.95,
+                        "text_region": [[0, 0], [10, 0], [10, 5], [0, 5]],
+                    }
+                ]
+            )
+        ],
+        "formula_results": [],
+    }
+
+    first_content, first_raw = load_test.calculate_response_digests(first)
+    second_content, second_raw = load_test.calculate_response_digests(second)
+
+    assert first_content == second_content
+    assert first_raw != second_raw

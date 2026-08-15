@@ -7,6 +7,7 @@ from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -40,6 +41,9 @@ class RequestResult:
     success: bool
     latency_ms: float
     error: str | None = None
+    status_code: int | None = None
+    response_digest: str | None = None
+    raw_response_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -57,6 +61,9 @@ class LoadTestReport:
     requests_per_second: float
     latency_ms: dict[str, float]
     errors: dict[str, int]
+    http_5xx_count: int
+    response_digests: dict[str, int]
+    raw_response_digests: dict[str, int]
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -101,6 +108,49 @@ def calculate_latency_statistics(latencies: list[float]) -> dict[str, float]:
     return {name: round(value, 3) for name, value in statistics.items()}
 
 
+def _digest(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+
+
+def _without_confidence(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            key: _without_confidence(item)
+            for key, item in value.items()
+            if key not in {"confidence", "detection_confidence"}
+        }
+    if isinstance(value, list):
+        return [_without_confidence(item) for item in value]
+    return value
+
+
+def calculate_response_digests(payload: dict) -> tuple[str, str]:
+    raw_response = {
+        "value": payload.get("value"),
+        "formula_results": payload.get("formula_results"),
+    }
+    parsed_values = []
+    for value in payload.get("value") or []:
+        try:
+            parsed_values.append(json.loads(value) if isinstance(value, str) else value)
+        except (TypeError, ValueError):
+            parsed_values.append(value)
+    content_response = _without_confidence(
+        {
+            "value": parsed_values,
+            "formula_results": payload.get("formula_results"),
+        }
+    )
+    return _digest(content_response), _digest(raw_response)
+
+
 async def send_prediction(
     client: httpx.AsyncClient,
     image_base64: str,
@@ -113,13 +163,18 @@ async def send_prediction(
         request_payload["enable_formula"] = True
 
     started = time.perf_counter()
+    status_code = None
+    response_digest = None
+    raw_response_digest = None
     try:
         response = await client.post("/ocr/prediction", json=request_payload)
+        status_code = response.status_code
         response.raise_for_status()
         payload = response.json()
         if payload.get("err_no") != 0:
             message = payload.get("err_msg") or "未知错误"
             raise RuntimeError(f"OCR 接口返回错误：{message}")
+        response_digest, raw_response_digest = calculate_response_digests(payload)
         success = True
         error_message = None
     except httpx.TimeoutException:
@@ -133,7 +188,14 @@ async def send_prediction(
         error_message = str(error) or error.__class__.__name__
 
     latency_ms = (time.perf_counter() - started) * 1000
-    return RequestResult(success, latency_ms, error_message)
+    return RequestResult(
+        success,
+        latency_ms,
+        error_message,
+        status_code=status_code,
+        response_digest=response_digest,
+        raw_response_digest=raw_response_digest,
+    )
 
 
 async def _execute_workers(
@@ -218,6 +280,18 @@ async def run_load_test(
     completed = len(results)
     failed = completed - successful
     errors = Counter(result.error for result in results if result.error)
+    response_digests = Counter(
+        result.response_digest for result in results if result.response_digest
+    )
+    raw_response_digests = Counter(
+        result.raw_response_digest
+        for result in results
+        if result.raw_response_digest
+    )
+    http_5xx_count = sum(
+        result.status_code is not None and 500 <= result.status_code < 600
+        for result in results
+    )
     latencies = [result.latency_ms for result in results]
     return LoadTestReport(
         started_at=datetime.now(timezone.utc).isoformat(),
@@ -235,6 +309,9 @@ async def run_load_test(
         requests_per_second=round(completed / elapsed, 3) if elapsed else 0.0,
         latency_ms=calculate_latency_statistics(latencies),
         errors=dict(errors),
+        http_5xx_count=http_5xx_count,
+        response_digests=dict(response_digests),
+        raw_response_digests=dict(raw_response_digests),
     )
 
 
@@ -276,12 +353,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default="http",
         help="请求协议",
     )
-    parser.add_argument("--image", type=Path,default="/Users/zhangshen/Documents/data/OCR测试数据/ppt课件截图_Formula.png", required=True, help="测试图片路径")
+    parser.add_argument(
+        "--image",
+        type=Path,
+        required=True,
+        help="测试图片路径",
+    )
     parser.add_argument(
         "--concurrency",
         type=_positive_int,
         default=10,
-        help="并发请求数，默认 20",
+        help="并发请求数，默认 10",
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--requests", type=_positive_int, help="固定请求总数")
@@ -321,6 +403,7 @@ def _print_report(report: LoadTestReport) -> None:
     print(f"成功/失败: {report.successful_requests}/{report.failed_requests}")
     print(f"成功率: {report.success_rate_percent:.3f}%")
     print(f"QPS: {report.requests_per_second:.3f}")
+    print(f"HTTP 5xx: {report.http_5xx_count}")
     print(
         "耗时(ms): "
         f"min={latency['min']:.3f} avg={latency['average']:.3f} "
@@ -332,6 +415,14 @@ def _print_report(report: LoadTestReport) -> None:
         print("失败原因:")
         for message, count in sorted(report.errors.items()):
             print(f"  {count} x {message}")
+    if report.response_digests:
+        print("内容摘要:")
+        for digest, count in sorted(report.response_digests.items()):
+            print(f"  {count} x {digest}")
+    if report.raw_response_digests:
+        print("原始响应摘要:")
+        for digest, count in sorted(report.raw_response_digests.items()):
+            print(f"  {count} x {digest}")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

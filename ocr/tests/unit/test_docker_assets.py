@@ -155,3 +155,39 @@ def test_formula_models_are_part_of_the_verified_docker_model_assets():
 
     assert "PP-DocLayout_plus-L/" in manifest
     assert "PP-FormulaNet_plus-M/" in manifest
+
+
+def test_linux_delivery_guide_starts_from_the_offline_tar():
+    content = (PROJECT_ROOT / "docker" / "README.md").read_text(encoding="utf-8")
+
+    tar_position = content.index("ocr_v6_amd.tar")
+    build_position = content.index("docker build")
+    assert tar_position < build_position
+    assert "sha256sum -c ocr_v6_amd.tar.sha256" in content
+    assert "docker load -i ocr_v6_amd.tar" in content
+
+
+def test_linux_delivery_guide_covers_gpu_run_and_operations():
+    content = (PROJECT_ROOT / "docker" / "README.md").read_text(encoding="utf-8")
+
+    required_fragments = (
+        'device = "cuda:0"',
+        'recognition_batch_size = 1',
+        'enable_hpi = false',
+        'max_concurrency = 1',
+        '--name ocr-v6-amd',
+        "--gpus '\"device=2\"'",
+        'config.toml:/app/config.toml:ro',
+        '--log-driver json-file',
+        '--log-opt max-size=100m',
+        '--log-opt max-file=3',
+        "启动成功日志",
+        "常见失败日志",
+        "配置文件不存在",
+        "GPU 不可用",
+        "端口占用",
+        "docker stop ocr-v6-amd",
+        "回滚",
+    )
+    for fragment in required_fragments:
+        assert fragment in content

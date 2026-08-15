@@ -66,6 +66,44 @@ docker build --platform linux/amd64 \
 Cython 四个最终镜像的真实 OCR、公式开启、显存和重启复验；详细镜像 ID、响应摘要和显存数据
 见场景文件，因此 `DEC-023` 结论为“符合”。
 
+### AMD64 离线交付与 RTX 3090 推荐配置
+
+Linux 运维从 tar 开始复验：
+
+```bash
+cd /opt/ocr-v6
+sha256sum -c ocr_v6_amd.tar.sha256
+docker load -i ocr_v6_amd.tar
+docker image inspect ocr:v6_amd --format '{{.Id}} {{.Architecture}} {{.Os}}'
+docker run --rm --entrypoint sh ocr:v6_amd -c '
+  test -n "$(find /app/app -type f -name "*.so" -print -quit)" &&
+  test -z "$(find /app/app -type f -name "*.py" ! -name "__init__.py" -print -quit)" &&
+  test ! -e /app/config.toml &&
+  test ! -e /app/.build &&
+  ! command -v gcc &&
+  ! python -m pip show Cython
+'
+```
+
+tar SHA-256 必须为
+`8201d9234eeac95cc993f76d74890f0dbbce4910a018e2db6ba0472790822cd9`，架构必须为
+`amd64 linux`。生产运行使用物理 GPU 2、容器逻辑 `cuda:0`、只读配置、
+`REQUIRE_GPU=true`、`recognition_batch_size = 4`、`max_concurrency = 1` 和
+`enable_hpi = false`。启动、真实 OCR、公式、日志、停止与回滚命令见
+`../ocr/docker/README.md`。
+
+检查压测报告和同步结果：
+
+```bash
+rg -n '13.468 QPS|P95 `152.716 ms`|8201d923|20 组均满足' \
+  ../ocr/docs/ocr-v6-rtx3090-benchmark.md
+(cd ../ocr && conda run -n ocr-v6 python -m pytest -q tests)
+.venv/bin/python -m pytest -q tests/test_harness_consistency.py
+```
+
+报告记录 20 组固定矩阵、2,000 个计量请求、公式识别、显存、重启和失败日志；完整证据见
+[`scenarios/ocr-optional-cython-build-and-sync.md`](scenarios/ocr-optional-cython-build-and-sync.md)。
+
 ## 里程碑 2B 部署验证场景
 
 完整执行顺序、证据目录和未执行边界见

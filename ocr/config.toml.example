@@ -10,30 +10,44 @@ workers = 1
 [ocr]
 # 可选值：cpu、cuda:<容器逻辑编号>、npu:<容器逻辑编号>
 device = "cpu"
-detection_model_dir = "models/PP-OCRv6_medium_det"
-recognition_model_dir = "models/PP-OCRv6_medium_rec"
-recognition_batch_size = 1
+# 以下两个参数仅在 device = "cpu" 时生效，GPU/NPU 部署可保持默认值
 cpu_threads = 8
 enable_mkldnn = false
+
+detection_model_dir = "models/PP-OCRv6_medium_det"
+recognition_model_dir = "models/PP-OCRv6_medium_rec"
+# RTX 3090 实测推荐值；单次送入 4 个文字区域，兼顾吞吐和资源占用
+recognition_batch_size = 4
+# 启用 Paddle 高性能推理模式；需要匹配设备和推理后端，默认关闭以保证兼容性
 enable_hpi = false
+# 单引擎串行推理的准入上限；保持 1 时并发请求会排队，增大不会产生多引擎并行
 max_concurrency = 1
+# 单张图片解码前允许的最大文件大小，单位：字节
 image_max_bytes = 20971520
 
 [ocr.detection]
+# 检测前图像缩放的边长限制；值越大越利于小字检测，但推理耗时和资源占用也越高
 limit_side_len = 960
+# 文本像素候选阈值；值越低越容易检出文字，也更容易引入噪声
 threshold = 0.3
-box_threshold = 0.6
+# 文本框置信度阈值；低于该值的候选框会被过滤
+box_threshold = 0.5
+# 文本框向外扩张比例；值越大保留的文字边缘越多，也可能扩大到相邻区域
 unclip_ratio = 1.5
 
 [formula]
+# 服务端公式能力总开关；关闭时请求 enable_formula=true 会返回未启用提示
 enabled = false
 layout_model_dir = "models/PP-DocLayout_plus-L"
 recognition_model_dir = "models/PP-FormulaNet_plus-M"
+# 单次送入公式识别模型的公式区域数量；增大可提高吞吐量，但会占用更多显存或内存
 recognition_batch_size = 1
 layout_threshold = 0.5
 
 [logging]
 level = "INFO"
 directory = "logs"
+# 单个应用日志文件上限，单位：MiB
 max_size_mb = 100
+# 应用日志历史文件数量；Docker JSON 日志轮转由 docker run 参数单独控制
 backup_count = 3
