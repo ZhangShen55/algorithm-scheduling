@@ -183,6 +183,7 @@ def _assert_platform_dockerfile_contract(
 
     assert _instruction_names(builder) == [
         "FROM",
+        "ARG",
         "ENV",
         "WORKDIR",
         "COPY",
@@ -196,8 +197,11 @@ def _assert_platform_dockerfile_contract(
     expected_runtime_names.extend(["COPY", "COPY", "EXPOSE", "CMD"])
     assert _instruction_names(runtime) == expected_runtime_names, service
 
+    assert _instructions_named(builder, "ARG") == [
+        "ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple"
+    ], service
     assert _instructions_named(builder, "ENV") == [
-        "ENV PIP_DEFAULT_TIMEOUT=300 PIP_RETRIES=10"
+        "ENV PIP_INDEX_URL=${PIP_INDEX_URL} PIP_DEFAULT_TIMEOUT=300 PIP_RETRIES=10"
     ], service
     assert _instructions_named(builder, "WORKDIR") == ["WORKDIR /build"], service
 

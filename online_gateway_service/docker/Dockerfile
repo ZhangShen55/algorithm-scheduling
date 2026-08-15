@@ -1,6 +1,9 @@
 FROM python:3.11-slim AS builder
 
-ENV PIP_DEFAULT_TIMEOUT=300 \
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
+
+ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_DEFAULT_TIMEOUT=300 \
     PIP_RETRIES=10
 
 WORKDIR /build
