@@ -75,6 +75,12 @@ def _base_inspect(
             "Labels": {"org.opencontainers.image.revision": RELEASE_SHA},
         },
         "HostConfig": {
+            "PortBindings": {
+                "8083/tcp": [
+                    {"HostIp": "127.0.0.1", "HostPort": "18083"},
+                    {"HostIp": "::1", "HostPort": "18083"},
+                ]
+            },
             "DeviceRequests": [
                 {
                     "Driver": "nvidia",
@@ -177,6 +183,9 @@ def emit(event, **overrides):
         "instance_id": "asr-offline-gpu0",
         "run_id": "gpu0-asr-run",
         "attempt": 1,
+        "target_origin": os.environ.get(
+            "ACTIVITY_TARGET_ORIGIN", "http://127.0.0.1:18083"
+        ),
     }
     payload.update(overrides)
     os.write(int(fd_value), (json.dumps(payload) + "\\n").encode())
@@ -204,6 +213,12 @@ elif mode == "two_attempts":
     emit("finish")
     time.sleep(float(os.environ.get("BETWEEN_ACTIVITY_SECONDS", "0")))
     emit("start", attempt=2)
+elif mode == "origin_drift":
+    emit("start")
+elif mode == "attempt_origin_drift":
+    emit("start")
+    emit("finish")
+    emit("start", attempt=2, target_origin="http://127.0.0.1:18084")
 marker.write_text("running", encoding="utf-8")
 time.sleep(float(os.environ.get("TRIGGER_SECONDS", "0.25")))
 marker.unlink(missing_ok=True)
@@ -211,6 +226,10 @@ if mode == "valid":
     emit("finish")
 elif mode == "two_attempts":
     emit("finish", attempt=2)
+elif mode == "origin_drift":
+    emit("finish", target_origin="http://127.0.0.1:28083")
+elif mode == "attempt_origin_drift":
+    emit("finish", attempt=2, target_origin="http://127.0.0.1:18084")
 """,
         encoding="utf-8",
     )
@@ -356,6 +375,7 @@ def test_verifier_records_synchronous_cuda_pid_and_exact_container_mapping(
         "protocol": "inherited-fd-v1",
         "operator_code": "asr_offline",
         "instance_id": "asr-offline-gpu0",
+        "target_origin": "http://127.0.0.1:18083",
         "run_id": "gpu0-asr-run",
         "attempts": [
             {
@@ -404,6 +424,149 @@ def test_sample_window_does_not_reset_for_later_activity_attempt(
 
     assert completed.returncode != 0
     assert "同步采样" in _report(gpu_runtime)["reason"]
+
+
+def test_verifier_rejects_activity_target_bound_to_another_instance(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    gpu_runtime["env"]["ACTIVITY_TARGET_ORIGIN"] = "http://127.0.0.1:28083"
+
+    completed = _run(gpu_runtime)
+
+    assert completed.returncode != 0
+    assert "published port" in _report(gpu_runtime)["reason"]
+
+
+def test_verifier_rejects_target_origin_drift_within_one_attempt(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    gpu_runtime["env"]["ACTIVITY_MODE"] = "origin_drift"
+
+    completed = _run(gpu_runtime)
+
+    assert completed.returncode != 0
+    assert "target_origin" in _report(gpu_runtime)["reason"]
+
+
+def test_verifier_rejects_target_origin_drift_between_attempts(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    inspect = _base_inspect()
+    inspect["HostConfig"]["PortBindings"]["8084/tcp"] = [
+        {"HostIp": "127.0.0.1", "HostPort": "18084"}
+    ]
+    gpu_runtime["inspect_path"].write_text(json.dumps(inspect), encoding="utf-8")
+    gpu_runtime["env"]["ACTIVITY_MODE"] = "attempt_origin_drift"
+
+    completed = _run(gpu_runtime)
+
+    assert completed.returncode != 0
+    assert "target_origin" in _report(gpu_runtime)["reason"]
+
+
+@pytest.mark.parametrize(
+    "target_origin",
+    (
+        "http://192.0.2.10:18083",
+        "http://127.0.0.1",
+        "http://127.0.0.1:18083/private/fixture.png",
+        "http://127.0.0.1:18083?token=secret-query",
+        "http://user:secret-password@127.0.0.1:18083",
+    ),
+)
+def test_verifier_rejects_non_loopback_or_non_origin_activity_target(
+    gpu_runtime: dict[str, Any], target_origin: str
+) -> None:
+    gpu_runtime["env"]["ACTIVITY_TARGET_ORIGIN"] = target_origin
+
+    completed = _run(gpu_runtime)
+
+    assert completed.returncode != 0
+    report_bytes = gpu_runtime["output"].read_bytes()
+    assert "target_origin" in _report(gpu_runtime)["reason"]
+    assert b"private/fixture.png" not in report_bytes
+    assert b"secret-query" not in report_bytes
+    assert b"secret-password" not in report_bytes
+
+
+@pytest.mark.parametrize(
+    "port_bindings",
+    (
+        None,
+        {},
+        {"8083/tcp": None},
+        {"invalid": [{"HostIp": "127.0.0.1", "HostPort": "18083"}]},
+        {"8083/tcp": [{"HostIp": "192.0.2.10", "HostPort": "18083"}]},
+        {"8083/tcp": [{"HostIp": "127.0.0.1", "HostPort": "invalid"}]},
+        {"8083/tcp": [{"HostIp": "127.0.0.1"}]},
+    ),
+)
+def test_verifier_rejects_missing_or_invalid_port_bindings(
+    gpu_runtime: dict[str, Any], port_bindings: Any
+) -> None:
+    inspect = _base_inspect()
+    if port_bindings is None:
+        del inspect["HostConfig"]["PortBindings"]
+    else:
+        inspect["HostConfig"]["PortBindings"] = port_bindings
+    gpu_runtime["inspect_path"].write_text(json.dumps(inspect), encoding="utf-8")
+
+    completed = _run(gpu_runtime)
+
+    assert completed.returncode != 0
+    assert "PortBindings" in _report(gpu_runtime)["reason"]
+
+
+@pytest.mark.parametrize(
+    ("target_origin", "host_ip"),
+    (
+        ("http://127.0.0.1:18083", ""),
+        ("http://127.0.0.1:18083", "0.0.0.0"),
+        ("http://127.0.0.1:18083", "127.0.0.1"),
+        ("http://[::1]:18083", "::"),
+        ("http://[::1]:18083", "::1"),
+    ),
+)
+def test_verifier_accepts_loopback_or_wildcard_docker_binding(
+    gpu_runtime: dict[str, Any], target_origin: str, host_ip: str
+) -> None:
+    inspect = _base_inspect()
+    inspect["HostConfig"]["PortBindings"] = {
+        "8083/tcp": [{"HostIp": host_ip, "HostPort": "18083"}]
+    }
+    gpu_runtime["inspect_path"].write_text(json.dumps(inspect), encoding="utf-8")
+    gpu_runtime["env"]["ACTIVITY_TARGET_ORIGIN"] = target_origin
+
+    completed = _run(gpu_runtime)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("target_origin", "host_ip"),
+    (
+        ("http://127.0.0.2:18083", "127.0.0.1"),
+        ("http://127.0.0.1:18083", "::"),
+        ("http://127.0.0.1:18083", "::1"),
+        ("http://[::1]:18083", ""),
+        ("http://[::1]:18083", "0.0.0.0"),
+        ("http://[::1]:18083", "127.0.0.1"),
+    ),
+)
+def test_verifier_rejects_other_loopback_or_cross_family_binding(
+    gpu_runtime: dict[str, Any], target_origin: str, host_ip: str
+) -> None:
+    inspect = _base_inspect()
+    inspect["HostConfig"]["PortBindings"] = {
+        "8083/tcp": [{"HostIp": host_ip, "HostPort": "18083"}]
+    }
+    gpu_runtime["inspect_path"].write_text(json.dumps(inspect), encoding="utf-8")
+    gpu_runtime["env"]["ACTIVITY_TARGET_ORIGIN"] = target_origin
+
+    completed = _run(gpu_runtime)
+
+    assert completed.returncode != 0
+    assert "published binding" in _report(gpu_runtime)["reason"]
 
 
 @pytest.mark.parametrize("value", ("0", "-1", "nan", "inf", "86400.01"))
@@ -928,7 +1091,8 @@ def test_verifier_kills_trigger_process_group_when_helper_command_fails(
         "subprocess.Popen([sys.executable,os.environ['CHILD_SCRIPT']])\n"
         "event={'event':'start','nonce':os.environ['GPU_EVIDENCE_ACTIVITY_NONCE'],"
         "'operator_code':'asr_offline','instance_id':'asr-offline-gpu0',"
-        "'run_id':'cleanup-run','attempt':1}\n"
+        "'run_id':'cleanup-run','attempt':1,"
+        "'target_origin':'http://127.0.0.1:18083'}\n"
         "os.write(int(os.environ['GPU_EVIDENCE_ACTIVITY_FD']),"
         "(json.dumps(event)+'\\n').encode())\n"
         "open(os.environ['TRIGGER_MARKER'],'w').write('running')\n"

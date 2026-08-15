@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import math
 import os
@@ -17,6 +18,7 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 
 class VerificationError(RuntimeError):
@@ -33,6 +35,7 @@ ACTIVITY_FIELDS = {
     "instance_id",
     "run_id",
     "attempt",
+    "target_origin",
 }
 MAX_ACTIVITY_BUFFER_BYTES = 64 * 1024
 MAX_TRIGGER_TIMEOUT_SECONDS = 24 * 60 * 60
@@ -461,12 +464,121 @@ def _redacted_command(argv: Sequence[str]) -> dict[str, Any]:
     return {"executable": Path(argv[0]).name, "argument_count": len(argv) - 1}
 
 
+def _canonical_loopback_origin(
+    value: Any,
+) -> tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address, int]:
+    if not isinstance(value, str):
+        raise VerificationError("activity target_origin 必须是字符串")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise VerificationError("activity target_origin 格式不合法") from error
+    hostname = parsed.hostname.lower() if parsed.hostname is not None else None
+    if (
+        parsed.scheme not in {"http", "https", "ws", "wss"}
+        or hostname is None
+        or port is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise VerificationError("activity target_origin 必须是无凭据和路径的显式端口 origin")
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError as error:
+        raise VerificationError("activity target_origin 必须使用 loopback IP") from error
+    if not address.is_loopback:
+        raise VerificationError("activity target_origin 必须使用 loopback IP")
+    formatted_host = f"[{address.compressed}]" if address.version == 6 else address.compressed
+    canonical = f"{parsed.scheme}://{formatted_host}:{port}"
+    if value != canonical:
+        raise VerificationError("activity target_origin 未规范化")
+    return canonical, address, port
+
+
+def _published_tcp_bindings(
+    inspect: dict[str, Any],
+) -> set[tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int]]:
+    host_config = inspect.get("HostConfig")
+    bindings = host_config.get("PortBindings") if isinstance(host_config, dict) else None
+    if not isinstance(bindings, dict) or not bindings:
+        raise VerificationError("docker inspect HostConfig.PortBindings 缺失或为空")
+    published_tcp_bindings: set[
+        tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int]
+    ] = set()
+    for container_target, entries in bindings.items():
+        match = (
+            re.fullmatch(r"([0-9]{1,5})/(tcp|udp)", container_target)
+            if isinstance(container_target, str)
+            else None
+        )
+        if match is None or not 1 <= int(match.group(1)) <= 65535:
+            raise VerificationError("docker inspect HostConfig.PortBindings 包含非法容器端口")
+        if not isinstance(entries, list) or not entries:
+            raise VerificationError("docker inspect HostConfig.PortBindings 包含非法 binding")
+        for entry in entries:
+            if not isinstance(entry, dict) or set(entry) != {"HostIp", "HostPort"}:
+                raise VerificationError("docker inspect HostConfig.PortBindings 包含非法 binding")
+            host_ip = entry["HostIp"]
+            host_port = entry["HostPort"]
+            if not isinstance(host_ip, str) or not isinstance(host_port, str):
+                raise VerificationError("docker inspect HostConfig.PortBindings 包含非法 binding")
+            if host_ip:
+                try:
+                    binding_address = ipaddress.ip_address(host_ip)
+                except ValueError as error:
+                    raise VerificationError(
+                        "docker inspect HostConfig.PortBindings 包含非法 HostIp"
+                    ) from error
+                if not (binding_address.is_unspecified or binding_address.is_loopback):
+                    raise VerificationError(
+                        "docker inspect HostConfig.PortBindings HostIp 不是 wildcard/loopback"
+                    )
+            else:
+                binding_address = ipaddress.IPv4Address("0.0.0.0")
+            if re.fullmatch(r"[0-9]{1,5}", host_port) is None:
+                raise VerificationError("docker inspect HostConfig.PortBindings 包含非法 HostPort")
+            published_port = int(host_port)
+            if not 1 <= published_port <= 65535:
+                raise VerificationError("docker inspect HostConfig.PortBindings 包含非法 HostPort")
+            if match.group(2) == "tcp":
+                published_tcp_bindings.add((binding_address, published_port))
+    if not published_tcp_bindings:
+        raise VerificationError("docker inspect HostConfig.PortBindings 未发布 TCP 端口")
+    return published_tcp_bindings
+
+
+def _matches_published_binding(
+    origin_address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    origin_port: int,
+    bindings: set[tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int]],
+) -> bool:
+    return any(
+        binding_port == origin_port
+        and binding_address.version == origin_address.version
+        and (binding_address.is_unspecified or binding_address == origin_address)
+        for binding_address, binding_port in bindings
+    )
+
+
 class _ActivityProtocol:
-    def __init__(self, *, nonce: str, operator_code: str, instance_id: str) -> None:
+    def __init__(
+        self,
+        *,
+        nonce: str,
+        operator_code: str,
+        instance_id: str,
+        inspect: dict[str, Any],
+    ) -> None:
         self.nonce = nonce
         self.operator_code = operator_code
         self.instance_id = instance_id
+        self.inspect = inspect
         self.run_id: str | None = None
+        self.target_origin: str | None = None
         self.buffer = bytearray()
         self.active: dict[str, Any] | None = None
         self.completed: list[dict[str, Any]] = []
@@ -516,6 +628,22 @@ class _ActivityProtocol:
         if event == "start":
             if self.active is not None or attempt != len(self.completed) + 1:
                 raise VerificationError("activity 协议 start 顺序不合法")
+            target_origin, target_address, target_port = _canonical_loopback_origin(
+                payload["target_origin"]
+            )
+            if self.target_origin is None:
+                if not _matches_published_binding(
+                    target_address,
+                    target_port,
+                    _published_tcp_bindings(self.inspect),
+                ):
+                    raise VerificationError(
+                        "activity target_origin published port 不属于目标容器对应地址的 "
+                        "published binding"
+                    )
+                self.target_origin = target_origin
+            elif target_origin != self.target_origin:
+                raise VerificationError("activity target_origin 在同一轮发生变化")
             if self.first_started_monotonic is None:
                 self.first_started_monotonic = time.monotonic()
             self.active = {
@@ -528,6 +656,9 @@ class _ActivityProtocol:
             raise VerificationError("activity 协议 event 不受支持")
         if self.active is None or attempt != self.active["attempt"]:
             raise VerificationError("activity 协议 finish 顺序不合法")
+        target_origin, _, _ = _canonical_loopback_origin(payload["target_origin"])
+        if target_origin != self.target_origin:
+            raise VerificationError("activity target_origin 在同一轮发生变化")
         self.active["finished_at"] = datetime.now(timezone.utc).isoformat()  # noqa: UP017
         self.completed.append(self.active)
         self.active = None
@@ -543,7 +674,7 @@ class _ActivityProtocol:
             raise VerificationError("activity 协议存在未完整事件")
         if self.active is not None:
             raise VerificationError("activity 协议缺少 finish 事件")
-        if not self.completed or self.run_id is None:
+        if not self.completed or self.run_id is None or self.target_origin is None:
             raise VerificationError("未收到有效 activity 请求窗口")
         samples = [sample for window in self.completed for sample in window["samples"]]
         if not samples:
@@ -552,6 +683,7 @@ class _ActivityProtocol:
             "protocol": "inherited-fd-v1",
             "operator_code": self.operator_code,
             "instance_id": self.instance_id,
+            "target_origin": self.target_origin,
             "run_id": self.run_id,
             "attempts": [
                 {
@@ -639,6 +771,7 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
             nonce=activity_nonce,
             operator_code=arguments.process_name,
             instance_id=arguments.instance_id,
+            inspect=inspect,
         )
         report["activity"] = {
             "protocol": "inherited-fd-v1",

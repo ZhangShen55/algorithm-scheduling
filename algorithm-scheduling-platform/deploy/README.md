@@ -218,6 +218,11 @@ set and every digest before installing the derived runtime manifest, and the bui
 removes the temporary file on success, failure or interruption. The Git worktree and
 external model roots do not gain a second manifest authority.
 
+Before deployment, copy the two canonical endpoint files from `deploy/endpoints.json`
+and `deploy/endpoints-full.json` into the Git-external fixture root. Per-instance GPU
+triggers use the external `endpoints.json`; the full eight-operator Smoke command uses
+the external `endpoints-full.json`.
+
 Python wheels may be downloaded while each image is built. A quiet BuildKit log alone
 is not a failure: continue while network bytes, Docker cache size or filesystem writes
 show progress. Stop only for an explicit HTTP/connection failure or a sustained interval

@@ -216,6 +216,10 @@ docker compose -f deploy/docker-compose.operators.yml ps
 worker；同一实例 ID 不得被两个容器复用。容器配置只读挂载 `deploy/config/operators`，
 模型和业务结果分别遵守 `/data/course`、`/data/result` 边界。
 
+部署前将仓库内 `deploy/endpoints.json` 和 `deploy/endpoints-full.json` 两份权威文件
+复制到 Git 外 fixture 根。逐实例 GPU 触发命令使用外部 `endpoints.json`，八类 full
+Smoke 使用外部 `endpoints-full.json`，两者不得互换。
+
 ## 阶段 4：GPU 真实性证据
 
 每个 GPU 容器必须在真实推理触发器存活期间采样。触发器是 JSON argv 数组，不经过
@@ -265,7 +269,7 @@ deploy/scripts/run-operator-smoke \
   --fixture-target-root /data/course/_harness/fixtures \
   --result-root /data/result/_harness \
   --callback-advertise-base-url http://192.168.29.11:19090 \
-  --endpoints-json /root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/endpoints.json
+  --endpoints-json /root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/endpoints-full.json
 ```
 
 在线图片 Smoke 只验证网关路由，不进入 Kafka 或离线媒体下载；实时 ASR 验证

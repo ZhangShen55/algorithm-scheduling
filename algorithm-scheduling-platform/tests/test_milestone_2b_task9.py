@@ -1208,6 +1208,7 @@ def test_smoke_runner_emits_bound_activity_events_around_each_real_request(
                 "instance_id": "ocr-gpu0",
                 "run_id": "activity-run",
                 "attempt": attempt,
+                "target_origin": http_url,
             }
             for event in pair
         )
@@ -1285,6 +1286,61 @@ def test_facerec_activity_covers_only_target_recognize_and_pairs_on_failure(
         ("GET", "manage.test", "/persons", False),
     ]
     assert not active
+
+
+def test_facerec_activity_reports_selected_recognize_instance_origin(
+    tmp_path: Path,
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    read_fd, write_fd = os.pipe()
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "GPU_EVIDENCE_ACTIVITY_FD": str(write_fd),
+            "GPU_EVIDENCE_ACTIVITY_NONCE": "verifier-generated-nonce",
+        }
+    )
+    handler = _smoke_handler(tmp_path)
+    try:
+        with ExitStack() as stack:
+            ws_url = stack.enter_context(_WebSocketServer())
+            face_urls = [stack.enter_context(_Server({}, handler)) for _ in range(3)]
+            completed = _run_smoke(
+                tmp_path,
+                face_urls[0],
+                ws_url,
+                manifest,
+                cases="facerec",
+                endpoint_overrides={
+                    "facerec": {
+                        f"facerec-gpu{index}": url
+                        for index, url in enumerate(face_urls)
+                    }
+                },
+                extra_arguments=(
+                    "--operator",
+                    "facerec",
+                    "--instance",
+                    "facerec-gpu1",
+                    "--run-id",
+                    "facerec-origin-run",
+                ),
+                environment=environment,
+                pass_fds=(write_fd,),
+            )
+    finally:
+        os.close(write_fd)
+    try:
+        raw_events = b""
+        while chunk := os.read(read_fd, 65536):
+            raw_events += chunk
+    finally:
+        os.close(read_fd)
+
+    assert completed.returncode == 0, completed.stderr
+    events = [json.loads(line) for line in raw_events.splitlines()]
+    assert [event["event"] for event in events] == ["start", "finish"]
+    assert {event["target_origin"] for event in events} == {face_urls[1]}
 
 
 def test_asr_online_activity_starts_with_first_send_after_preparation_and_finishes(

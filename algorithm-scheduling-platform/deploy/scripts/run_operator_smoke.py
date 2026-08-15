@@ -111,6 +111,7 @@ def emit_activity(
     instance_id: str,
     run_id: str,
     attempt: int,
+    target_origin: str,
 ) -> None:
     if channel is None:
         return
@@ -124,6 +125,7 @@ def emit_activity(
                 "instance_id": instance_id,
                 "run_id": run_id,
                 "attempt": attempt,
+                "target_origin": target_origin,
             },
             separators=(",", ":"),
         )
@@ -142,6 +144,7 @@ def bind_activity(
     instance_id: str,
     run_id: str,
     attempt: int,
+    target_origin: str,
 ) -> ActivityEmitter:
     def bound(event: str) -> None:
         emit_activity(
@@ -151,6 +154,7 @@ def bind_activity(
             instance_id=instance_id,
             run_id=run_id,
             attempt=attempt,
+            target_origin=target_origin,
         )
 
     return bound
@@ -275,6 +279,28 @@ def normalized_http_origin(value: Any) -> tuple[str, str, int]:
     ):
         raise ValueError("HTTP endpoint 协议或 origin 不合法")
     return scheme, hostname, port or (443 if scheme == "https" else 80)
+
+
+def normalized_target_origin(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ValueError("target endpoint 必须是字符串")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError("target endpoint 端口不合法") from error
+    scheme = parsed.scheme.lower()
+    hostname = parsed.hostname.lower() if parsed.hostname is not None else None
+    if (
+        scheme not in {"http", "https", "ws", "wss"}
+        or hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError("target endpoint origin 不合法")
+    explicit_port = port or (443 if scheme in {"https", "wss"} else 80)
+    formatted_host = f"[{hostname}]" if ":" in hostname else hostname
+    return f"{scheme}://{formatted_host}:{explicit_port}"
 
 
 def resolve_endpoint(
@@ -1109,6 +1135,7 @@ def main() -> int:
             raise ValueError("GPU activity 通道只支持单个逐实例 Smoke")
         resolved_endpoints: dict[str, Any] = {}
         targets: dict[str, str] = {}
+        activity_origins: dict[str, str] = {}
         for case in selected:
             code = case["operator_code"]
             endpoint, target = resolve_endpoint(endpoints, code, instance_id)
@@ -1125,6 +1152,7 @@ def main() -> int:
                     ) from error
                 if len(origins) != 3:
                     raise ValueError("FaceRec Smoke 必须配置三个不同实例")
+                activity_origins[code] = normalized_target_origin(endpoint[1])
                 continue
             parsed = urlsplit(str(endpoint))
             allowed = {"ws", "wss"} if case["operator_code"] == "asr_online" else {"http", "https"}
@@ -1137,6 +1165,7 @@ def main() -> int:
                 or bool(parsed.fragment)
             ):
                 raise ValueError(f"{case['operator_code']} endpoint 协议不合法")
+            activity_origins[code] = normalized_target_origin(endpoint)
         if "ppt_slice" in selected_codes:
             if args.callback_advertise_base_url is None:
                 raise ValueError("PPT Slice Smoke 必须指定 --callback-advertise-base-url")
@@ -1228,6 +1257,7 @@ def main() -> int:
                                 instance_id=str(instance_id),
                                 run_id=str(run_id),
                                 attempt=attempt_number,
+                                target_origin=activity_origins[code],
                             )
                             if activity_channel is not None
                             else None

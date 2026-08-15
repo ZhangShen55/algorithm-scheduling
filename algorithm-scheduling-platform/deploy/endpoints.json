@@ -1,0 +1,42 @@
+{
+  "asr_offline": {
+    "asr-offline-gpu0": "http://127.0.0.1:18083",
+    "asr-offline-gpu1": "http://127.0.0.1:28083",
+    "asr-offline-gpu2": "http://127.0.0.1:38083"
+  },
+  "asr_online": {
+    "asr-online-gpu0": "ws://127.0.0.1:18084",
+    "asr-online-gpu1": "ws://127.0.0.1:28084",
+    "asr-online-gpu2": "ws://127.0.0.1:38084"
+  },
+  "ocr": {
+    "ocr-gpu0": "http://127.0.0.1:18866",
+    "ocr-gpu1": "http://127.0.0.1:28866",
+    "ocr-gpu2": "http://127.0.0.1:38866"
+  },
+  "vbas": {
+    "vbas-gpu0": "http://127.0.0.1:18981",
+    "vbas-gpu1": "http://127.0.0.1:28981",
+    "vbas-gpu2": "http://127.0.0.1:38981"
+  },
+  "facerec": {
+    "facerec-gpu0": "http://127.0.0.1:18003",
+    "facerec-gpu1": "http://127.0.0.1:28003",
+    "facerec-gpu2": "http://127.0.0.1:38003"
+  },
+  "screen_det": {
+    "screen-det-gpu0": "http://127.0.0.1:18880",
+    "screen-det-gpu1": "http://127.0.0.1:28880",
+    "screen-det-gpu2": "http://127.0.0.1:38880"
+  },
+  "ppt_slice": {
+    "ppt-slice-cpu0": "http://127.0.0.1:19001",
+    "ppt-slice-cpu1": "http://127.0.0.1:29001",
+    "ppt-slice-cpu2": "http://127.0.0.1:39001"
+  },
+  "text_analysis": {
+    "text-analysis-cpu0": "http://127.0.0.1:18000",
+    "text-analysis-cpu1": "http://127.0.0.1:28000",
+    "text-analysis-cpu2": "http://127.0.0.1:38000"
+  }
+}
