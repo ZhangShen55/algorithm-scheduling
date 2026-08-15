@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -44,6 +45,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--git-sha", required=True)
     parser.add_argument("--reports-root", type=Path, required=True)
     parser.add_argument("--expected-compose", type=Path, default=COMPOSE_PATH)
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--profile", action="append", default=[])
+    selection.add_argument("--instance", action="append", default=[])
     parser.add_argument("--timeout-seconds", type=float, default=180)
     parser.add_argument("--poll-seconds", type=float, default=2)
     parser.add_argument("--request-timeout-seconds", type=float, default=5)
@@ -144,14 +148,58 @@ def load_expected(path: Path) -> dict[str, dict[str, Any]]:
         if declared_capacity <= 0:
             raise ValueError(f"Compose 声明容量无效: {instance_id}")
         gpu_index = environment.get("PLATFORM_GPU_ID")
+        profiles = service.get("profiles")
+        if (
+            not isinstance(profiles, list)
+            or not profiles
+            or any(not isinstance(profile, str) or not profile for profile in profiles)
+        ):
+            raise ValueError(f"Compose profile 无效: {instance_id}")
         expected[instance_id] = {
             "operator_code": code,
             "capabilities": capabilities,
             "service_url": service_url,
             "declared_capacity": declared_capacity,
             "gpu": str(gpu_index) if gpu_index is not None else None,
+            "profiles": set(profiles),
         }
     return expected
+
+
+def select_expected(
+    expected: dict[str, dict[str, Any]],
+    *,
+    profiles: list[str],
+    instances: list[str],
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any], str]:
+    if profiles:
+        values = sorted({safe_component(value, TAG_PATTERN, "profile") for value in profiles})
+        known = {profile for contract in expected.values() for profile in contract["profiles"]}
+        unknown = sorted(set(values) - known)
+        if unknown:
+            raise ValueError(f"未知 Compose profile: {unknown}")
+        selected = {
+            instance_id: contract
+            for instance_id, contract in expected.items()
+            if contract["profiles"] & set(values)
+        }
+        suffix = "profiles-" + "-".join(values) if len(values) > 1 else f"profile-{values[0]}"
+        return selected, {"mode": "profile", "values": values}, suffix
+    if instances:
+        values = [safe_component(value, TAG_PATTERN, "instance ID") for value in instances]
+        if len(values) != len(set(values)):
+            raise ValueError("--instance 不能重复")
+        unknown = sorted(set(values) - set(expected))
+        if unknown:
+            raise ValueError(f"实例不在 Compose 权威清单: {unknown}")
+        selected = {instance_id: expected[instance_id] for instance_id in sorted(values)}
+        suffix = (
+            f"instance-{values[0]}"
+            if len(values) == 1
+            else "instances-" + hashlib.sha256("\n".join(sorted(values)).encode()).hexdigest()[:12]
+        )
+        return selected, {"mode": "instance", "values": sorted(values)}, suffix
+    return expected, {"mode": "full", "values": []}, "full"
 
 
 def get_json(url: str, timeout: float) -> Any:
@@ -166,16 +214,30 @@ def get_json(url: str, timeout: float) -> Any:
 
 
 def validate_instances(
-    rows: Any, expected: dict[str, dict[str, Any]]
+    rows: Any,
+    expected: dict[str, dict[str, Any]],
+    *,
+    strict_observed: bool = True,
 ) -> tuple[list[str], dict[str, dict[str, Any]]]:
     if not isinstance(rows, list):
         return ["运维列表响应不是数组"], {}
-    ids = [row.get("instance_id") for row in rows if isinstance(row, dict)]
+    ids = [
+        row.get("instance_id")
+        for row in rows
+        if isinstance(row, dict) and row.get("instance_id") in expected
+    ]
     counts = Counter(ids)
     duplicate = sorted(str(value) for value, count in counts.items() if count > 1)
-    observed = {str(row.get("instance_id")): row for row in rows if isinstance(row, dict)}
+    observed = {
+        str(row.get("instance_id")): row
+        for row in rows
+        if isinstance(row, dict) and row.get("instance_id") in expected
+    }
     missing = sorted(set(expected) - set(observed))
-    extra = sorted(set(observed) - set(expected))
+    all_observed = {
+        str(row.get("instance_id")) for row in rows if isinstance(row, dict)
+    }
+    extra = sorted(all_observed - set(expected)) if strict_observed else []
     issues: list[str] = []
     if missing:
         issues.append("缺失实例: " + ", ".join(missing))
@@ -256,6 +318,8 @@ def main() -> int:
     last_issues: list[str] = []
     last_specific_issues: list[str] = []
     observed_count = 0
+    expected_count = 24
+    selection = {"mode": "full", "values": []}
     try:
         tag = safe_component(args.release_tag, TAG_PATTERN, "release tag")
         sha = safe_component(args.git_sha.lower(), SHA_PATTERN, "Git SHA")
@@ -265,7 +329,13 @@ def main() -> int:
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError("control URL 必须是 HTTP(S) URL")
         base_url = args.control_url.rstrip("/")
-        expected = load_expected(args.expected_compose)
+        authoritative = load_expected(args.expected_compose)
+        expected, selection, output_suffix = select_expected(
+            authoritative,
+            profiles=args.profile,
+            instances=args.instance,
+        )
+        expected_count = len(expected)
         output = (
             args.reports_root
             / "milestone-2b"
@@ -273,7 +343,11 @@ def main() -> int:
             / tag
             / sha
             / "registration"
-            / "operator-registration.json"
+            / (
+                "operator-registration.json"
+                if selection["mode"] == "full"
+                else f"operator-registration-{output_suffix}.json"
+            )
         )
         deadline = time.monotonic() + args.timeout_seconds
         while True:
@@ -288,8 +362,20 @@ def main() -> int:
                     f"{base_url}/ops/operator-instances",
                     min(args.request_timeout_seconds, remaining),
                 )
-                observed_count = len(rows) if isinstance(rows, list) else 0
-                last_issues, observed = validate_instances(rows, expected)
+                observed_count = (
+                    sum(
+                        1
+                        for row in rows
+                        if isinstance(row, dict) and row.get("instance_id") in expected
+                    )
+                    if isinstance(rows, list)
+                    else 0
+                )
+                last_issues, observed = validate_instances(
+                    rows,
+                    expected,
+                    strict_observed=selection["mode"] == "full",
+                )
                 if not last_issues:
                     last_issues.extend(
                         heartbeat_issues(
@@ -322,6 +408,7 @@ def main() -> int:
                 f"{parsed.scheme}://{parsed.hostname}:"
                 f"{parsed.port or (443 if parsed.scheme == 'https' else 80)}"
             ),
+            "selection": selection,
             "summary": {
                 "expected": len(expected),
                 "observed": observed_count,
@@ -346,7 +433,12 @@ def main() -> int:
                     "git_sha": args.git_sha,
                     "started_at": started_at,
                     "finished_at": datetime.now(UTC).isoformat(),
-                    "summary": {"expected": 24, "observed": observed_count, "valid": 0},
+                    "selection": selection,
+                    "summary": {
+                        "expected": expected_count,
+                        "observed": observed_count,
+                        "valid": 0,
+                    },
                     "issues": [str(exc)],
                 },
             )

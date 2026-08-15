@@ -27,6 +27,7 @@ COMMAND_TIMEOUT_SECONDS = 15.0
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="采集单个 GPU 算子实例真实性证据")
     parser.add_argument("--container", required=True)
+    parser.add_argument("--instance-id")
     parser.add_argument("--physical-gpu", required=True, type=int)
     parser.add_argument("--process-name", required=True)
     parser.add_argument("--output", required=True, type=Path)
@@ -399,7 +400,7 @@ def _check_running_contract(
         raise VerificationError("docker inspect 缺少完整 64 位容器 ID")
     environment = _environment(inspect)
     expected = {
-        "PLATFORM_INSTANCE_ID": arguments.container,
+        "PLATFORM_INSTANCE_ID": arguments.instance_id,
         "PLATFORM_GPU_ID": str(arguments.physical_gpu),
         "GPU_PROCESS_NAME": arguments.process_name,
     }
@@ -688,6 +689,8 @@ def _verify_stopped(arguments: argparse.Namespace, report: dict[str, Any]) -> No
 def main() -> int:
     global COMMAND_TIMEOUT_SECONDS
     arguments = _parse_args()
+    if arguments.instance_id is None:
+        arguments.instance_id = arguments.container
     output: Path | None = None
     report: dict[str, Any] = {
         "schema_version": 1,
@@ -697,6 +700,7 @@ def main() -> int:
         "reason": "验证未完成",
         "target": {
             "container": arguments.container,
+            "instance_id": arguments.instance_id,
             "physical_gpu": arguments.physical_gpu,
             "process_name": arguments.process_name,
         },
@@ -711,6 +715,7 @@ def main() -> int:
     }
     try:
         _require_component(arguments.container, "container")
+        _require_component(arguments.instance_id, "instance ID")
         _require_component(arguments.process_name, "process name")
         if arguments.physical_gpu < 0:
             raise VerificationError("physical GPU 索引不能为负数")

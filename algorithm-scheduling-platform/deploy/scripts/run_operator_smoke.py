@@ -16,6 +16,7 @@ import stat
 import sys
 import tempfile
 import threading
+import time
 import uuid
 import wave
 from collections.abc import Callable
@@ -47,9 +48,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fixture-target-root", type=Path, required=True)
     parser.add_argument("--result-root", type=Path, required=True)
     parser.add_argument("--callback-listen-host", default="0.0.0.0")
-    parser.add_argument("--callback-advertise-base-url", required=True)
+    parser.add_argument("--callback-advertise-base-url")
     parser.add_argument("--endpoints-json", required=True)
     parser.add_argument("--cases", default="all")
+    parser.add_argument("--operator")
+    parser.add_argument("--instance")
+    parser.add_argument("--run-id")
+    parser.add_argument("--repeat", type=int, default=1)
+    parser.add_argument("--hold-seconds", type=float, default=0.0)
     parser.add_argument("--case-manifest", type=Path, default=DEFAULT_CASES)
     parser.add_argument("--timeout-seconds", type=float, default=300)
     parser.add_argument("--mock", action="store_true")
@@ -139,6 +145,38 @@ def load_cases(path: Path) -> list[dict[str, Any]]:
         ids.add(case["case_id"])
         codes.add(case["operator_code"])
     return cases
+
+
+def load_endpoints(value: str) -> dict[str, Any]:
+    candidate = Path(value)
+    if candidate.is_file() or candidate.is_symlink():
+        reject_symlink_chain(candidate, "endpoints JSON")
+        document = json.loads(candidate.read_text(encoding="utf-8"))
+    else:
+        document = json.loads(value)
+    if not isinstance(document, dict):
+        raise ValueError("endpoints-json 必须是对象或包含对象的 JSON 文件")
+    return document
+
+
+def resolve_endpoint(
+    endpoints: dict[str, Any], code: str, instance_id: str | None
+) -> tuple[Any, str]:
+    configured = endpoints.get(code)
+    if instance_id is None:
+        if isinstance(configured, dict):
+            raise ValueError(f"{code} endpoint 是实例映射，必须同时指定 --instance")
+        return configured, code
+    if not isinstance(configured, dict) or instance_id not in configured:
+        raise ValueError(f"{code} 未配置目标实例 endpoint: {instance_id}")
+    if code != "facerec":
+        return configured[instance_id], instance_id
+    if len(configured) != 3 or len(set(configured.values())) != 3:
+        raise ValueError("FaceRec Smoke 必须配置三个不同实例")
+    others = [value for key, value in sorted(configured.items()) if key != instance_id]
+    if len(others) != 2:
+        raise ValueError("FaceRec Smoke 必须配置三个不同实例")
+    return [others[0], configured[instance_id], others[1]], instance_id
 
 
 def hash_stream(stream: Any) -> tuple[int, str]:
@@ -714,6 +752,16 @@ RUNNERS: dict[str, Callable[..., dict[str, Any]]] = {
     "ppt_slice": smoke_ppt,
     "text_analysis": smoke_text,
 }
+INSTANCE_PREFIXES = {
+    "asr_offline": "asr-offline-",
+    "asr_online": "asr-online-",
+    "ocr": "ocr-",
+    "vbas": "vbas-",
+    "facerec": "facerec-",
+    "screen_det": "screen-det-",
+    "ppt_slice": "ppt-slice-",
+    "text_analysis": "text-analysis-",
+}
 
 
 def make_case(
@@ -749,11 +797,10 @@ def reproduction_command(
     args: argparse.Namespace,
     *,
     code: str,
-    endpoint: Any,
     tag: str,
     sha: str,
 ) -> str:
-    command = [
+    command: list[str] = [
         "deploy/scripts/run-operator-smoke",
         "--release-tag",
         tag,
@@ -769,19 +816,32 @@ def reproduction_command(
         str(args.fixture_target_root),
         "--result-root",
         str(args.result_root),
-        "--callback-listen-host",
-        str(args.callback_listen_host),
-        "--callback-advertise-base-url",
-        str(args.callback_advertise_base_url),
         "--endpoints-json",
-        json.dumps({code: endpoint}, ensure_ascii=False, separators=(",", ":")),
-        "--cases",
-        code,
+        str(args.endpoints_json),
         "--case-manifest",
         str(args.case_manifest),
         "--timeout-seconds",
         str(args.timeout_seconds),
     ]
+    if args.operator is not None:
+        command.extend(("--operator", code, "--instance", str(args.instance)))
+    else:
+        command.extend(("--cases", code))
+    if args.run_id is not None:
+        command.extend(("--run-id", str(args.run_id)))
+    if args.repeat != 1:
+        command.extend(("--repeat", str(args.repeat)))
+    if args.hold_seconds:
+        command.extend(("--hold-seconds", str(args.hold_seconds)))
+    if args.callback_advertise_base_url is not None:
+        command.extend(
+            (
+                "--callback-listen-host",
+                str(args.callback_listen_host),
+                "--callback-advertise-base-url",
+                str(args.callback_advertise_base_url),
+            )
+        )
     if args.mock:
         command.append("--mock")
     return shlex.join(command)
@@ -794,18 +854,47 @@ def main() -> int:
         sha = safe_component(args.git_sha.lower(), SHA_PATTERN, "Git SHA")
         if args.timeout_seconds <= 0:
             raise ValueError("命令超时必须大于 0")
-        validate_callback_advertise_base_url(args.callback_advertise_base_url)
-        endpoints = json.loads(args.endpoints_json)
-        if not isinstance(endpoints, dict):
-            raise ValueError("endpoints-json 必须是对象")
+        if args.repeat <= 0:
+            raise ValueError("repeat 必须大于 0")
+        if args.hold_seconds < 0:
+            raise ValueError("hold-seconds 不能为负数")
+        if (args.operator is None) != (args.instance is None):
+            raise ValueError("--operator 与 --instance 必须同时指定")
+        instance_id = (
+            safe_component(args.instance, TAG_PATTERN, "instance ID")
+            if args.instance is not None
+            else None
+        )
+        run_id = (
+            safe_component(args.run_id, TAG_PATTERN, "run ID")
+            if args.run_id is not None
+            else None
+        )
+        if instance_id is not None and run_id is None:
+            raise ValueError("逐实例 Smoke 必须指定 --run-id 以隔离追加证据")
+        endpoints = load_endpoints(args.endpoints_json)
         all_cases = load_cases(args.case_manifest)
-        selected_codes = set(RUNNERS) if args.cases == "all" else set(args.cases.split(","))
+        if args.operator is not None:
+            if args.cases not in {"all", args.operator}:
+                raise ValueError("--operator 与 --cases 选择冲突")
+            selected_codes = {args.operator}
+        else:
+            selected_codes = set(RUNNERS) if args.cases == "all" else set(args.cases.split(","))
         unknown = selected_codes - set(RUNNERS)
         if unknown:
             raise ValueError(f"未知 Smoke case: {sorted(unknown)}")
+        if instance_id is not None:
+            selected_code = next(iter(selected_codes))
+            if not instance_id.startswith(INSTANCE_PREFIXES[selected_code]):
+                raise ValueError("实例 ID 与算子不匹配")
         selected = [case for case in all_cases if case["operator_code"] in selected_codes]
+        resolved_endpoints: dict[str, Any] = {}
+        targets: dict[str, str] = {}
         for case in selected:
-            endpoint = endpoints.get(case["operator_code"])
+            code = case["operator_code"]
+            endpoint, target = resolve_endpoint(endpoints, code, instance_id)
+            resolved_endpoints[code] = endpoint
+            targets[code] = target
             if case["operator_code"] == "facerec":
                 if (
                     not isinstance(endpoint, list)
@@ -834,6 +923,10 @@ def main() -> int:
                 or bool(parsed.fragment)
             ):
                 raise ValueError(f"{case['operator_code']} endpoint 协议不合法")
+        if "ppt_slice" in selected_codes:
+            if args.callback_advertise_base_url is None:
+                raise ValueError("PPT Slice Smoke 必须指定 --callback-advertise-base-url")
+            validate_callback_advertise_base_url(args.callback_advertise_base_url)
         fixtures, missing_fixtures = load_and_stage_fixtures(
             args.fixture_manifest,
             args.external_fixture_root,
@@ -843,22 +936,27 @@ def main() -> int:
         undeclared = needed - set(fixtures) - set(missing_fixtures)
         if undeclared:
             raise ValueError(f"fixture manifest 未声明: {sorted(undeclared)}")
-        smoke_root = args.reports_root / "milestone-2b" / "releases" / tag / sha / "smoke"
+        release_root = args.reports_root / "milestone-2b" / "releases" / tag / sha
+        smoke_root = release_root / "smoke"
+        if instance_id is not None:
+            smoke_root = smoke_root / "instances" / instance_id / "runs" / str(run_id)
+        elif run_id is not None:
+            smoke_root = smoke_root / "runs" / run_id
         results: list[dict[str, Any]] = []
         failed = False
         with httpx.Client(timeout=args.timeout_seconds, follow_redirects=False) as http:
             for case in selected:
                 started = utc_now()
                 code = case["operator_code"]
+                report_case = {**case, "operator_code": targets[code]}
                 command = reproduction_command(
                     args,
                     code=code,
-                    endpoint=endpoints[code],
                     tag=tag,
                     sha=sha,
                 )
                 evidence_path = smoke_root / f"{code}.json"
-                relative = f"smoke/{code}.json"
+                relative = evidence_path.relative_to(release_root).as_posix()
                 unavailable = [
                     missing_fixtures[fixture]
                     for fixture in case["fixtures"]
@@ -871,7 +969,10 @@ def main() -> int:
                         evidence_path,
                         {
                             "schema_version": 1,
+                            "evidence_type": "operator_smoke",
                             "operator_code": code,
+                            "target": targets[code],
+                            "checks": case["checks"],
                             "status": "未执行及原因",
                             "reason": reason,
                             "mock": args.mock,
@@ -881,7 +982,7 @@ def main() -> int:
                     )
                     results.append(
                         make_case(
-                            case,
+                            report_case,
                             status="未执行及原因",
                             started=started,
                             finished=utc_now(),
@@ -897,30 +998,38 @@ def main() -> int:
                     continue
                 try:
                     endpoint_value = (
-                        json.dumps(endpoints[code])
+                        json.dumps(resolved_endpoints[code])
                         if code == "facerec"
-                        else str(endpoints[code])
+                        else str(resolved_endpoints[code])
                     )
-                    if code == "ppt_slice":
-                        summary = smoke_ppt(
-                            http,
-                            endpoint_value,
-                            fixtures,
-                            args.timeout_seconds,
-                            callback_listen_host=args.callback_listen_host,
-                            callback_advertise_base_url=args.callback_advertise_base_url,
-                            result_root=args.result_root,
-                        )
-                    else:
-                        summary = RUNNERS[code](
-                            http, endpoint_value, fixtures, args.timeout_seconds
-                        )
+                    attempts = []
+                    for _ in range(args.repeat):
+                        if code == "ppt_slice":
+                            attempt = smoke_ppt(
+                                http,
+                                endpoint_value,
+                                fixtures,
+                                args.timeout_seconds,
+                                callback_listen_host=args.callback_listen_host,
+                                callback_advertise_base_url=str(
+                                    args.callback_advertise_base_url
+                                ),
+                                result_root=args.result_root,
+                            )
+                        else:
+                            attempt = RUNNERS[code](
+                                http, endpoint_value, fixtures, args.timeout_seconds
+                            )
+                        attempts.append(attempt)
+                    summary = {**attempts[-1], "repeat": args.repeat, "attempts": attempts}
+                    if args.hold_seconds:
+                        time.sleep(args.hold_seconds)
                     evidence_payload = {
                         "schema_version": 1,
                         "evidence_type": "operator_smoke",
                         "operator_code": code,
                         "status": "PASS",
-                        "target": code,
+                        "target": targets[code],
                         "checks": case["checks"],
                         "summary": summary,
                         "mock": args.mock,
@@ -930,7 +1039,7 @@ def main() -> int:
                     atomic_json(evidence_path, evidence_payload)
                     results.append(
                         make_case(
-                            case,
+                            report_case,
                             status="通过",
                             started=started,
                             finished=utc_now(),
@@ -949,7 +1058,10 @@ def main() -> int:
                         evidence_path,
                         {
                             "schema_version": 1,
+                            "evidence_type": "operator_smoke",
                             "operator_code": code,
+                            "target": targets[code],
+                            "checks": case["checks"],
                             "status": "失败",
                             "reason": reason,
                             "mock": args.mock,
@@ -959,7 +1071,7 @@ def main() -> int:
                     )
                     results.append(
                         make_case(
-                            case,
+                            report_case,
                             status="失败",
                             started=started,
                             finished=utc_now(),

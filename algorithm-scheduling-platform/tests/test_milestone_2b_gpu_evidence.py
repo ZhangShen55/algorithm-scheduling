@@ -104,19 +104,24 @@ import json, os, pathlib, sys
 import time
 args = sys.argv[1:]
 inspect = json.loads(pathlib.Path(os.environ["FAKE_INSPECT"]).read_text())
-if args[:2] == ["inspect", "asr-offline-gpu0"]:
+if len(args) >= 2 and args[0] == "inspect" and args[1] in {{"asr-offline-gpu0", "{CONTAINER_ID}"}}:
     marker = os.environ.get("FAKE_RESTART_MARKER")
     if marker and pathlib.Path(marker).exists():
         inspect[0 if isinstance(inspect, list) else "Id"] = os.environ["FAKE_RESTART_ID"]
     print(json.dumps(inspect if isinstance(inspect, list) else [inspect]))
     raise SystemExit(0)
-if args[:3] == ["top", "asr-offline-gpu0", "-eo"]:
+if (
+    len(args) >= 3
+    and args[0] == "top"
+    and args[1] in {{"asr-offline-gpu0", "{CONTAINER_ID}"}}
+    and args[2] == "-eo"
+):
     time.sleep(float(os.environ.get("FAKE_DOCKER_TOP_DELAY", "0")))
     print("PID")
     print("1000")
     print("2000")
     raise SystemExit(0)
-if args[:2] == ["exec", "asr-offline-gpu0"]:
+if len(args) >= 2 and args[0] == "exec" and args[1] in {{"asr-offline-gpu0", "{CONTAINER_ID}"}}:
     time.sleep(float(os.environ.get("FAKE_DOCKER_EXEC_DELAY", "0")))
     if "nvidia-smi" in args:
         print(os.environ.get("FAKE_CONTAINER_GPU_ROWS", "0, GPU-A"))
@@ -228,6 +233,41 @@ def _run(runtime: dict[str, Any], *extra: str) -> subprocess.CompletedProcess[st
         capture_output=True,
         check=False,
     )
+
+
+def test_verifier_separates_compose_container_id_from_platform_instance_id(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    completed = subprocess.run(
+        [
+            str(VERIFIER),
+            "--container",
+            CONTAINER_ID,
+            "--instance-id",
+            "asr-offline-gpu0",
+            "--physical-gpu",
+            "0",
+            "--process-name",
+            "asr_offline",
+            "--output",
+            str(gpu_runtime["output"]),
+            "--trigger-file",
+            str(gpu_runtime["trigger_file"]),
+            "--sample-window",
+            "0.6",
+            "--sample-interval",
+            "0.02",
+        ],
+        env=gpu_runtime["env"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    report = _report(gpu_runtime)
+    assert report["target"]["container"] == CONTAINER_ID
+    assert report["target"]["instance_id"] == "asr-offline-gpu0"
 
 
 def _report(runtime: dict[str, Any]) -> dict[str, Any]:
@@ -482,6 +522,7 @@ def test_failure_report_identifies_target_without_leaking_secret_trigger_argumen
     assert completed.returncode != 0
     assert report["target"] == {
         "container": "asr-offline-gpu0",
+        "instance_id": "asr-offline-gpu0",
         "physical_gpu": 0,
         "process_name": "asr_offline",
     }

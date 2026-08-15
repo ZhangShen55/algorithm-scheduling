@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shlex
 import socket
 import stat
 import subprocess
@@ -222,7 +223,11 @@ def _events(instances: list[dict[str, Any]]) -> dict[str, tuple[int, Any]]:
 
 
 def _run_registration(
-    tmp_path: Path, url: str, *, timeout: str = "1"
+    tmp_path: Path,
+    url: str,
+    *,
+    timeout: str = "1",
+    extra_arguments: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -241,12 +246,61 @@ def _run_registration(
             "0.01",
             "--request-timeout-seconds",
             "0.2",
+            *extra_arguments,
         ],
         cwd=PLATFORM_ROOT,
         text=True,
         capture_output=True,
         check=False,
     )
+
+
+def test_registration_verifier_accepts_explicit_gpu_profile_subset(
+    tmp_path: Path,
+) -> None:
+    instances = [
+        item
+        for item in _expected_instances()
+        if item["instance_id"].endswith("gpu0")
+    ]
+    with _Server(_events(instances)) as url:
+        completed = _run_registration(
+            tmp_path,
+            url,
+            extra_arguments=("--profile", "gpu0"),
+        )
+
+    assert completed.returncode == 0, completed.stderr
+    output = (
+        _release(tmp_path)
+        / "registration"
+        / "operator-registration-profile-gpu0.json"
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["selection"] == {"mode": "profile", "values": ["gpu0"]}
+    assert report["summary"] == {"expected": 6, "observed": 6, "valid": 6}
+
+
+def test_registration_verifier_accepts_instance_subset_among_other_rows(
+    tmp_path: Path,
+) -> None:
+    instances = _expected_instances()
+    with _Server(_events(instances)) as url:
+        completed = _run_registration(
+            tmp_path,
+            url,
+            extra_arguments=("--instance", "ocr-gpu0"),
+        )
+
+    assert completed.returncode == 0, completed.stderr
+    output = (
+        _release(tmp_path)
+        / "registration"
+        / "operator-registration-instance-ocr-gpu0.json"
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["selection"] == {"mode": "instance", "values": ["ocr-gpu0"]}
+    assert report["summary"] == {"expected": 1, "observed": 1, "valid": 1}
 
 
 def test_registration_verifier_accepts_exact_ready_heartbeat_topology(tmp_path: Path) -> None:
@@ -841,6 +895,9 @@ def _run_smoke(
     timeout: str = "2",
     face_endpoints: list[str] | None = None,
     callback_base: str | None = None,
+    endpoints_as_file: bool = False,
+    endpoint_overrides: dict[str, Any] | None = None,
+    extra_arguments: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     endpoints = {
         code: http_url
@@ -865,6 +922,13 @@ def _run_smoke(
         callback_base = f"http://{callback_host}"
     if face_endpoints is not None:
         endpoints["facerec"] = face_endpoints
+    if endpoint_overrides is not None:
+        endpoints.update(endpoint_overrides)
+    endpoints_argument = json.dumps(endpoints)
+    if endpoints_as_file:
+        endpoints_path = tmp_path / "endpoints.json"
+        endpoints_path.write_text(endpoints_argument, encoding="utf-8")
+        endpoints_argument = str(endpoints_path)
     return subprocess.run(
         [
             str(SCRIPTS / "run-operator-smoke"),
@@ -885,12 +949,13 @@ def _run_smoke(
             "--callback-advertise-base-url",
             callback_base,
             "--endpoints-json",
-            json.dumps(endpoints),
+            endpoints_argument,
             "--cases",
             cases,
             "--timeout-seconds",
             timeout,
             "--mock",
+            *extra_arguments,
         ],
         cwd=PLATFORM_ROOT,
         text=True,
@@ -898,6 +963,166 @@ def _run_smoke(
         check=False,
         timeout=15,
     )
+
+
+def test_smoke_runner_supports_file_endpoint_and_append_only_instance_run(
+    tmp_path: Path,
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    calls = 0
+    base_handler = _smoke_handler(tmp_path)
+
+    def counted_handler(path: str, headers: Any, body: bytes) -> tuple[int, Any]:
+        nonlocal calls
+        if path == "/ocr/prediction":
+            calls += 1
+        return base_handler(path, headers, body)
+
+    with _WebSocketServer() as ws_url, _Server({}, counted_handler) as http_url:
+        completed = _run_smoke(
+            tmp_path,
+            http_url,
+            ws_url,
+            manifest,
+            endpoints_as_file=True,
+            endpoint_overrides={"ocr": {"ocr-gpu0": http_url}},
+            extra_arguments=(
+                "--operator",
+                "ocr",
+                "--instance",
+                "ocr-gpu0",
+                "--run-id",
+                "gpu0-ocr",
+                "--repeat",
+                "2",
+                "--hold-seconds",
+                "0.01",
+            ),
+        )
+        run_root = (
+            _release(tmp_path)
+            / "smoke"
+            / "instances"
+            / "ocr-gpu0"
+            / "runs"
+            / "gpu0-ocr"
+        )
+        cases = json.loads((run_root / "cases.json").read_text(encoding="utf-8"))
+        reproduction = shlex.split(cases[0]["command"])
+        run_id_index = reproduction.index("--run-id") + 1
+        reproduction[run_id_index] = "gpu0-ocr-replay"
+        replay = subprocess.run(
+            reproduction,
+            cwd=PLATFORM_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    assert completed.returncode == 0, completed.stderr
+    assert replay.returncode == 0, replay.stderr
+    assert calls == 4
+    report = json.loads((run_root / "ocr.json").read_text(encoding="utf-8"))
+    assert report["target"] == "ocr-gpu0"
+    assert report["summary"]["repeat"] == 2
+    assert len(report["summary"]["attempts"]) == 2
+    assert cases[0]["target"] == "ocr-gpu0"
+    assert reproduction[reproduction.index("--endpoints-json") + 1] == str(
+        tmp_path / "endpoints.json"
+    )
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    (
+        (("--repeat", "0"), "repeat 必须大于 0"),
+        (("--hold-seconds", "-0.1"), "hold-seconds 不能为负数"),
+    ),
+)
+def test_smoke_runner_rejects_invalid_repeat_and_hold_with_specific_reason(
+    tmp_path: Path,
+    arguments: tuple[str, ...],
+    expected: str,
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    with _WebSocketServer() as ws_url, _Server({}, _smoke_handler(tmp_path)) as http_url:
+        completed = _run_smoke(
+            tmp_path,
+            http_url,
+            ws_url,
+            manifest,
+            cases="ocr",
+            extra_arguments=arguments,
+        )
+
+    assert completed.returncode != 0
+    assert expected in completed.stderr
+
+
+def test_instance_smoke_failure_evidence_keeps_the_selected_instance_target(
+    tmp_path: Path,
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+    document["fixtures"] = [
+        item for item in document["fixtures"] if item["fixture_id"] != "ocr_image"
+    ]
+    document["missing_fixtures"].append(
+        {"fixture_id": "ocr_image", "reason": "fixture unavailable"}
+    )
+    manifest.write_text(json.dumps(document), encoding="utf-8")
+
+    with _WebSocketServer() as ws_url, _Server({}, _smoke_handler(tmp_path)) as http_url:
+        completed = _run_smoke(
+            tmp_path,
+            http_url,
+            ws_url,
+            manifest,
+            endpoint_overrides={"ocr": {"ocr-gpu0": http_url}},
+            extra_arguments=(
+                "--operator",
+                "ocr",
+                "--instance",
+                "ocr-gpu0",
+                "--run-id",
+                "missing-fixture",
+            ),
+        )
+
+    assert completed.returncode != 0
+    run_root = (
+        _release(tmp_path)
+        / "smoke/instances/ocr-gpu0/runs/missing-fixture"
+    )
+    evidence = json.loads((run_root / "ocr.json").read_text(encoding="utf-8"))
+    cases = json.loads((run_root / "cases.json").read_text(encoding="utf-8"))
+    assert evidence["target"] == "ocr-gpu0"
+    assert cases[0]["target"] == "ocr-gpu0"
+
+
+def test_instance_smoke_rejects_instance_id_from_another_operator(
+    tmp_path: Path,
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    with _WebSocketServer() as ws_url, _Server({}, _smoke_handler(tmp_path)) as http_url:
+        completed = _run_smoke(
+            tmp_path,
+            http_url,
+            ws_url,
+            manifest,
+            endpoint_overrides={"ocr": {"asr-offline-gpu0": http_url}},
+            extra_arguments=(
+                "--operator",
+                "ocr",
+                "--instance",
+                "asr-offline-gpu0",
+                "--run-id",
+                "wrong-instance",
+            ),
+        )
+
+    assert completed.returncode != 0
+    assert "实例 ID 与算子不匹配" in completed.stderr
 
 
 def test_smoke_runner_calls_all_eight_operator_contracts_and_redacts(tmp_path: Path) -> None:
