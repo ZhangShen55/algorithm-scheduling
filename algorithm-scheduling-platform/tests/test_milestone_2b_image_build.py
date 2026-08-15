@@ -906,6 +906,24 @@ def test_text_analysis_image_uses_a_configurable_resilient_pypi_source() -> None
     assert "files.pythonhosted.org" not in dockerfile
 
 
+def test_text_analysis_obfuscates_large_entities_with_trial_compatible_mode() -> None:
+    dockerfile = (
+        PLATFORM_ROOT.parent / "text_analysis/Dockerfile"
+    ).read_text(encoding="utf-8")
+
+    assert "ARG PYARMOR_VERSION=8.5.12" in dockerfile
+    assert 'pyarmor=="$PYARMOR_VERSION"' in dockerfile
+    assert "--exclude app/models/entities.py app" in dockerfile
+    assert "--obf-code 0 app/models/entities.py" in dockerfile
+    assert (
+        "install -m 0644 /build/entities-obf/entities.py "
+        "/build/obf/app/models/entities.py"
+        in dockerfile
+    )
+    assert "COPY app/models/entities.py" not in dockerfile
+    assert "cp app/models/entities.py" not in dockerfile
+
+
 def test_all_real_contexts_only_reinclude_the_exact_registry_wheel() -> None:
     workspace_root = PLATFORM_ROOT.parent
     for context_name, _, _ in EXPECTED_MATRIX:

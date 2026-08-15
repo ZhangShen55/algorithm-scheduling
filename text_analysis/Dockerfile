@@ -6,6 +6,7 @@
 FROM python:3.11 AS builder
 
 ARG PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PYARMOR_VERSION=8.5.12
 
 WORKDIR /build
 
@@ -25,15 +26,19 @@ RUN pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} && \
         --timeout 300 \
         --retries 10 \
         --prefer-binary \
-        pyarmor
+        pyarmor=="$PYARMOR_VERSION"
 
 # 拷贝源码（config.toml 不拷贝，运行时挂载）
 COPY app ./app
 COPY prompt ./prompt
 
-# 使用 PyArmor 混淆 app 目录，输出到 /build/obf
-# PyArmor 8.x：pyarmor gen -O <outdir> --recursive <package_or_file>
-RUN pyarmor gen -O /build/obf --recursive app
+# 试用版无法以默认强度处理超大的实体定义文件；该文件仍单独混淆，
+# 但关闭函数级混淆，其余源码维持默认强度。
+RUN pyarmor gen -O /build/obf --recursive \
+        --exclude app/models/entities.py app && \
+    pyarmor gen -O /build/entities-obf \
+        --obf-code 0 app/models/entities.py && \
+    install -m 0644 /build/entities-obf/entities.py /build/obf/app/models/entities.py
 
 # 资源文件保留原样（如 prompt）
 # RUN mkdir -p /build/obf/prompt && cp -r   /* /build/obf/prompt/
