@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import csv
 import io
+import ipaddress
 import json
 import re
+import stat
 import sys
 import tomllib
 import urllib.error
@@ -147,19 +149,26 @@ EXPECTED_KAFKA_TOPICS = (
     "algorithm.visual.commands",
     "algorithm.visual.events",
 )
+WILDCARD_HOST = "*"
+PortMapping = tuple[int, int, str, str]
 EXPECTED_PLATFORM_PORT_MAPPINGS = {
-    "postgres": (5432, 5432, "tcp"),
-    "redis": (6379, 6379, "tcp"),
-    "kafka": (9092, 9092, "tcp"),
-    "mongodb": (27017, 27017, "tcp"),
-    "control-service": (18100, 18100, "tcp"),
-    "orchestrator-service": (18101, 18101, "tcp"),
-    "vision-orchestrator-service": (18102, 8010, "tcp"),
-    "online-gateway-service": (18103, 8001, "tcp"),
+    "postgres": (5432, 5432, "tcp", WILDCARD_HOST),
+    "redis": (6379, 6379, "tcp", WILDCARD_HOST),
+    "kafka": (9092, 9092, "tcp", WILDCARD_HOST),
+    "mongodb": (27017, 27017, "tcp", "127.0.0.1"),
+    "control-service": (18100, 18100, "tcp", WILDCARD_HOST),
+    "orchestrator-service": (18101, 18101, "tcp", WILDCARD_HOST),
+    "vision-orchestrator-service": (18102, 8010, "tcp", WILDCARD_HOST),
+    "online-gateway-service": (18103, 8001, "tcp", WILDCARD_HOST),
 }
 EXPECTED_OPERATOR_PORT_MAPPINGS = {
     **{
-        f"{operator}-gpu{gpu}": ((gpu + 1) * 10000 + suffix, target, "tcp")
+        f"{operator}-gpu{gpu}": (
+            (gpu + 1) * 10000 + suffix,
+            target,
+            "tcp",
+            WILDCARD_HOST,
+        )
         for operator, target, suffix in (
             ("asr-offline", 8083, 8083),
             ("asr-online", 8084, 8084),
@@ -171,7 +180,12 @@ EXPECTED_OPERATOR_PORT_MAPPINGS = {
         for gpu in range(3)
     },
     **{
-        f"{operator}-cpu{index}": ((index + 1) * 10000 + suffix, target, "tcp")
+        f"{operator}-cpu{index}": (
+            (index + 1) * 10000 + suffix,
+            target,
+            "tcp",
+            WILDCARD_HOST,
+        )
         for operator, target, suffix in (
             ("ppt-slice", 9001, 9001),
             ("text-analysis", 8000, 8000),
@@ -434,17 +448,19 @@ def _validate_bind_mount(
     mount = mounts[0]
     source = mount.get("source")
     try:
-        normalized_source = (
-            Path(source).expanduser().resolve(strict=False)
+        source_identity = (
+            _directory_identity(Path(source).expanduser().resolve(strict=True))
             if isinstance(source, str)
             else None
         )
-        normalized_expected = Path(expected_source).expanduser().resolve(strict=False)
+        expected_identity = _directory_identity(
+            Path(expected_source).expanduser().resolve(strict=True)
+        )
     except (OSError, RuntimeError) as error:
         raise PreflightError(f"{service_name} bind mount source is invalid: {target}") from error
     if (
         mount.get("type") != "bind"
-        or normalized_source != normalized_expected
+        or source_identity != expected_identity
         or mount.get("read_only", False) is not False
     ):
         raise PreflightError(f"{service_name} must use writable host bind mount {target}")
@@ -463,24 +479,43 @@ def _port_number(value: Any, label: str, service_name: str) -> int:
     return result
 
 
+def _normalize_host_ip(value: Any, error_message: str) -> str:
+    if not isinstance(value, str):
+        raise PreflightError(error_message)
+    if not value:
+        return WILDCARD_HOST
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError as error:
+        raise PreflightError(error_message) from error
+    if getattr(address, "scope_id", None) is not None:
+        raise PreflightError(error_message)
+    return WILDCARD_HOST if address.is_unspecified else str(address)
+
+
 def _compose_port_mappings(
     service: dict[str, Any], label: str, service_name: str
-) -> list[tuple[int, int, str]]:
+) -> list[PortMapping]:
     ports = service.get("ports")
     if not isinstance(ports, list):
         raise PreflightError(f"{label} Compose port mapping is invalid: {service_name}")
-    result: list[tuple[int, int, str]] = []
+    result: list[PortMapping] = []
     for port in ports:
         if not isinstance(port, dict):
             raise PreflightError(f"{label} Compose port mapping is invalid: {service_name}")
         protocol = port.get("protocol")
         if not isinstance(protocol, str):
             raise PreflightError(f"{label} Compose port mapping is invalid: {service_name}")
+        host_ip = _normalize_host_ip(
+            port["host_ip"] if "host_ip" in port else "",
+            f"{label} Compose port mapping is invalid: {service_name}",
+        )
         result.append(
             (
                 _port_number(port.get("published"), label, service_name),
                 _port_number(port.get("target"), label, service_name),
                 protocol,
+                host_ip,
             )
         )
     return result
@@ -489,7 +524,7 @@ def _compose_port_mappings(
 def _published_ports(services: dict[str, dict[str, Any]], label: str) -> dict[int, str]:
     result: dict[int, str] = {}
     for service_name, service in services.items():
-        for published, _, _ in _compose_port_mappings(service, label, service_name):
+        for published, _, _, _ in _compose_port_mappings(service, label, service_name):
             if published in result:
                 raise PreflightError(
                     f"duplicate published port {published}: "
@@ -502,7 +537,7 @@ def _published_ports(services: dict[str, dict[str, Any]], label: str) -> dict[in
 def _validate_port_contract(
     services: dict[str, dict[str, Any]],
     label: str,
-    expected: dict[str, tuple[int, int, str]],
+    expected: dict[str, PortMapping],
 ) -> None:
     for service_name, expected_mapping in expected.items():
         service = services.get(service_name)
@@ -518,6 +553,39 @@ def _validate_port_contract(
             raise PreflightError(
                 f"{label} Compose port mapping is not canonical: {service_name}"
             )
+
+
+def _directory_identity(path: Path) -> tuple[int, int]:
+    metadata = path.stat()
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise NotADirectoryError(path)
+    return metadata.st_dev, metadata.st_ino
+
+
+def _validate_shared_roots(course_root: str, result_root: str) -> tuple[str, str]:
+    try:
+        resolved_course_root = Path(course_root).expanduser().resolve(strict=True)
+        resolved_result_root = Path(result_root).expanduser().resolve(strict=True)
+        course_identity = _directory_identity(resolved_course_root)
+        result_identity = _directory_identity(resolved_result_root)
+        course_ancestor_identities = {
+            _directory_identity(path)
+            for path in (resolved_course_root, *resolved_course_root.parents)
+        }
+        result_ancestor_identities = {
+            _directory_identity(path)
+            for path in (resolved_result_root, *resolved_result_root.parents)
+        }
+    except (OSError, RuntimeError) as error:
+        raise PreflightError(
+            "course_root and result_root must resolve to real directories"
+        ) from error
+    if (
+        course_identity in result_ancestor_identities
+        or result_identity in course_ancestor_identities
+    ):
+        raise PreflightError("course_root and result_root must not overlap")
+    return str(resolved_course_root), str(resolved_result_root)
 
 
 def _validate_operator_services(
@@ -573,23 +641,7 @@ def validate_host_compose(
     course_root: str,
     result_root: str,
 ) -> list[int]:
-    try:
-        resolved_course_root = Path(course_root).expanduser().resolve(strict=True)
-        resolved_result_root = Path(result_root).expanduser().resolve(strict=True)
-    except (OSError, RuntimeError) as error:
-        raise PreflightError(
-            "course_root and result_root must resolve to real directories"
-        ) from error
-    if not resolved_course_root.is_dir() or not resolved_result_root.is_dir():
-        raise PreflightError("course_root and result_root must resolve to real directories")
-    if (
-        resolved_course_root == resolved_result_root
-        or resolved_course_root in resolved_result_root.parents
-        or resolved_result_root in resolved_course_root.parents
-    ):
-        raise PreflightError("course_root and result_root must not overlap")
-    course_root = str(resolved_course_root)
-    result_root = str(resolved_result_root)
+    course_root, result_root = _validate_shared_roots(course_root, result_root)
 
     platform_services = _services(platform_document, "platform")
     operator_services = _services(operator_document, "operator")
@@ -645,7 +697,7 @@ def validate_host_compose(
     return sorted(set(platform_ports) | set(operator_ports))
 
 
-def select_operator_services(
+def _select_operator_services(
     operator_document: Any,
     *,
     profiles: list[str],
@@ -675,6 +727,22 @@ def select_operator_services(
     return services, selected
 
 
+def select_operator_services(
+    operator_document: Any,
+    *,
+    profiles: list[str],
+    course_root: str,
+    result_root: str,
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    course_root, result_root = _validate_shared_roots(course_root, result_root)
+    return _select_operator_services(
+        operator_document,
+        profiles=profiles,
+        course_root=course_root,
+        result_root=result_root,
+    )
+
+
 def _actual_environment(record: dict[str, Any], service_name: str) -> dict[str, str]:
     config = record.get("Config")
     values = config.get("Env") if isinstance(config, dict) else None
@@ -701,12 +769,13 @@ def _actual_device_requests(record: dict[str, Any], service_name: str) -> list[d
 
 def _actual_port_bindings(
     record: dict[str, Any], service_name: str
-) -> list[tuple[int, int, str]]:
+) -> list[PortMapping]:
     host_config = record.get("HostConfig")
     bindings = host_config.get("PortBindings") if isinstance(host_config, dict) else None
     if not isinstance(bindings, dict):
         raise PreflightError(f"running container port bindings are invalid: {service_name}")
-    result: list[tuple[int, int, str]] = []
+    result: list[PortMapping] = []
+    wildcard_bindings: set[PortMapping] = set()
     for container_port, entries in bindings.items():
         if not isinstance(container_port, str):
             raise PreflightError(
@@ -722,7 +791,6 @@ def _actual_port_bindings(
         for entry in entries:
             if (
                 not isinstance(entry, dict)
-                or not isinstance(entry.get("HostIp"), str)
                 or not isinstance(entry.get("HostPort"), str)
             ):
                 raise PreflightError(
@@ -731,7 +799,16 @@ def _actual_port_bindings(
             published = _port_number(
                 entry["HostPort"], "running container", service_name
             )
-            result.append((published, target, protocol))
+            host_ip = _normalize_host_ip(
+                entry["HostIp"] if "HostIp" in entry else "",
+                f"running container port bindings are invalid: {service_name}",
+            )
+            mapping = (published, target, protocol, host_ip)
+            if host_ip == WILDCARD_HOST:
+                if mapping in wildcard_bindings:
+                    continue
+                wildcard_bindings.add(mapping)
+            result.append(mapping)
     return result
 
 
@@ -753,19 +830,21 @@ def _validate_actual_mount(
     mount = mounts[0]
     source = mount.get("Source")
     try:
-        normalized_source = (
-            Path(source).expanduser().resolve(strict=False)
+        source_identity = (
+            _directory_identity(Path(source).expanduser().resolve(strict=True))
             if isinstance(source, str)
             else None
         )
-        normalized_expected = Path(expected_source).expanduser().resolve(strict=False)
+        expected_identity = _directory_identity(
+            Path(expected_source).expanduser().resolve(strict=True)
+        )
     except (OSError, RuntimeError) as error:
         raise PreflightError(
             f"running container bind mount source is invalid: {target}: {service_name}"
         ) from error
     if (
         mount.get("Type") != "bind"
-        or normalized_source != normalized_expected
+        or source_identity != expected_identity
         or mount.get("RW") is not True
     ):
         raise PreflightError(
@@ -781,7 +860,8 @@ def validate_operator_runtime(
     course_root: str,
     result_root: str,
 ) -> None:
-    services, selected = select_operator_services(
+    course_root, result_root = _validate_shared_roots(course_root, result_root)
+    services, selected = _select_operator_services(
         operator_document,
         profiles=profiles,
         course_root=course_root,
