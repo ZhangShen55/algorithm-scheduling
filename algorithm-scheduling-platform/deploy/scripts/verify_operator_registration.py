@@ -112,10 +112,43 @@ def load_expected(path: Path) -> dict[str, dict[str, Any]]:
         environment = service.get("environment", {})
         if environment.get("PLATFORM_INSTANCE_ID") != instance_id:
             raise ValueError(f"Compose 实例 ID 不一致: {instance_id}")
+        service_url = environment.get("PLATFORM_SERVICE_URL")
+        if (
+            not isinstance(service_url, str)
+            or not service_url
+            or any(character.isspace() for character in service_url)
+        ):
+            raise ValueError(f"Compose service URL 无效: {instance_id}")
+        try:
+            parsed_service_url = urllib.parse.urlsplit(service_url)
+            service_port = parsed_service_url.port
+        except ValueError as exc:
+            raise ValueError(f"Compose service URL 无效: {instance_id}") from exc
+        if (
+            parsed_service_url.scheme not in {"http", "https"}
+            or not parsed_service_url.hostname
+            or service_port is None
+            or service_port <= 0
+        ):
+            raise ValueError(f"Compose service URL 无效: {instance_id}")
+        raw_capacity = environment.get("PLATFORM_DECLARED_CAPACITY")
+        if isinstance(raw_capacity, int) and not isinstance(raw_capacity, bool):
+            declared_capacity = raw_capacity
+        elif isinstance(raw_capacity, str) and re.fullmatch(r"[1-9][0-9]*", raw_capacity):
+            try:
+                declared_capacity = int(raw_capacity)
+            except ValueError as exc:
+                raise ValueError(f"Compose 声明容量无效: {instance_id}") from exc
+        else:
+            raise ValueError(f"Compose 声明容量无效: {instance_id}")
+        if declared_capacity <= 0:
+            raise ValueError(f"Compose 声明容量无效: {instance_id}")
         gpu_index = environment.get("PLATFORM_GPU_ID")
         expected[instance_id] = {
             "operator_code": code,
             "capabilities": capabilities,
+            "service_url": service_url,
+            "declared_capacity": declared_capacity,
             "gpu": str(gpu_index) if gpu_index is not None else None,
         }
     return expected
@@ -157,6 +190,8 @@ def validate_instances(
             issues.append(f"{instance_id} operator_code 不匹配")
         if set(row.get("capabilities") or []) != contract["capabilities"]:
             issues.append(f"{instance_id} capability 不匹配")
+        if row.get("service_url") != contract["service_url"]:
+            issues.append(f"{instance_id} service_url 不匹配")
         if row.get("lifecycle") != "ONLINE":
             issues.append(f"{instance_id} 生命周期不是 ONLINE")
         if row.get("model_ready") is not True:
@@ -165,6 +200,8 @@ def validate_instances(
         inflight = row.get("inflight")
         if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity <= 0:
             issues.append(f"{instance_id} 声明容量必须大于 0")
+        elif capacity != contract["declared_capacity"]:
+            issues.append(f"{instance_id} 声明容量不匹配")
         if (
             not isinstance(inflight, int)
             or isinstance(inflight, bool)

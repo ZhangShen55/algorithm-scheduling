@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml  # type: ignore[import-untyped]
 
 PLATFORM_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = PLATFORM_ROOT.parent
@@ -25,6 +26,14 @@ SCRIPTS = DEPLOY / "scripts"
 PYTHON = PLATFORM_ROOT / ".venv" / "bin" / "python"
 SHA = "a" * 40
 TAG = "v1.0_260812"
+
+REGISTRATION_SPEC = importlib.util.spec_from_file_location(
+    "task9_verify_operator_registration", SCRIPTS / "verify_operator_registration.py"
+)
+assert REGISTRATION_SPEC is not None and REGISTRATION_SPEC.loader is not None
+REGISTRATION_MODULE = importlib.util.module_from_spec(REGISTRATION_SPEC)
+REGISTRATION_SPEC.loader.exec_module(REGISTRATION_MODULE)
+load_registration_expected = REGISTRATION_MODULE.load_expected
 
 SMOKE_SPEC = importlib.util.spec_from_file_location(
     "task9_run_operator_smoke", SCRIPTS / "run_operator_smoke.py"
@@ -108,18 +117,23 @@ class _Server:
 
 
 def _expected_instances() -> list[dict[str, Any]]:
-    capabilities = {
-        "asr-offline": ("asr_offline", ["asr_offline"]),
-        "asr-online": ("asr_online", ["asr_online"]),
-        "ocr": ("ocr", ["ocr"]),
-        "vbas": ("vbas", ["student_behavior", "teacher_behavior"]),
-        "facerec": ("facerec", ["recognize"]),
-        "screen-det": ("screen_det", ["detect_all"]),
-        "ppt-slice": ("ppt_slice", ["ppt_slice"]),
-        "text-analysis": ("text_analysis", ["course_overviews", "extract_keywords"]),
+    contracts = {
+        "asr-offline": ("asr_offline", ["asr_offline"], 8083, 1),
+        "asr-online": ("asr_online", ["asr_online"], 8084, 1),
+        "ocr": ("ocr", ["ocr"], 8866, 1),
+        "vbas": ("vbas", ["student_behavior", "teacher_behavior"], 8981, 1),
+        "facerec": ("facerec", ["recognize"], 8000, 1),
+        "screen-det": ("screen_det", ["detect_all"], 8880, 1),
+        "ppt-slice": ("ppt_slice", ["ppt_slice"], 9001, 15),
+        "text-analysis": (
+            "text_analysis",
+            ["course_overviews", "extract_keywords"],
+            8000,
+            4,
+        ),
     }
     result = []
-    for prefix, (code, caps) in capabilities.items():
+    for prefix, (code, caps, port, capacity) in contracts.items():
         suffix = "gpu" if prefix not in {"ppt-slice", "text-analysis"} else "cpu"
         for index in range(3):
             labels = {"gpu": str(index)} if suffix == "gpu" else {}
@@ -128,8 +142,8 @@ def _expected_instances() -> list[dict[str, Any]]:
                     "instance_id": f"{prefix}-{suffix}{index}",
                     "operator_code": code,
                     "capabilities": caps,
-                    "service_url": f"http://{prefix}-{suffix}{index}:9999",
-                    "declared_capacity": 2 if prefix == "ppt-slice" else 1,
+                    "service_url": f"http://{prefix}-{suffix}{index}:{port}",
+                    "declared_capacity": capacity,
                     "labels": labels,
                     "lifecycle": "ONLINE",
                     "inflight": 0,
@@ -138,6 +152,60 @@ def _expected_instances() -> list[dict[str, Any]]:
                 }
             )
     return result
+
+
+def _compose_with_environment_override(
+    tmp_path: Path, variable: str, value: Any
+) -> Path:
+    document = yaml.safe_load(
+        (DEPLOY / "docker-compose.operators.yml").read_text(encoding="utf-8")
+    )
+    document["services"]["asr-offline-gpu0"]["environment"][variable] = value
+    output = tmp_path / "docker-compose.operators.yml"
+    output.write_text(
+        yaml.safe_dump(document, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    return output
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "http://",
+        "ftp://asr-offline-gpu0:8083",
+        "   ",
+        "http://:8083",
+        "http://asr-offline-gpu0",
+        "http://asr-offline-gpu0:0",
+        "http://asr-offline-gpu0:65536",
+        "http://bad host:8083",
+    ),
+)
+def test_registration_verifier_rejects_invalid_compose_service_url(
+    tmp_path: Path, value: str
+) -> None:
+    compose = _compose_with_environment_override(
+        tmp_path, "PLATFORM_SERVICE_URL", value
+    )
+
+    with pytest.raises(ValueError, match="Compose service URL 无效"):
+        load_registration_expected(compose)
+
+
+@pytest.mark.parametrize(
+    "value",
+    (1.5, 1.0, True, float("inf"), b"1", "1.5", " 1 ", "+1"),
+)
+def test_registration_verifier_rejects_non_strict_compose_capacity(
+    tmp_path: Path, value: Any
+) -> None:
+    compose = _compose_with_environment_override(
+        tmp_path, "PLATFORM_DECLARED_CAPACITY", value
+    )
+
+    with pytest.raises(ValueError, match="Compose 声明容量无效"):
+        load_registration_expected(compose)
 
 
 def _events(instances: list[dict[str, Any]]) -> dict[str, tuple[int, Any]]:
@@ -201,6 +269,8 @@ def test_registration_verifier_accepts_exact_ready_heartbeat_topology(tmp_path: 
     (
         (lambda rows: rows.pop(), "缺失"),
         (lambda rows: rows.append(dict(rows[0])), "重复"),
+        (lambda rows: rows[0].update(operator_code="unexpected"), "operator_code"),
+        (lambda rows: rows[0].update(capabilities=["unexpected"]), "capability"),
         (lambda rows: rows[0].update(lifecycle="OFFLINE"), "ONLINE"),
         (lambda rows: rows[0].update(model_ready=False), "model_ready"),
         (lambda rows: rows[0].update(declared_capacity=0), "容量"),
@@ -219,6 +289,32 @@ def test_registration_verifier_rejects_invalid_topology(
     assert reason in completed.stderr
     output = _release(tmp_path) / "registration" / "operator-registration.json"
     assert json.loads(output.read_text(encoding="utf-8"))["status"] == "失败"
+
+
+@pytest.mark.parametrize(
+    ("instance_id", "field", "value", "reason"),
+    (
+        ("asr-offline-gpu0", "service_url", "http://wrong-host:8083", "service_url"),
+        ("ocr-gpu1", "service_url", "http://ocr-gpu1:9999", "service_url"),
+        ("ppt-slice-cpu0", "declared_capacity", 2, "声明容量"),
+        ("text-analysis-cpu0", "declared_capacity", 1, "声明容量"),
+    ),
+)
+def test_registration_verifier_rejects_compose_contract_drift(
+    tmp_path: Path,
+    instance_id: str,
+    field: str,
+    value: Any,
+    reason: str,
+) -> None:
+    instances = _expected_instances()
+    instance = next(item for item in instances if item["instance_id"] == instance_id)
+    instance[field] = value
+    with _Server(_events(instances)) as url:
+        completed = _run_registration(tmp_path, url, timeout="0.05")
+
+    assert completed.returncode != 0
+    assert reason in completed.stderr
 
 
 def test_registration_verifier_requires_heartbeat_event(tmp_path: Path) -> None:
