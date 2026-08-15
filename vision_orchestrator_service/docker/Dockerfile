@@ -1,3 +1,22 @@
+FROM python:3.11-slim AS builder
+
+ENV PIP_DEFAULT_TIMEOUT=300 \
+    PIP_RETRIES=10
+
+WORKDIR /build
+
+COPY vision_orchestrator_service/requirements.txt /tmp/requirements.txt
+COPY algorithm-scheduling-platform/pyproject.toml /tmp/platform/pyproject.toml
+COPY algorithm-scheduling-platform/packages /tmp/platform/packages
+RUN --mount=type=cache,id=algorithm-platform-pip-cache,target=/root/.cache/pip,sharing=locked \
+    python -m pip wheel \
+        --wheel-dir /wheelhouse \
+        --timeout 300 \
+        --retries 10 \
+        --prefer-binary \
+        -r /tmp/requirements.txt \
+        /tmp/platform
+
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -5,12 +24,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY vision_orchestrator_service/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
-
-COPY algorithm-scheduling-platform/pyproject.toml /tmp/platform/pyproject.toml
-COPY algorithm-scheduling-platform/packages /tmp/platform/packages
-RUN pip install --no-cache-dir /tmp/platform
+RUN --mount=type=bind,from=builder,source=/wheelhouse,target=/tmp/wheelhouse \
+    --mount=type=bind,from=builder,source=/tmp/requirements.txt,target=/tmp/requirements.txt \
+    python -m pip install \
+        --no-cache-dir \
+        --no-index \
+        --find-links=/tmp/wheelhouse \
+        -r /tmp/requirements.txt \
+        algorithm-scheduling-platform
 
 COPY vision_orchestrator_service/app /app/app
 COPY vision_orchestrator_service/config.toml /app/config.toml
