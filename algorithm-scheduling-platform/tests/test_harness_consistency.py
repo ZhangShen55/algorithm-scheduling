@@ -43,3 +43,31 @@ def test_harness_contains_required_governance_files() -> None:
         str(path.relative_to(HARNESS_ROOT))
         for path in HARNESS_ROOT.rglob("*.md")
     }
+
+
+def test_arch_003_preserves_registration_lease_and_invocation_directions() -> None:
+    design = (PROJECT_ROOT.parent / "docs/算法功能调度平台总体设计-v2.md").read_text(
+        encoding="utf-8"
+    )
+    arch_003 = design.split("### 6.5 ARCH-003", 1)[1].split("## 7.", 1)[0]
+
+    for edge in (
+        'OFF -->|"注册 / 心跳"| C',
+        'VB -->|"注册 / 心跳"| C',
+        'ON -->|"注册 / 心跳"| C',
+        'CPU -->|"注册 / 心跳"| C',
+        'O -->|"租约申请"| C',
+        'V -->|"租约申请"| C',
+        'G -->|"租约申请"| C',
+        'O -->|"离线 ASR / OCR"| OFF',
+        'O -->|"PPT / Text Analysis"| CPU',
+        'V -->|"VBas 帧推理"| VB',
+        'G -->|"在线 ASR / FaceRec / ScreenDet"| ON',
+        'G -->|"弱实时 VBas"| VB',
+    ):
+        assert edge in arch_003
+
+    assert "C --> OFF" not in arch_003
+    assert "C --> VB" not in arch_003
+    assert "C --> ON" not in arch_003
+    assert "C --> CPU" not in arch_003

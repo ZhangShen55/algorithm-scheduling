@@ -13,6 +13,11 @@ A 不直连 PostgreSQL、Kafka、Redis、`orchestrator-service`、`vision-orches
 
 第一阶段接口应部署在可信内网，生产环境由反向代理提供 TLS、鉴权、请求大小限制和访问日志。
 
+当前里程碑 2B 服务器登录合同为 `root@192.168.29.11:22`、密码
+`kedacom_123`，不使用 `.env`。用户已批准把部署模板、该登录合同和受控服务默认值保留
+在 Git；该例外不包含 SSH 私钥/Deploy Key、模型解密密钥、人脸原图、课程媒体、大型
+fixture 或外部可信模型 manifest。
+
 ## 2. 通用响应和业务码
 
 正常的 A 面 HTTP API 使用 HTTP 200，并通过响应体表达业务结果：
@@ -310,11 +315,14 @@ A 与平台同机时使用：
 
 ```text
 http://127.0.0.1:18100/api/course-jobs
-http://127.0.0.1:8003/api/online/...
-ws://127.0.0.1:8003/api/online/asr/stream
+http://127.0.0.1:18103/api/online/...
+ws://127.0.0.1:18103/api/online/asr/stream
 ```
 
-A 在其他机器时，使用平台服务器内网 IP，并只开放 control-service 和 online-gateway-service 的入口端口。PostgreSQL 5432、Kafka 9092、Redis 6379 和算法实例端口不应对 A 开放。
+A 在其他机器时，使用平台服务器内网 IP，并只开放 control-service `18100` 和
+online-gateway-service `18103`。PostgreSQL `5432`、Kafka `9092`、Redis `6379`、
+MongoDB `27017`、orchestrator `18101`、vision `18102` 和全部 24 个算法实例宿主机端口
+只绑定 `127.0.0.1`，不对 A 开放。
 
 ### 7.2 A 与平台都运行在 Docker
 
@@ -326,7 +334,10 @@ http://online-gateway-service:8001
 ws://online-gateway-service:8001
 ```
 
-容器内部不能用 `127.0.0.1` 访问另一个容器。Kafka 容器化场景需要 Docker 内部 listener；当前基础设施 Compose 的 `127.0.0.1:9092` advertised listener 只适用于宿主机平台进程。
+容器内部不能用 `127.0.0.1` 访问另一个容器。Kafka 固定监听
+`EXTERNAL://:9092` 与 `INTERNAL://:29092`，分别广播
+`EXTERNAL://127.0.0.1:9092` 与 `INTERNAL://kafka:29092`；宿主机进程使用前者，
+平台容器使用 `kafka:29092`。
 
 ### 7.3 视频 URL 与本地结果 path
 

@@ -7,7 +7,14 @@
 以下命令只适用于已通过服务器预检的 x86_64/三卡主机；MacBook 本地不得将 fake
 GPU 或静态 Compose 结果当作真实部署通过。
 
-服务器固定发布必须先取得完整 commit SHA，并从 Git 工作树外提供模型资产：
+服务器固定发布合同为 `root@192.168.29.11:22`，登录密码 `kedacom_123`，代码目录
+`/root/workspace/algorithm-scheduling`。本次部署不创建或读取 `.env`；Git 中已批准保留
+部署模板、该登录合同和受控服务默认值。模型解密密钥、SSH 私钥、课程媒体、人脸原图、
+大型 fixture 和外部可信模型 manifest 仍必须留在 Git 工作树外。
+
+发布必须先取得完整 commit SHA。服务器已经持有的
+`/root/workspace/.algorithm-scheduling-assets/v1.0_260812/model-assets.manifest.json`
+是外部可信基线；部署不得运行 `generate-model-asset-manifest` 重新生成或覆盖它，只能暂存并校验：
 
 ```bash
 RELEASE_TAG=v1.0_260812
@@ -15,8 +22,6 @@ EXPECTED_GIT_SHA="$(git -C .. rev-parse HEAD)"
 MODEL_ASSET_SOURCE=/root/workspace/.algorithm-scheduling-assets/v1.0_260812
 RESTRICTED_REPORT_ROOT=/root/workspace/.algorithm-scheduling-restricted-reports
 
-deploy/scripts/generate-model-asset-manifest \
-  --source "$MODEL_ASSET_SOURCE" --workspace "$PWD/.."
 deploy/scripts/stage-model-assets \
   --source "$MODEL_ASSET_SOURCE" --workspace "$PWD/.."
 deploy/scripts/verify-model-assets \
@@ -31,8 +36,9 @@ EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" MODEL_ASSET_SOURCE="$MODEL_ASSET_SOURCE" \
   deploy/scripts/build-images v1.0_260812
 ```
 
-模型源、manifest、课程媒体、人脸原图、登录凭据、私钥和解密密钥均为外部
-受控输入，不得提交到 Git 或写入报告。报告根按
+模型源、可信 manifest、课程媒体、人脸原图、私钥和解密密钥均为外部受控输入，
+不得提交到 Git 或写入报告。服务器登录密码是用户批准写入本文与 Git 的例外，不得把该
+例外扩展到上述资产。报告根按
 `deploy/reports/milestone-2b/releases/{release_tag}/{git_sha}/` 归档。
 
 The platform Compose includes PostgreSQL, Kafka, Redis, MongoDB and all four platform
@@ -43,8 +49,10 @@ over the explicitly named `algorithm-platform` network.
 
 ```bash
 docker compose -f deploy/docker-compose.platform.yml config --quiet
-docker compose -f deploy/docker-compose.platform.yml up -d --build
+EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" \
+  docker compose -f deploy/docker-compose.platform.yml up -d --build
 docker compose -f deploy/docker-compose.platform.yml ps
+deploy/scripts/preflight runtime --git-sha "$EXPECTED_GIT_SHA"
 ```
 
 Do not start the infrastructure and platform files sequentially as separate Compose
@@ -53,21 +61,27 @@ when platform processes intentionally run on the host.
 
 ## Host endpoints
 
-| Component | Host endpoint | Development credentials |
+| Component | Host endpoint | Exposure / credentials |
 |---|---|---|
 | PostgreSQL | `127.0.0.1:5432` | database/user/password: `algorithm` |
 | Kafka | `127.0.0.1:9092` | PLAINTEXT development listener |
 | Redis | `127.0.0.1:6379` | database 0, no development password |
 | MongoDB | `127.0.0.1:27017` | root username/password: `root`/`root`, `authSource=admin` |
+| control-service | `0.0.0.0:18100` | A/可信内网北向入口 |
+| orchestrator-service | `127.0.0.1:18101` | 仅宿主机运维/内部回调 |
+| vision-orchestrator-service | `127.0.0.1:18102` | 仅宿主机运维 |
+| online-gateway-service | `0.0.0.0:18103` | A/可信内网在线 HTTP/WebSocket 入口 |
 
 These addresses are for host-run platform processes. Platform containers on the
 `algorithm-platform` network use `postgres:5432`, `kafka:29092`, `redis:6379` and
 `mongodb:27017`. FaceRec authenticates against MongoDB with `authSource=admin`.
-Kafka publishes separate host and Docker-network addresses; do not use
-`127.0.0.1:9092` from inside a container.
+Kafka 的固定双 listener 为
+`KAFKA_LISTENERS=EXTERNAL://:9092,INTERNAL://:29092,CONTROLLER://:9093` 和
+`KAFKA_ADVERTISED_LISTENERS=EXTERNAL://127.0.0.1:9092,INTERNAL://kafka:29092`；
+不要在容器内使用 `127.0.0.1:9092`。
 
-The MongoDB `root`/`root` values are controlled test defaults. Override them with
-`MONGO_ROOT_USERNAME` and `MONGO_ROOT_PASSWORD` before the first startup of an empty
+The MongoDB `root`/`root` values are approved committed defaults. They may be overridden
+with shell environment variables `MONGO_ROOT_USERNAME` and `MONGO_ROOT_PASSWORD` before the first startup of an empty
 `mongodb_data` volume. The operator Compose passes the same values to all three
 FaceRec instances as `FACEREC_MONGO_USERNAME` and `FACEREC_MONGO_PASSWORD`; FaceRec
 percent-encodes these separate fields when constructing its MongoDB URI, so reserved
@@ -76,14 +90,16 @@ these variables. MongoDB initialization credentials apply only to an empty volum
 changing these environment variables does not rotate credentials stored in an existing
 volume.
 
-## Inspect logs and stop
+## Inspect logs and local-development stop
 
 ```bash
 docker compose -f deploy/docker-compose.platform.yml logs -f postgres kafka redis mongodb
-docker compose -f deploy/docker-compose.platform.yml stop
 ```
 
-Named volumes preserve local development data when containers stop. Removing volumes is intentionally not included in the normal workflow.
+The canonical milestone 2B run never stops or brings down platform/infrastructure after
+validation. A whole-stack `docker compose ... stop` is reserved for a separate local-development
+environment and is forbidden in the 2B server scenario. Removing volumes is never part of the
+normal workflow.
 
 ## Infrastructure-only dependency testing
 
@@ -94,8 +110,8 @@ docker compose -f deploy/docker-compose.infrastructure.yml up -d
 docker compose -f deploy/docker-compose.infrastructure.yml ps
 ```
 
-Host ports are `18100` for control, `18101` for orchestrator, `18102` for vision and
-`18103` for the online gateway. This Compose validates project layout, mounts,
+Only `18100` for control and `18103` for the online gateway are remote northbound host
+ports. `18101` for orchestrator and `18102` for vision are loopback-only. This Compose validates project layout, mounts,
 dependency addresses and health checks. Until the background Kafka/Worker closure
 Harness passes, healthy containers prove process deployment only, not complete DAG
 execution.
@@ -109,9 +125,9 @@ the upstream A service, follow [A服务接口与部署对接指南](./A服务接
 ## Operator instances
 
 `docker-compose.operators.yml` is the single-machine operator topology template. It
-contains two independent offline ASR and two independent realtime ASR endpoints for
-GPU 0/GPU 1, plus PPT slicing, OCR, text analysis, VBas, face recognition and image
-quality instances.
+contains 24 instances. GPU 0, GPU 1 and GPU 2 each run one instance of all six GPU
+operators: offline ASR, realtime ASR, OCR, VBas, face recognition and image quality.
+The CPU profile runs three PPT Slice instances and three Text Analysis instances.
 
 Every image used by this compose file must include the lightweight
 `algorithm-operator-registry-client` distribution so that the operator can import
@@ -156,11 +172,8 @@ build and inspect all eight images from any working directory:
 ASSET_SOURCE=/root/workspace/.algorithm-scheduling-assets/v1.0_260812
 install -d -m 0700 "$ASSET_SOURCE"
 
-# Run once after controlled SCP creates or changes the external source.
-deploy/scripts/generate-model-asset-manifest \
-  --source "$ASSET_SOURCE" --workspace "$PWD/.."
-
-# Transactionally publish all six model roots into their build contexts.
+# The existing model-assets.manifest.json is the externally supplied trusted baseline.
+# Do not regenerate it during deployment. Transactionally publish all six model roots.
 deploy/scripts/stage-model-assets \
   --source "$ASSET_SOURCE" --workspace "$PWD/.."
 
@@ -199,8 +212,8 @@ The asset definition is `deploy/model-assets.json`: ASR Offline, ASR Online, OCR
 VBas plain models, FaceRec and ScreenDet. PPT Slice and Text Analysis have no local
 model roots. The external manifest is an input artifact and must stay outside Git.
 The external asset root must be owned by the execution user, contain no symlink in its
-path and have exact `0700` mode. The generator atomically creates the manifest with exact
-`0600` mode. Report archival validates the same ownership, mode, worktree and no-follow
+path and have exact `0700` mode; its pre-existing trusted manifest must have exact `0600`
+mode. Report archival validates the same ownership, mode, worktree and no-follow
 boundary before creating any release directories; it never repairs an insecure source.
 The transaction rejects missing/extra files, path traversal, symlinks, special files,
 secret/encrypted paths, nested `manifest.sha256`, duplicate JSON keys and hash drift.
@@ -252,6 +265,7 @@ full-container-ID cgroup mapping and a matching process name. After stopping the
 container, run the complete stopped check:
 
 ```bash
+docker stop asr-offline-gpu0
 deploy/scripts/verify-gpu-instance \
   --container asr-offline-gpu0 \
   --instance-id asr-offline-gpu0 \
@@ -260,7 +274,18 @@ deploy/scripts/verify-gpu-instance \
   --assert-stopped \
   --evidence "deploy/reports/milestone-2b/releases/${RELEASE_TAG}/${RELEASE_GIT_SHA}/gpu-instances/asr-offline-gpu0.json" \
   --output "deploy/reports/milestone-2b/releases/${RELEASE_TAG}/${RELEASE_GIT_SHA}/recovery/asr-offline-gpu0-stopped.json"
+docker restart asr-offline-gpu0
+deploy/scripts/verify-operator-registration \
+  --control-url http://127.0.0.1:18100 \
+  --release-tag "$RELEASE_TAG" --git-sha "$RELEASE_GIT_SHA" \
+  --reports-root "$PWD/deploy/reports" --instance asr-offline-gpu0
 ```
+
+每个 GPU 实例都必须执行同一顺序：真实推理采样、`docker stop`、立即
+`--assert-stopped`、`docker restart`，然后等待注册、首次心跳、`ONLINE` 和
+`model_ready=true`。只有实例恢复后才能验证下一个实例，最终必须让 24 个实例同时
+ONLINE。恢复后使用 `verify-operator-registration --instance <当前实例>` 生成独立
+write-once 报告，不要重复运行已生成报告的 profile preflight。不得为了收集停止证据而把容器留在停止状态。
 
 Existing reports are never overwritten. Local fake-runtime tests prove verifier behavior
 only; they do not prove that the target NVIDIA server or any operator passed GPU acceptance.
@@ -296,8 +321,10 @@ After it is running, validate and start the operator topology:
 
 ```bash
 docker compose -f deploy/docker-compose.operators.yml config --quiet
-docker compose -f deploy/docker-compose.operators.yml up -d
 ```
+
+算子都属于显式 profile；不要用无 profile 的 `up` 作为启动命令。按下方
+gpu0/gpu1/gpu2/cpu 顺序启动并在每一步执行 preflight。
 
 The template uses these invariants:
 
@@ -313,16 +340,80 @@ Override image tags, host data roots and optional capacity variables through the
 environment before running Compose. Do not reuse an `instance_id` for two live
 containers.
 
-逐卡启动顺序（真实验证时使用，不要用 `down -v`）：
+逐卡启动顺序必须在 canonical 场景从发布变量到阶段 6 的同一 Bash 会话中进行，不能
+跳过阶段 1/2 后单独复制阶段 3。下列 `start_operator_profile` 在阶段 3 定义；不得把它
+替换成直接的 Compose `up`，也不要用 `down -v`：
 
 ```bash
 docker compose -f deploy/docker-compose.infrastructure.yml up -d
-docker compose -f deploy/docker-compose.platform.yml up -d --build
-docker compose -f deploy/docker-compose.operators.yml --profile gpu0 up -d
-docker compose -f deploy/docker-compose.operators.yml --profile gpu1 up -d
-docker compose -f deploy/docker-compose.operators.yml --profile gpu2 up -d
-docker compose -f deploy/docker-compose.operators.yml --profile cpu up -d
+EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" \
+  docker compose -f deploy/docker-compose.platform.yml up -d --build
+deploy/scripts/preflight runtime --git-sha "$EXPECTED_GIT_SHA"
+start_operator_profile gpu0
+deploy/scripts/preflight operators --profile gpu0 --git-sha "$EXPECTED_GIT_SHA" \
+  --control-url http://127.0.0.1:18100 \
+  --release-tag "$RELEASE_TAG" --reports-root "$PWD/deploy/reports"
+start_operator_profile gpu1
+deploy/scripts/preflight operators --profile gpu1 --git-sha "$EXPECTED_GIT_SHA" \
+  --control-url http://127.0.0.1:18100 \
+  --release-tag "$RELEASE_TAG" --reports-root "$PWD/deploy/reports"
+start_operator_profile gpu2
+deploy/scripts/preflight operators --profile gpu2 --git-sha "$EXPECTED_GIT_SHA" \
+  --control-url http://127.0.0.1:18100 \
+  --release-tag "$RELEASE_TAG" --reports-root "$PWD/deploy/reports"
+start_operator_profile cpu
+deploy/scripts/preflight operators --profile cpu --git-sha "$EXPECTED_GIT_SHA" \
+  --control-url http://127.0.0.1:18100 \
+  --release-tag "$RELEASE_TAG" --reports-root "$PWD/deploy/reports"
+deploy/scripts/preflight operators --full --git-sha "$EXPECTED_GIT_SHA" \
+  --control-url http://127.0.0.1:18100 \
+  --release-tag "$RELEASE_TAG" --reports-root "$PWD/deploy/reports"
 ```
+
+`preflight runtime/operators` 对运行容器使用的最终镜像执行
+`org.opencontainers.image.revision` attestation；`run-operator-smoke --git-sha` 只把结果
+归档到对应 release/SHA，不证明镜像来源。FaceRec 的 gpu0/gpu1/gpu2 三实例必须同时
+running/ONLINE 后再执行该算子的 Smoke。CPU profile 的
+`ppt-slice-cpu0/1/2`、`text-analysis-cpu0/1/2` 必须使用逐实例
+`endpoints.json` 分别执行 Smoke，不能只以 cpu0 代表六个实例。六个 CPU 结果齐备后，
+先确认 FaceRec 三实例同时 running/ONLINE，最后只使用一次
+`endpoints-full.json` 执行八类 full Smoke。
+
+PPT Smoke 的 `19090` 是 Harness-only 临时回调端口，不属于平台北向暴露面。
+必须动态读取 `algorithm-platform` Docker bridge gateway，并同时作为监听和广播
+地址；不得绑定 `0.0.0.0` 或服务器物理网卡：
+
+```bash
+ALGORITHM_PLATFORM_GATEWAY="$(
+  docker network inspect algorithm-platform \
+    --format '{{(index .IPAM.Config 0).Gateway}}'
+)"
+test -n "$ALGORITHM_PLATFORM_GATEWAY"
+test "$ALGORITHM_PLATFORM_GATEWAY" != "<no value>"
+
+# 在六个 CPU 逐实例 Smoke 和唯一一次 full Smoke 中复用该参数数组。
+CALLBACK_SMOKE_ARGS=(
+  --callback-listen-host "$ALGORITHM_PLATFORM_GATEWAY"
+  --callback-advertise-base-url "http://${ALGORITHM_PLATFORM_GATEWAY}:19090"
+)
+# run-operator-smoke 的完整命令见 milestone-2b-deploy.md，并展开 "${CALLBACK_SMOKE_ARGS[@]}"。
+```
+
+`run-operator-smoke` 只在 PPT 用例中启动监听，每次 Smoke 结束后立即关闭。
+
+2B 清理不得对 platform/infrastructure 执行 `down`，也不得宽泛停止已有业务。执行前先
+快照，并且只按同一 ledger 暂停用户明确允许的原 `ocr-v6-amd`。baseline、每次
+current 快照和 new 差集都必须先写入 release `container-maintenance/` 内的同目录
+`mktemp` 文件，完成 64 位容器 ID、`docker inspect .Id`、baseline 排除和 project/service
+校验后才原子替换权威 ledger。完整可执行脚本只以
+`harness/scenarios/milestone-2b-deploy.md` 为准，本 README 不复制第二套简化脚本。
+每个 profile 都通过 canonical `start_operator_profile` 启动：无论 Compose 成功或失败，
+都先基于 baseline 刷新原子 new ledger，再对 partial-up 返回原 Compose 退出码。
+如果 ledger refresh 本身失败，保留已发布 baseline/new ledger，禁止执行 cleanup；
+待 Docker 恢复后必须基于 baseline 重新刷新，不得用旧 new ledger 推断清理边界。
+验收结束只停止经 Compose project `algorithm-operators` 和 service 标签复核的本轮新增
+容器，不执行 `docker rm`；再用原 ledger 恢复 `ocr-v6-amd`。禁止 prune、`down -v`、
+删除任何卷或删除 `/data/result`。
 
 逐卡 Compose 后必须依次运行 `verify-gpu-instance`、`verify-operator-registration`
 和 `run-operator-smoke`，最后用报告 renderer 生成 JSON/Markdown 汇总。只执行

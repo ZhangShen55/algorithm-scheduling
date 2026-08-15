@@ -1,5 +1,50 @@
 # Change Ledger
 
+## 2026-08-15 - 里程碑 2B 唯一部署执行合同（覆盖旧操作规则）
+
+- 覆盖关系：本条只覆盖旧记录中的“所有密码不得进入 Markdown/Git”、部署时重新生成模型
+  manifest、验收结束对 platform/infrastructure 执行 `down`、以及内部端口可对外绑定等
+  **操作规则**；旧记录描述的当时失败、构建、推理和修复事实继续保留，不追溯改写。
+- 登录与配置：目标固定为 `root@192.168.29.11:22`，密码 `kedacom_123`，代码目录
+  `/root/workspace/algorithm-scheduling`。本次部署不使用 `.env`；用户已批准 Git 保存部署
+  模板、该登录合同和受控服务默认值。该例外不包含 SSH 私钥/Deploy Key、模型解密密钥、
+  人脸原图、课程媒体、大型 fixture 或外部可信模型 manifest。
+- 暴露面：只允许 `control-service:18100`、`online-gateway-service:18103` 作为 A/远程
+  可信内网入口。PostgreSQL `5432`、Kafka `9092`、Redis `6379`、MongoDB `27017`、
+  `18101`、`18102` 和全部 24 个算子宿主机端口收紧为 `127.0.0.1`；容器内服务名、
+  HTTP/WebSocket 路径、方法、字段和容器端口不变，因此本次绑定收紧不改变业务端口契约。
+  Kafka 使用 `EXTERNAL://:9092`/`INTERNAL://:29092`，分别广播
+  `EXTERNAL://127.0.0.1:9092`/`INTERNAL://kafka:29092`。
+- 模型权威：Git 外已有 `model-assets.manifest.json` 是可信交付基线。部署只运行
+  `stage-model-assets` 与 `verify-model-assets`，不运行生成器覆盖基线。OCR 镜像内派生
+  manifest 只用于运行校验，不是第二个交付权威；旧记录中生成清单的动作仍是当时事实。
+- revision 证明：四个平台镜像构建显式接收完整 `EXPECTED_GIT_SHA`，运行后由
+  `preflight runtime --git-sha` 对最终镜像 attestation；gpu0/gpu1/gpu2/cpu 每个 profile
+  启动后立即由 `preflight operators --profile ... --git-sha` 验证，24 实例同时 ONLINE 后
+  再运行 `preflight operators --full --git-sha`。Smoke 的 `--git-sha` 仅记录报告归属。
+- 生命周期：先快照，只按同一 ledger 暂停用户明确允许的原 `ocr-v6-amd`。baseline/current/new
+  ID 先写同目录 `mktemp`，校验完整 64 位 ID、`docker inspect .Id`、baseline 排除和
+  project/service 后再原子发布 ledger。验收结束只停止这些新增算子，不执行
+  `docker rm`；随后恢复 `ocr-v6-amd`，platform/infrastructure 保持运行。禁止 prune、
+  `down -v`、删除卷和删除 `/data/result`。算子 Compose 的权威 project 标签是
+  `algorithm-operators`，不是
+  平台 project `algorithm-scheduling-platform`。旧场景中的 whole-stack down 命令不再适用于 2B。
+- partial-up 边界：四个 profile 只通过 `start_operator_profile` 启动。它保留 Compose 退出码，
+  无论成功或失败都先刷新 current-baseline 差集；若刷新成功但 `up` 失败，按原码
+  返回并由严格模式中止。若账本刷新失败，不发布临时结果，禁止 cleanup；待
+  Docker 恢复后基于已发布 baseline 重新刷新。
+- 完整验收：每个 GPU 实例完成真实推理证据后执行 stop、`--assert-stopped`、立即 restart，
+  只用 `verify-operator-registration --instance` 等待当前实例的首次心跳、ONLINE 和
+  `model_ready=true`，不重复会冲突 write-once 报告的 profile preflight。PPT 三实例和
+  Text Analysis 三实例先逐实例 Smoke；再确认 FaceRec 三实例同时 running/ONLINE；
+  最后且只执行一次八类 full Smoke、反例、压力和恢复。
+- PPT Smoke 回调：`19090` 仅是 Harness-only 临时端口。监听与广播地址都从
+  `algorithm-platform` Docker bridge gateway 动态取得，不绑定 `0.0.0.0` 或服务器物理网卡；
+  每次 PPT Smoke 结束立即关闭监听，不将该端口列为平台北向入口。
+- 当前证据边界：本条记录的是代码和文档执行合同收口，不是服务器运行结果。最终 SHA 的
+  四平台镜像、24 实例同时 ONLINE、18 个 GPU 活动、全部 Smoke/反例/压力/恢复尚待真实
+  执行；OpenSpec 7.4、7.5 继续保持未勾选，不宣称 PPT、ASR、视觉或在线泳道已贯通。
+
 ## 2026-08-15 - OCR v6 AMD64 离线镜像与 RTX 3090 参数收敛
 
 - 交付目标：源项目 `main@e7fb26f1a24c75d2a1623a52a9aa379e2e6771da` 整理唯一 Cython

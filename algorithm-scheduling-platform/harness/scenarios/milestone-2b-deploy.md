@@ -8,37 +8,52 @@
 
 ```text
 preflight -> snapshot/pause -> infrastructure -> model staging/verify
--> build 8 images -> compose gpu0/gpu1/gpu2/cpu
--> GPU UUID/PID/cgroup -> 24 instance registration
+-> build 8 images + platform images -> runtime attestation
+-> compose gpu0/gpu1/gpu2/cpu + profile attestation
+-> GPU UUID/PID/cgroup -> restart/ONLINE -> 24 instance registration
 -> 8 operator smoke -> negative/load/recovery
--> stop project -> restore existing containers -> render report
+-> stop only newly-added operators -> restore ocr-v6-amd -> render report
 ```
 
-测试状态只能是 `通过`、`失败` 或 `未执行及原因`。Task 7B-9 的本地代码门禁
-通过不表示真实部署通过：当前尚未取得真实服务器、三卡驱动、六根模型资产、24
-实例注册、真实媒体推理或完整离线/在线泳道证据。ScreenDet 是在线网关调用的
+测试状态只能是 `通过`、`失败` 或 `未执行及原因`。Task 7B-9 的本地代码门禁和历史
+八镜像构建通过不表示真实部署通过：当前仍未取得最终 SHA 对应的平台/算子运行
+attestation、24 实例同时 ONLINE、18 个 GPU 实例活动、真实媒体全量推理或完整离线/
+在线泳道证据。ScreenDet 是在线网关调用的
 图像质量算子，不属于离线课程 DAG。
 
 ## 服务器前提和安全边界
 
-- 目标：`root@192.168.29.11:22`；代码目录：`/root/workspace/algorithm-scheduling`。
+- 目标：`root@192.168.29.11:22`；密码：`kedacom_123`；代码目录：
+  `/root/workspace/algorithm-scheduling`。本次部署不使用 `.env`；用户已批准 Git 保存部署
+  模板、该登录合同和受控服务默认值。
 - 必须为 `x86_64`，Docker、Compose v2、NVIDIA Container Runtime 可用，且容器
   `nvidia/cuda` 运行时能看到恰好三张 GPU。
 - `/data/course` 和 `/data/result` 必须是实际目录并可由执行身份完成同步写入；
   `/data/result` 为持久结果目录，禁止部署清理流程删除。
 - PostgreSQL、Redis、Kafka、MongoDB 必须先健康；容器内使用 Compose 网络地址，
-  宿主机进程使用 `127.0.0.1` 地址，不能混用 Kafka listener。
-- 登录密码、Deploy Key、模型解密密钥、课程视频、人脸原图和外部 fixture 只通过
-  安全外部通道提供，禁止出现在 Git、Markdown、JSON 报告、进程参数和 shell 历史。
-- 允许暂停已有业务容器，但必须先快照，使用同一 canonical ledger 恢复；禁止
+  宿主机进程使用 `127.0.0.1` 地址，不能混用 Kafka listener。Kafka 固定使用
+  `EXTERNAL://:9092`/`INTERNAL://:29092`，分别广播
+  `EXTERNAL://127.0.0.1:9092`/`INTERNAL://kafka:29092`。
+- 只有 `control-service:18100`、`online-gateway-service:18103` 可绑定全部宿主机地址供
+  A/远程可信内网访问。`5432`、`9092`、`6379`、`27017`、`18101`、`18102` 和全部
+  24 个算子宿主机端口必须绑定 `127.0.0.1`；容器间服务名和容器端口保持不变。
+- 上述服务器密码是经用户批准写入 Markdown/Git 的明确例外。Deploy Key/私钥、模型
+  解密密钥、课程视频、人脸原图、大型 fixture 和外部可信模型 manifest 仍只通过安全
+  外部通道提供，不得进入 Git、普通 JSON 报告、镜像上下文或命令参数。
+- 不允许宽泛暂停已有业务容器。必须先快照，并且只在同一 canonical ledger 中暂停用户
+  明确允许的原 `ocr-v6-amd`，验收后恢复；禁止
   `docker system prune`、`docker compose down -v` 和删除 `/data/result`。
 
 ## 发布变量和报告目录
 
 以下命令在 `algorithm-scheduling-platform` 目录执行。`EXPECTED_GIT_SHA` 必须是
 工作树当前 HEAD 的完整 40 位 SHA；模型源必须位于 Git 工作树外、目录权限 `0700`。
+从本节发布变量开始到阶段 6 结束，全部 Bash 代码块必须复制到同一 Bash 会话中按文档
+顺序连续执行，不得为每个阶段另开 shell；这样变量、trap、函数和 strict mode 才能持续生效。
 
 ```bash
+set -euo pipefail
+
 RELEASE_TAG=v1.0_260812
 EXPECTED_GIT_SHA="$(git -C .. rev-parse HEAD)"
 MODEL_ASSET_SOURCE=/root/workspace/.algorithm-scheduling-assets/v1.0_260812
@@ -47,10 +62,11 @@ REPORT_ROOT="$PWD/deploy/reports"
 RELEASE_ROOT="$REPORT_ROOT/milestone-2b/releases/$RELEASE_TAG/$EXPECTED_GIT_SHA"
 ```
 
-初始化外部模型清单和报告目录：
+校验外部可信模型清单并初始化报告目录。不得在部署阶段运行 manifest 生成器或覆盖
+`$MODEL_ASSET_SOURCE/model-assets.manifest.json`：
 
 ```bash
-deploy/scripts/generate-model-asset-manifest \
+deploy/scripts/verify-model-assets \
   --source "$MODEL_ASSET_SOURCE" --workspace "$PWD/.."
 deploy/scripts/prepare-report-directory \
   --release-tag "$RELEASE_TAG" --git-sha "$EXPECTED_GIT_SHA" \
@@ -66,17 +82,19 @@ FaceRec、ScreenDet 六个模型根必须由外部 manifest 冻结；PPT Slice �
 ## 阶段 1：服务器预检、快照和暂停
 
 ```bash
-EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" deploy/scripts/preflight \
+EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" deploy/scripts/preflight host \
   >"$RELEASE_ROOT/preflight/preflight.log" 2>&1
 
 SNAPSHOT="$RELEASE_ROOT/container-maintenance/existing-containers.jsonl"
 deploy/scripts/snapshot-existing-containers "$SNAPSHOT"
 ```
 
-只暂停经过确认的业务容器；不要使用空选择器或按宽泛名称匹配：
+确认精确容器身份后，只暂停用户已允许的原 `ocr-v6-amd`；不要使用空选择器或按宽泛
+名称匹配：
 
 ```bash
-deploy/scripts/pause-existing-containers "$SNAPSHOT" <container-id-or-exact-name>...
+docker inspect ocr-v6-amd >"$RELEASE_ROOT/container-maintenance/ocr-v6-amd-before.json"
+deploy/scripts/pause-existing-containers "$SNAPSHOT" ocr-v6-amd
 ```
 
 暂停账本固定为 `${SNAPSHOT}.paused.jsonl`，必须保留到恢复完成。预检失败时停止
@@ -201,15 +219,250 @@ Text Analysis 首轮因默认 PyPI 的连接重置和 15 秒读取超时失败�
 ## 阶段 3：平台和逐卡算子拓扑
 
 ```bash
-docker compose -f deploy/docker-compose.platform.yml up -d --build
-docker compose -f deploy/docker-compose.platform.yml ps
+BASELINE_OPERATOR_IDS="$RELEASE_ROOT/container-maintenance/baseline-operator-container-ids.txt"
+NEW_OPERATOR_IDS="$RELEASE_ROOT/container-maintenance/new-operator-container-ids.txt"
+LEDGER_DIR="$(dirname "$BASELINE_OPERATOR_IDS")"
+test "$LEDGER_DIR" = "$(dirname "$NEW_OPERATOR_IDS")"
+test -d "$LEDGER_DIR"
 
-docker compose -f deploy/docker-compose.operators.yml --profile gpu0 up -d
-docker compose -f deploy/docker-compose.operators.yml --profile gpu1 up -d
-docker compose -f deploy/docker-compose.operators.yml --profile gpu2 up -d
-docker compose -f deploy/docker-compose.operators.yml --profile cpu up -d
+OPERATOR_LEDGER_TEMPS=()
+cleanup_operator_ledger_temps() {
+  if ((${#OPERATOR_LEDGER_TEMPS[@]})); then
+    rm -f -- "${OPERATOR_LEDGER_TEMPS[@]}"
+  fi
+}
+trap cleanup_operator_ledger_temps EXIT
+
+if ! OPERATOR_SERVICE_ALLOWLIST_TMP="$(
+  mktemp "$LEDGER_DIR/.operator-service-allowlist.XXXXXX"
+)"; then
+  echo "无法创建权威算子 service allowlist 临时文件" >&2
+  exit 1
+fi
+OPERATOR_LEDGER_TEMPS+=("$OPERATOR_SERVICE_ALLOWLIST_TMP")
+if ! docker compose -f deploy/docker-compose.operators.yml --profile '*' \
+  config --services | LC_ALL=C sort -u >"$OPERATOR_SERVICE_ALLOWLIST_TMP"; then
+  echo "无法从权威 Compose 解析算子 service allowlist" >&2
+  exit 1
+fi
+if [[ "$(wc -l <"$OPERATOR_SERVICE_ALLOWLIST_TMP" | tr -d ' ')" != 24 ]]; then
+  echo "权威算子 Compose 必须精确包含 24 个 service" >&2
+  exit 1
+fi
+
+validate_operator_id_file() {
+  local id_file="$1"
+  local container_id actual_id
+  while IFS= read -r container_id || [[ -n "$container_id" ]]
+  do
+    if [[ ! "$container_id" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "容器 ID 不是 64 位小写十六进制: $container_id" >&2
+      return 1
+    fi
+    if ! actual_id="$(docker inspect -f '{{.Id}}' "$container_id")"; then
+      echo "无法核验容器 ID: $container_id" >&2
+      return 1
+    fi
+    if [[ "$actual_id" != "$container_id" ]]; then
+      echo "容器 ID 与 docker inspect 不一致: $container_id" >&2
+      return 1
+    fi
+  done <"$id_file"
+  return 0
+}
+
+validate_operator_identity() {
+  local container_id="$1" actual_id compose_project service_name allowlist_status=0
+  if [[ ! "$container_id" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "容器 ID 不是 64 位小写十六进制: $container_id" >&2
+    return 1
+  fi
+  if ! actual_id="$(docker inspect -f '{{.Id}}' "$container_id")"; then
+    echo "无法核验容器 ID: $container_id" >&2
+    return 1
+  fi
+  if [[ "$actual_id" != "$container_id" ]]; then
+    echo "容器 ID 与 docker inspect 不一致: $container_id" >&2
+    return 1
+  fi
+  if ! compose_project="$(
+    docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$container_id"
+  )"; then
+    echo "无法核验容器 Compose project: $container_id" >&2
+    return 1
+  fi
+  if [[ "$compose_project" != "algorithm-operators" ]]; then
+    echo "拒绝非权威算子 Compose project: $compose_project ($container_id)" >&2
+    return 1
+  fi
+  if ! service_name="$(
+    docker inspect -f '{{ index .Config.Labels "com.docker.compose.service" }}' "$container_id"
+  )"; then
+    echo "无法核验容器 Compose service: $container_id" >&2
+    return 1
+  fi
+  grep -Fqx -- "$service_name" "$OPERATOR_SERVICE_ALLOWLIST_TMP" || allowlist_status=$?
+  case "$allowlist_status" in
+    0)
+      return 0
+      ;;
+    1)
+      echo "拒绝不在权威 Compose allowlist 中的算子服务: $service_name ($container_id)" >&2
+      return 1
+      ;;
+    *)
+      echo "无法读取权威算子 service allowlist: $service_name ($container_id)" >&2
+      return 1
+      ;;
+  esac
+}
+
+snapshot_current_operator_ids() {
+  local output_file="$1"
+  if ! docker compose -f deploy/docker-compose.operators.yml --profile '*' \
+    ps --all --no-trunc -q | LC_ALL=C sort -u >"$output_file"; then
+    echo "无法获取完整算子容器快照" >&2
+    return 1
+  fi
+  if ! validate_operator_id_file "$output_file"; then
+    echo "当前算子容器快照校验失败" >&2
+    return 1
+  fi
+  return 0
+}
+
+assert_not_in_baseline() {
+  local container_id="$1" grep_status=0
+  grep -Fqx -- "$container_id" "$BASELINE_OPERATOR_IDS" || grep_status=$?
+  case "$grep_status" in
+    0)
+      echo "拒绝将 baseline 容器视为本轮新增: $container_id" >&2
+      return 1
+      ;;
+    1)
+      return 0
+      ;;
+    *)
+      echo "无法读取 baseline 账本以排除容器: $container_id" >&2
+      return 1
+      ;;
+  esac
+}
+
+refresh_new_operator_ledger() {
+  local CURRENT_TMP NEW_TMP container_id
+  if ! validate_operator_id_file "$BASELINE_OPERATOR_IDS"; then
+    echo "baseline 账本校验失败" >&2
+    return 1
+  fi
+  if ! CURRENT_TMP="$(mktemp "$LEDGER_DIR/.current-operator-container-ids.XXXXXX")"; then
+    echo "无法创建 current 快照临时文件" >&2
+    return 1
+  fi
+  OPERATOR_LEDGER_TEMPS+=("$CURRENT_TMP")
+  if ! NEW_TMP="$(mktemp "$LEDGER_DIR/.new-operator-container-ids.XXXXXX")"; then
+    echo "无法创建 new ledger 临时文件" >&2
+    return 1
+  fi
+  OPERATOR_LEDGER_TEMPS+=("$NEW_TMP")
+  if ! snapshot_current_operator_ids "$CURRENT_TMP"; then
+    return 1
+  fi
+  if ! comm -23 "$CURRENT_TMP" "$BASELINE_OPERATOR_IDS" >"$NEW_TMP"; then
+    echo "无法计算 current 与 baseline 的差集" >&2
+    return 1
+  fi
+  if ! validate_operator_id_file "$NEW_TMP"; then
+    echo "新增容器差集校验失败" >&2
+    return 1
+  fi
+  while IFS= read -r container_id || [[ -n "$container_id" ]]
+  do
+    if ! validate_operator_identity "$container_id"; then
+      echo "新增容器身份校验失败: $container_id" >&2
+      return 1
+    fi
+    if ! assert_not_in_baseline "$container_id"; then
+      return 1
+    fi
+  done <"$NEW_TMP"
+  if ! mv -f -- "$NEW_TMP" "$NEW_OPERATOR_IDS"; then
+    echo "无法原子发布新增容器账本" >&2
+    return 1
+  fi
+  rm -f -- "$CURRENT_TMP" || true
+  return 0
+}
+
+start_operator_profile() {
+  local profile="$1" up_status=0
+  docker compose -f deploy/docker-compose.operators.yml --profile "$profile" \
+    up -d || up_status=$?
+
+  if ! refresh_new_operator_ledger; then
+    echo "profile $profile 启动后无法安全刷新新增容器账本；已发布 baseline 保留且未发布损坏的 new ledger。" >&2
+    echo "禁止执行 cleanup；待 Docker 恢复后基于 baseline 重新刷新账本。" >&2
+    return 1
+  fi
+  if ((up_status != 0)); then
+    echo "profile $profile 的 docker compose up 返回 ${up_status}，可能已 partial-up；新增容器账本已安全刷新，现按原退出码中止。" >&2
+    return "$up_status"
+  fi
+  return 0
+}
+
+BASELINE_TMP="$(mktemp "$LEDGER_DIR/.baseline-operator-container-ids.XXXXXX")"
+OPERATOR_LEDGER_TEMPS+=("$BASELINE_TMP")
+NEW_TMP="$(mktemp "$LEDGER_DIR/.new-operator-container-ids.XXXXXX")"
+OPERATOR_LEDGER_TEMPS+=("$NEW_TMP")
+snapshot_current_operator_ids "$BASELINE_TMP"
+mv -f -- "$BASELINE_TMP" "$BASELINE_OPERATOR_IDS"
+: >"$NEW_TMP"
+validate_operator_id_file "$NEW_TMP"
+mv -f -- "$NEW_TMP" "$NEW_OPERATOR_IDS"
+
+EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" \
+  docker compose -f deploy/docker-compose.platform.yml up -d --build
+docker compose -f deploy/docker-compose.platform.yml ps
+deploy/scripts/preflight runtime --git-sha "$EXPECTED_GIT_SHA"
+
+start_operator_profile gpu0
+deploy/scripts/preflight operators --profile gpu0 --git-sha "$EXPECTED_GIT_SHA" \
+  --control-url http://127.0.0.1:18100 \
+  --release-tag "$RELEASE_TAG" --reports-root "$REPORT_ROOT"
+start_operator_profile gpu1
+deploy/scripts/preflight operators --profile gpu1 --git-sha "$EXPECTED_GIT_SHA" \
+  --control-url http://127.0.0.1:18100 \
+  --release-tag "$RELEASE_TAG" --reports-root "$REPORT_ROOT"
+start_operator_profile gpu2
+deploy/scripts/preflight operators --profile gpu2 --git-sha "$EXPECTED_GIT_SHA" \
+  --control-url http://127.0.0.1:18100 \
+  --release-tag "$RELEASE_TAG" --reports-root "$REPORT_ROOT"
+start_operator_profile cpu
+deploy/scripts/preflight operators --profile cpu --git-sha "$EXPECTED_GIT_SHA" \
+  --control-url http://127.0.0.1:18100 \
+  --release-tag "$RELEASE_TAG" --reports-root "$REPORT_ROOT"
 docker compose -f deploy/docker-compose.operators.yml ps
+
+test "$(wc -l <"$NEW_OPERATOR_IDS" | tr -d ' ')" = 24
 ```
+
+阶段 1 到阶段 6 必须在发布变量块启用 strict mode 的同一 Bash 会话中按顺序连续执行。
+`set -euo pipefail` 保证预检、快照、暂停、模型发布、构建、Compose、管道、排序、
+`comm` 或 ID 校验任何一步失败时立即停止。baseline 允许为空；所有非空 ID 必须是
+64 位小写十六进制且与
+`docker inspect .Id` 精确一致。new 差集发布前还必须由统一
+`validate_operator_identity` 核验 Compose project 为 `algorithm-operators`，并精确匹配
+权威 Compose `config --services` 动态生成的 24 项 allowlist。baseline、每次 current
+快照和 new 差集均先写入
+`container-maintenance/` 同目录的 `mktemp` 文件；全部校验后才原子 `mv`。任何失败
+都不得截断已发布的权威 ledger。
+
+`start_operator_profile` 不依赖 `set -e` 对 `docker compose up` 的默认处理。它先保留
+Compose 退出码，无论成功或 partial-up 失败都先刷新原子 ledger；刷新成功后，
+若 Compose 失败则按原退出码返回，由严格模式中止后续 profile 和 preflight。若 ledger
+刷新自身失败，不发布临时结果，保留已发布 baseline/new ledger；此时禁止执行
+cleanup，必须等 Docker 恢复后基于 baseline 重新执行 `refresh_new_operator_ledger`。
 
 权威 Compose 必须保持 24 个实例：18 个 GPU 实例（六类 GPU 算子 × 三卡）和
 6 个 CPU 实例（PPT Slice × 三、Text Analysis × 三）。每个容器一个 Uvicorn
@@ -219,6 +472,10 @@ worker；同一实例 ID 不得被两个容器复用。容器配置只读挂载 
 部署前将仓库内 `deploy/endpoints.json` 和 `deploy/endpoints-full.json` 两份权威文件
 复制到 Git 外 fixture 根。逐实例 GPU 触发命令使用外部 `endpoints.json`，八类 full
 Smoke 使用外部 `endpoints-full.json`，两者不得互换。
+
+`preflight runtime` 对四个平台最终镜像执行 attestation。每个 profile preflight 对所选
+算子最终镜像执行 attestation，并验证运行容器身份、注册、首次心跳、`ONLINE` 和
+`model_ready=true`。Smoke 的 `--git-sha` 只记录报告归属，不是镜像 attestation。
 
 ## 阶段 4：GPU 真实性证据
 
@@ -240,7 +497,29 @@ deploy/scripts/verify-gpu-instance \
 对 18 个 GPU 实例逐一替换容器、物理 GPU 和算子名。通过条件同时包括：容器只见
 一张目标卡、UUID 与宿主一致、`cuda:0`/框架设备证据、`nvidia-smi` 中目标算子
 进程名、宿主 CUDA PID、`docker top` 映射、完整 64 位 cgroup ID 和 NSpid。停止容器
-后用 `--assert-stopped --evidence <prior-json>` 将残留检查写入 `recovery/`。
+后必须立即用 `--assert-stopped --evidence <prior-json>` 将残留检查写入 `recovery/`，
+随后立即重启同一实例，等待它重新完成注册、首次心跳、`ONLINE`、`model_ready=true`，
+再验证下一个实例。示例的停止后半程为：
+
+```bash
+docker stop asr-offline-gpu0
+deploy/scripts/verify-gpu-instance \
+  --container asr-offline-gpu0 --instance-id asr-offline-gpu0 \
+  --physical-gpu 0 --process-name asr_offline --assert-stopped \
+  --evidence "$RELEASE_ROOT/gpu-instances/asr-offline-gpu0.json" \
+  --output "$RELEASE_ROOT/recovery/asr-offline-gpu0-stopped.json"
+docker restart asr-offline-gpu0
+deploy/scripts/verify-operator-registration \
+  --control-url http://127.0.0.1:18100 \
+  --release-tag "$RELEASE_TAG" --git-sha "$EXPECTED_GIT_SHA" \
+  --reports-root "$REPORT_ROOT" --instance asr-offline-gpu0
+```
+
+不得把已经取得停止证据的实例留在停止状态。每次恢复只使用
+`verify-operator-registration --instance <当前实例>` 等待该实例重新注册、
+首次心跳、`ONLINE` 和 `model_ready=true`，生成独立的 instance 报告。不得重复运行
+已完成的 profile preflight，否则会与 write-once profile 报告冲突。18 个实例逐一
+恢复后，最终验收必须保持 18 个 GPU 实例和 6 个 CPU 实例同时运行并 ONLINE。
 
 ## 阶段 5：注册、Smoke 和报告
 
@@ -248,17 +527,73 @@ deploy/scripts/verify-gpu-instance \
 GPU 标签匹配”；只有注册响应不能通过：
 
 ```bash
-deploy/scripts/verify-operator-registration \
+deploy/scripts/preflight operators --full --git-sha "$EXPECTED_GIT_SHA" \
   --control-url http://127.0.0.1:18100 \
-  --release-tag "$RELEASE_TAG" --git-sha "$EXPECTED_GIT_SHA" \
-  --reports-root "$REPORT_ROOT"
+  --release-tag "$RELEASE_TAG" --reports-root "$REPORT_ROOT"
 ```
+
+`preflight operators --full` 内部已执行全 24 实例注册校验并生成 full 报告；不再单独
+执行无 `--instance`/`--profile` 的 `verify-operator-registration`，避免写入同一份
+write-once full 报告。
 
 八类 Smoke 使用 `deploy/operator-smoke-cases.json`、`operator-smoke-fixtures.json`
 和外部 fixture manifest。ASR Offline 调用 v1.1.8；ASR Online 使用 WebSocket；
 OCR/VBas/FaceRec/ScreenDet 使用单图；PPT 必须使用冻结的本地 `video_path`，等待一次
 终态 manifest 回调；Text Analysis 调用 `extract_keywords` 与 `course_overviews`。
-缺失的 ASR/VBas/PPT fixture 必须写成“未执行及原因”，不能改用随意媒体冒充基准：
+缺失的 ASR/VBas/PPT fixture 必须写成“未执行及原因”，不能改用随意媒体冒充基准。
+
+PPT 终态回调的 `19090` 是 Smoke 期间的 Harness-only 临时端口，不是平台北向端口。
+从权威 `algorithm-platform` Docker bridge 动态读取 gateway，同时作为监听地址和
+算子容器可访问的广播地址；不得绑定 `0.0.0.0` 或服务器物理网卡。
+`run-operator-smoke` 只在 PPT 用例中启动该监听，该次 Smoke 结束后必须关闭监听。
+
+CPU profile 不能只抽测 cpu0。先对六个 CPU 实例分别 Smoke：
+
+```bash
+ALGORITHM_PLATFORM_GATEWAY="$(
+  docker network inspect algorithm-platform \
+    --format '{{(index .IPAM.Config 0).Gateway}}'
+)"
+test -n "$ALGORITHM_PLATFORM_GATEWAY"
+test "$ALGORITHM_PLATFORM_GATEWAY" != "<no value>"
+
+for operator_instance in \
+  ppt_slice:ppt-slice-cpu0 ppt_slice:ppt-slice-cpu1 ppt_slice:ppt-slice-cpu2 \
+  text_analysis:text-analysis-cpu0 text_analysis:text-analysis-cpu1 text_analysis:text-analysis-cpu2
+do
+  operator_code="${operator_instance%%:*}"
+  instance_id="${operator_instance#*:}"
+  deploy/scripts/run-operator-smoke \
+    --release-tag "$RELEASE_TAG" --git-sha "$EXPECTED_GIT_SHA" \
+    --reports-root "$REPORT_ROOT" \
+    --fixture-manifest /root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/manifest.json \
+    --external-fixture-root /root/workspace/.algorithm-scheduling-fixtures/v1.0_260812 \
+    --fixture-target-root /data/course/_harness/fixtures \
+    --result-root /data/result/_harness \
+    --callback-listen-host "$ALGORITHM_PLATFORM_GATEWAY" \
+    --callback-advertise-base-url "http://${ALGORITHM_PLATFORM_GATEWAY}:19090" \
+    --endpoints-json /root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/endpoints.json \
+    --operator "$operator_code" --instance "$instance_id" --run-id auto
+done
+```
+
+六个 CPU 结果齐备后，确认 FaceRec 三个容器同时 running，并用一份独立的三实例
+注册报告确认它们同时 `ONLINE` 且 `model_ready=true`：
+
+```bash
+for face_instance in facerec-gpu0 facerec-gpu1 facerec-gpu2
+do
+  test "$(docker inspect -f '{{.State.Running}}' "$face_instance")" = true
+done
+deploy/scripts/verify-operator-registration \
+  --control-url http://127.0.0.1:18100 \
+  --release-tag "$RELEASE_TAG" --git-sha "$EXPECTED_GIT_SHA" \
+  --reports-root "$REPORT_ROOT" \
+  --instance facerec-gpu0 --instance facerec-gpu1 --instance facerec-gpu2
+```
+
+最后且只执行一次八类 full Smoke；`endpoints-full.json` 中的 FaceRec 三 URL 会在同一
+用例内共同参与人物创建、识别和清理：
 
 ```bash
 deploy/scripts/run-operator-smoke \
@@ -268,9 +603,13 @@ deploy/scripts/run-operator-smoke \
   --external-fixture-root /root/workspace/.algorithm-scheduling-fixtures/v1.0_260812 \
   --fixture-target-root /data/course/_harness/fixtures \
   --result-root /data/result/_harness \
-  --callback-advertise-base-url http://192.168.29.11:19090 \
+  --callback-listen-host "$ALGORITHM_PLATFORM_GATEWAY" \
+  --callback-advertise-base-url "http://${ALGORITHM_PLATFORM_GATEWAY}:19090" \
   --endpoints-json /root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/endpoints-full.json
 ```
+
+六个 CPU 逐实例结果、FaceRec 三实例同时就绪结果、八类 full
+结果、四个 profile preflight 和最终 full preflight 是互补证据，不能相互替代。
 
 在线图片 Smoke 只验证网关路由，不进入 Kafka 或离线媒体下载；实时 ASR 验证
 WebSocket 会话粘性。该阶段仍是算子直接调用证据，不得通过 Repository 伪造课程节点
@@ -285,15 +624,37 @@ OFFLINE/DRAINING 路由、容量耗尽、HTTP 429/503、超时、错误输入、
 压力报告必须记录并发、队列、成功/失败、p95/p99 和资源峰值；失败或未执行必须保留
 原因，不能以 health 代替推理。
 
-停止本项目容器时只使用本项目 Compose，不带 `-v`：
+canonical 2B 场景绝不对 platform/infrastructure 执行 `down` 或 `stop`。只停止
+`$NEW_OPERATOR_IDS` 中本轮新增的算子容器，不删除容器。清理前重新校验 baseline
+和 new ledger；每个 ID 还必须再次确认为 64 位小写十六进制、不在 baseline、
+`docker inspect .Id` 精确一致，且 Compose project/service 标签匹配。禁止对 ledger 外容器执行操作：
 
 ```bash
-docker compose -f deploy/docker-compose.operators.yml \
-  --profile gpu0 --profile gpu1 --profile gpu2 --profile cpu down
-docker compose -f deploy/docker-compose.platform.yml down
-docker compose -f deploy/docker-compose.infrastructure.yml down
+validate_operator_id_file "$BASELINE_OPERATOR_IDS"
+validate_operator_id_file "$NEW_OPERATOR_IDS"
+while IFS= read -r container_id || [[ -n "$container_id" ]]
+do
+  if ! validate_operator_identity "$container_id"; then
+    exit 1
+  fi
+  if ! assert_not_in_baseline "$container_id"; then
+    exit 1
+  fi
+done <"$NEW_OPERATOR_IDS"
+while IFS= read -r container_id || [[ -n "$container_id" ]]
+do
+  docker stop "$container_id"
+done <"$NEW_OPERATOR_IDS"
 deploy/scripts/restore-existing-containers "$SNAPSHOT" "${SNAPSHOT}.paused.jsonl"
 ```
+
+清理采用两遍处理：第一遍复用发布前的 `validate_operator_identity` 并排除 baseline；
+只有整份 new ledger 全部通过后，第二遍才逐个执行 `docker stop`。任一身份不合规时，
+不得停止其中任何容器。
+
+清理后确认原 `ocr-v6-amd` 恢复到快照状态。平台与四类基础设施继续运行；不得 prune、
+不得删除卷、不得删除 `/data/result`。whole-stack `down` 只允许出现在与本服务器隔离的
+本地开发环境，不属于本场景。
 
 最后渲染当前 release 的 JSON/Markdown 汇总；renderer 要求通过用例有证据文件、
 未执行用例有中文原因、所有用例使用同一 release/SHA，并拒绝跨目录或包含敏感 token：
@@ -308,7 +669,10 @@ deploy/scripts/restore-existing-containers "$SNAPSHOT" "${SNAPSHOT}.paused.jsonl
 
 ## 当前未执行声明
 
-本地静态、单元和部署合同测试已执行；目标 x86_64 服务器的模型资产校验与八镜像构建也已
-执行，不能再表述为“未连接远端”或“八镜像未构建”。当前尚未完成的是平台/基础设施和
-24 个算子实例拓扑、18 个 GPU 实例真实性、注册与心跳、八类真实模型/课程媒体 Smoke、
-反例、压力、恢复和完整离线/在线泳道。后续报告必须继续逐项给出真实证据或中文未执行原因。
+本地静态、单元和部署合同测试已执行。目标 x86_64 服务器已取得旧 SHA
+`e65dd576b3b53b73a874bb131449ef031423057b` 的模型资产校验和八算子镜像构建证据；
+该历史证据不能代替本轮最终发布 SHA 的验收。最终 SHA 对应的四平台/八算子镜像
+重建、基础设施与平台运行状态、runtime attestation、24 个算子实例同时 ONLINE、
+18 个 GPU 实例真实性、八类真实模型/课程媒体 Smoke、反例、压力、恢复和完整
+离线/在线泳道均待本轮现场证据确认。后续报告必须继续逐项给出真实证据或中文
+未执行原因。

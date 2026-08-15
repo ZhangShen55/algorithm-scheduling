@@ -116,7 +116,9 @@ Task 7B-9 当前仅代表构建输入、模型/密钥边界、GPU 证据采集�
 Harness 和报告归档的代码门禁已通过。它们不等价于真实三卡部署通过。任何
 `mock=true` 或 fake Docker/NVIDIA 报告必须在汇总中标注为非真实证据。
 
-报告初始化和发布构建必须使用完整 commit SHA，不能使用分支名代替：
+目标服务器登录合同是 `root@192.168.29.11:22`、密码 `kedacom_123`。本次部署不使用
+`.env`；用户已批准 Git 保存部署模板、该登录合同和受控服务默认值。报告初始化、平台构建
+和算子构建必须使用同一个完整 commit SHA，不能使用分支名代替：
 
 ```bash
 RELEASE_TAG=v1.0_260812
@@ -131,18 +133,20 @@ deploy/scripts/prepare-report-directory \
   --external-manifest "$MODEL_ASSET_SOURCE/model-assets.manifest.json"
 ```
 
-凭据、私钥、模型解密密钥、课程媒体和人脸原图通过服务器外部安全通道提供，
-不得写入命令历史、Git、Harness JSON 或 Markdown。
+服务器登录密码是批准写入 Markdown/Git 的明确例外。Deploy Key/私钥、模型解密密钥、
+课程媒体、人脸原图、大型 fixture 和外部可信模型 manifest 仍通过服务器外部安全通道
+提供，不得写入 Git、普通 Harness JSON、镜像上下文或命令参数。
 
 GPU 实例证据采集器的 fake Docker/NVIDIA/proc 行为合同见
 `harness/scenarios/milestone-2b-gpu-instance-evidence.md`。该本地测试不是真实 GPU 验收；
 Task 12-14 必须在目标服务器用各算子的真实 smoke 触发文件同步运行采集器。
 
-里程碑 2B 模型资产验证只使用仓库外受控目录。先生成精确 manifest，再事务发布并校验：
+里程碑 2B 模型资产验证只使用仓库外受控目录。现有
+`$ASSET_SOURCE/model-assets.manifest.json` 是外部可信基线；部署不得运行 manifest 生成器
+或覆盖它，只能事务发布并校验：
 
 ```bash
 ASSET_SOURCE=/root/workspace/.algorithm-scheduling-assets/v1.0_260812
-deploy/scripts/generate-model-asset-manifest --source "$ASSET_SOURCE" --workspace "$PWD/.."
 deploy/scripts/stage-model-assets --source "$ASSET_SOURCE" --workspace "$PWD/.."
 deploy/scripts/verify-model-assets --source "$ASSET_SOURCE" --workspace "$PWD/.."
 ```
@@ -151,6 +155,57 @@ deploy/scripts/verify-model-assets --source "$ASSET_SOURCE" --workspace "$PWD/..
 Harness 报告。当前明文模式不要求 runtime secret。未来启用加密模型时，可单独运行
 `deploy/scripts/verify-runtime-secrets --secret ID=/run/secrets/TARGET=/host/path` 检查只读挂载前提；
 该检查不读取 secret 内容。
+
+最终镜像、逐 profile 和全拓扑验证必须按 canonical
+`harness/scenarios/milestone-2b-deploy.md` 从发布变量到阶段 6 在同一 Bash 会话连续执行，
+不能从阶段 3 单独开始。平台构建必须显式传入
+`EXPECTED_GIT_SHA`；Smoke 的 `--git-sha` 只报告元数据，不能替代以下 attestation。
+下面的 `start_operator_profile` 由 canonical 场景阶段 3 定义，只有在此前阶段仍处于
+同一 Bash 会话时才可调用：
+
+```bash
+EXPECTED_GIT_SHA="$(git -C .. rev-parse HEAD)"
+RELEASE_TAG=v1.0_260812
+REPORT_ROOT="$PWD/deploy/reports"
+EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" \
+  docker compose -f deploy/docker-compose.platform.yml up -d --build
+deploy/scripts/preflight runtime --git-sha "$EXPECTED_GIT_SHA"
+
+for profile in gpu0 gpu1 gpu2 cpu
+do
+  start_operator_profile "$profile"
+  deploy/scripts/preflight operators --profile "$profile" --git-sha "$EXPECTED_GIT_SHA" \
+    --control-url http://127.0.0.1:18100 \
+    --release-tag "$RELEASE_TAG" --reports-root "$REPORT_ROOT"
+done
+deploy/scripts/preflight operators --full --git-sha "$EXPECTED_GIT_SHA" \
+  --control-url http://127.0.0.1:18100 \
+  --release-tag "$RELEASE_TAG" --reports-root "$REPORT_ROOT"
+```
+
+只有 control `18100` 和 online gateway `18103` 对 A/远程可信内网开放；PostgreSQL
+`5432`、Kafka `9092`、Redis `6379`、MongoDB `27017`、`18101`、`18102` 和 24 个
+算子宿主机端口都必须绑定 `127.0.0.1`。Kafka 固定使用
+`EXTERNAL://:9092`/`INTERNAL://:29092` 并分别广播
+`EXTERNAL://127.0.0.1:9092`/`INTERNAL://kafka:29092`。
+
+真实验收还必须满足：FaceRec gpu0/gpu1/gpu2 同时 running/ONLINE；PPT 三个 CPU 实例
+和 Text Analysis 三个 CPU 实例逐实例 Smoke；每个 GPU 实例执行真实推理、停止、
+`--assert-stopped`、立即重启并等待首次心跳/ONLINE/model ready；最后 24 实例同时
+ONLINE，再执行八类 full Smoke、反例、压力和恢复。canonical 2B 场景不停止或 down
+platform/infrastructure，只停止本轮经原子 ledger 记录和复核的新增算子，不删除容器，
+然后恢复原 `ocr-v6-amd`；禁止
+prune、删除卷和删除 `/data/result`。
+
+PPT 回调 `19090` 是 Smoke 期间的 Harness-only 临时端口。执行时通过
+`docker network inspect algorithm-platform` 动态取得 Docker bridge gateway，并同时传给
+`--callback-listen-host` 和 `--callback-advertise-base-url`；不绑定 `0.0.0.0` 或服务器
+物理网卡，每次 Smoke 结束后关闭监听。
+
+算子 profile 必须经 canonical `start_operator_profile` 启动。`docker compose up` 即使返回
+非零，也可能已部分创建容器；因此先原子刷新 current-baseline 差集，再返回原退出码。
+如果 ledger refresh 失败，不得使用旧 new ledger 执行 cleanup；必须等 Docker 恢复并
+基于已发布 baseline 重新刷新。
 
 算子本机真实运行的输入、环境、结果与缺口见
 `harness/scenarios/operator-local-runtime-validation.md`。该场景必须与课程 DAG 验收分开计数。

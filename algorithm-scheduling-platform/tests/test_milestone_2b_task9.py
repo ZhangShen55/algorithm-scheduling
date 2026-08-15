@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import shlex
 import socket
 import stat
@@ -723,6 +724,9 @@ def test_gpu_acceptance_docs_contain_complete_executable_commands() -> None:
     scenario = (
         PLATFORM_ROOT / "harness/scenarios/milestone-2b-deploy.md"
     ).read_text(encoding="utf-8")
+    verification = (PLATFORM_ROOT / "harness/verification.md").read_text(
+        encoding="utf-8"
+    )
     for required in (
         "--release-tag",
         "--git-sha",
@@ -739,10 +743,45 @@ def test_gpu_acceptance_docs_contain_complete_executable_commands() -> None:
         "--repeat",
         "--hold-seconds",
         "--instance-id",
+        "--callback-listen-host",
+        "--callback-advertise-base-url",
     ):
         assert required in readme
     assert "run-operator-smoke is delivered by the later" not in readme
-    assert "http://192.168.29.11:19090" in scenario
+    assert "http://192.168.29.11:19090" not in scenario
+    assert "docker network inspect algorithm-platform" in scenario
+    assert '--callback-listen-host "$ALGORITHM_PLATFORM_GATEWAY"' in scenario
+    assert (
+        '--callback-advertise-base-url "http://${ALGORITHM_PLATFORM_GATEWAY}:19090"'
+        in scenario
+    )
+    assert "Harness-only" in scenario
+    assert "Smoke 结束后" in scenario and "关闭监听" in scenario
+    assert "algorithm-platform" in verification and "19090" in verification
+
+    assert "algorithm-operators" in scenario
+    assert "algorithm-scheduling-platform" not in scenario.split(
+        "com.docker.compose.project", 1
+    )[1].split("service_name=", 1)[0]
+    assert scenario.count("deploy/scripts/preflight operators --profile gpu0") == 1
+    assert "--instance asr-offline-gpu0" in scenario
+    assert scenario.count("deploy/scripts/verify-operator-registration") == 2
+    full_endpoints_arg = (
+        "--endpoints-json "
+        "/root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/endpoints-full.json"
+    )
+    assert scenario.count(full_endpoints_arg) == 1
+    assert "基础设施与平台容器也已存在且健康" not in scenario
+
+    cpu_smoke = scenario.index("for operator_instance in")
+    facerec_check = scenario.index("--instance facerec-gpu0")
+    full_smoke = scenario.index(full_endpoints_arg)
+    assert cpu_smoke < facerec_check < full_smoke
+
+    assert "contains two independent offline ASR" not in readme
+    assert "GPU 0/GPU 1" not in readme
+    assert "24" in readme and "GPU 2" in readme
+    assert "\n  ... \\" not in readme
     trigger_line = next(
         line
         for line in scenario.splitlines()
@@ -759,6 +798,600 @@ def test_gpu_acceptance_docs_contain_complete_executable_commands() -> None:
         option_index = trigger_argv.index(option)
         assert trigger_argv[option_index + 1] == value
     assert "--instance-id asr-offline-gpu0" in scenario
+
+
+def test_canonical_scenario_uses_atomic_stop_only_operator_ledger() -> None:
+    scenario = (
+        PLATFORM_ROOT / "harness/scenarios/milestone-2b-deploy.md"
+    ).read_text(encoding="utf-8")
+    readme = (DEPLOY / "README.md").read_text(encoding="utf-8")
+
+    for required in (
+        "set -euo pipefail",
+        'mktemp "$LEDGER_DIR/.baseline-operator-container-ids.XXXXXX"',
+        'mktemp "$LEDGER_DIR/.current-operator-container-ids.XXXXXX"',
+        'mktemp "$LEDGER_DIR/.new-operator-container-ids.XXXXXX"',
+        '[[ ! "$container_id" =~ ^[0-9a-f]{64}$ ]]',
+        "docker inspect -f '{{.Id}}'",
+        'mv -f -- "$BASELINE_TMP" "$BASELINE_OPERATOR_IDS"',
+        'mv -f -- "$NEW_TMP" "$NEW_OPERATOR_IDS"',
+        'grep -Fqx -- "$container_id" "$BASELINE_OPERATOR_IDS"',
+        'docker stop "$container_id"',
+        "start_operator_profile()",
+        'local profile="$1" up_status=0',
+        'up -d || up_status=$?',
+        "if ! refresh_new_operator_ledger; then",
+        'if ! snapshot_current_operator_ids "$CURRENT_TMP"; then',
+        'if ! comm -23 "$CURRENT_TMP" "$BASELINE_OPERATOR_IDS" >"$NEW_TMP"; then',
+        'if ! mv -f -- "$NEW_TMP" "$NEW_OPERATOR_IDS"; then',
+        'grep -Fqx -- "$container_id" "$BASELINE_OPERATOR_IDS" || grep_status=$?',
+        'case "$grep_status" in',
+        "禁止执行 cleanup",
+        "待 Docker 恢复后基于 baseline 重新刷新",
+        'return "$up_status"',
+        "validate_operator_identity()",
+        "com.docker.compose.project",
+        "com.docker.compose.service",
+    ):
+        assert required in scenario
+
+    for profile in ("gpu0", "gpu1", "gpu2", "cpu"):
+        assert f"start_operator_profile {profile}" in scenario
+
+    assert '>"$BASELINE_OPERATOR_IDS"' not in scenario
+    assert '>"$NEW_OPERATOR_IDS"' not in scenario
+    assert 'docker rm "$container_id"' not in scenario
+    assert "partial-up" in readme
+    assert "无论 Compose 成功或失败" in readme
+    assert "禁止执行 cleanup" in readme
+    assert scenario.count('if ! validate_operator_identity "$container_id"; then') == 2
+    refresh_body = scenario.split("refresh_new_operator_ledger()", 1)[1].split(
+        "start_operator_profile()", 1
+    )[0]
+    assert refresh_body.index("validate_operator_identity") < refresh_body.index(
+        'mv -f -- "$NEW_TMP" "$NEW_OPERATOR_IDS"'
+    )
+
+
+def _extract_scenario_bash_block(heading: str) -> str:
+    scenario = (
+        PLATFORM_ROOT / "harness/scenarios/milestone-2b-deploy.md"
+    ).read_text(encoding="utf-8")
+    section = scenario.split(heading, 1)[1]
+    match = re.search(r"```bash\n(?P<script>.*?)\n```", section, re.DOTALL)
+    assert match is not None, f"{heading} 后缺少 Bash 代码块"
+    return match.group("script")
+
+
+def _extract_scenario_bash_blocks_before(heading: str) -> list[str]:
+    scenario = (
+        PLATFORM_ROOT / "harness/scenarios/milestone-2b-deploy.md"
+    ).read_text(encoding="utf-8")
+    prefix = scenario.split(heading, 1)[0]
+    return re.findall(r"```bash\n(.*?)\n```", prefix, re.DOTALL)
+
+
+def test_canonical_strict_mode_starts_with_release_variables_and_has_one_session_contract(
+) -> None:
+    scenario = (
+        PLATFORM_ROOT / "harness/scenarios/milestone-2b-deploy.md"
+    ).read_text(encoding="utf-8")
+    blocks = _extract_scenario_bash_blocks_before(
+        "### 本次远端执行结果（2026-08-12）"
+    )
+
+    assert blocks[0].splitlines()[0] == "set -euo pipefail"
+    assert "阶段 1 到阶段 6" in scenario
+    assert "同一 Bash 会话" in scenario
+    stage_three = _extract_scenario_bash_block("## 阶段 3：平台和逐卡算子拓扑")
+    assert "set -euo pipefail" not in stage_three
+    assert "config --services" in stage_three
+    assert 'grep -Fqx -- "$service_name" "$OPERATOR_SERVICE_ALLOWLIST_TMP"' in stage_three
+    assert "asr-offline-gpu[012]|" not in stage_three
+
+
+def _prepare_early_phase_shell(tmp_path: Path, failing_command: str) -> tuple[Path, dict[str, str]]:
+    project_root = tmp_path / "project"
+    scripts = project_root / "deploy/scripts"
+    scripts.mkdir(parents=True)
+    release_root = (
+        project_root
+        / "deploy/reports/milestone-2b/releases"
+        / TAG
+        / SHA
+    )
+    for category in ("preflight", "container-maintenance"):
+        (release_root / category).mkdir(parents=True)
+
+    fake_command = """#!/usr/bin/env bash
+command_name="${0##*/}"
+printf '%s\\n' "$command_name" >>"$COMMAND_LOG"
+if [[ "$command_name" == "$FAILING_COMMAND" ]]; then
+  exit "$FAILURE_STATUS"
+fi
+exit 0
+"""
+    for command in (
+        "verify-model-assets",
+        "prepare-report-directory",
+        "preflight",
+        "snapshot-existing-containers",
+        "pause-existing-containers",
+        "stage-model-assets",
+        "build-images",
+    ):
+        _write_executable(scripts / command, fake_command)
+
+    fake_bin = tmp_path / "early-bin"
+    fake_bin.mkdir()
+    _write_executable(
+        fake_bin / "git",
+        f"#!/usr/bin/env bash\nprintf '%s\\n' '{SHA}'\n",
+    )
+    _write_executable(
+        fake_bin / "docker",
+        """#!/usr/bin/env bash
+printf 'docker:%s\\n' "$*" >>"$COMMAND_LOG"
+if [[ "${1:-}" == "inspect" ]]; then
+  printf '%s\\n' '{}'
+fi
+exit 0
+""",
+    )
+    command_log = tmp_path / "early-commands.log"
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "COMMAND_LOG": str(command_log),
+        "FAILING_COMMAND": failing_command,
+        "FAILURE_STATUS": "41",
+    }
+    return project_root, environment
+
+
+@pytest.mark.parametrize(
+    ("failing_command", "forbidden_later_command"),
+    (
+        ("preflight", "snapshot-existing-containers"),
+        ("stage-model-assets", "build-images"),
+    ),
+)
+def test_canonical_early_phases_stop_at_first_failure(
+    tmp_path: Path,
+    failing_command: str,
+    forbidden_later_command: str,
+) -> None:
+    blocks = _extract_scenario_bash_blocks_before(
+        "### 本次远端执行结果（2026-08-12）"
+    )
+    project_root, environment = _prepare_early_phase_shell(tmp_path, failing_command)
+
+    completed = subprocess.run(
+        ["bash", "-c", "\n".join(blocks)],
+        cwd=project_root,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 41, completed.stderr
+    commands = (tmp_path / "early-commands.log").read_text(encoding="utf-8").splitlines()
+    assert failing_command in commands
+    assert forbidden_later_command not in commands
+
+
+def _container_id(index: int) -> str:
+    return f"{index:064x}"
+
+
+def _operator_containers(
+    compose_path: Path = DEPLOY / "docker-compose.operators.yml",
+) -> tuple[dict[str, list[str]], dict[str, dict[str, Any]]]:
+    compose = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+    project = compose["name"]
+    profiles: dict[str, list[str]] = {}
+    containers: dict[str, dict[str, Any]] = {}
+    for index, (service, specification) in enumerate(
+        sorted(compose["services"].items()), start=1
+    ):
+        container_id = _container_id(index)
+        containers[container_id] = {"project": project, "service": service}
+        for profile in specification.get("profiles", []):
+            profiles.setdefault(profile, []).append(container_id)
+    return profiles, containers
+
+
+def test_fake_lifecycle_topology_is_derived_from_operator_compose(tmp_path: Path) -> None:
+    compose = yaml.safe_load((DEPLOY / "docker-compose.operators.yml").read_text(encoding="utf-8"))
+    compose_services = compose["services"]
+    derived_profiles, derived_containers = _operator_containers(
+        DEPLOY / "docker-compose.operators.yml"
+    )
+
+    assert {metadata["service"] for metadata in derived_containers.values()} == set(
+        compose_services
+    )
+    assert {
+        profile: {
+            service
+            for service in compose_services
+            if profile in compose_services[service]["profiles"]
+        }
+        for profile in {item for spec in compose_services.values() for item in spec["profiles"]}
+    } == {
+        profile: {derived_containers[container_id]["service"] for container_id in ids}
+        for profile, ids in derived_profiles.items()
+    }
+
+    extra_service = "fixture-only-cpu3"
+    compose["services"][extra_service] = {
+        **compose["services"]["ppt-slice-cpu0"],
+        "profiles": ["fixture"],
+        "environment": {
+            **compose["services"]["ppt-slice-cpu0"]["environment"],
+            "PLATFORM_INSTANCE_ID": extra_service,
+        },
+    }
+    compose_path = tmp_path / "operators.yml"
+    compose_path.write_text(
+        yaml.safe_dump(compose, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
+
+    profiles_with_extra, containers_with_extra = _operator_containers(compose_path)
+    assert profiles_with_extra["fixture"]
+    assert extra_service in {
+        metadata["service"] for metadata in containers_with_extra.values()
+    }
+
+
+def _write_executable(path: Path, content: str) -> None:
+    path.write_text(content, encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+def _prepare_fake_lifecycle(
+    tmp_path: Path,
+    *,
+    up_status: dict[str, int] | None = None,
+    mutation: tuple[str, str] | None = None,
+    failure_injection: dict[str, Any] | None = None,
+) -> tuple[Path, Path, dict[str, str], str, dict[str, list[str]]]:
+    project_root = tmp_path / "project"
+    scripts = project_root / "deploy/scripts"
+    scripts.mkdir(parents=True)
+    _write_executable(scripts / "preflight", "#!/usr/bin/env bash\nexit 0\n")
+    _write_executable(
+        scripts / "restore-existing-containers",
+        "#!/usr/bin/env bash\nexit 0\n",
+    )
+
+    profiles, containers = _operator_containers()
+    compose_container_ids = {
+        container_id for profile_ids in profiles.values() for container_id in profile_ids
+    }
+    compose_services = sorted(
+        containers[container_id]["service"] for container_id in compose_container_ids
+    )
+    baseline_id = _container_id(999)
+    containers[baseline_id] = {
+        "project": "algorithm-operators",
+        "service": "ocr-gpu0",
+    }
+    if mutation is not None:
+        mutation_kind, profile = mutation
+        target_id = profiles[profile][0]
+        if mutation_kind == "inspect":
+            containers[target_id]["inspect_fails"] = True
+        elif mutation_kind == "project":
+            containers[target_id]["project"] = "untrusted-project"
+        elif mutation_kind == "service":
+            containers[target_id]["service"] = "untrusted-service"
+        else:  # pragma: no cover - test helper misuse
+            raise AssertionError(f"未知 mutation: {mutation_kind}")
+
+    state_dir = tmp_path / "docker-state"
+    state_dir.mkdir()
+    state = {
+        "current": [baseline_id],
+        "profiles": profiles,
+        "containers": containers,
+        "compose_services": compose_services,
+        "up_status": up_status or {},
+        **(failure_injection or {}),
+    }
+    (state_dir / "state.json").write_text(
+        json.dumps(state, ensure_ascii=False), encoding="utf-8"
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_docker = """#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
+
+state_dir = pathlib.Path(os.environ["FAKE_DOCKER_STATE"])
+state_path = state_dir / "state.json"
+state = json.loads(state_path.read_text(encoding="utf-8"))
+args = sys.argv[1:]
+with (state_dir / "calls.log").open("a", encoding="utf-8") as stream:
+    stream.write(json.dumps(args) + "\\n")
+
+def save() -> None:
+    temporary = state_path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(state), encoding="utf-8")
+    temporary.replace(state_path)
+
+if args and args[0] == "compose":
+    if "config" in args and "--services" in args:
+        print("\\n".join(state["compose_services"]))
+        raise SystemExit(0)
+    if "up" in args:
+        if "--profile" in args:
+            profile = args[args.index("--profile") + 1]
+            for container_id in state["profiles"].get(profile, []):
+                if container_id not in state["current"]:
+                    state["current"].append(container_id)
+            save()
+            raise SystemExit(int(state["up_status"].get(profile, 0)))
+        raise SystemExit(0)
+    if "ps" in args:
+        if "-q" in args:
+            state["compose_ps_calls"] = int(state.get("compose_ps_calls", 0)) + 1
+            save()
+            if state["compose_ps_calls"] == state.get("compose_ps_fail_on_call"):
+                raise SystemExit(67)
+            print("\\n".join(state["current"]))
+        raise SystemExit(0)
+
+if args and args[0] == "inspect":
+    container_id = args[-1]
+    metadata = state["containers"].get(container_id)
+    if metadata is None or metadata.get("inspect_fails"):
+        raise SystemExit(1)
+    template = args[args.index("-f") + 1]
+    if template == "{{.Id}}":
+        print(container_id)
+    elif "com.docker.compose.project" in template:
+        print(metadata["project"])
+    elif "com.docker.compose.service" in template:
+        print(metadata["service"])
+    else:
+        raise SystemExit(2)
+    raise SystemExit(0)
+
+if args and args[0] == "stop":
+    with (state_dir / "stops.log").open("a", encoding="utf-8") as stream:
+        stream.write(args[1] + "\\n")
+    raise SystemExit(0)
+
+raise SystemExit(2)
+"""
+    _write_executable(fake_bin / "docker", fake_docker)
+    fake_comm = """#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
+
+state_dir = pathlib.Path(os.environ["FAKE_DOCKER_STATE"])
+state_path = state_dir / "state.json"
+state = json.loads(state_path.read_text(encoding="utf-8"))
+state["comm_calls"] = int(state.get("comm_calls", 0)) + 1
+temporary = state_path.with_suffix(".tmp")
+temporary.write_text(json.dumps(state), encoding="utf-8")
+temporary.replace(state_path)
+if state["comm_calls"] == state.get("comm_fail_on_call"):
+    raise SystemExit(68)
+if len(sys.argv) != 4 or sys.argv[1] != "-23":
+    raise SystemExit(2)
+left = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8").splitlines()
+right = set(pathlib.Path(sys.argv[3]).read_text(encoding="utf-8").splitlines())
+for line in left:
+    if line not in right:
+        print(line)
+"""
+    _write_executable(fake_bin / "comm", fake_comm)
+    fake_mktemp = """#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
+import tempfile
+
+state_dir = pathlib.Path(os.environ["FAKE_DOCKER_STATE"])
+state_path = state_dir / "state.json"
+state = json.loads(state_path.read_text(encoding="utf-8"))
+template = pathlib.Path(sys.argv[-1])
+pattern = str(state.get("mktemp_fail_pattern", ""))
+if pattern and pattern in str(template):
+    state["mktemp_matching_calls"] = int(state.get("mktemp_matching_calls", 0)) + 1
+temporary = state_path.with_suffix(".tmp")
+temporary.write_text(json.dumps(state), encoding="utf-8")
+temporary.replace(state_path)
+if pattern and pattern in str(template) and (
+    state["mktemp_matching_calls"] == state.get("mktemp_fail_on_matching_call")
+):
+    raise SystemExit(69)
+prefix = template.name.removesuffix("XXXXXX")
+descriptor, path = tempfile.mkstemp(prefix=prefix, dir=template.parent)
+os.close(descriptor)
+print(path)
+"""
+    _write_executable(fake_bin / "mktemp", fake_mktemp)
+
+    release_root = tmp_path / "release"
+    (release_root / "container-maintenance").mkdir(parents=True)
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_DOCKER_STATE": str(state_dir),
+        "RELEASE_ROOT": str(release_root),
+        "EXPECTED_GIT_SHA": SHA,
+        "RELEASE_TAG": TAG,
+        "REPORT_ROOT": str(tmp_path / "reports"),
+        "SNAPSHOT": str(tmp_path / "snapshot.json"),
+    }
+    return project_root, release_root, environment, baseline_id, profiles
+
+
+def _run_lifecycle_script(
+    tmp_path: Path,
+    script: str,
+    **fixture_options: Any,
+) -> tuple[subprocess.CompletedProcess[str], Path, dict[str, Any], str, dict[str, list[str]]]:
+    project_root, release_root, environment, baseline_id, profiles = (
+        _prepare_fake_lifecycle(tmp_path, **fixture_options)
+    )
+    completed = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join(
+                (
+                    _extract_scenario_bash_blocks_before(
+                        "## 阶段 1：服务器预检、快照和暂停"
+                    )[0].splitlines()[0],
+                    script,
+                )
+            ),
+        ],
+        cwd=project_root,
+        env=environment,
+        text=True,
+        errors="replace",
+        capture_output=True,
+        check=False,
+    )
+    state_dir = Path(environment["FAKE_DOCKER_STATE"])
+    state = json.loads((state_dir / "state.json").read_text(encoding="utf-8"))
+    return completed, release_root, state, baseline_id, profiles
+
+
+def _ledger_ids(release_root: Path, ledger_name: str) -> list[str]:
+    ledger = release_root / "container-maintenance" / ledger_name
+    return ledger.read_text(encoding="utf-8").splitlines()
+
+
+def test_operator_profile_partial_up_publishes_difference_then_returns_original_status(
+    tmp_path: Path,
+) -> None:
+    stage_three = _extract_scenario_bash_block("## 阶段 3：平台和逐卡算子拓扑")
+
+    completed, release_root, _, baseline_id, profiles = _run_lifecycle_script(
+        tmp_path,
+        stage_three,
+        up_status={"gpu0": 23},
+    )
+
+    assert completed.returncode == 23, completed.stderr
+    assert _ledger_ids(
+        release_root, "baseline-operator-container-ids.txt"
+    ) == [baseline_id]
+    assert _ledger_ids(release_root, "new-operator-container-ids.txt") == sorted(
+        profiles["gpu0"]
+    )
+
+
+@pytest.mark.parametrize("mutation", ("inspect", "project", "service"))
+def test_operator_profile_refresh_failure_preserves_published_ledgers_and_never_stops(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    stage_three = _extract_scenario_bash_block("## 阶段 3：平台和逐卡算子拓扑")
+
+    completed, release_root, _, baseline_id, _ = _run_lifecycle_script(
+        tmp_path,
+        stage_three,
+        mutation=(mutation, "gpu0"),
+    )
+
+    assert completed.returncode != 0
+    assert _ledger_ids(
+        release_root, "baseline-operator-container-ids.txt"
+    ) == [baseline_id]
+    assert _ledger_ids(release_root, "new-operator-container-ids.txt") == []
+    assert not (tmp_path / "docker-state/stops.log").exists()
+
+
+@pytest.mark.parametrize(
+    "failure_injection",
+    (
+        {"compose_ps_fail_on_call": 2},
+        {"comm_fail_on_call": 1},
+        {
+            "mktemp_fail_pattern": ".new-operator-container-ids.",
+            "mktemp_fail_on_matching_call": 2,
+        },
+    ),
+    ids=("compose-ps", "comm", "mktemp"),
+)
+def test_refresh_tool_failure_preserves_ledgers_cleans_temps_and_never_stops(
+    tmp_path: Path,
+    failure_injection: dict[str, Any],
+) -> None:
+    stage_three = _extract_scenario_bash_block("## 阶段 3：平台和逐卡算子拓扑")
+
+    completed, release_root, _, baseline_id, _ = _run_lifecycle_script(
+        tmp_path,
+        stage_three,
+        failure_injection=failure_injection,
+    )
+
+    assert completed.returncode != 0
+    assert _ledger_ids(
+        release_root, "baseline-operator-container-ids.txt"
+    ) == [baseline_id]
+    assert _ledger_ids(release_root, "new-operator-container-ids.txt") == []
+    assert not (tmp_path / "docker-state/stops.log").exists()
+    ledger_dir = release_root / "container-maintenance"
+    assert not list(ledger_dir.glob(".*-operator-container-ids.*"))
+
+
+def test_operator_cleanup_stops_exact_valid_new_set_without_removing_containers(
+    tmp_path: Path,
+) -> None:
+    stage_three = _extract_scenario_bash_block("## 阶段 3：平台和逐卡算子拓扑")
+    cleanup = _extract_scenario_bash_block(
+        "## 阶段 6：反例、压力、恢复和报告渲染"
+    )
+
+    completed, release_root, state, baseline_id, profiles = _run_lifecycle_script(
+        tmp_path,
+        f"{stage_three}\n{cleanup}",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    expected_new = sorted(
+        container_id
+        for profile_ids in profiles.values()
+        for container_id in profile_ids
+    )
+    assert _ledger_ids(release_root, "new-operator-container-ids.txt") == expected_new
+    stops = (tmp_path / "docker-state/stops.log").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    assert stops == expected_new
+    assert baseline_id not in stops
+    assert set(state["current"]) == {baseline_id, *expected_new}
+    calls = (tmp_path / "docker-state/calls.log").read_text(encoding="utf-8")
+    assert '"rm"' not in calls
+
+
+def test_noncanonical_docs_do_not_offer_direct_operator_profile_up_commands() -> None:
+    direct_up = re.compile(
+        r"(?m)^\s*docker\s+compose\s+-f\s+deploy/docker-compose\.operators\.yml\s+"
+        r"--profile\s+\S+\s+up\s+-d\s*$"
+    )
+    for document in (
+        DEPLOY / "README.md",
+        PLATFORM_ROOT / "harness/verification.md",
+        DEPLOY / "单机运维与恢复手册.md",
+    ):
+        content = document.read_text(encoding="utf-8")
+        normalized = re.sub(r"\\\n\s*", " ", content)
+        assert direct_up.search(normalized) is None, f"发现 direct-up 旁路: {document}"
 
 
 def _fixture_manifest(tmp_path: Path) -> Path:
