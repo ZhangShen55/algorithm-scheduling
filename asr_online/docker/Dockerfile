@@ -25,7 +25,7 @@ RUN conda config --system --set show_channel_urls true && \
     conda config --system --add default_channels https://conda.anaconda.org/conda-forge && \
     conda info
 
-# Python 环境（在线服务不需要 libsndfile / pysoundfile）
+# Python 环境
 RUN conda create -n asr -y -c conda-forge python=3.11 && conda clean -afy
 SHELL ["bash", "-lc"]
 ENV PATH="/opt/conda/envs/asr/bin:$PATH"
@@ -42,6 +42,9 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} && \
     pip install --no-cache-dir --retries 10 --timeout 60 --prefer-binary \
       -r /tmp/requirements.txt
+# ModelScope 的部分运行依赖没有完整声明在包元数据中，显式冻结已验证的闭包。
+RUN pip install --no-cache-dir setuptools==69.5.1 addict==2.4.0 datasets==2.18.0 pyarrow==15.0.2 pandas==2.2.2 Pillow torchaudio==2.6.0 sortedcontainers==2.4.0
+RUN conda install -n asr -y libsndfile && conda clean -afy
 COPY docker/verify_torch_runtime.py /tmp/verify_torch_runtime.py
 RUN python /tmp/verify_torch_runtime.py && \
     rm -f /tmp/verify_torch_runtime.py
@@ -55,6 +58,7 @@ WORKDIR /app
 COPY app /app/app
 COPY model /app/model
 COPY docker/start.sh /app/start.sh
+RUN python -c "from app.main import app"
 
 # 权限
 RUN chmod +x ./start.sh

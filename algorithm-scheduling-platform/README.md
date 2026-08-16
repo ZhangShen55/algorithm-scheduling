@@ -25,7 +25,7 @@ the repository must not yet be treated as an end-to-end production runtime.
 
 ```bash
 docker compose -f deploy/docker-compose.platform.yml config --quiet
-docker compose -f deploy/docker-compose.platform.yml up -d --build
+docker compose -f deploy/docker-compose.platform.yml up -d --build --wait --wait-timeout "${PLATFORM_WAIT_TIMEOUT_SECONDS:-180}"
 ```
 
 The stack exposes control/orchestrator on `18100`/`18101`, and maps vision/online to

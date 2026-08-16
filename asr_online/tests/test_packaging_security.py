@@ -75,7 +75,7 @@ class PackagingSecurityTests(unittest.TestCase):
         dockerfile = Path("docker/Dockerfile.cython").read_text(encoding="utf-8")
 
         self.assertIn(
-            "pip install --no-cache-dir setuptools==69.5.1 modelscope==1.16.0 addict datasets==2.18.0 pyarrow==15.0.2 pandas==2.2.2 Pillow torchaudio==2.6.0 sortedcontainers==2.4.0",
+            "pip install --no-cache-dir setuptools==69.5.1 addict==2.4.0 datasets==2.18.0 pyarrow==15.0.2 pandas==2.2.2 Pillow torchaudio==2.6.0 sortedcontainers==2.4.0",
             dockerfile,
         )
         self.assertIn('"setuptools==69.5.1"', dockerfile)
@@ -104,6 +104,32 @@ class PackagingSecurityTests(unittest.TestCase):
         self.assertIn("python /tmp/verify_torch_runtime.py", dockerfile)
         self.assertIn("rm -f /tmp/verify_torch_runtime.py", dockerfile)
         self.assertNotIn("RUN python - <<", dockerfile)
+
+    def test_release_dockerfile_installs_modelscope_runtime_dependency_closure(self):
+        dockerfile = Path("docker/Dockerfile").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "pip install --no-cache-dir setuptools==69.5.1 addict==2.4.0 "
+            "datasets==2.18.0 pyarrow==15.0.2 pandas==2.2.2 Pillow "
+            "torchaudio==2.6.0 sortedcontainers==2.4.0",
+            dockerfile,
+        )
+        self.assertIn("conda install -n asr -y libsndfile", dockerfile)
+
+    def test_release_requirements_pin_modelscope_once(self):
+        requirements = Path("requirements.txt").read_text(encoding="utf-8").splitlines()
+
+        modelscope_requirements = [
+            requirement
+            for requirement in requirements
+            if requirement.startswith("modelscope")
+        ]
+        self.assertEqual(["modelscope==1.16.0"], modelscope_requirements)
+
+    def test_release_dockerfile_imports_application_during_build(self):
+        dockerfile = Path("docker/Dockerfile").read_text(encoding="utf-8")
+
+        self.assertIn('RUN python -c "from app.main import app"', dockerfile)
 
     def test_cython_dockerfile_removes_bytecode_caches(self):
         dockerfile = Path("docker/Dockerfile.cython").read_text(encoding="utf-8")

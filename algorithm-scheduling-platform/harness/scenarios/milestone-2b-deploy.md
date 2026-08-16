@@ -61,9 +61,17 @@ RESTRICTED_REPORT_ROOT=/root/workspace/.algorithm-scheduling-restricted-reports
 REPORT_ROOT="$PWD/deploy/reports"
 RELEASE_ROOT="$REPORT_ROOT/milestone-2b/releases/$RELEASE_TAG/$EXPECTED_GIT_SHA"
 PREVIOUS_RELEASE_ROOT="${PREVIOUS_RELEASE_ROOT:-}"
+PLATFORM_WAIT_TIMEOUT_SECONDS="${PLATFORM_WAIT_TIMEOUT_SECONDS:-180}"
 OPERATOR_LIFECYCLE_LOCK_PID=
 OPERATOR_LIFECYCLE_LOCK_CONTROL_FD=
 OPERATOR_LIFECYCLE_LOCK_READY_FD=
+
+if ! [[ "$PLATFORM_WAIT_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] ||
+  ((${#PLATFORM_WAIT_TIMEOUT_SECONDS} > 4)) ||
+  ((PLATFORM_WAIT_TIMEOUT_SECONDS > 3600)); then
+  echo "PLATFORM_WAIT_TIMEOUT_SECONDS 必须是 1 到 3600 之间的整数" >&2
+  exit 1
+fi
 
 validate_previous_release_root() {
   local previous_sha
@@ -715,7 +723,7 @@ else
 fi
 
 EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" \
-  docker compose -f deploy/docker-compose.platform.yml up -d --build
+  docker compose -f deploy/docker-compose.platform.yml up -d --build --wait --wait-timeout "${PLATFORM_WAIT_TIMEOUT_SECONDS:-180}"
 docker compose -f deploy/docker-compose.platform.yml ps
 deploy/scripts/preflight runtime --git-sha "$EXPECTED_GIT_SHA"
 
@@ -779,6 +787,9 @@ Smoke 使用外部 `endpoints-full.json`，两者不得互换。
 `preflight runtime` 对四个平台最终镜像执行 attestation。每个 profile preflight 对所选
 算子最终镜像执行 attestation，并验证运行容器身份、注册、首次心跳、`ONLINE` 和
 `model_ready=true`。Smoke 的 `--git-sha` 只记录报告归属，不是镜像 attestation。
+平台 `up` 使用 Compose 的有界健康等待；默认最多等待 180 秒，可通过
+`PLATFORM_WAIT_TIMEOUT_SECONDS` 在 1 到 3600 秒内调整。只有四个平台服务均达到各自健康条件后才执行
+runtime preflight，避免容器刚进入 running、应用仍在启动时产生瞬态连接失败。
 
 ## 阶段 4：GPU 真实性证据
 

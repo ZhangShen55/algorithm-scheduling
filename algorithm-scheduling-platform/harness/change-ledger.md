@@ -1,5 +1,32 @@
 # Change Ledger
 
+## 2026-08-16 - 阶段 3 就绪竞态与 ASR Online 运行依赖修复
+
+- 平台启动竞态：提交 `02203a5b25324767b569bff79b065f79b856d1a0` 的阶段 3 首次重建
+  四个平台容器后立即运行 runtime preflight，orchestrator 尚处于 `health: starting`，探针收到
+  `Connection reset by peer`。四容器随后均达到 healthy，且同一只读 preflight 完整通过，确认
+  根因是 Compose 返回与应用就绪之间的瞬态竞态，不是平台持续崩溃。
+- 启动合同修复：canonical 场景改用 Compose `--wait` 和默认 180 秒的
+  `--wait-timeout`，并校验覆盖值必须是 1 到 3600 之间的整数；只有四个平台服务均满足自身 healthcheck 后才运行
+  最终 attestation。平台 README、部署说明、验证说明和恢复手册同步相同命令；runtime preflight
+  仍保持单次、失败即拒绝的最终验收语义，不用重试掩盖健康后的抖动。
+- ASR Online 失败证据：平台竞态修复后，gpu0 六实例已由当前 revision 镜像替换，其中五个健康；
+  `asr-online-gpu0` 因 `ModuleNotFoundError: No module named 'addict'` 重启，profile 门禁最终以
+  “缺失实例、注册验证全局超时”失败。gpu1、gpu2 和 cpu 未启动，current baseline/new ledger
+  保持 `0/6`，维护锁和本次日志子进程已精确释放。
+- 依赖根因与修复：发布矩阵使用普通 `asr_online/docker/Dockerfile`，但只有 Cython Dockerfile
+  显式安装 ModelScope pipeline 运行依赖；普通镜像的构建门禁只验证 Torch/CUDA，未导入
+  `app.main`。普通镜像现同步固定的 `modelscope==1.16.0`、`addict==2.4.0`、
+  `datasets==2.18.0`、`pyarrow==15.0.2`、`pandas==2.2.2`、`sortedcontainers==2.4.0`
+  以及 `Pillow`、`libsndfile` 依赖闭包，并在 build 阶段导入应用入口，
+  使缺失运行依赖在生成镜像时直接失败。
+- 清理边界：仅删除同时满足“dangling、无任何容器引用、未被权威恢复快照引用”的精确旧镜像 ID；
+  仍被六个 gpu0 容器引用或被恢复快照引用的镜像全部保留。未执行 `docker system prune`，未删除
+  容器、卷或 `/data/result`。
+- 当前证据：ASR Online 完整单元测试 `20 passed`，平台阶段 3 部署合同回归 `161 passed`，
+  Ruff 和 Git diff 检查通过。这些结果只证明修复代码门禁；新提交的八镜像统一构建、24 实例注册、真实 GPU
+  推理和全泳道验收仍待目标服务器重新执行，不能标记为通过。
+
 ## 2026-08-15 - 里程碑 2B 唯一部署执行合同（覆盖旧操作规则）
 
 - 覆盖关系：本条只覆盖旧记录中的“所有密码不得进入 Markdown/Git”、部署时重新生成模型

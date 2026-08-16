@@ -70,7 +70,7 @@ over the explicitly named `algorithm-platform` network.
 ```bash
 docker compose -f deploy/docker-compose.platform.yml config --quiet
 EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" \
-  docker compose -f deploy/docker-compose.platform.yml up -d --build
+  docker compose -f deploy/docker-compose.platform.yml up -d --build --wait --wait-timeout "${PLATFORM_WAIT_TIMEOUT_SECONDS:-180}"
 docker compose -f deploy/docker-compose.platform.yml ps
 deploy/scripts/preflight runtime --git-sha "$EXPECTED_GIT_SHA"
 ```
@@ -370,7 +370,7 @@ canonical 发布变量块前显式把它设为上一 SHA 的绝对 release 目�
 ```bash
 docker compose -f deploy/docker-compose.infrastructure.yml up -d
 EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" \
-  docker compose -f deploy/docker-compose.platform.yml up -d --build
+  docker compose -f deploy/docker-compose.platform.yml up -d --build --wait --wait-timeout "${PLATFORM_WAIT_TIMEOUT_SECONDS:-180}"
 deploy/scripts/preflight runtime --git-sha "$EXPECTED_GIT_SHA"
 start_operator_profile gpu0
 deploy/scripts/preflight operators --profile gpu0 --git-sha "$EXPECTED_GIT_SHA" \

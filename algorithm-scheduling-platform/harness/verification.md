@@ -168,7 +168,7 @@ EXPECTED_GIT_SHA="$(git -C .. rev-parse HEAD)"
 RELEASE_TAG=v1.0_260812
 REPORT_ROOT="$PWD/deploy/reports"
 EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" \
-  docker compose -f deploy/docker-compose.platform.yml up -d --build
+  docker compose -f deploy/docker-compose.platform.yml up -d --build --wait --wait-timeout "${PLATFORM_WAIT_TIMEOUT_SECONDS:-180}"
 deploy/scripts/preflight runtime --git-sha "$EXPECTED_GIT_SHA"
 
 for profile in gpu0 gpu1 gpu2 cpu

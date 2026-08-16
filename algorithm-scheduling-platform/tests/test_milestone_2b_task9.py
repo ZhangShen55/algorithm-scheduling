@@ -1036,6 +1036,75 @@ def test_canonical_strict_mode_starts_with_release_variables_and_has_one_session
     assert "asr-offline-gpu[012]|" not in stage_three
 
 
+def test_platform_compose_waits_for_health_before_runtime_preflight() -> None:
+    scenario = (
+        PLATFORM_ROOT / "harness/scenarios/milestone-2b-deploy.md"
+    ).read_text(encoding="utf-8")
+    stage_three = _extract_scenario_bash_block(
+        "## 阶段 3：平台和逐卡算子拓扑"
+    )
+
+    platform_up = (
+        'docker compose -f deploy/docker-compose.platform.yml up -d --build '
+        '--wait --wait-timeout "${PLATFORM_WAIT_TIMEOUT_SECONDS:-180}"'
+    )
+    runtime_preflight = (
+        'deploy/scripts/preflight runtime --git-sha "$EXPECTED_GIT_SHA"'
+    )
+
+    assert platform_up in stage_three
+    assert stage_three.index(platform_up) < stage_three.index(runtime_preflight)
+    assert (
+        'PLATFORM_WAIT_TIMEOUT_SECONDS="${PLATFORM_WAIT_TIMEOUT_SECONDS:-180}"'
+        in scenario
+    )
+    assert '[[ "$PLATFORM_WAIT_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]' in scenario
+
+
+def test_platform_health_wait_is_consistent_in_operational_docs() -> None:
+    platform_up = (
+        'docker compose -f deploy/docker-compose.platform.yml up -d --build '
+        '--wait --wait-timeout "${PLATFORM_WAIT_TIMEOUT_SECONDS:-180}"'
+    )
+    documents = (
+        PLATFORM_ROOT / "README.md",
+        PLATFORM_ROOT / "deploy/README.md",
+        PLATFORM_ROOT / "deploy/单机运维与恢复手册.md",
+        PLATFORM_ROOT / "harness/verification.md",
+    )
+
+    for document in documents:
+        content = document.read_text(encoding="utf-8")
+        assert platform_up in content, document
+        assert (
+            "docker compose -f deploy/docker-compose.platform.yml up -d --build\n"
+            not in content
+        ), document
+
+
+@pytest.mark.parametrize(
+    "timeout",
+    ("0", "-1", " 1", "1.5", "--wait", "3601", "9" * 100),
+)
+def test_release_variables_reject_invalid_platform_wait_timeout(timeout: str) -> None:
+    release_variables = _extract_scenario_bash_blocks_before(
+        "### 本次远端执行结果（2026-08-12）"
+    )[0]
+    environment = {**os.environ, "PLATFORM_WAIT_TIMEOUT_SECONDS": timeout}
+
+    completed = subprocess.run(
+        ["bash", "-c", release_variables],
+        cwd=PLATFORM_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "PLATFORM_WAIT_TIMEOUT_SECONDS" in completed.stderr
+
+
 def _prepare_early_phase_shell(tmp_path: Path, failing_command: str) -> tuple[Path, dict[str, str]]:
     project_root = tmp_path / "project"
     scripts = project_root / "deploy/scripts"
