@@ -4769,6 +4769,64 @@ def test_renderer_journal_rejects_terminal_hardlinked_to_unknown_name(
     assert journal.exists()
 
 
+@pytest.mark.parametrize("replacement_kind", ("regular", "symlink"))
+def test_renderer_transaction_rejects_temp_replaced_before_hard_link(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement_kind: str,
+) -> None:
+    release = _release(tmp_path)
+    summary = release / "summary"
+    real_link = os.link
+    attacked = False
+
+    def replace_then_link(
+        source: str,
+        destination: str,
+        *,
+        src_dir_fd: int,
+        dst_dir_fd: int,
+        follow_symlinks: bool,
+    ) -> None:
+        nonlocal attacked
+        if destination == "report.json" and not attacked:
+            attacked = True
+            os.unlink(source, dir_fd=src_dir_fd)
+            if replacement_kind == "regular":
+                descriptor = os.open(
+                    source,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=src_dir_fd,
+                )
+                try:
+                    os.write(descriptor, b"attacker-controlled\n")
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+            else:
+                os.symlink("attacker-controlled", source, dir_fd=src_dir_fd)
+        real_link(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+            follow_symlinks=follow_symlinks,
+        )
+
+    monkeypatch.setattr(RENDERER_MODULE.os, "link", replace_then_link)
+
+    with pytest.raises(ValueError, match="临时|终态|发布"):
+        _publish_renderer_transaction(tmp_path)
+
+    assert attacked
+    assert (summary / ".report-transaction.journal").is_file()
+    assert not (summary / "report.md").exists()
+    assert not all(
+        (summary / name).is_file() for name in ("report.json", "report.md")
+    )
+
+
 def test_renderer_first_link_crash_recovers_hardlinked_temporary(tmp_path: Path) -> None:
     release = _release(tmp_path)
     env = os.environ.copy()

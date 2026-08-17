@@ -1227,8 +1227,11 @@ def _read_private_at(
     return content, opened_after
 
 
-def _create_private_at(parent_fd: int, name: str, content: bytes) -> None:
+def _create_private_at(
+    parent_fd: int, name: str, content: bytes
+) -> os.stat_result:
     descriptor = -1
+    created_metadata: os.stat_result | None = None
     try:
         descriptor = os.open(
             name,
@@ -1242,15 +1245,71 @@ def _create_private_at(parent_fd: int, name: str, content: bytes) -> None:
         os.fchmod(descriptor, 0o600)
         _write_all(descriptor, content)
         os.fsync(descriptor)
+        created_metadata = os.fstat(descriptor)
+        _require_private_regular(created_metadata, f"事务文件 {name}")
+        named = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        _require_private_regular(named, f"事务文件 {name}")
+        if (
+            not _same_filesystem_object(created_metadata, named)
+            or _metadata_snapshot(created_metadata) != _metadata_snapshot(named)
+        ):
+            raise ValueError(f"事务文件创建期间发生变化: {name}")
     except OSError as exc:
         raise ValueError(f"无法安全创建事务文件: {name}") from exc
     finally:
         if descriptor >= 0:
             os.close(descriptor)
     os.fsync(parent_fd)
+    if created_metadata is None:
+        raise ValueError(f"事务文件缺少创建快照: {name}")
+    return created_metadata
 
 
-def _unlink_at(parent_fd: int, name: str) -> None:
+def _require_bound_private_at(
+    parent_fd: int,
+    name: str,
+    expected_content: bytes,
+    expected_metadata: os.stat_result,
+    context: str,
+    *,
+    allowed_links: frozenset[int] = frozenset({1}),
+) -> os.stat_result:
+    snapshot = _read_private_at(
+        parent_fd,
+        name,
+        context,
+        allowed_links=allowed_links,
+    )
+    if snapshot is None:
+        raise ValueError(f"{context} 不存在")
+    content, metadata = snapshot
+    if content != expected_content:
+        raise ValueError(f"{context} 内容摘要冲突")
+    if not _same_filesystem_object(metadata, expected_metadata):
+        raise ValueError(f"{context} inode 与事务快照不一致")
+    return metadata
+
+
+def _verified_unlink_at(
+    parent_fd: int,
+    name: str,
+    expected_content: bytes,
+    expected_metadata: os.stat_result,
+    context: str,
+    *,
+    allowed_links: frozenset[int] = frozenset({1}),
+) -> None:
+    _require_bound_private_at(
+        parent_fd,
+        name,
+        expected_content,
+        expected_metadata,
+        context,
+        allowed_links=allowed_links,
+    )
+    named = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    if not _same_filesystem_object(named, expected_metadata):
+        raise ValueError(f"{context} 删除前 inode 发生变化")
     os.unlink(name, dir_fd=parent_fd)
     os.fsync(parent_fd)
 
@@ -1326,7 +1385,7 @@ def _validate_journal(
 def _read_and_validate_journal(
     summary_fd: int,
     expected_outputs: Mapping[str, tuple[bytes, str]],
-) -> tuple[dict[str, Any], str, bytes] | None:
+) -> tuple[dict[str, Any], str, bytes, os.stat_result] | None:
     try:
         snapshot = _read_private_at(
             summary_fd, REPORT_JOURNAL_NAME, "报告事务 journal"
@@ -1335,9 +1394,9 @@ def _read_and_validate_journal(
         raise ValueError("报告事务 journal 不合法") from exc
     if snapshot is None:
         return None
-    content, _metadata = snapshot
+    content, metadata = snapshot
     payload, transaction_id = _validate_journal(content, expected_outputs)
-    return payload, transaction_id, content
+    return payload, transaction_id, content, metadata
 
 
 def _validate_transaction_temporary(
@@ -1397,7 +1456,16 @@ def _publish_from_temporary(
     summary_fd: int,
     temporary_name: str,
     output_name: str,
-) -> None:
+    expected_content: bytes,
+    expected_metadata: os.stat_result,
+) -> os.stat_result:
+    _require_bound_private_at(
+        summary_fd,
+        temporary_name,
+        expected_content,
+        expected_metadata,
+        "报告事务发布临时文件",
+    )
     try:
         os.link(
             temporary_name,
@@ -1411,14 +1479,34 @@ def _publish_from_temporary(
     except OSError as exc:
         raise ValueError(f"无法安全发布报告输出: {output_name}") from exc
     os.fsync(summary_fd)
+    try:
+        terminal_metadata = _require_bound_private_at(
+            summary_fd,
+            output_name,
+            expected_content,
+            expected_metadata,
+            f"报告发布终态 {output_name}",
+            allowed_links=frozenset({2}),
+        )
+        _require_bound_private_at(
+            summary_fd,
+            temporary_name,
+            expected_content,
+            expected_metadata,
+            "报告事务发布临时文件",
+            allowed_links=frozenset({2}),
+        )
+    except ValueError as exc:
+        raise ValueError(f"报告发布后终态不安全: {output_name}") from exc
+    return terminal_metadata
 
 
 def _recover_transaction(
     summary_fd: int,
     expected_outputs: Mapping[str, tuple[bytes, str]],
-    journal: tuple[dict[str, Any], str, bytes],
+    journal: tuple[dict[str, Any], str, bytes, os.stat_result],
 ) -> None:
-    payload, transaction_id, journal_content = journal
+    payload, transaction_id, journal_content, journal_metadata = journal
     terminal_states = _terminal_states(summary_fd, expected_outputs, recovery=True)
     temporary_names = {
         name: f".{name}.{transaction_id}.tmp" for name in REPORT_OUTPUT_NAMES
@@ -1445,7 +1533,7 @@ def _recover_transaction(
         summary_fd, journal_temporary, "报告事务 journal 临时文件"
     )
     if journal_temporary_snapshot is not None:
-        temporary_content, _metadata = journal_temporary_snapshot
+        temporary_content, journal_temporary_metadata = journal_temporary_snapshot
         replacement_payload, replacement_id = _validate_journal(
             temporary_content, expected_outputs
         )
@@ -1456,38 +1544,81 @@ def _recover_transaction(
             continue
         temporary_name = temporary_names[name]
         if temporary_states[name] is None:
-            _create_private_at(summary_fd, temporary_name, expected_outputs[name][0])
-        _publish_from_temporary(summary_fd, temporary_name, name)
-        terminal_states[name] = os.stat(
-            name, dir_fd=summary_fd, follow_symlinks=False
+            temporary_states[name] = _create_private_at(
+                summary_fd, temporary_name, expected_outputs[name][0]
+            )
+        temporary_metadata = temporary_states[name]
+        if temporary_metadata is None:
+            raise ValueError("报告事务临时文件缺少安全快照")
+        terminal_states[name] = _publish_from_temporary(
+            summary_fd,
+            temporary_name,
+            name,
+            expected_outputs[name][0],
+            temporary_metadata,
         )
     for name in REPORT_OUTPUT_NAMES:
         temporary_name = temporary_names[name]
-        if _stat_at(summary_fd, temporary_name) is not None:
-            _unlink_at(summary_fd, temporary_name)
+        temporary_metadata = temporary_states[name]
+        if temporary_metadata is not None:
+            _verified_unlink_at(
+                summary_fd,
+                temporary_name,
+                expected_outputs[name][0],
+                temporary_metadata,
+                "报告事务临时文件",
+                allowed_links=frozenset({1, 2}),
+            )
     if journal_temporary_snapshot is not None:
-        _unlink_at(summary_fd, journal_temporary)
-    _unlink_at(summary_fd, REPORT_JOURNAL_NAME)
+        _verified_unlink_at(
+            summary_fd,
+            journal_temporary,
+            temporary_content,
+            journal_temporary_metadata,
+            "报告事务 journal 临时文件",
+        )
+    _verified_unlink_at(
+        summary_fd,
+        REPORT_JOURNAL_NAME,
+        journal_content,
+        journal_metadata,
+        "报告事务 journal",
+    )
 
 
 def _write_initial_journal(
     summary_fd: int,
     payload: Mapping[str, object],
-) -> bytes:
+) -> tuple[bytes, os.stat_result]:
     content = _journal_bytes(payload)
-    _create_private_at(summary_fd, REPORT_JOURNAL_NAME, content)
-    return content
+    metadata = _create_private_at(summary_fd, REPORT_JOURNAL_NAME, content)
+    return content, metadata
 
 
 def _replace_journal_for_crash_injection(
     summary_fd: int,
     transaction_id: str,
     content: bytes,
-) -> None:
+    journal_metadata: os.stat_result,
+) -> os.stat_result:
     temporary_name = f"{REPORT_JOURNAL_NAME}.{transaction_id}.tmp"
-    _create_private_at(summary_fd, temporary_name, content)
+    temporary_metadata = _create_private_at(summary_fd, temporary_name, content)
     if os.getenv("REPORT_TRANSACTION_CRASH_DURING_JOURNAL_REPLACE"):
         os._exit(87)
+    _require_bound_private_at(
+        summary_fd,
+        REPORT_JOURNAL_NAME,
+        content,
+        journal_metadata,
+        "报告事务 journal",
+    )
+    _require_bound_private_at(
+        summary_fd,
+        temporary_name,
+        content,
+        temporary_metadata,
+        "报告事务 journal 临时文件",
+    )
     try:
         os.rename(
             temporary_name,
@@ -1498,6 +1629,13 @@ def _replace_journal_for_crash_injection(
     except OSError as exc:
         raise ValueError("无法安全替换报告事务 journal") from exc
     os.fsync(summary_fd)
+    return _require_bound_private_at(
+        summary_fd,
+        REPORT_JOURNAL_NAME,
+        content,
+        temporary_metadata,
+        "报告事务 journal",
+    )
 
 
 def publish_report_transaction(
@@ -1550,22 +1688,48 @@ def publish_report_transaction(
             },
             "temporaries": temporary_names,
         }
-        journal_content = _write_initial_journal(summary_fd, payload)
-        _replace_journal_for_crash_injection(
-            summary_fd, transaction_id, journal_content
+        journal_content, journal_metadata = _write_initial_journal(
+            summary_fd, payload
+        )
+        journal_metadata = _replace_journal_for_crash_injection(
+            summary_fd,
+            transaction_id,
+            journal_content,
+            journal_metadata,
         )
         for index, name in enumerate(REPORT_OUTPUT_NAMES):
             temporary_name = temporary_names[name]
-            _create_private_at(summary_fd, temporary_name, output_by_name[name][0])
-            _publish_from_temporary(summary_fd, temporary_name, name)
+            temporary_metadata = _create_private_at(
+                summary_fd, temporary_name, output_by_name[name][0]
+            )
+            _publish_from_temporary(
+                summary_fd,
+                temporary_name,
+                name,
+                output_by_name[name][0],
+                temporary_metadata,
+            )
             if index == 0 and os.getenv("REPORT_TRANSACTION_CRASH_AFTER_FIRST_RENAME"):
                 os._exit(86)
             if index == 0 and os.getenv("REPORT_TRANSACTION_FAIL_AFTER_FIRST_RENAME"):
                 raise RuntimeError("注入第一文件发布后的事务失败")
             if index == 1 and os.getenv("REPORT_TRANSACTION_CRASH_AFTER_SECOND_RENAME"):
                 os._exit(88)
-            _unlink_at(summary_fd, temporary_name)
-        _unlink_at(summary_fd, REPORT_JOURNAL_NAME)
+            _verified_unlink_at(
+                summary_fd,
+                temporary_name,
+                output_by_name[name][0],
+                temporary_metadata,
+                "报告事务临时文件",
+                allowed_links=frozenset({2}),
+            )
+        _verified_unlink_at(
+            summary_fd,
+            REPORT_JOURNAL_NAME,
+            journal_content,
+            journal_metadata,
+            "报告事务 journal",
+        )
 
 
 def _require_canonical_cli_paths(arguments: argparse.Namespace) -> None:
