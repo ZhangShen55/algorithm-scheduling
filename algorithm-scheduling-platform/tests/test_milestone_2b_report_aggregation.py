@@ -1343,6 +1343,38 @@ def test_cases_envelope_allows_real_failures_to_lower_passed_coverage() -> None:
 
 
 @pytest.mark.parametrize(
+    ("coverage_key", "case_kind"),
+    (
+        ("registration_full", "registration_full"),
+        ("registration_profiles", "registration_profile"),
+        ("registration_recovery", "registration_recovery"),
+        ("registration_facerec", "registration_facerec"),
+        ("gpu_running", "gpu_running"),
+        ("gpu_stopped", "gpu_stopped"),
+        ("smoke_full", "smoke_full"),
+        ("smoke_gpu_trigger", "smoke_gpu_trigger"),
+        ("smoke_cpu_instance", "smoke_cpu_instance"),
+    ),
+)
+def test_cases_envelope_mock_pass_is_observed_but_never_passed(
+    coverage_key: str,
+    case_kind: str,
+) -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    case = next(
+        item for item in envelope["cases"] if item["case_kind"] == case_kind
+    )
+    case["mock"] = True
+
+    with pytest.raises(ValueError, match=rf"coverage\.{coverage_key}\.passed"):
+        contract.validate_cases_envelope(envelope)
+
+    envelope["coverage"][coverage_key]["passed"] -= 1
+    contract.validate_cases_envelope(envelope)
+
+
+@pytest.mark.parametrize(
     "coverage_key", ("negative_declarations", "load_declarations")
 )
 def test_cases_envelope_declaration_coverage_never_reports_passed(
@@ -3155,7 +3187,6 @@ def test_cases_envelope_rejects_nonempty_full_smoke_run_id() -> None:
     (
         ("target", "operator-registry"),
         ("evidence", ["registration/operator-registration.json"]),
-        ("mock", True),
     ),
 )
 def test_cases_envelope_rejects_noncanonical_full_smoke_authority_fields(
@@ -3498,7 +3529,7 @@ def test_publish_json_once_keeps_temp_descriptor_open_through_link(
     assert json.loads(output.read_bytes()) == {"schema_version": 1}
 
 
-def test_publish_json_once_rolls_back_wrong_inode_link(
+def test_publish_json_once_preserves_wrong_inode_link(
     release_tree: ReleaseTree,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3526,11 +3557,15 @@ def test_publish_json_once_rolls_back_wrong_inode_link(
             document={"schema_version": 1},
         )
 
-    assert not output.exists()
+    assert output.read_bytes() == b'{"attacker":true}\n'
+    assert (os.lstat(output).st_dev, os.lstat(output).st_ino) == (
+        os.lstat(attacker).st_dev,
+        os.lstat(attacker).st_ino,
+    )
     assert attacker.read_bytes() == b'{"attacker":true}\n'
 
 
-def test_publish_json_once_preserves_rebound_temp_name_and_removes_wrong_final(
+def test_publish_json_once_preserves_rebound_temp_name_and_wrong_final(
     release_tree: ReleaseTree,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3575,9 +3610,14 @@ def test_publish_json_once_preserves_rebound_temp_name_and_removes_wrong_final(
             document={"schema_version": 1},
         )
 
-    assert not output.exists()
     assert rebound_name is not None
-    assert (summary / rebound_name).read_bytes() == b'{"rebound":true}\n'
+    rebound = summary / rebound_name
+    assert output.read_bytes() == b'{"rebound":true}\n'
+    assert rebound.read_bytes() == b'{"rebound":true}\n'
+    assert (os.lstat(output).st_dev, os.lstat(output).st_ino) == (
+        os.lstat(rebound).st_dev,
+        os.lstat(rebound).st_ino,
+    )
 
 
 def test_publish_json_once_rejects_rebound_temp_name_before_link(
@@ -3620,7 +3660,7 @@ def test_publish_json_once_rejects_rebound_temp_name_before_link(
     assert (summary / rebound_name).read_bytes() == b'{"rebound":true}\n'
 
 
-def test_publish_json_once_does_not_remove_changed_final_during_rollback(
+def test_publish_json_once_preserves_third_party_before_first_final_stat(
     release_tree: ReleaseTree,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3628,46 +3668,29 @@ def test_publish_json_once_does_not_remove_changed_final_during_rollback(
     release_tree.root.mkdir(parents=True)
     summary = release_tree.root / "summary"
     summary.mkdir(mode=0o700)
-    wrong = summary / ".wrong"
-    wrong.write_bytes(b'{"wrong":true}\n')
-    wrong.chmod(0o600)
     third_party = summary / ".third-party"
     third_party.write_bytes(b'{"third_party":true}\n')
     third_party.chmod(0o600)
     original_link = aggregate.os.link
-    original_stat = aggregate.os.stat
     original_unlink = aggregate.os.unlink
-    wrong_linked = False
-    final_stat_calls = 0
 
-    def wrong_inode_link(
+    def replace_after_link(
         source: object, destination: object, **kwargs: object
     ) -> None:
-        nonlocal wrong_linked
-        original_link(wrong.name, destination, **kwargs)
-        wrong_linked = True
+        original_link(source, destination, **kwargs)
+        parent_descriptor = kwargs["dst_dir_fd"]
+        assert isinstance(parent_descriptor, int)
+        assert isinstance(destination, str)
+        original_unlink(destination, dir_fd=parent_descriptor)
+        original_link(
+            third_party.name,
+            destination,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
 
-    def changing_final_stat(
-        path: object, *args: object, **kwargs: object
-    ) -> os.stat_result:
-        nonlocal final_stat_calls
-        if wrong_linked and path == "cases.json":
-            final_stat_calls += 1
-            if final_stat_calls == 2:
-                parent_descriptor = kwargs["dir_fd"]
-                assert isinstance(parent_descriptor, int)
-                original_unlink("cases.json", dir_fd=parent_descriptor)
-                original_link(
-                    third_party.name,
-                    "cases.json",
-                    src_dir_fd=parent_descriptor,
-                    dst_dir_fd=parent_descriptor,
-                    follow_symlinks=False,
-                )
-        return original_stat(path, *args, **kwargs)
-
-    monkeypatch.setattr(aggregate.os, "link", wrong_inode_link)
-    monkeypatch.setattr(aggregate.os, "stat", changing_final_stat)
+    monkeypatch.setattr(aggregate.os, "link", replace_after_link)
 
     output = summary / "cases.json"
     with pytest.raises(ValueError, match="inode|publication|published"):
@@ -3677,9 +3700,12 @@ def test_publish_json_once_does_not_remove_changed_final_during_rollback(
             document={"schema_version": 1},
         )
 
-    assert final_stat_calls >= 2
     assert output.read_bytes() == b'{"third_party":true}\n'
     assert third_party.read_bytes() == b'{"third_party":true}\n'
+    assert (os.lstat(output).st_dev, os.lstat(output).st_ino) == (
+        os.lstat(third_party).st_dev,
+        os.lstat(third_party).st_ino,
+    )
 
 
 @pytest.mark.parametrize("mode", (0o720, 0o702))
@@ -3770,6 +3796,85 @@ def test_publish_json_once_rechecks_opened_parent_mode(
         )
 
     assert not (summary / "cases.json").exists()
+
+
+def test_publish_json_once_rolls_back_own_final_when_parent_becomes_writable(
+    release_tree: ReleaseTree,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    aggregate = _aggregate_module()
+    release_tree.root.mkdir(parents=True)
+    summary = release_tree.root / "summary"
+    original_read = aggregate._read_existing_publication
+
+    def loosen_parent_after_read(
+        parent_descriptor: int, name: str, **kwargs: object
+    ) -> bytes:
+        content = original_read(parent_descriptor, name, **kwargs)
+        if kwargs.get("expected_inode") is not None:
+            summary.chmod(0o777)
+        return content
+
+    monkeypatch.setattr(
+        aggregate, "_read_existing_publication", loosen_parent_after_read
+    )
+
+    output = summary / "cases.json"
+    with pytest.raises(ValueError, match="writable|mode|publication parent"):
+        aggregate.publish_json_once(
+            release_root=release_tree.root,
+            relative_path=Path("summary/cases.json"),
+            document={"schema_version": 1},
+        )
+
+    assert not output.exists()
+
+
+def test_publish_json_once_preserves_third_party_when_parent_becomes_writable(
+    release_tree: ReleaseTree,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    aggregate = _aggregate_module()
+    release_tree.root.mkdir(parents=True)
+    summary = release_tree.root / "summary"
+    original_read = aggregate._read_existing_publication
+    original_link = aggregate.os.link
+    third_party = release_tree.root / "third-party.json"
+    third_party.write_bytes(b'{"third_party":true}\n')
+    third_party.chmod(0o600)
+
+    def replace_final_after_read(
+        parent_descriptor: int, name: str, **kwargs: object
+    ) -> bytes:
+        content = original_read(parent_descriptor, name, **kwargs)
+        if kwargs.get("expected_inode") is not None:
+            aggregate.os.unlink(name, dir_fd=parent_descriptor)
+            original_link(
+                third_party,
+                name,
+                dst_dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            summary.chmod(0o777)
+        return content
+
+    monkeypatch.setattr(
+        aggregate, "_read_existing_publication", replace_final_after_read
+    )
+
+    output = summary / "cases.json"
+    with pytest.raises(ValueError, match="writable|mode|publication parent"):
+        aggregate.publish_json_once(
+            release_root=release_tree.root,
+            relative_path=Path("summary/cases.json"),
+            document={"schema_version": 1},
+        )
+
+    assert output.read_bytes() == b'{"third_party":true}\n'
+    assert (os.lstat(output).st_dev, os.lstat(output).st_ino) == (
+        os.lstat(third_party).st_dev,
+        os.lstat(third_party).st_ino,
+    )
 
 
 @pytest.mark.parametrize(

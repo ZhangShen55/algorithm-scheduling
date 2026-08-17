@@ -11,7 +11,7 @@ import re
 import secrets
 import stat
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -252,7 +252,7 @@ def _require_secure_publication_parent(
 @contextmanager
 def _publication_directory_descriptor(
     release_root: Path, parent_path: Path
-) -> Iterator[int]:
+) -> Iterator[tuple[int, Callable[[], None]]]:
     if parent_path.is_absolute() or len(parent_path.parts) != 1:
         raise ValueError(f"publication parent path is not canonical: {parent_path}")
     parent_name = parent_path.parts[0]
@@ -315,23 +315,32 @@ def _publication_directory_descriptor(
                     f"publication directory changed while opening: {parent_path}"
                 )
             _require_secure_publication_parent(opened_parent, parent_path)
-            yield parent_descriptor
-            named_after = os.stat(
-                parent_name,
-                dir_fd=root_descriptor,
-                follow_symlinks=False,
-            )
-            opened_after = os.fstat(parent_descriptor)
-            if (
-                stat.S_ISLNK(named_after.st_mode)
-                or not stat.S_ISDIR(named_after.st_mode)
-                or not _same_filesystem_object(named_after, opened_after)
-            ):
-                raise ValueError(
-                    f"publication directory changed during access: {parent_path}"
-                )
-            _require_secure_publication_parent(named_after, parent_path)
-            _require_secure_publication_parent(opened_after, parent_path)
+
+            def verify_parent() -> None:
+                try:
+                    named_after = os.stat(
+                        parent_name,
+                        dir_fd=root_descriptor,
+                        follow_symlinks=False,
+                    )
+                    opened_after = os.fstat(parent_descriptor)
+                except OSError as exc:
+                    raise ValueError(
+                        "failed to recheck publication directory: "
+                        f"{parent_path}"
+                    ) from exc
+                if (
+                    stat.S_ISLNK(named_after.st_mode)
+                    or not stat.S_ISDIR(named_after.st_mode)
+                    or not _same_filesystem_object(named_after, opened_after)
+                ):
+                    raise ValueError(
+                        f"publication directory changed during access: {parent_path}"
+                    )
+                _require_secure_publication_parent(named_after, parent_path)
+                _require_secure_publication_parent(opened_after, parent_path)
+
+            yield parent_descriptor, verify_parent
         except OSError as exc:
             raise ValueError(
                 f"failed to access publication directory: {parent_path}"
@@ -487,11 +496,26 @@ def _unlink_temp_name_if_bound(
 def _rollback_linked_publication_if_unchanged(
     parent_descriptor: int,
     final_name: str,
-    first_metadata: os.stat_result,
+    temp_metadata: os.stat_result,
     relative_path: Path,
 ) -> None:
     try:
-        confirmed = os.stat(
+        first_final = os.stat(
+            final_name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        os.fsync(parent_descriptor)
+        return
+    except OSError as exc:
+        raise ValueError(
+            f"failed to inspect publication inode for rollback: {relative_path}"
+        ) from exc
+    if not _same_filesystem_object(first_final, temp_metadata):
+        return
+    try:
+        confirmed_final = os.stat(
             final_name,
             dir_fd=parent_descriptor,
             follow_symlinks=False,
@@ -503,7 +527,7 @@ def _rollback_linked_publication_if_unchanged(
         raise ValueError(
             f"failed to confirm publication inode for rollback: {relative_path}"
         ) from exc
-    if not _same_filesystem_object(confirmed, first_metadata):
+    if not _same_filesystem_object(confirmed_final, temp_metadata):
         return
     try:
         os.unlink(final_name, dir_fd=parent_descriptor)
@@ -525,12 +549,13 @@ def publish_json_once(
     payload = _stable_json_bytes(document)
     parent_path = relative_path.parent
     final_name = relative_path.name
-    with _publication_directory_descriptor(
-        release_root, parent_path
-    ) as parent_descriptor:
+    with _publication_directory_descriptor(release_root, parent_path) as publication:
+        parent_descriptor, verify_parent = publication
         temp_descriptor, temp_name = _create_publication_temp(
             parent_descriptor, final_name
         )
+        link_succeeded = False
+        temp_metadata: os.stat_result | None = None
         try:
             offset = 0
             while offset < len(payload):
@@ -575,6 +600,7 @@ def publish_json_once(
                         f"{relative_path}"
                     ) from exc
             else:
+                link_succeeded = True
                 final_metadata = _publication_name_metadata(
                     parent_descriptor, final_name
                 )
@@ -584,55 +610,37 @@ def publish_json_once(
                     or stat.S_IMODE(final_metadata.st_mode) != 0o600
                     or not _same_filesystem_object(final_metadata, temp_metadata)
                 ):
-                    _rollback_linked_publication_if_unchanged(
-                        parent_descriptor,
-                        final_name,
-                        final_metadata,
-                        relative_path,
-                    )
                     raise ValueError(
                         f"published inode does not match temp: {relative_path}"
                     )
-                try:
-                    published = _read_existing_publication(
-                        parent_descriptor,
-                        final_name,
-                        expected_inode=temp_metadata,
-                    )
-                except ValueError:
-                    try:
-                        current_final = os.stat(
-                            final_name,
-                            dir_fd=parent_descriptor,
-                            follow_symlinks=False,
-                        )
-                    except OSError:
-                        pass
-                    else:
-                        if _same_filesystem_object(current_final, temp_metadata):
-                            _rollback_linked_publication_if_unchanged(
-                                parent_descriptor,
-                                final_name,
-                                current_final,
-                                relative_path,
-                            )
-                    raise
+                published = _read_existing_publication(
+                    parent_descriptor,
+                    final_name,
+                    expected_inode=temp_metadata,
+                )
                 if published != payload:
-                    current_final = _publication_name_metadata(
-                        parent_descriptor, final_name
-                    )
-                    if _same_filesystem_object(current_final, temp_metadata):
-                        _rollback_linked_publication_if_unchanged(
-                            parent_descriptor,
-                            final_name,
-                            current_final,
-                            relative_path,
-                        )
                     raise ValueError(
                         f"published bytes changed unexpectedly: {relative_path}"
                     )
+            verify_parent()
         except OSError as exc:
+            if link_succeeded and temp_metadata is not None:
+                _rollback_linked_publication_if_unchanged(
+                    parent_descriptor,
+                    final_name,
+                    temp_metadata,
+                    relative_path,
+                )
             raise ValueError(f"failed to publish JSON: {relative_path}") from exc
+        except ValueError:
+            if link_succeeded and temp_metadata is not None:
+                _rollback_linked_publication_if_unchanged(
+                    parent_descriptor,
+                    final_name,
+                    temp_metadata,
+                    relative_path,
+                )
+            raise
         finally:
             cleanup_error: ValueError | None = None
             try:

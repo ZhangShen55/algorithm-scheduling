@@ -172,6 +172,13 @@ class DeclarationCase(TypedDict):
     reason: str
 
 
+class _CoverageCase(TypedDict):
+    target: str
+    run_id: str
+    status: str
+    mock: bool
+
+
 def _reject_duplicate_json_fields(
     pairs: list[tuple[str, object]],
 ) -> dict[str, object]:
@@ -459,16 +466,18 @@ def _validate_execution_declaration(
         raise ValueError(f"{context}.mock must be false for execution_declaration")
 
 
-def _status_coverage(cases: list[dict[str, str]], expected: int) -> Coverage:
+def _status_coverage(cases: list[_CoverageCase], expected: int) -> Coverage:
     return {
         "expected": expected,
         "observed": len(cases),
-        "passed": sum(case["status"] == "通过" for case in cases),
+        "passed": sum(
+            case["mock"] is False and case["status"] == "通过" for case in cases
+        ),
     }
 
 
 def _recompute_real_case_coverage(
-    cases_by_kind: dict[str, list[dict[str, str]]],
+    cases_by_kind: dict[str, list[_CoverageCase]],
 ) -> dict[str, Coverage]:
     recomputed: dict[str, Coverage] = {}
     for case_kind, coverage_key in FIXED_CASE_KIND_COVERAGE.items():
@@ -498,7 +507,7 @@ def _recompute_real_case_coverage(
     if running_targets != stopped_targets:
         raise ValueError("gpu_running and gpu_stopped target sets must be identical")
 
-    gpu_smoke_by_key: dict[tuple[str, str], dict[str, str]] = {}
+    gpu_smoke_by_key: dict[tuple[str, str], _CoverageCase] = {}
     for case in cases_by_kind["smoke_gpu_trigger"]:
         target = case["target"]
         if target not in running_targets:
@@ -532,7 +541,7 @@ def _recompute_real_case_coverage(
                 f"{running['target']}/{running['run_id']}"
             )
         gpu_observed += 1
-        if linked["status"] == "通过":
+        if linked["mock"] is False and linked["status"] == "通过":
             gpu_passed += 1
     recomputed["smoke_gpu_trigger"] = {
         "expected": COVERAGE_EXPECTED["smoke_gpu_trigger"],
@@ -553,7 +562,7 @@ def _recompute_real_case_coverage(
             )
         cpu_keys.add(key)
         cpu_targets.add(case["target"])
-        if case["status"] == "通过":
+        if case["mock"] is False and case["status"] == "通过":
             passing_cpu_targets.add(case["target"])
     recomputed["smoke_cpu_instance"] = {
         "expected": COVERAGE_EXPECTED["smoke_cpu_instance"],
@@ -623,7 +632,7 @@ def validate_cases_envelope(document: object) -> None:
 
     seen_case_ids: set[str] = set()
     declaration_case_ids: set[str] = set()
-    cases_by_kind: dict[str, list[dict[str, str]]] = {
+    cases_by_kind: dict[str, list[_CoverageCase]] = {
         case_kind: [] for case_kind in CASE_KINDS
     }
     for index, raw_case in enumerate(_require_list(envelope["cases"], "cases")):
@@ -679,12 +688,14 @@ def validate_cases_envelope(document: object) -> None:
                 _require_list(case["evidence"], f"{context}.evidence")
             )
         ]
-        if type(case["mock"]) is not bool:
+        raw_mock = case["mock"]
+        if type(raw_mock) is not bool:
             raise ValueError(f"{context}.mock must be a boolean")
+        mock = raw_mock
         _validate_execution_declaration(
             strings=strings,
             evidence=evidence,
-            mock=case["mock"],
+            mock=mock,
             context=context,
         )
         if case_kind == "execution_declaration":
@@ -699,13 +710,18 @@ def validate_cases_envelope(document: object) -> None:
                 raise ValueError(
                     f"{context}.evidence must equal {expected_evidence} for full Smoke"
                 )
-            if case["mock"] is not False:
-                raise ValueError(f"{context}.mock must be false for full Smoke")
         if strings["release_tag"] != release_tag:
             raise ValueError(f"{context}.release_tag does not match the envelope")
         if strings["git_sha"] != git_sha:
             raise ValueError(f"{context}.git_sha does not match the envelope")
-        cases_by_kind[case_kind].append(strings)
+        cases_by_kind[case_kind].append(
+            {
+                "target": strings["target"],
+                "run_id": strings["run_id"],
+                "status": strings["status"],
+                "mock": mock,
+            }
+        )
 
     expected_declaration_ids = set(DECLARATION_CATEGORY_BY_CASE_ID)
     if declaration_case_ids != expected_declaration_ids:
