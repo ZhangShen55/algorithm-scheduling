@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import importlib
 import importlib.util
 import json
 import os
@@ -51,6 +52,10 @@ assert SMOKE_SPEC is not None and SMOKE_SPEC.loader is not None
 SMOKE_MODULE = importlib.util.module_from_spec(SMOKE_SPEC)
 SMOKE_SPEC.loader.exec_module(SMOKE_MODULE)
 load_and_stage_fixtures = SMOKE_MODULE.load_and_stage_fixtures
+
+RENDERER_MODULE = importlib.import_module("scripts.render_milestone_2b_report")
+publish_report_transaction = RENDERER_MODULE.publish_report_transaction
+render_report = RENDERER_MODULE.render
 
 
 def _release(tmp_path: Path) -> Path:
@@ -543,185 +548,125 @@ def test_registration_exception_report_keeps_the_typed_envelope(
     assert report["issues"]
 
 
-def _case(case_id: str, *, status: str = "通过", mock: bool = False) -> dict[str, Any]:
-    return {
-        "case_id": case_id,
-        "status": status,
-        "started_at": "2026-08-12T10:00:00+08:00",
-        "finished_at": "2026-08-12T10:00:01+08:00",
-        "target": "ocr-gpu0",
-        "command": "deploy/scripts/run-operator-smoke --case ocr",
-        "evidence": ["smoke/ocr.json"],
-        "reason": "响应合同正确",
-        "mock": mock,
+def test_renderer_render_emits_schema_v2_and_escapes_markdown_cells() -> None:
+    case = {
+        "case_id": "INF-001",
+        "case_kind": "operator_smoke",
+        "status": "失败",
+        "target": "ocr|<script>alert(1)</script>",
+        "reason": "bad|<img src=x>\nnext",
+        "mock": False,
+    }
+    envelope = {
         "release_tag": TAG,
         "git_sha": SHA,
+        "plan_sha256": "b" * 64,
+        "coverage": {
+            "smoke_full": {"expected": 1, "observed": 1, "passed": 0}
+        },
     }
 
+    document, markdown = render_report(envelope, [case], [], "失败")
 
-def _run_renderer(tmp_path: Path, cases: list[dict[str, Any]]) -> subprocess.CompletedProcess[str]:
-    release = _release(tmp_path)
-    for item in cases:
-        for relative in item.get("evidence", []):
-            evidence = release / relative
-            evidence.parent.mkdir(parents=True, exist_ok=True)
-            evidence.write_text(
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "evidence_type": "operator_smoke",
-                        "status": "PASS",
-                        "mock": item["mock"],
-                        "release_tag": item["release_tag"],
-                        "git_sha": item["git_sha"],
-                        "target": item["target"],
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-    source = release / "summary" / f"cases-{uuid.uuid4().hex}.json"
-    source.write_text(json.dumps(cases, ensure_ascii=False), encoding="utf-8")
-    return subprocess.run(
-        [
-            str(PYTHON),
-            str(PLATFORM_ROOT / "scripts" / "render_milestone_2b_report.py"),
-            "--input",
-            str(source),
-            "--release-root",
-            str(release),
-            "--output-json",
-            str(release / "summary" / "report.json"),
-            "--output-markdown",
-            str(release / "summary" / "report.md"),
-        ],
-        cwd=PLATFORM_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-
-def test_renderer_summarizes_real_mock_and_statuses(tmp_path: Path) -> None:
-    cases = [
-        _case("INF-001"),
-        {**_case("INF-MOCK", mock=True), "evidence": ["smoke/ocr-mock.json"]},
-        {**_case("INF-002", status="失败"), "evidence": [], "reason": "HTTP 500"},
-        {
-            **_case("INF-003", status="未执行及原因"),
-            "command": "",
-            "evidence": [],
-            "reason": "缺少外部 fixture",
-        },
-    ]
-    completed = _run_renderer(tmp_path, cases)
-
-    assert completed.returncode == 0, completed.stderr
-    result = json.loads(
-        (_release(tmp_path) / "summary" / "report.json").read_text(encoding="utf-8")
-    )
-    assert result["counts"] == {"通过": 1, "失败": 1, "未执行及原因": 1}
-    assert result["mock_counts"] == {"通过": 1, "失败": 0, "未执行及原因": 0}
-    markdown = (_release(tmp_path) / "summary" / "report.md").read_text(encoding="utf-8")
-    assert "真实验证" in markdown and "Mock 合同验证" in markdown
-
-
-@pytest.mark.parametrize(
-    "mutate",
-    (
-        lambda cases: cases.append(dict(cases[0])),
-        lambda cases: cases[0].update(status="成功"),
-        lambda cases: cases[0].update(evidence=[]),
-        lambda cases: cases[0].update(reason="", status="未执行及原因", evidence=[]),
-        lambda cases: cases[0].update(unknown=True),
-        lambda cases: cases[0].update(evidence=["../escape.json"]),
-        lambda cases: cases[0].update(command="python -c 'repository.complete_node()'"),
-        lambda cases: cases[0].update(command="curl -H 'Authorization: Bearer secret'"),
-        lambda cases: cases[0].update(git_sha="b" * 40),
-    ),
-)
-def test_renderer_rejects_unsafe_or_invalid_cases(tmp_path: Path, mutate: Any) -> None:
-    cases = [_case("INF-001")]
-    mutate(cases)
-    completed = _run_renderer(tmp_path, cases)
-
-    assert completed.returncode != 0
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    (
-        ("status", "FAIL"),
-        ("mock", True),
-        ("git_sha", "b" * 40),
-        ("target", "other-target"),
-        ("evidence_type", "unknown"),
-    ),
-)
-def test_renderer_rejects_evidence_semantic_mismatch(
-    tmp_path: Path, field: str, value: Any
-) -> None:
-    cases = [_case("INF-001")]
-    release = _release(tmp_path)
-    evidence = release / "smoke" / "ocr.json"
-    evidence.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "evidence_type": "operator_smoke",
-                "status": "PASS",
-                "mock": False,
-                "release_tag": TAG,
-                "git_sha": SHA,
-                "target": "ocr-gpu0",
-                field: value,
-            }
-        ),
-        encoding="utf-8",
-    )
-    source = release / "summary" / "cases.json"
-    source.write_text(json.dumps(cases), encoding="utf-8")
-    completed = subprocess.run(
-        [
-            str(PYTHON),
-            str(PLATFORM_ROOT / "scripts" / "render_milestone_2b_report.py"),
-            "--input",
-            str(source),
-            "--release-root",
-            str(release),
-            "--output-json",
-            str(release / "summary" / "report.json"),
-            "--output-markdown",
-            str(release / "summary" / "report.md"),
-        ],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert completed.returncode != 0
-
-
-def test_renderer_escapes_all_markdown_cells_and_rejects_invalid_identifiers(
-    tmp_path: Path,
-) -> None:
-    escaped = [
-        {
-            **_case("INF-001"),
-            "status": "失败",
-            "evidence": [],
-            "target": "ocr|<script>alert(1)</script>",
-            "reason": "bad|<img src=x>\nnext",
-        }
-    ]
-    completed = _run_renderer(tmp_path, escaped)
-    assert completed.returncode == 0, completed.stderr
-    markdown = (_release(tmp_path) / "summary" / "report.md").read_text(encoding="utf-8")
+    assert document["schema_version"] == 2
+    assert document["overall_status"] == "失败"
+    assert "验收结论" in markdown
     assert "<script>" not in markdown and "<img" not in markdown
     assert "ocr\\|&lt;script&gt;" in markdown
 
-    invalid = [{**_case("bad|id"), "status": "失败", "evidence": []}]
-    rejected = _run_renderer(tmp_path / "invalid", invalid)
-    assert rejected.returncode != 0
+
+TRANSACTION_JSON = b'{"schema_version":2,"overall_status":"through"}\n'
+TRANSACTION_MARKDOWN = b"# report\n"
+TRANSACTION_SUBPROCESS = """
+import sys
+from pathlib import Path
+from scripts.render_milestone_2b_report import publish_report_transaction
+
+release = Path(sys.argv[1])
+summary = release / "summary"
+publish_report_transaction(
+    release,
+    (
+        (summary / "report.json", b'{"schema_version":2,"overall_status":"through"}\\n'),
+        (summary / "report.md", b"# report\\n"),
+    ),
+)
+"""
+
+
+def _transaction_outputs(
+    release: Path,
+    *,
+    json_content: bytes = TRANSACTION_JSON,
+    markdown_content: bytes = TRANSACTION_MARKDOWN,
+) -> tuple[tuple[Path, bytes], tuple[Path, bytes]]:
+    summary = release / "summary"
+    return (
+        (summary / "report.json", json_content),
+        (summary / "report.md", markdown_content),
+    )
+
+
+def _publish_renderer_transaction(
+    tmp_path: Path,
+    *,
+    json_content: bytes = TRANSACTION_JSON,
+    markdown_content: bytes = TRANSACTION_MARKDOWN,
+) -> None:
+    release = _release(tmp_path)
+    publish_report_transaction(
+        release,
+        _transaction_outputs(
+            release,
+            json_content=json_content,
+            markdown_content=markdown_content,
+        ),
+    )
+
+
+def _run_renderer_transaction_subprocess(
+    release: Path, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(PYTHON), "-c", TRANSACTION_SUBPROCESS, str(release)],
+        cwd=PLATFORM_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_renderer_snapshot_rejects_release_root_rebind_between_files(
+    tmp_path: Path,
+) -> None:
+    release = _release(tmp_path)
+    source = release / "summary/cases.json"
+    source.write_text('{"schema_version":1}\n', encoding="utf-8")
+    source.chmod(0o600)
+    root_identity = RENDERER_MODULE.release_root_identity(release)
+    first = RENDERER_MODULE._snapshot_release_json(
+        release,
+        "summary/cases.json",
+        snapshot_type="cases_envelope",
+        expected_root_identity=root_identity,
+    )
+    assert first.payload == {"schema_version": 1}
+
+    displaced = release.with_name(f"{release.name}-displaced")
+    release.rename(displaced)
+    (release / "summary").mkdir(parents=True, mode=0o700)
+    replacement = release / "summary/cases.json"
+    replacement.write_text('{"schema_version":1}\n', encoding="utf-8")
+    replacement.chmod(0o600)
+
+    with pytest.raises(ValueError, match="root.*锚"):
+        RENDERER_MODULE._snapshot_release_json(
+            release,
+            "summary/cases.json",
+            snapshot_type="cases_envelope",
+            expected_root_identity=root_identity,
+        )
 
 
 def test_registration_entrypoint_is_executable() -> None:
@@ -4400,65 +4345,32 @@ def test_smoke_http_timeout_is_bounded_and_reported(tmp_path: Path) -> None:
 
 
 def test_renderer_is_idempotent_and_refuses_different_existing_output(tmp_path: Path) -> None:
-    cases = [_case("INF-001")]
-    first = _run_renderer(tmp_path, cases)
-    second = _run_renderer(tmp_path, cases)
-    assert first.returncode == second.returncode == 0
+    _publish_renderer_transaction(tmp_path)
+    _publish_renderer_transaction(tmp_path)
 
     output = _release(tmp_path) / "summary" / "report.json"
     output.write_text('{"tampered":true}\n', encoding="utf-8")
-    third = _run_renderer(tmp_path, cases)
-    assert third.returncode != 0
+    with pytest.raises(ValueError, match="拒绝覆盖"):
+        _publish_renderer_transaction(tmp_path)
     assert output.read_text(encoding="utf-8") == '{"tampered":true}\n'
 
 
 def test_renderer_markdown_conflict_does_not_publish_json(tmp_path: Path) -> None:
-    cases = [_case("INF-001")]
     release = _release(tmp_path)
     markdown = release / "summary" / "report.md"
     markdown.write_text("conflict\n", encoding="utf-8")
-    completed = _run_renderer(tmp_path, cases)
-    assert completed.returncode != 0
+    with pytest.raises(ValueError, match="拒绝覆盖"):
+        _publish_renderer_transaction(tmp_path)
     assert not (release / "summary" / "report.json").exists()
 
 
 def test_renderer_recovers_after_process_crash_after_first_rename(tmp_path: Path) -> None:
-    cases = [_case("INF-001")]
     release = _release(tmp_path)
-    source = release / "summary" / "cases.json"
-    evidence = release / "smoke" / "ocr.json"
-    evidence.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "evidence_type": "operator_smoke",
-                "status": "PASS",
-                "mock": False,
-                "release_tag": TAG,
-                "git_sha": SHA,
-                "target": "ocr-gpu0",
-            }
-        ),
-        encoding="utf-8",
-    )
-    source.write_text(json.dumps(cases), encoding="utf-8")
-    command = [
-        str(PYTHON),
-        str(PLATFORM_ROOT / "scripts" / "render_milestone_2b_report.py"),
-        "--input",
-        str(source),
-        "--release-root",
-        str(release),
-        "--output-json",
-        str(release / "summary" / "report.json"),
-        "--output-markdown",
-        str(release / "summary" / "report.md"),
-    ]
     env = os.environ.copy()
     env["REPORT_TRANSACTION_CRASH_AFTER_FIRST_RENAME"] = "1"
-    failed = subprocess.run(command, env=env, text=True, capture_output=True, check=False)
+    failed = _run_renderer_transaction_subprocess(release, env)
     assert failed.returncode != 0
-    recovered = subprocess.run(command, text=True, capture_output=True, check=False)
+    recovered = _run_renderer_transaction_subprocess(release)
     assert recovered.returncode == 0, recovered.stderr
     assert (release / "summary" / "report.json").is_file()
     assert (release / "summary" / "report.md").is_file()
@@ -4468,42 +4380,12 @@ def test_renderer_recovers_after_process_crash_after_first_rename(tmp_path: Path
 
 
 def test_renderer_recovers_after_crash_during_atomic_journal_replace(tmp_path: Path) -> None:
-    cases = [_case("INF-001")]
     release = _release(tmp_path)
-    source = release / "summary" / "cases.json"
-    evidence = release / "smoke" / "ocr.json"
-    evidence.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "evidence_type": "operator_smoke",
-                "status": "PASS",
-                "mock": False,
-                "release_tag": TAG,
-                "git_sha": SHA,
-                "target": "ocr-gpu0",
-            }
-        ),
-        encoding="utf-8",
-    )
-    source.write_text(json.dumps(cases), encoding="utf-8")
-    command = [
-        str(PYTHON),
-        str(PLATFORM_ROOT / "scripts" / "render_milestone_2b_report.py"),
-        "--input",
-        str(source),
-        "--release-root",
-        str(release),
-        "--output-json",
-        str(release / "summary" / "report.json"),
-        "--output-markdown",
-        str(release / "summary" / "report.md"),
-    ]
     env = os.environ.copy()
     env["REPORT_TRANSACTION_CRASH_DURING_JOURNAL_REPLACE"] = "1"
-    failed = subprocess.run(command, env=env, text=True, capture_output=True, check=False)
+    failed = _run_renderer_transaction_subprocess(release, env)
     assert failed.returncode != 0
-    recovered = subprocess.run(command, text=True, capture_output=True, check=False)
+    recovered = _run_renderer_transaction_subprocess(release)
     assert recovered.returncode == 0, recovered.stderr
     assert (release / "summary" / "report.json").is_file()
     assert (release / "summary" / "report.md").is_file()
@@ -4513,33 +4395,35 @@ def test_renderer_recovers_after_crash_during_atomic_journal_replace(tmp_path: P
 def test_renderer_truncated_journal_fails_closed_without_overwriting_unknown_output(
     tmp_path: Path,
 ) -> None:
-    cases = [_case("INF-001")]
     release = _release(tmp_path)
     unknown = release / "summary" / "report.json"
     unknown.write_text('{"unknown":true}\n', encoding="utf-8")
     (release / "summary" / ".report-transaction.journal").write_text(
         '{"published":', encoding="utf-8"
     )
-    completed = _run_renderer(tmp_path, cases)
-    assert completed.returncode != 0
-    assert "journal" in completed.stderr and "不合法" in completed.stderr
+    with pytest.raises(ValueError, match="journal.*不合法"):
+        _publish_renderer_transaction(tmp_path)
     assert unknown.read_text(encoding="utf-8") == '{"unknown":true}\n'
 
 
 def test_renderer_concurrent_same_content_is_idempotent(tmp_path: Path) -> None:
-    cases = [_case("INF-001")]
     with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(lambda _: _run_renderer(tmp_path, cases), range(2)))
-    assert [item.returncode for item in results] == [0, 0]
+        results = list(pool.map(lambda _: _publish_renderer_transaction(tmp_path), range(2)))
+    assert results == [None, None]
 
 
 def test_renderer_concurrent_different_content_has_one_winner(tmp_path: Path) -> None:
-    first = [_case("INF-001")]
-    second = [{**_case("INF-002"), "reason": "另一份报告"}]
+    def attempt(content: bytes) -> bool:
+        try:
+            _publish_renderer_transaction(tmp_path, json_content=content)
+        except ValueError:
+            return False
+        return True
+
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [
-            pool.submit(_run_renderer, tmp_path, cases)
-            for cases in (first, second)
+            pool.submit(attempt, content)
+            for content in (TRANSACTION_JSON, b'{"different":true}\n')
         ]
         results = [future.result() for future in futures]
-    assert sorted(item.returncode for item in results) == [0, 1]
+    assert sorted(results) == [False, True]

@@ -15,7 +15,7 @@ from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError, fields, is_dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, get_type_hints
 
@@ -31,6 +31,7 @@ COMPOSE_PATH = PLATFORM_ROOT / "deploy" / "docker-compose.operators.yml"
 SMOKE_MANIFEST_PATH = PLATFORM_ROOT / "deploy" / "operator-smoke-cases.json"
 CONTRACT_PATH = PLATFORM_ROOT / "scripts" / "milestone_2b_report_contract.py"
 AGGREGATE_PATH = PLATFORM_ROOT / "scripts" / "aggregate_milestone_2b_cases.py"
+RENDERER_PATH = PLATFORM_ROOT / "scripts" / "render_milestone_2b_report.py"
 
 REASON = (
     "当前仓库没有该用例的受控目标服务器 runner 与运行证据 schema；"
@@ -425,7 +426,10 @@ class ReleaseTree:
             "git_sha": self.git_sha,
         }
         if status == "通过":
-            evidence["summary"] = {"verified": True}
+            evidence["summary"] = {
+                "verified": True,
+                "attempts": [{"status": "PASS"}],
+            }
         else:
             evidence["reason"] = reason
         self._write_json(relative, evidence)
@@ -546,6 +550,423 @@ class ReleaseTree:
 @pytest.fixture
 def release_tree(tmp_path: Path) -> ReleaseTree:
     return ReleaseTree(tmp_path)
+
+
+def _prepare_renderer_release(
+    release_tree: ReleaseTree,
+    *,
+    full_statuses: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources(full_statuses)
+    aggregated = release_tree.run_aggregator()
+    assert aggregated.returncode == 0, aggregated.stderr
+    envelope = release_tree.read_json("summary/cases.json")
+    evidence_paths = {
+        relative_path
+        for case in envelope["cases"]
+        for relative_path in case["evidence"]
+    }
+    for relative_path in evidence_paths:
+        (release_tree.root / relative_path).chmod(0o600)
+    (release_tree.root / "summary/cases.json").chmod(0o600)
+    return envelope
+
+
+def _write_renderer_envelope(
+    release_tree: ReleaseTree, envelope: dict[str, Any]
+) -> None:
+    path = release_tree.root / "summary/cases.json"
+    path.write_text(
+        json.dumps(envelope, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
+
+
+def _run_task6_renderer(
+    release_tree: ReleaseTree,
+    *,
+    input_path: Path | None = None,
+    output_json: Path | None = None,
+    output_markdown: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    summary = release_tree.root / "summary"
+    return subprocess.run(
+        [
+            sys.executable,
+            str(RENDERER_PATH),
+            "--input",
+            str(input_path or summary / "cases.json"),
+            "--release-root",
+            str(release_tree.root),
+            "--output-json",
+            str(output_json or summary / "report.json"),
+            "--output-markdown",
+            str(output_markdown or summary / "report.md"),
+        ],
+        cwd=PLATFORM_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _assert_renderer_published_nothing(release_tree: ReleaseTree) -> None:
+    assert not (release_tree.root / "summary/report.json").exists()
+    assert not (release_tree.root / "summary/report.md").exists()
+
+
+def test_task6_renderer_accepts_headerless_gpu_v1_and_publishes_unexecuted_conclusion(
+    release_tree: ReleaseTree,
+) -> None:
+    envelope = _prepare_renderer_release(release_tree)
+    marker = "renderer-must-not-copy-sensitive-evidence"
+    smoke_path = release_tree.root / "smoke/ocr.json"
+    smoke = release_tree.read_json("smoke/ocr.json")
+    smoke["summary"]["attempts"][0]["private_detail"] = marker
+    release_tree.replace_json("smoke/ocr.json", smoke)
+    smoke_path.chmod(0o600)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 3, completed.stderr
+    report_bytes = (release_tree.root / "summary/report.json").read_bytes()
+    markdown = (release_tree.root / "summary/report.md").read_text(encoding="utf-8")
+    report = json.loads(report_bytes)
+    assert report["schema_version"] == 2
+    assert report["overall_status"] == "未执行及原因"
+    assert report["coverage"] == envelope["coverage"]
+    evidence_index = report["evidence_index"]
+    assert len(evidence_index) == 94
+    assert list(evidence_index) == sorted(evidence_index)
+    assert {
+        item["type"] for item in evidence_index.values()
+    } == {
+        "operator_smoke",
+        "operator_registration",
+        "gpu_runtime",
+        "gpu_recovery",
+        "execution_declaration",
+    }
+    assert all(
+        set(item) == {"type", "bytes", "sha256"}
+        and type(item["bytes"]) is int
+        and item["bytes"] > 0
+        and len(item["sha256"]) == 64
+        for item in evidence_index.values()
+    )
+    assert evidence_index["negative/cases.json"]["type"] == "execution_declaration"
+    assert evidence_index["load/cases.json"]["type"] == "execution_declaration"
+    assert marker.encode() not in report_bytes
+    assert marker not in markdown
+    assert any(
+        case["case_kind"] == "gpu_running" for case in envelope["cases"]
+    )
+    assert "evidence_type" not in release_tree.read_json(
+        "gpu-instances/asr-offline-gpu0.json"
+    )
+    assert "验收结论" in "\n".join(markdown.splitlines()[:12])
+
+
+@pytest.mark.parametrize("authority", ("empty", "mock-only", "coverage-subset"))
+def test_task6_renderer_rejects_non_authoritative_case_sets_without_report(
+    release_tree: ReleaseTree,
+    authority: str,
+) -> None:
+    envelope = _prepare_renderer_release(release_tree)
+    if authority == "empty":
+        envelope["cases"] = []
+    elif authority == "mock-only":
+        for case in envelope["cases"]:
+            case["mock"] = True
+    else:
+        envelope["cases"].pop()
+    _write_renderer_envelope(release_tree, envelope)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 1
+    _assert_renderer_published_nothing(release_tree)
+
+
+def test_task6_renderer_publishes_legal_real_smoke_failure_as_overall_failure(
+    release_tree: ReleaseTree,
+) -> None:
+    _prepare_renderer_release(release_tree, full_statuses={"ocr": "失败"})
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 3, completed.stderr
+    report = release_tree.read_json("summary/report.json")
+    assert report["overall_status"] == "失败"
+    assert report["coverage"]["smoke_full"] == {
+        "expected": 8,
+        "observed": 8,
+        "passed": 7,
+    }
+    assert (release_tree.root / "summary/report.md").is_file()
+
+
+def test_task6_renderer_overall_status_precedence_and_real_case_authority() -> None:
+    contract = _contract_module()
+    passed = {"case_kind": "gpu_running", "status": "通过", "mock": False}
+    unexecuted = {
+        "case_kind": "execution_declaration",
+        "status": "未执行及原因",
+        "mock": False,
+    }
+    failed = {"case_kind": "operator_smoke", "status": "失败", "mock": False}
+
+    assert contract.overall_status([passed]) == "通过"
+    assert contract.overall_status([passed, unexecuted]) == "未执行及原因"
+    assert contract.overall_status([passed, unexecuted, failed]) == "失败"
+    with pytest.raises(ValueError, match="真实"):
+        contract.overall_status([])
+    with pytest.raises(ValueError, match="真实"):
+        contract.overall_status([{**passed, "mock": True}])
+    with pytest.raises(ValueError, match="真实"):
+        contract.overall_status([unexecuted])
+
+
+@pytest.mark.parametrize("unsafe_kind", ("symlink", "0644", "hardlink"))
+def test_task6_renderer_rejects_unsafe_canonical_cases_without_output(
+    release_tree: ReleaseTree,
+    unsafe_kind: str,
+) -> None:
+    _prepare_renderer_release(release_tree)
+    cases_path = release_tree.root / "summary/cases.json"
+    if unsafe_kind == "symlink":
+        authority = cases_path.with_name("cases-authority.json")
+        cases_path.rename(authority)
+        cases_path.symlink_to(authority.name)
+    elif unsafe_kind == "0644":
+        cases_path.chmod(0o644)
+    else:
+        os.link(cases_path, cases_path.with_name("cases-hardlink.json"))
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 1
+    _assert_renderer_published_nothing(release_tree)
+
+
+@pytest.mark.parametrize("unsafe_kind", ("symlink", "0644", "hardlink"))
+def test_task6_renderer_rejects_unsafe_execution_evidence_without_output(
+    release_tree: ReleaseTree,
+    unsafe_kind: str,
+) -> None:
+    _prepare_renderer_release(release_tree)
+    evidence = release_tree.root / "smoke/ocr.json"
+    if unsafe_kind == "symlink":
+        authority = evidence.with_name("ocr-authority.json")
+        evidence.rename(authority)
+        evidence.symlink_to(authority.name)
+    elif unsafe_kind == "0644":
+        evidence.chmod(0o644)
+    else:
+        os.link(evidence, evidence.with_name("ocr-hardlink.json"))
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 1
+    _assert_renderer_published_nothing(release_tree)
+
+
+@pytest.mark.parametrize("mismatch_side", ("case", "evidence"))
+def test_task6_renderer_rejects_bidirectional_case_evidence_status_mismatch(
+    release_tree: ReleaseTree,
+    mismatch_side: str,
+) -> None:
+    envelope = _prepare_renderer_release(release_tree)
+    if mismatch_side == "case":
+        smoke_case = next(
+            case
+            for case in envelope["cases"]
+            if case["case_id"] == "SMOKE-FULL-INF-OCR"
+        )
+        smoke_case["status"] = "失败"
+        smoke_case["reason"] = "case-only injected failure"
+        envelope["coverage"]["smoke_full"]["passed"] -= 1
+        _write_renderer_envelope(release_tree, envelope)
+    else:
+        smoke = release_tree.read_json("smoke/ocr.json")
+        smoke["status"] = "失败"
+        smoke["reason"] = "evidence-only injected failure"
+        smoke.pop("summary")
+        release_tree.replace_json("smoke/ocr.json", smoke)
+        (release_tree.root / "smoke/ocr.json").chmod(0o600)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 1
+    assert "status" in completed.stderr or "状态" in completed.stderr
+    _assert_renderer_published_nothing(release_tree)
+
+
+def test_task6_renderer_evidence_byte_change_conflicts_with_write_once_report(
+    release_tree: ReleaseTree,
+) -> None:
+    _prepare_renderer_release(release_tree)
+    first = _run_task6_renderer(release_tree)
+    assert first.returncode == 3, first.stderr
+    report_json = release_tree.root / "summary/report.json"
+    report_markdown = release_tree.root / "summary/report.md"
+    original_json = report_json.read_bytes()
+    original_markdown = report_markdown.read_bytes()
+    evidence = release_tree.root / "smoke/ocr.json"
+    evidence.write_bytes(evidence.read_bytes() + b" \n")
+    evidence.chmod(0o600)
+
+    second = _run_task6_renderer(release_tree)
+
+    assert second.returncode == 1
+    assert "拒绝覆盖" in second.stderr or "不同报告" in second.stderr
+    assert report_json.read_bytes() == original_json
+    assert report_markdown.read_bytes() == original_markdown
+
+
+@pytest.mark.parametrize("noncanonical", ("input", "json-output", "markdown-output"))
+def test_task6_renderer_requires_exact_canonical_cli_paths(
+    release_tree: ReleaseTree,
+    noncanonical: str,
+) -> None:
+    _prepare_renderer_release(release_tree)
+    summary = release_tree.root / "summary"
+    kwargs: dict[str, Path] = {}
+    if noncanonical == "input":
+        copied = summary / "cases-copy.json"
+        copied.write_bytes((summary / "cases.json").read_bytes())
+        copied.chmod(0o600)
+        kwargs["input_path"] = copied
+    elif noncanonical == "json-output":
+        kwargs["output_json"] = summary / "report-copy.json"
+    else:
+        kwargs["output_markdown"] = summary / "report-copy.md"
+
+    completed = _run_task6_renderer(release_tree, **kwargs)
+
+    assert completed.returncode == 1
+    assert not list(summary.glob("report*.json"))
+    assert not list(summary.glob("report*.md"))
+
+
+def test_task6_renderer_rejects_execution_evidence_path_reuse(
+    release_tree: ReleaseTree,
+) -> None:
+    envelope = _prepare_renderer_release(release_tree)
+    profiles = [
+        case for case in envelope["cases"] if case["case_kind"] == "registration_profile"
+    ]
+    profiles[1]["evidence"] = list(profiles[0]["evidence"])
+    _write_renderer_envelope(release_tree, envelope)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 1
+    assert "重复" in completed.stderr or "两个用例" in completed.stderr
+    _assert_renderer_published_nothing(release_tree)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_message"),
+    (
+        ("smoke-attempts", "attempts"),
+        ("registration-summary", "summary"),
+        ("gpu-recovery-pair", "container"),
+        ("declaration-source", "source"),
+        ("declaration-status", "status"),
+        ("declaration-category", "category"),
+        ("unknown-classification", "类型"),
+    ),
+)
+def test_task6_renderer_revalidates_type_specific_evidence_semantics(
+    release_tree: ReleaseTree,
+    mutation: str,
+    expected_message: str,
+) -> None:
+    _prepare_renderer_release(release_tree)
+    if mutation == "smoke-attempts":
+        relative = "smoke/ocr.json"
+        payload = release_tree.read_json(relative)
+        payload["summary"]["attempts"] = []
+    elif mutation == "registration-summary":
+        relative = "registration/operator-registration.json"
+        payload = release_tree.read_json(relative)
+        payload["summary"]["valid"] -= 1
+    elif mutation == "gpu-recovery-pair":
+        relative = "recovery/asr-offline-gpu0-stopped.json"
+        payload = release_tree.read_json(relative)
+        payload["container"]["id"] = "different-container"
+    elif mutation == "declaration-source":
+        relative = "negative/cases.json"
+        payload = release_tree.read_json(relative)
+        payload["cases"] = [
+            case for case in payload["cases"] if case["case_id"] != "DEP-001"
+        ]
+    elif mutation == "declaration-status":
+        relative = "negative/cases.json"
+        payload = release_tree.read_json(relative)
+        payload["status"] = "PASS"
+    elif mutation == "declaration-category":
+        relative = "negative/cases.json"
+        payload = release_tree.read_json(relative)
+        payload["category"] = "load"
+    else:
+        relative = "smoke/ocr.json"
+        payload = release_tree.read_json(relative)
+        payload.pop("evidence_type")
+    release_tree.replace_json(relative, payload)
+    (release_tree.root / relative).chmod(0o600)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 1
+    assert expected_message in completed.stderr
+    _assert_renderer_published_nothing(release_tree)
+
+
+@pytest.mark.parametrize(
+    "case_kind",
+    ("registration_profile", "smoke_cpu_instance", "gpu_running", "gpu_stopped"),
+)
+def test_task6_renderer_rejects_noncanonical_execution_evidence_filename(
+    release_tree: ReleaseTree,
+    case_kind: str,
+) -> None:
+    envelope = _prepare_renderer_release(release_tree)
+    case = next(case for case in envelope["cases"] if case["case_kind"] == case_kind)
+    original = case["evidence"][0]
+    parent = PurePosixPath(original).parent
+    copied_relative = (parent / "copied-evidence.json").as_posix()
+    copied = release_tree.root / copied_relative
+    copied.write_bytes((release_tree.root / original).read_bytes())
+    copied.chmod(0o600)
+    case["evidence"] = [copied_relative]
+    _write_renderer_envelope(release_tree, envelope)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 1
+    assert "路径" in completed.stderr or "规范" in completed.stderr
+    _assert_renderer_published_nothing(release_tree)
+
+
+def test_task6_renderer_rechecks_gpu_sample_pid_namespace_mapping(
+    release_tree: ReleaseTree,
+) -> None:
+    _prepare_renderer_release(release_tree)
+    relative = "gpu-instances/asr-offline-gpu0.json"
+    payload = release_tree.read_json(relative)
+    payload["synchronous_samples"][0]["processes"][0]["mapping"]["docker_top"] = False
+    release_tree.replace_json(relative, payload)
+    (release_tree.root / relative).chmod(0o600)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 1
+    assert "mapping" in completed.stderr
+    _assert_renderer_published_nothing(release_tree)
 
 
 def _compose_document() -> dict[str, Any]:

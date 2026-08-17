@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TypedDict, cast
 
@@ -178,6 +179,33 @@ class _CoverageCase(TypedDict):
     run_id: str
     status: str
     mock: bool
+
+
+def overall_status(cases: Sequence[Mapping[str, object]]) -> str:
+    statuses: list[str] = []
+    real_execution_cases = 0
+    for index, case in enumerate(cases):
+        raw_mock = case.get("mock")
+        if type(raw_mock) is not bool:
+            raise ValueError(f"cases[{index}].mock must be a boolean")
+        case_kind = case.get("case_kind")
+        if type(case_kind) is not str or not case_kind:
+            raise ValueError(f"cases[{index}].case_kind must be a non-empty string")
+        status = case.get("status")
+        if type(status) is not str or status not in STATUSES:
+            raise ValueError(f"cases[{index}].status is unknown: {status}")
+        if raw_mock:
+            continue
+        statuses.append(status)
+        if case_kind != "execution_declaration":
+            real_execution_cases += 1
+    if real_execution_cases == 0:
+        raise ValueError("至少需要一个非 Mock 的真实执行用例")
+    if "失败" in statuses:
+        return "失败"
+    if "未执行及原因" in statuses:
+        return "未执行及原因"
+    return "通过"
 
 
 def _reject_duplicate_json_fields(
