@@ -4415,9 +4415,16 @@ def test_renderer_markdown_conflict_does_not_publish_json(tmp_path: Path) -> Non
     release = _release(tmp_path)
     markdown = release / "summary" / "report.md"
     markdown.write_text("conflict\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="拒绝覆盖"):
+    markdown.chmod(0o600)
+    before = (markdown.read_bytes(), os.lstat(markdown).st_ino)
+    with pytest.raises(
+        ValueError, match=re.escape("拒绝覆盖报告输出摘要冲突: report.md")
+    ) as raised:
         _publish_renderer_transaction(tmp_path)
+    assert str(raised.value) == "拒绝覆盖报告输出摘要冲突: report.md"
+    assert (markdown.read_bytes(), os.lstat(markdown).st_ino) == before
     assert not (release / "summary" / "report.json").exists()
+    assert not (release / "summary/.report-transaction.journal").exists()
 
 
 def test_renderer_recovers_after_process_crash_after_first_rename(tmp_path: Path) -> None:
@@ -4440,7 +4447,13 @@ def test_renderer_recovers_after_crash_during_atomic_journal_replace(tmp_path: P
     env = os.environ.copy()
     env["REPORT_TRANSACTION_CRASH_DURING_JOURNAL_REPLACE"] = "1"
     failed = _run_renderer_transaction_subprocess(release, env)
-    assert failed.returncode != 0
+    assert failed.returncode == 87, failed.stderr
+    assert failed.stderr == ""
+    journal = release / "summary/.report-transaction.journal"
+    assert journal.is_file()
+    transaction_id = json.loads(journal.read_text(encoding="utf-8"))["transaction_id"]
+    replacement = release / f"summary/.report-transaction.journal.{transaction_id}.tmp"
+    assert replacement.is_file()
     recovered = _run_renderer_transaction_subprocess(release)
     assert recovered.returncode == 3, recovered.stderr
     assert (release / "summary" / "report.json").is_file()
@@ -4454,12 +4467,18 @@ def test_renderer_truncated_journal_fails_closed_without_overwriting_unknown_out
     release = _release(tmp_path)
     unknown = release / "summary" / "report.json"
     unknown.write_text('{"unknown":true}\n', encoding="utf-8")
-    (release / "summary" / ".report-transaction.journal").write_text(
-        '{"published":', encoding="utf-8"
-    )
-    with pytest.raises(ValueError, match="journal.*不合法"):
+    journal = release / "summary/.report-transaction.journal"
+    journal.write_text('{"published":', encoding="utf-8")
+    journal.chmod(0o600)
+    unknown_before = (unknown.read_bytes(), os.lstat(unknown).st_ino)
+    journal_before = (journal.read_bytes(), os.lstat(journal).st_ino)
+    with pytest.raises(
+        ValueError, match=re.escape("报告事务 journal 不合法")
+    ) as raised:
         _publish_renderer_transaction(tmp_path)
-    assert unknown.read_text(encoding="utf-8") == '{"unknown":true}\n'
+    assert str(raised.value) == "报告事务 journal 不合法"
+    assert (unknown.read_bytes(), os.lstat(unknown).st_ino) == unknown_before
+    assert (journal.read_bytes(), os.lstat(journal).st_ino) == journal_before
 
 
 def test_renderer_concurrent_same_content_is_idempotent(tmp_path: Path) -> None:
@@ -4702,14 +4721,18 @@ def test_renderer_valid_journal_digest_conflict_fails_closed(tmp_path: Path) -> 
     release = _release(tmp_path)
     report_json = release / "summary/report.json"
     report_json.write_bytes(b"different\n")
+    report_json.chmod(0o600)
     before = (report_json.read_bytes(), os.lstat(report_json).st_ino)
     journal = _write_transaction_journal(
         release, _transaction_journal_payload(published=(True, False))
     )
 
-    with pytest.raises(ValueError, match="摘要|拒绝覆盖"):
+    with pytest.raises(
+        ValueError, match=re.escape("拒绝覆盖报告输出摘要冲突: report.json")
+    ) as raised:
         _publish_renderer_transaction(tmp_path)
 
+    assert str(raised.value) == "拒绝覆盖报告输出摘要冲突: report.json"
     assert (report_json.read_bytes(), os.lstat(report_json).st_ino) == before
     assert journal.exists()
     assert not (release / "summary/report.md").exists()
