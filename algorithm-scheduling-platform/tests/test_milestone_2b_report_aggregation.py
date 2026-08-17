@@ -6,10 +6,13 @@ import importlib
 import inspect
 import json
 import os
+import stat
 import subprocess
 import sys
+import threading
 from collections import Counter
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError, fields, is_dataclass
 from pathlib import Path
 from types import ModuleType
@@ -81,6 +84,8 @@ RELEASE_TAG = "v1.0_260817"
 GIT_SHA = "a" * 40
 PLAN_SHA256 = "b" * 64
 EVIDENCE_TIMESTAMP = "2026-08-17T00:00:00+00:00"
+DECLARATION_PLACEHOLDER = "NOT_EXECUTED"
+DECLARATION_TARGET = "controlled-target-server"
 
 
 def _contract_module() -> ModuleType:
@@ -498,8 +503,10 @@ class ReleaseTree:
             git_sha=self.git_sha,
         )
 
-    def run_aggregator(self) -> subprocess.CompletedProcess[str]:
-        output = self.root / "summary" / "cases.json"
+    def run_aggregator(
+        self, output: Path | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        selected_output = output or self.root / "summary" / "cases.json"
         return subprocess.run(
             [
                 sys.executable,
@@ -513,7 +520,7 @@ class ReleaseTree:
                 "--report-plan",
                 str(self.report_plan_path),
                 "--output",
-                str(output),
+                str(selected_output),
             ],
             cwd=PLATFORM_ROOT,
             text=True,
@@ -585,14 +592,14 @@ def _valid_case(case_id: str = "DEP-001") -> dict[str, Any]:
     return {
         "case_id": case_id,
         "source_case_id": "DEP-001",
-        "case_kind": "negative",
-        "run_id": "declaration",
+        "case_kind": "execution_declaration",
+        "run_id": DECLARATION_PLACEHOLDER,
         "status": "未执行及原因",
-        "started_at": "2026-08-17T00:00:00Z",
-        "finished_at": "2026-08-17T00:00:00Z",
-        "target": "root@192.168.29.11",
-        "command": "not-run",
-        "evidence": ["negative/DEP-001.json"],
+        "started_at": DECLARATION_PLACEHOLDER,
+        "finished_at": DECLARATION_PLACEHOLDER,
+        "target": DECLARATION_TARGET,
+        "command": DECLARATION_PLACEHOLDER,
+        "evidence": ["negative/cases.json"],
         "reason": REASON,
         "mock": False,
         "release_tag": RELEASE_TAG,
@@ -967,6 +974,43 @@ def test_cases_envelope_accepts_strict_valid_document() -> None:
     contract = _contract_module()
 
     contract.validate_cases_envelope(_valid_envelope())
+
+
+def test_cases_envelope_rejects_execution_declaration_claiming_pass() -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    envelope["cases"][0]["status"] = "通过"
+
+    with pytest.raises(ValueError, match="execution_declaration.*status"):
+        contract.validate_cases_envelope(envelope)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("case_id", "DEP-002"),
+        ("source_case_id", "LOAD-001"),
+        ("case_kind", "negative"),
+        ("run_id", "executed-run"),
+        ("started_at", EVIDENCE_TIMESTAMP),
+        ("finished_at", EVIDENCE_TIMESTAMP),
+        ("target", "root@192.168.29.11"),
+        ("command", "pytest"),
+        ("evidence", ["negative/DEP-001.json"]),
+        ("reason", "unit tests passed"),
+        ("mock", True),
+    ),
+)
+def test_cases_envelope_rejects_noncanonical_execution_declaration_fields(
+    field: str,
+    value: object,
+) -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    envelope["cases"][0][field] = value
+
+    with pytest.raises(ValueError, match=field):
+        contract.validate_cases_envelope(envelope)
 
 
 @pytest.mark.parametrize("action", ("missing", "unknown"))
@@ -2017,7 +2061,7 @@ def test_gpu_fail_rejects_missing_reason_and_present_identity_drift(
         _validate_gpu_pair(release_tree, running, stopped)
 
 
-def test_task3_cli_fails_closed_without_creating_any_output(
+def test_task4_cli_publishes_complete_deterministic_envelope(
     release_tree: ReleaseTree,
 ) -> None:
     release_tree.write_complete_sources()
@@ -2025,12 +2069,79 @@ def test_task3_cli_fails_closed_without_creating_any_output(
 
     completed = release_tree.run_aggregator()
 
-    assert completed.returncode != 0
-    assert "Declaration coverage" in completed.stderr
-    assert not (release_tree.root / "summary" / "cases.json").exists()
-    assert not (release_tree.root / "summary").exists()
-    assert not (release_tree.root / "negative").exists()
-    assert not (release_tree.root / "load").exists()
+    assert completed.returncode == 0, completed.stderr
+    output = release_tree.root / "summary" / "cases.json"
+    first_bytes = output.read_bytes()
+    envelope = json.loads(first_bytes)
+    _contract_module().validate_cases_envelope(envelope)
+    assert set(envelope) == {
+        "schema_version",
+        "release_tag",
+        "git_sha",
+        "plan_sha256",
+        "coverage",
+        "cases",
+    }
+    assert envelope["schema_version"] == 1
+    assert envelope["release_tag"] == release_tree.release_tag
+    assert envelope["git_sha"] == release_tree.git_sha
+    assert envelope["plan_sha256"] == hashlib.sha256(
+        release_tree.report_plan_path.read_bytes()
+    ).hexdigest()
+    assert envelope["coverage"] == {
+        "registration_full": {"expected": 1, "observed": 1, "passed": 1},
+        "registration_profiles": {"expected": 4, "observed": 4, "passed": 4},
+        "registration_recovery": {
+            "expected": 18,
+            "observed": 18,
+            "passed": 18,
+        },
+        "registration_facerec": {"expected": 1, "observed": 1, "passed": 1},
+        "gpu_running": {"expected": 18, "observed": 18, "passed": 18},
+        "gpu_stopped": {"expected": 18, "observed": 18, "passed": 18},
+        "smoke_full": {"expected": 8, "observed": 8, "passed": 8},
+        "smoke_gpu_trigger": {
+            "expected": 18,
+            "observed": 18,
+            "passed": 18,
+        },
+        "smoke_cpu_instance": {"expected": 6, "observed": 6, "passed": 6},
+        "negative_declarations": {
+            "expected": 217,
+            "observed": 217,
+            "passed": 0,
+        },
+        "load_declarations": {"expected": 26, "observed": 26, "passed": 0},
+    }
+    assert len(envelope["cases"]) == 335
+
+    def sort_key(case: dict[str, Any]) -> tuple[int, str, str, str]:
+        kind = case["case_kind"]
+        evidence = case["evidence"]
+        if kind.startswith("registration_"):
+            group = 0
+        elif kind == "gpu_running":
+            group = 1
+        elif kind == "gpu_stopped":
+            group = 2
+        elif kind == "smoke_full":
+            group = 3
+        elif kind in {"smoke_gpu_trigger", "smoke_cpu_instance"}:
+            group = 4
+        elif evidence == ["negative/cases.json"]:
+            group = 5
+        elif evidence == ["load/cases.json"]:
+            group = 6
+        else:
+            raise AssertionError(f"unknown case source: {case}")
+        return group, case["target"], case["run_id"], case["case_id"]
+
+    assert envelope["cases"] == sorted(envelope["cases"], key=sort_key)
+    assert len({case["case_id"] for case in envelope["cases"]}) == 335
+
+    rerun = release_tree.run_aggregator()
+    assert rerun.returncode == 0, rerun.stderr
+    assert output.read_bytes() == first_bytes
 
 
 def test_task3_cli_validates_gpu_smoke_link_before_failing_closed(
@@ -2691,3 +2802,403 @@ def test_cases_envelope_rejects_wrong_full_smoke_case_id() -> None:
 
     with pytest.raises(ValueError, match="case_id|canonical|Smoke"):
         contract.validate_cases_envelope(envelope)
+
+
+def test_declarations_materialize_exact_batches_and_never_pass(
+    release_tree: ReleaseTree,
+) -> None:
+    aggregate = _aggregate_module()
+    contract = _contract_module()
+    release_tree.root.mkdir(parents=True)
+    report_plan = contract.load_report_plan(release_tree.report_plan_path)
+    expected = contract.expand_declaration_cases(report_plan)
+
+    cases, coverage = aggregate.materialize_declaration_cases(
+        release_root=release_tree.root,
+        report_plan=report_plan,
+        release_tag=release_tree.release_tag,
+        git_sha=release_tree.git_sha,
+    )
+
+    expected_by_category = {
+        category: [case for case in expected if case["case_kind"] == category]
+        for category in ("negative", "load")
+    }
+    for category, expected_cases in expected_by_category.items():
+        declaration = release_tree.read_json(f"{category}/cases.json")
+        assert set(declaration) == {
+            "schema_version",
+            "evidence_type",
+            "category",
+            "status",
+            "mock",
+            "release_tag",
+            "git_sha",
+            "reason",
+            "cases",
+        }
+        assert declaration == {
+            "schema_version": 1,
+            "evidence_type": "execution_declaration",
+            "category": category,
+            "status": "NOT_EXECUTED",
+            "mock": False,
+            "release_tag": release_tree.release_tag,
+            "git_sha": release_tree.git_sha,
+            "reason": REASON,
+            "cases": [
+                {"case_id": case["case_id"], "status": "NOT_EXECUTED"}
+                for case in expected_cases
+            ],
+        }
+
+    assert len(cases) == 243
+    assert {case["case_id"] for case in cases} == {
+        case["case_id"] for case in expected
+    }
+    assert all(
+        case["case_id"] == case["source_case_id"]
+        and case["case_kind"] == "execution_declaration"
+        and case["status"] == "未执行及原因"
+        and case["run_id"] == DECLARATION_PLACEHOLDER
+        and case["started_at"] == DECLARATION_PLACEHOLDER
+        and case["finished_at"] == DECLARATION_PLACEHOLDER
+        and case["target"] == DECLARATION_TARGET
+        and case["command"] == DECLARATION_PLACEHOLDER
+        and case["reason"] == REASON
+        and case["mock"] is False
+        and case["evidence"]
+        == [
+            "load/cases.json"
+            if case["case_id"].startswith("LOAD-")
+            else "negative/cases.json"
+        ]
+        for case in cases
+    )
+    assert coverage == {
+        "negative_declarations": {
+            "expected": 217,
+            "observed": 217,
+            "passed": 0,
+        },
+        "load_declarations": {"expected": 26, "observed": 26, "passed": 0},
+    }
+
+
+def test_existing_declaration_changed_to_pass_is_rejected(
+    release_tree: ReleaseTree,
+) -> None:
+    aggregate = _aggregate_module()
+    contract = _contract_module()
+    release_tree.root.mkdir(parents=True)
+    report_plan = contract.load_report_plan(release_tree.report_plan_path)
+    arguments = {
+        "release_root": release_tree.root,
+        "report_plan": report_plan,
+        "release_tag": release_tree.release_tag,
+        "git_sha": release_tree.git_sha,
+    }
+    aggregate.materialize_declaration_cases(**arguments)
+    declaration = release_tree.read_json("negative/cases.json")
+    declaration["cases"][0]["status"] = "PASS"
+    release_tree.replace_json("negative/cases.json", declaration)
+
+    with pytest.raises(
+        ValueError,
+        match=r"negative/cases\.json.*cases\[0\]\.status",
+    ):
+        aggregate.materialize_declaration_cases(**arguments)
+
+
+@pytest.mark.parametrize("scope", ("document", "case"))
+def test_existing_declaration_rejects_unknown_fields(
+    release_tree: ReleaseTree,
+    scope: str,
+) -> None:
+    aggregate = _aggregate_module()
+    contract = _contract_module()
+    release_tree.root.mkdir(parents=True)
+    report_plan = contract.load_report_plan(release_tree.report_plan_path)
+    arguments = {
+        "release_root": release_tree.root,
+        "report_plan": report_plan,
+        "release_tag": release_tree.release_tag,
+        "git_sha": release_tree.git_sha,
+    }
+    aggregate.materialize_declaration_cases(**arguments)
+    declaration = release_tree.read_json("negative/cases.json")
+    if scope == "document":
+        declaration["unknown"] = "value"
+    else:
+        declaration["cases"][0]["unknown"] = "value"
+    release_tree.replace_json("negative/cases.json", declaration)
+
+    with pytest.raises(ValueError, match=r"negative/cases\.json.*unknown"):
+        aggregate.materialize_declaration_cases(**arguments)
+
+
+def test_publish_json_once_uses_durable_hard_link_and_preserves_conflicts(
+    release_tree: ReleaseTree,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    aggregate = _aggregate_module()
+    release_tree.root.mkdir(parents=True)
+    document = {"schema_version": 1, "value": "first"}
+    original_link = aggregate.os.link
+    original_fsync = aggregate.os.fsync
+    link_calls: list[tuple[object, object]] = []
+    fsync_types: list[int] = []
+
+    def observed_link(source: object, destination: object, **kwargs: object) -> None:
+        link_calls.append((source, destination))
+        original_link(source, destination, **kwargs)
+
+    def observed_fsync(descriptor: int) -> None:
+        fsync_types.append(stat.S_IFMT(os.fstat(descriptor).st_mode))
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(aggregate.os, "link", observed_link)
+    monkeypatch.setattr(aggregate.os, "fsync", observed_fsync)
+
+    aggregate.publish_json_once(
+        release_root=release_tree.root,
+        relative_path=Path("summary/cases.json"),
+        document=document,
+    )
+
+    output = release_tree.root / "summary" / "cases.json"
+    original_bytes = output.read_bytes()
+    assert link_calls
+    assert stat.S_IFREG in fsync_types
+    assert stat.S_IFDIR in fsync_types
+    assert stat.S_IMODE(os.lstat(output).st_mode) == 0o600
+    assert {entry.name for entry in output.parent.iterdir()} == {"cases.json"}
+
+    aggregate.publish_json_once(
+        release_root=release_tree.root,
+        relative_path=Path("summary/cases.json"),
+        document=document,
+    )
+    assert output.read_bytes() == original_bytes
+
+    with pytest.raises(ValueError, match="different bytes|conflict"):
+        aggregate.publish_json_once(
+            release_root=release_tree.root,
+            relative_path=Path("summary/cases.json"),
+            document={"schema_version": 1, "value": "second"},
+        )
+    assert output.read_bytes() == original_bytes
+    assert {entry.name for entry in output.parent.iterdir()} == {"cases.json"}
+
+
+@pytest.mark.parametrize("same_content", (True, False))
+def test_publish_json_once_is_concurrent_create_if_absent(
+    release_tree: ReleaseTree,
+    monkeypatch: pytest.MonkeyPatch,
+    same_content: bool,
+) -> None:
+    aggregate = _aggregate_module()
+    release_tree.root.mkdir(parents=True)
+    documents = (
+        {"schema_version": 1, "value": "first"},
+        {
+            "schema_version": 1,
+            "value": "first" if same_content else "second",
+        },
+    )
+    link_barrier = threading.Barrier(2)
+    original_link = aggregate.os.link
+
+    def synchronized_link(source: object, destination: object, **kwargs: object) -> None:
+        link_barrier.wait(timeout=5)
+        original_link(source, destination, **kwargs)
+
+    monkeypatch.setattr(aggregate.os, "link", synchronized_link)
+
+    def publish(document: dict[str, object]) -> str | None:
+        try:
+            aggregate.publish_json_once(
+                release_root=release_tree.root,
+                relative_path=Path("summary/cases.json"),
+                document=document,
+            )
+        except ValueError as exc:
+            return str(exc)
+        return None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = tuple(executor.map(publish, documents))
+
+    output = release_tree.root / "summary" / "cases.json"
+    if same_content:
+        assert results == (None, None)
+        assert json.loads(output.read_bytes()) == documents[0]
+    else:
+        assert sum(result is None for result in results) == 1
+        winner = results.index(None)
+        assert json.loads(output.read_bytes()) == documents[winner]
+        assert "different bytes" in results[1 - winner]
+    assert stat.S_IMODE(os.lstat(output).st_mode) == 0o600
+    assert {entry.name for entry in output.parent.iterdir()} == {"cases.json"}
+
+
+@pytest.mark.parametrize(
+    "unsafe_kind",
+    ("parent_symlink", "parent_file", "final_symlink", "final_directory"),
+)
+def test_publish_json_once_rejects_unsafe_parent_or_final_binding(
+    release_tree: ReleaseTree,
+    tmp_path: Path,
+    unsafe_kind: str,
+) -> None:
+    aggregate = _aggregate_module()
+    release_tree.root.mkdir(parents=True)
+    summary = release_tree.root / "summary"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    if unsafe_kind == "parent_symlink":
+        summary.symlink_to(outside, target_is_directory=True)
+    elif unsafe_kind == "parent_file":
+        summary.write_text("not a directory", encoding="utf-8")
+    else:
+        summary.mkdir()
+        final = summary / "cases.json"
+        if unsafe_kind == "final_symlink":
+            target = outside / "cases.json"
+            target.write_text("outside", encoding="utf-8")
+            final.symlink_to(target)
+        else:
+            final.mkdir()
+
+    with pytest.raises(ValueError, match="directory|regular|publication"):
+        aggregate.publish_json_once(
+            release_root=release_tree.root,
+            relative_path=Path("summary/cases.json"),
+            document={"schema_version": 1},
+        )
+
+    if unsafe_kind == "parent_symlink":
+        assert tuple(outside.iterdir()) == ()
+    elif unsafe_kind == "final_symlink":
+        assert (outside / "cases.json").read_bytes() == b"outside"
+
+
+def test_task4_cli_rejects_wrong_output_without_summary(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    wrong_output = release_tree.root / "summary" / "other.json"
+
+    completed = release_tree.run_aggregator(wrong_output)
+
+    assert completed.returncode == 1
+    assert "--output" in completed.stderr
+    assert not (release_tree.root / "summary").exists()
+    assert not (release_tree.root / "negative").exists()
+    assert not (release_tree.root / "load").exists()
+
+
+def test_task4_cli_rejects_changed_declaration_after_summary_is_removed(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    assert release_tree.run_aggregator().returncode == 0
+    output = release_tree.root / "summary" / "cases.json"
+    output.unlink()
+    declaration = release_tree.read_json("negative/cases.json")
+    declaration["cases"][0]["status"] = "PASS"
+    release_tree.replace_json("negative/cases.json", declaration)
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 1
+    assert "negative/cases.json.cases[0].status" in completed.stderr
+    assert not output.exists()
+
+
+def test_task4_cli_late_instance_run_conflicts_without_replacing_summary(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    assert release_tree.run_aggregator().returncode == 0
+    output = release_tree.root / "summary" / "cases.json"
+    original_bytes = output.read_bytes()
+    instance_id = release_tree.cpu_instances[0]
+    release_tree.write_instance_smoke(instance_id, "late-run")
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 1
+    assert "summary/cases.json" in completed.stderr
+    assert "different bytes" in completed.stderr
+    assert output.read_bytes() == original_bytes
+    assert {entry.name for entry in output.parent.iterdir()} == {"cases.json"}
+
+
+def test_task4_cli_missing_real_source_publishes_nothing(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    missing = release_tree.root / "registration" / "operator-registration.json"
+    missing.unlink()
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 1
+    assert missing.name in completed.stderr
+    assert not (release_tree.root / "summary").exists()
+    assert not (release_tree.root / "negative").exists()
+    assert not (release_tree.root / "load").exists()
+
+
+def test_task4_cli_hashes_raw_report_plan_bytes(
+    release_tree: ReleaseTree,
+    tmp_path: Path,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    raw_plan = PLAN_PATH.read_bytes() + b" \n"
+    report_plan = tmp_path / "report-plan-with-trailing-space.json"
+    report_plan.write_bytes(raw_plan)
+    release_tree.report_plan_path = report_plan
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 0, completed.stderr
+    envelope = release_tree.read_json("summary/cases.json")
+    assert envelope["plan_sha256"] == hashlib.sha256(raw_plan).hexdigest()
+
+
+def test_task4_cli_preserves_real_failure_in_final_envelope(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    instance_id = release_tree.gpu_instances[0]
+    relative = f"registration/operator-registration-instance-{instance_id}.json"
+    registration = release_tree.read_json(relative)
+    registration["status"] = "失败"
+    registration["summary"]["valid"] = 0
+    registration["issues"] = ["instance recovery failed"]
+    release_tree.replace_json(relative, registration)
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 0, completed.stderr
+    envelope = release_tree.read_json("summary/cases.json")
+    failed = next(
+        case
+        for case in envelope["cases"]
+        if case["case_id"] == f"REG-RECOVERY-{instance_id}"
+    )
+    assert failed["status"] == "失败"
+    assert failed["reason"] == "instance recovery failed"
+    assert envelope["coverage"]["registration_recovery"] == {
+        "expected": 18,
+        "observed": 18,
+        "passed": 17,
+    }

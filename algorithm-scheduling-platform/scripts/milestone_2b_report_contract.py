@@ -80,6 +80,14 @@ EXPECTED_RANGES = {
     ),
     "load": (("LOAD", 1, 26),),
 }
+DECLARATION_CATEGORY_BY_CASE_ID = {
+    f"{prefix}-{number:03d}": category
+    for category, ranges in EXPECTED_RANGES.items()
+    for prefix, first, last in ranges
+    for number in range(first, last + 1)
+}
+DECLARATION_PLACEHOLDER = "NOT_EXECUTED"
+DECLARATION_TARGET = "controlled-target-server"
 SMOKE_FULL_OPERATOR_BY_SOURCE_CASE_ID = {
     "INF-ASR-OFFLINE": "asr_offline",
     "INF-ASR-ONLINE": "asr_online",
@@ -356,6 +364,53 @@ def expand_declaration_cases(plan: object) -> list[DeclarationCase]:
     return expanded
 
 
+def _validate_execution_declaration(
+    *,
+    strings: dict[str, str],
+    evidence: list[str],
+    mock: object,
+    context: str,
+) -> None:
+    case_id = strings["case_id"]
+    source_case_id = strings["source_case_id"]
+    case_kind = strings["case_kind"]
+    declaration_like = (
+        case_kind == "execution_declaration"
+        or case_id in DECLARATION_CATEGORY_BY_CASE_ID
+        or source_case_id in DECLARATION_CATEGORY_BY_CASE_ID
+    )
+    if not declaration_like:
+        return
+    if case_id != source_case_id:
+        raise ValueError(
+            f"{context}.case_id and {context}.source_case_id must be identical "
+            "for an execution declaration"
+        )
+    category = DECLARATION_CATEGORY_BY_CASE_ID.get(case_id)
+    if category is None:
+        raise ValueError(f"{context}.case_id is not a report plan declaration ID")
+    if case_kind != "execution_declaration":
+        raise ValueError(f"{context}.case_kind must equal execution_declaration")
+
+    expected_strings = {
+        "run_id": DECLARATION_PLACEHOLDER,
+        "status": "未执行及原因",
+        "started_at": DECLARATION_PLACEHOLDER,
+        "finished_at": DECLARATION_PLACEHOLDER,
+        "target": DECLARATION_TARGET,
+        "command": DECLARATION_PLACEHOLDER,
+        "reason": DECLARATION_REASON,
+    }
+    for field, expected in expected_strings.items():
+        if strings[field] != expected:
+            raise ValueError(f"{context}.{field} must equal {expected}")
+    expected_evidence = [f"{category}/cases.json"]
+    if evidence != expected_evidence:
+        raise ValueError(f"{context}.evidence must equal {expected_evidence}")
+    if mock is not False:
+        raise ValueError(f"{context}.mock must be false for execution_declaration")
+
+
 def validate_cases_envelope(document: object) -> None:
     envelope = _require_exact_object(
         document,
@@ -424,6 +479,13 @@ def validate_cases_envelope(document: object) -> None:
         seen_case_ids.add(case_id)
         if strings["status"] not in STATUSES:
             raise ValueError(f"{context}.status is unknown: {strings['status']}")
+        if (
+            strings["case_kind"] == "execution_declaration"
+            and strings["status"] != "未执行及原因"
+        ):
+            raise ValueError(
+                f"{context} execution_declaration status must be 未执行及原因"
+            )
 
         evidence = [
             _require_string(
@@ -435,6 +497,12 @@ def validate_cases_envelope(document: object) -> None:
         ]
         if type(case["mock"]) is not bool:
             raise ValueError(f"{context}.mock must be a boolean")
+        _validate_execution_declaration(
+            strings=strings,
+            evidence=evidence,
+            mock=case["mock"],
+            context=context,
+        )
         if canonical_smoke_operator is not None:
             if strings["target"] != canonical_smoke_operator:
                 raise ValueError(

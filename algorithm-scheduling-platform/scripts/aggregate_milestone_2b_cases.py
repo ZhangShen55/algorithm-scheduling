@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import importlib
 import json
 import os
 import re
+import secrets
 import stat
 import sys
 from collections.abc import Iterator
@@ -19,10 +21,14 @@ import yaml  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from scripts.milestone_2b_report_contract import (
+        DECLARATION_PLACEHOLDER,
+        DECLARATION_TARGET,
         CaseRecord,
         Coverage,
+        expand_declaration_cases,
         load_report_plan,
         strict_json_loads,
+        validate_cases_envelope,
     )
 else:
     _contract = importlib.import_module(
@@ -30,10 +36,14 @@ else:
         if __package__
         else "milestone_2b_report_contract"
     )
+    DECLARATION_PLACEHOLDER = _contract.DECLARATION_PLACEHOLDER
+    DECLARATION_TARGET = _contract.DECLARATION_TARGET
     CaseRecord = _contract.CaseRecord
     Coverage = _contract.Coverage
+    expand_declaration_cases = _contract.expand_declaration_cases
     load_report_plan = _contract.load_report_plan
     strict_json_loads = _contract.strict_json_loads
+    validate_cases_envelope = _contract.validate_cases_envelope
 
 EXPECTED_PROFILES = ("gpu0", "gpu1", "gpu2", "cpu")
 EXPECTED_FACEREC_INSTANCES = (
@@ -92,6 +102,26 @@ EXPECTED_SMOKE_OPERATOR_CODES = frozenset(
         "screen_det",
         "text_analysis",
         "vbas",
+    }
+)
+DECLARATION_CATEGORIES = ("negative", "load")
+DECLARATION_FIELDS = {
+    "schema_version",
+    "evidence_type",
+    "category",
+    "status",
+    "mock",
+    "release_tag",
+    "git_sha",
+    "reason",
+    "cases",
+}
+DECLARATION_CASE_FIELDS = {"case_id", "status"}
+PUBLISH_PATHS = frozenset(
+    {
+        Path("negative/cases.json"),
+        Path("load/cases.json"),
+        Path("summary/cases.json"),
     }
 )
 
@@ -187,6 +217,374 @@ def _require_unique_string_list(
     if len(items) != len(set(items)):
         raise ValueError(f"{context} must contain unique strings")
     return items
+
+
+def _stable_json_bytes(document: object) -> bytes:
+    try:
+        serialized = json.dumps(
+            document,
+            allow_nan=False,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("publication document is not strict JSON") from exc
+    return (serialized + "\n").encode("utf-8")
+
+
+@contextmanager
+def _publication_directory_descriptor(
+    release_root: Path, parent_path: Path
+) -> Iterator[int]:
+    if parent_path.is_absolute() or len(parent_path.parts) != 1:
+        raise ValueError(f"publication parent path is not canonical: {parent_path}")
+    parent_name = parent_path.parts[0]
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    with _release_directory_descriptor(release_root, Path()) as root_descriptor:
+        try:
+            named_parent = os.stat(
+                parent_name,
+                dir_fd=root_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            try:
+                os.mkdir(parent_name, mode=0o700, dir_fd=root_descriptor)
+            except FileExistsError:
+                pass
+            else:
+                os.fsync(root_descriptor)
+            try:
+                named_parent = os.stat(
+                    parent_name,
+                    dir_fd=root_descriptor,
+                    follow_symlinks=False,
+                )
+            except OSError as exc:
+                raise ValueError(
+                    f"failed to create publication directory: {parent_path}"
+                ) from exc
+        except OSError as exc:
+            raise ValueError(
+                f"failed to inspect publication directory: {parent_path}"
+            ) from exc
+        if stat.S_ISLNK(named_parent.st_mode) or not stat.S_ISDIR(
+            named_parent.st_mode
+        ):
+            raise ValueError(
+                f"publication parent must be a real directory: {parent_path}"
+            )
+        try:
+            parent_descriptor = os.open(
+                parent_name,
+                directory_flags,
+                dir_fd=root_descriptor,
+            )
+        except OSError as exc:
+            raise ValueError(
+                f"failed to open publication directory: {parent_path}"
+            ) from exc
+        try:
+            opened_parent = os.fstat(parent_descriptor)
+            if not stat.S_ISDIR(opened_parent.st_mode) or not _same_filesystem_object(
+                named_parent, opened_parent
+            ):
+                raise ValueError(
+                    f"publication directory changed while opening: {parent_path}"
+                )
+            yield parent_descriptor
+            named_after = os.stat(
+                parent_name,
+                dir_fd=root_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                stat.S_ISLNK(named_after.st_mode)
+                or not stat.S_ISDIR(named_after.st_mode)
+                or not _same_filesystem_object(named_after, opened_parent)
+            ):
+                raise ValueError(
+                    f"publication directory changed during access: {parent_path}"
+                )
+        except OSError as exc:
+            raise ValueError(
+                f"failed to access publication directory: {parent_path}"
+            ) from exc
+        finally:
+            os.close(parent_descriptor)
+
+
+def _read_existing_publication(parent_descriptor: int, name: str) -> bytes:
+    try:
+        named = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except OSError as exc:
+        raise ValueError(f"failed to inspect existing publication: {name}") from exc
+    if stat.S_ISLNK(named.st_mode) or not stat.S_ISREG(named.st_mode):
+        raise ValueError(f"existing publication must be a regular file: {name}")
+    if stat.S_IMODE(named.st_mode) != 0o600:
+        raise ValueError(f"existing publication must have mode 0600: {name}")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(name, flags, dir_fd=parent_descriptor)
+    except OSError as exc:
+        raise ValueError(f"failed to open existing publication: {name}") from exc
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or not _same_filesystem_object(
+            named, opened
+        ):
+            raise ValueError(f"existing publication changed while opening: {name}")
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        named_after = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+        opened_after = os.fstat(descriptor)
+        if (
+            stat.S_ISLNK(named_after.st_mode)
+            or not stat.S_ISREG(named_after.st_mode)
+            or not _same_filesystem_object(named_after, opened_after)
+        ):
+            raise ValueError(f"existing publication changed during read: {name}")
+        return b"".join(chunks)
+    except OSError as exc:
+        raise ValueError(f"failed to read existing publication: {name}") from exc
+    finally:
+        os.close(descriptor)
+
+
+def _create_publication_temp(parent_descriptor: int, final_name: str) -> tuple[int, str]:
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    for _ in range(128):
+        temp_name = f".{final_name}.{secrets.token_hex(16)}.tmp"
+        try:
+            descriptor = os.open(
+                temp_name,
+                flags,
+                0o600,
+                dir_fd=parent_descriptor,
+            )
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            raise ValueError(f"failed to create publication temp for {final_name}") from exc
+        return descriptor, temp_name
+    raise ValueError(f"failed to allocate unique publication temp for {final_name}")
+
+
+def publish_json_once(
+    *, release_root: Path, relative_path: Path, document: object
+) -> None:
+    if relative_path not in PUBLISH_PATHS:
+        raise ValueError(f"publication path is not canonical: {relative_path}")
+    _require_release_root(release_root)
+    payload = _stable_json_bytes(document)
+    parent_path = relative_path.parent
+    final_name = relative_path.name
+    with _publication_directory_descriptor(
+        release_root, parent_path
+    ) as parent_descriptor:
+        temp_descriptor, temp_name = _create_publication_temp(
+            parent_descriptor, final_name
+        )
+        temp_exists = True
+        try:
+            offset = 0
+            while offset < len(payload):
+                written = os.write(temp_descriptor, payload[offset:])
+                if written <= 0:
+                    raise ValueError(
+                        f"short write while publishing JSON: {relative_path}"
+                    )
+                offset += written
+            os.fchmod(temp_descriptor, 0o600)
+            os.fsync(temp_descriptor)
+            temp_metadata = os.fstat(temp_descriptor)
+            if not stat.S_ISREG(temp_metadata.st_mode) or stat.S_IMODE(
+                temp_metadata.st_mode
+            ) != 0o600:
+                raise ValueError(
+                    f"publication temp is not a 0600 regular file: {relative_path}"
+                )
+            os.close(temp_descriptor)
+            temp_descriptor = -1
+            try:
+                os.link(
+                    temp_name,
+                    final_name,
+                    src_dir_fd=parent_descriptor,
+                    dst_dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+            except OSError as exc:
+                if exc.errno != errno.EEXIST:
+                    raise ValueError(
+                        f"failed to hard-link publication: {relative_path}"
+                    ) from exc
+                existing = _read_existing_publication(parent_descriptor, final_name)
+                if existing != payload:
+                    raise ValueError(
+                        "publication already exists with different bytes: "
+                        f"{relative_path}"
+                    ) from exc
+            else:
+                published = _read_existing_publication(parent_descriptor, final_name)
+                if published != payload:
+                    raise ValueError(
+                        f"published bytes changed unexpectedly: {relative_path}"
+                    )
+        except OSError as exc:
+            raise ValueError(f"failed to publish JSON: {relative_path}") from exc
+        finally:
+            if temp_descriptor >= 0:
+                os.close(temp_descriptor)
+            if temp_exists:
+                try:
+                    os.unlink(temp_name, dir_fd=parent_descriptor)
+                except FileNotFoundError:
+                    temp_exists = False
+                except OSError as exc:
+                    raise ValueError(
+                        f"failed to remove publication temp: {relative_path}"
+                    ) from exc
+                else:
+                    temp_exists = False
+            os.fsync(parent_descriptor)
+
+
+def _declaration_document(
+    *,
+    category: str,
+    source_cases: list[dict[str, Any]],
+    release_tag: str,
+    git_sha: str,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "evidence_type": "execution_declaration",
+        "category": category,
+        "status": DECLARATION_PLACEHOLDER,
+        "mock": False,
+        "release_tag": release_tag,
+        "git_sha": git_sha,
+        "reason": reason,
+        "cases": [
+            {"case_id": case["case_id"], "status": DECLARATION_PLACEHOLDER}
+            for case in source_cases
+        ],
+    }
+
+
+def _validate_declaration_document(
+    value: object,
+    *,
+    expected: dict[str, Any],
+    context: str,
+) -> None:
+    document = _require_object(value, context)
+    _require_exact_fields(document, DECLARATION_FIELDS, context)
+    raw_cases = _require_list(document.get("cases"), f"{context}.cases")
+    expected_cases = cast(list[dict[str, Any]], expected["cases"])
+    if len(raw_cases) != len(expected_cases):
+        raise ValueError(
+            f"{context}.cases must contain exactly {len(expected_cases)} items"
+        )
+    for index, (raw_case, expected_case) in enumerate(
+        zip(raw_cases, expected_cases, strict=True)
+    ):
+        case_context = f"{context}.cases[{index}]"
+        case = _require_object(raw_case, case_context)
+        _require_exact_fields(case, DECLARATION_CASE_FIELDS, case_context)
+        if case.get("status") != DECLARATION_PLACEHOLDER:
+            raise ValueError(
+                f"{case_context}.status must equal {DECLARATION_PLACEHOLDER}"
+            )
+        if case != expected_case:
+            raise ValueError(f"{case_context} does not match the report plan authority")
+    if document != expected:
+        raise ValueError(f"{context} does not match the report plan authority")
+
+
+def materialize_declaration_cases(
+    *,
+    release_root: Path,
+    report_plan: dict[str, Any],
+    release_tag: str,
+    git_sha: str,
+) -> tuple[list[CaseRecord], dict[str, Coverage]]:
+    _require_string(release_tag, "release_tag")
+    if GIT_SHA_PATTERN.fullmatch(git_sha) is None:
+        raise ValueError("git_sha must be 40 lowercase hexadecimal characters")
+    _require_release_root(release_root)
+    expanded = cast(list[dict[str, Any]], expand_declaration_cases(report_plan))
+    reason = _require_string(expanded[0]["reason"], "declarations.reason")
+    cases: list[CaseRecord] = []
+    coverage: dict[str, Coverage] = {}
+    for category in DECLARATION_CATEGORIES:
+        source_cases = [
+            case for case in expanded if case.get("case_kind") == category
+        ]
+        relative_path = Path(f"{category}/cases.json")
+        document = _declaration_document(
+            category=category,
+            source_cases=source_cases,
+            release_tag=release_tag,
+            git_sha=git_sha,
+            reason=reason,
+        )
+        try:
+            publish_json_once(
+                release_root=release_root,
+                relative_path=relative_path,
+                document=document,
+            )
+        except ValueError as publication_error:
+            try:
+                existing = _load_release_json(release_root, relative_path)
+            except ValueError as read_error:
+                raise publication_error from read_error
+            _validate_declaration_document(
+                existing,
+                expected=document,
+                context=relative_path.as_posix(),
+            )
+            raise publication_error
+        for source_case in source_cases:
+            cases.append(
+                _case_record(
+                    case_id=cast(str, source_case["case_id"]),
+                    case_kind="execution_declaration",
+                    run_id=DECLARATION_PLACEHOLDER,
+                    status="未执行及原因",
+                    started_at=DECLARATION_PLACEHOLDER,
+                    finished_at=DECLARATION_PLACEHOLDER,
+                    target=DECLARATION_TARGET,
+                    command=DECLARATION_PLACEHOLDER,
+                    evidence=relative_path,
+                    reason=reason,
+                    release_tag=release_tag,
+                    git_sha=git_sha,
+                )
+            )
+        coverage[f"{category}_declarations"] = {
+            "expected": len(source_cases),
+            "observed": len(source_cases),
+            "passed": 0,
+        }
+    return cases, coverage
 
 
 def load_smoke_manifest(path: str | Path) -> list[dict[str, Any]]:
@@ -1767,6 +2165,32 @@ def collect_registration_gpu_cases(
     return cases, coverage
 
 
+def _case_sort_key(case: CaseRecord) -> tuple[int, str, str, str]:
+    case_kind = case["case_kind"]
+    evidence = case["evidence"]
+    if case_kind.startswith("registration_"):
+        group = 0
+    elif case_kind == "gpu_running":
+        group = 1
+    elif case_kind == "gpu_stopped":
+        group = 2
+    elif case_kind == "smoke_full":
+        group = 3
+    elif case_kind in {"smoke_gpu_trigger", "smoke_cpu_instance"}:
+        group = 4
+    elif case_kind == "execution_declaration" and evidence == [
+        "negative/cases.json"
+    ]:
+        group = 5
+    elif case_kind == "execution_declaration" and evidence == ["load/cases.json"]:
+        group = 6
+    else:
+        raise ValueError(
+            f"case has an unknown aggregation source: {case['case_id']}"
+        )
+    return group, case["target"], case["run_id"], case["case_id"]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="aggregate milestone 2B release evidence",
@@ -1790,14 +2214,17 @@ def main() -> int:
         git_sha = arguments.release_root.name
         if arguments.release_root.parent.parent.name != "releases":
             raise ValueError("release root must use releases/<release_tag>/<git_sha>")
-        collect_registration_gpu_cases(
+        expected_output = arguments.release_root / "summary" / "cases.json"
+        if arguments.output != expected_output:
+            raise ValueError(f"--output must equal {expected_output}")
+        registration_cases, registration_coverage = collect_registration_gpu_cases(
             release_root=arguments.release_root,
             inventory=inventory,
             report_plan=report_plan,
             release_tag=release_tag,
             git_sha=git_sha,
         )
-        collect_smoke_cases(
+        smoke_cases, smoke_coverage = collect_smoke_cases(
             release_root=arguments.release_root,
             inventory=inventory,
             report_plan=report_plan,
@@ -1805,10 +2232,42 @@ def main() -> int:
             release_tag=release_tag,
             git_sha=git_sha,
         )
-        raise ValueError(
-            "Declaration coverage collector and publication are not implemented; "
-            "refusing to publish output before Task 4"
+        declaration_cases, declaration_coverage = materialize_declaration_cases(
+            release_root=arguments.release_root,
+            report_plan=report_plan,
+            release_tag=release_tag,
+            git_sha=git_sha,
         )
+        coverage = {
+            **registration_coverage,
+            **smoke_coverage,
+            **declaration_coverage,
+        }
+        cases = sorted(
+            registration_cases + smoke_cases + declaration_cases,
+            key=_case_sort_key,
+        )
+        try:
+            plan_bytes = arguments.report_plan.read_bytes()
+        except OSError as exc:
+            raise ValueError(
+                f"failed to read report plan bytes: {arguments.report_plan}"
+            ) from exc
+        envelope = {
+            "schema_version": 1,
+            "release_tag": release_tag,
+            "git_sha": git_sha,
+            "plan_sha256": hashlib.sha256(plan_bytes).hexdigest(),
+            "coverage": coverage,
+            "cases": cases,
+        }
+        validate_cases_envelope(envelope)
+        publish_json_once(
+            release_root=arguments.release_root,
+            relative_path=Path("summary/cases.json"),
+            document=envelope,
+        )
+        return 0
     except (OSError, ValueError) as exc:
         print(f"milestone 2B aggregation failed: {exc}", file=sys.stderr)
         return 1
