@@ -3067,6 +3067,42 @@ def _run_smoke(
     )
 
 
+def _ppt_main_args(
+    tmp_path: Path,
+    http_url: str,
+    manifest: Path,
+    *,
+    repeat: int,
+) -> Any:
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("192.0.2.1", 9))
+        callback_host = probe.getsockname()[0]
+    finally:
+        probe.close()
+    return SMOKE_MODULE.argparse.Namespace(
+        release_tag=TAG,
+        git_sha=SHA,
+        reports_root=tmp_path / "reports",
+        fixture_manifest=manifest,
+        external_fixture_root=manifest.parent / "fixtures",
+        fixture_target_root=tmp_path / "staged",
+        result_root=tmp_path / "result",
+        callback_listen_host="0.0.0.0",
+        callback_advertise_base_url=f"http://{callback_host}",
+        endpoints_json=json.dumps({"ppt_slice": http_url}),
+        cases="ppt_slice",
+        operator=None,
+        instance=None,
+        run_id=None,
+        repeat=repeat,
+        hold_seconds=0.0,
+        case_manifest=SMOKE_MODULE.DEFAULT_CASES,
+        timeout_seconds=2.0,
+        mock=True,
+    )
+
+
 def test_smoke_runner_supports_file_endpoint_and_append_only_instance_run(
     tmp_path: Path,
 ) -> None:
@@ -3618,6 +3654,117 @@ def test_ppt_smoke_rejects_symlink_and_non_regular_slice_images(
     evidence = json.loads((_release(tmp_path) / "smoke/ppt_slice.json").read_text())
     assert evidence["status"] == "失败"
     _assert_ppt_failure_context(evidence, submitted)
+
+
+def test_ppt_pre_submit_failure_after_success_does_not_duplicate_previous_attempt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    submitted: list[dict[str, Any]] = []
+    handler = _smoke_handler(tmp_path)
+    generated = iter((uuid.UUID(int=1), uuid.UUID(int=2)))
+
+    def fail_before_second_submission() -> uuid.UUID:
+        try:
+            return next(generated)
+        except StopIteration as error:
+            raise RuntimeError("injected pre-submit failure") from error
+
+    def inspect(path: str, headers: Any, body: bytes) -> tuple[int, Any]:
+        if path == "/LocalVideoPPTSliceTasks/v1.0.0":
+            submitted.append(json.loads(body))
+        return handler(path, headers, body)
+
+    with _Server({}, inspect) as http_url:
+        monkeypatch.setattr(
+            SMOKE_MODULE,
+            "parse_args",
+            lambda: _ppt_main_args(tmp_path, http_url, manifest, repeat=2),
+        )
+        monkeypatch.setattr(SMOKE_MODULE.uuid, "uuid4", fail_before_second_submission)
+        completed = SMOKE_MODULE.main()
+
+    assert completed == 1
+    assert len(submitted) == 1
+    evidence = json.loads((_release(tmp_path) / "smoke/ppt_slice.json").read_text())
+    assert "injected pre-submit failure" in evidence["reason"]
+    assert evidence["summary"]["attempt_count"] == 1
+    assert len(evidence["summary"]["attempts"]) == 1
+    assert evidence["summary"]["attempts"][0]["task_id"] == submitted[0]["task_id"]
+
+
+def test_ppt_success_evidence_write_failure_does_not_create_a_failed_attempt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    submitted: list[dict[str, Any]] = []
+    handler = _smoke_handler(tmp_path)
+    real_atomic_json = SMOKE_MODULE.atomic_json
+
+    def fail_pass_evidence(path: Path, payload: Any) -> None:
+        if isinstance(payload, dict) and payload.get("status") == "PASS":
+            raise RuntimeError("injected PASS evidence failure")
+        real_atomic_json(path, payload)
+
+    def inspect(path: str, headers: Any, body: bytes) -> tuple[int, Any]:
+        if path == "/LocalVideoPPTSliceTasks/v1.0.0":
+            submitted.append(json.loads(body))
+        return handler(path, headers, body)
+
+    with _Server({}, inspect) as http_url:
+        monkeypatch.setattr(
+            SMOKE_MODULE,
+            "parse_args",
+            lambda: _ppt_main_args(tmp_path, http_url, manifest, repeat=1),
+        )
+        monkeypatch.setattr(SMOKE_MODULE, "atomic_json", fail_pass_evidence)
+        completed = SMOKE_MODULE.main()
+
+    assert completed == 1
+    assert len(submitted) == 1
+    evidence = json.loads((_release(tmp_path) / "smoke/ppt_slice.json").read_text())
+    assert "injected PASS evidence failure" in evidence["reason"]
+    assert evidence["summary"]["attempt_count"] == 1
+    assert len(evidence["summary"]["attempts"]) == 1
+    assert evidence["summary"]["attempts"][0].get("status") != "失败"
+
+
+def test_ppt_second_submitted_request_failure_keeps_both_actual_attempt_ids(
+    tmp_path: Path,
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    submitted: list[dict[str, Any]] = []
+    handler = _smoke_handler(tmp_path)
+
+    def fail_second_request(path: str, headers: Any, body: bytes) -> tuple[int, Any]:
+        if path == "/LocalVideoPPTSliceTasks/v1.0.0":
+            submitted.append(json.loads(body))
+            if len(submitted) == 2:
+                return 503, {"detail": "injected operator failure"}
+        return handler(path, headers, body)
+
+    with _WebSocketServer() as ws_url, _Server({}, fail_second_request) as http_url:
+        completed = _run_smoke(
+            tmp_path,
+            http_url,
+            ws_url,
+            manifest,
+            cases="ppt_slice",
+            extra_arguments=("--repeat", "2"),
+        )
+
+    assert completed.returncode != 0
+    assert len(submitted) == 2
+    evidence = json.loads((_release(tmp_path) / "smoke/ppt_slice.json").read_text())
+    attempts = evidence["summary"]["attempts"]
+    assert evidence["summary"]["attempt_count"] == 2
+    assert [attempt["task_id"] for attempt in attempts] == [
+        request["task_id"] for request in submitted
+    ]
+    assert len({attempt["task_id"] for attempt in attempts}) == 2
+    assert attempts[1]["status"] == "失败"
 
 
 def test_text_analysis_smoke_uses_the_current_course_overview_contract(

@@ -904,6 +904,7 @@ def smoke_ppt(
     result_root: Path,
     task_id: str,
     operator_task_id: str,
+    mark_submitted: Callable[[str, str], None],
     activity: ActivityEmitter | None = None,
 ) -> dict[str, Any]:
     with CallbackCapture(
@@ -911,6 +912,7 @@ def smoke_ppt(
         advertise_base_url=callback_advertise_base_url,
     ) as callback:
         with activity_window(activity):
+            mark_submitted(task_id, operator_task_id)
             accepted_response = http.post(
                 endpoint.rstrip("/") + "/LocalVideoPPTSliceTasks/v1.0.0",
                 json={
@@ -1272,6 +1274,7 @@ def main() -> int:
                     )
                     hold_deadline = time.monotonic() + args.hold_seconds
                     while len(attempts) < args.repeat or time.monotonic() < hold_deadline:
+                        ppt_attempt_context = None
                         attempt_number = len(attempts) + 1
                         attempt_activity = (
                             bind_activity(
@@ -1286,12 +1289,22 @@ def main() -> int:
                             else None
                         )
                         if code == "ppt_slice":
-                            ppt_attempt_context = {
+                            allocated_context = {
                                 "task_id": "harness-ppt-" + uuid.uuid4().hex,
                                 "operator_task_id": (
                                     "harness-ppt-operator-" + uuid.uuid4().hex
                                 ),
                             }
+
+                            def mark_ppt_submitted(
+                                task_id: str, operator_task_id: str
+                            ) -> None:
+                                nonlocal ppt_attempt_context
+                                ppt_attempt_context = {
+                                    "task_id": task_id,
+                                    "operator_task_id": operator_task_id,
+                                }
+
                             attempt = smoke_ppt(
                                 http,
                                 endpoint_value,
@@ -1302,10 +1315,12 @@ def main() -> int:
                                     args.callback_advertise_base_url
                                 ),
                                 result_root=args.result_root,
-                                task_id=ppt_attempt_context["task_id"],
-                                operator_task_id=ppt_attempt_context["operator_task_id"],
+                                task_id=allocated_context["task_id"],
+                                operator_task_id=allocated_context["operator_task_id"],
+                                mark_submitted=mark_ppt_submitted,
                                 activity=attempt_activity,
                             )
+                            ppt_attempt_context = None
                         else:
                             attempt = RUNNERS[code](
                                 http,
@@ -1364,19 +1379,24 @@ def main() -> int:
                         "release_tag": tag,
                         "git_sha": sha,
                     }
-                    if code == "ppt_slice" and ppt_attempt_context is not None:
-                        failed_attempt = {
-                            **ppt_attempt_context,
-                            "status": "失败",
-                            "reason": reason,
-                        }
-                        failure_evidence["summary"] = {
-                            **ppt_attempt_context,
-                            "repeat": args.repeat,
-                            "attempt_count": len(attempts) + 1,
-                            "hold_seconds": args.hold_seconds,
-                            "attempts": [*attempts, failed_attempt],
-                        }
+                    if code == "ppt_slice":
+                        failure_attempts = [*attempts]
+                        if ppt_attempt_context is not None:
+                            failure_attempts.append(
+                                {
+                                    **ppt_attempt_context,
+                                    "status": "失败",
+                                    "reason": reason,
+                                }
+                            )
+                        if failure_attempts:
+                            failure_evidence["summary"] = {
+                                **failure_attempts[-1],
+                                "repeat": args.repeat,
+                                "attempt_count": len(failure_attempts),
+                                "hold_seconds": args.hold_seconds,
+                                "attempts": failure_attempts,
+                            }
                     atomic_json(
                         evidence_path,
                         failure_evidence,
