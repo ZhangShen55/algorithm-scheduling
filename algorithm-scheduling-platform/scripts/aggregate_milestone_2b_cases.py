@@ -26,7 +26,7 @@ if TYPE_CHECKING:
         CaseRecord,
         Coverage,
         expand_declaration_cases,
-        load_report_plan,
+        load_report_plan_bytes,
         strict_json_loads,
         validate_cases_envelope,
     )
@@ -41,7 +41,7 @@ else:
     CaseRecord = _contract.CaseRecord
     Coverage = _contract.Coverage
     expand_declaration_cases = _contract.expand_declaration_cases
-    load_report_plan = _contract.load_report_plan
+    load_report_plan_bytes = _contract.load_report_plan_bytes
     strict_json_loads = _contract.strict_json_loads
     validate_cases_envelope = _contract.validate_cases_envelope
 
@@ -233,6 +233,22 @@ def _stable_json_bytes(document: object) -> bytes:
     return (serialized + "\n").encode("utf-8")
 
 
+def _require_secure_publication_parent(
+    metadata: os.stat_result, parent_path: Path
+) -> None:
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise ValueError(f"publication parent must be a directory: {parent_path}")
+    if metadata.st_uid != os.getuid():
+        raise ValueError(
+            f"publication parent must be owned by the current UID: {parent_path}"
+        )
+    if stat.S_IMODE(metadata.st_mode) & 0o022:
+        raise ValueError(
+            "publication parent must not be group- or other-writable: "
+            f"{parent_path}"
+        )
+
+
 @contextmanager
 def _publication_directory_descriptor(
     release_root: Path, parent_path: Path
@@ -279,6 +295,7 @@ def _publication_directory_descriptor(
             raise ValueError(
                 f"publication parent must be a real directory: {parent_path}"
             )
+        _require_secure_publication_parent(named_parent, parent_path)
         try:
             parent_descriptor = os.open(
                 parent_name,
@@ -297,20 +314,24 @@ def _publication_directory_descriptor(
                 raise ValueError(
                     f"publication directory changed while opening: {parent_path}"
                 )
+            _require_secure_publication_parent(opened_parent, parent_path)
             yield parent_descriptor
             named_after = os.stat(
                 parent_name,
                 dir_fd=root_descriptor,
                 follow_symlinks=False,
             )
+            opened_after = os.fstat(parent_descriptor)
             if (
                 stat.S_ISLNK(named_after.st_mode)
                 or not stat.S_ISDIR(named_after.st_mode)
-                or not _same_filesystem_object(named_after, opened_parent)
+                or not _same_filesystem_object(named_after, opened_after)
             ):
                 raise ValueError(
                     f"publication directory changed during access: {parent_path}"
                 )
+            _require_secure_publication_parent(named_after, parent_path)
+            _require_secure_publication_parent(opened_after, parent_path)
         except OSError as exc:
             raise ValueError(
                 f"failed to access publication directory: {parent_path}"
@@ -319,7 +340,12 @@ def _publication_directory_descriptor(
             os.close(parent_descriptor)
 
 
-def _read_existing_publication(parent_descriptor: int, name: str) -> bytes:
+def _read_existing_publication(
+    parent_descriptor: int,
+    name: str,
+    *,
+    expected_inode: os.stat_result | None = None,
+) -> bytes:
     try:
         named = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
     except OSError as exc:
@@ -328,6 +354,10 @@ def _read_existing_publication(parent_descriptor: int, name: str) -> bytes:
         raise ValueError(f"existing publication must be a regular file: {name}")
     if stat.S_IMODE(named.st_mode) != 0o600:
         raise ValueError(f"existing publication must have mode 0600: {name}")
+    if expected_inode is not None and not _same_filesystem_object(
+        named, expected_inode
+    ):
+        raise ValueError(f"existing publication inode does not match temp: {name}")
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(name, flags, dir_fd=parent_descriptor)
@@ -339,6 +369,10 @@ def _read_existing_publication(parent_descriptor: int, name: str) -> bytes:
             named, opened
         ):
             raise ValueError(f"existing publication changed while opening: {name}")
+        if expected_inode is not None and not _same_filesystem_object(
+            opened, expected_inode
+        ):
+            raise ValueError(f"opened publication inode does not match temp: {name}")
         chunks: list[bytes] = []
         while True:
             chunk = os.read(descriptor, 1024 * 1024)
@@ -350,7 +384,12 @@ def _read_existing_publication(parent_descriptor: int, name: str) -> bytes:
         if (
             stat.S_ISLNK(named_after.st_mode)
             or not stat.S_ISREG(named_after.st_mode)
+            or stat.S_IMODE(named_after.st_mode) != 0o600
             or not _same_filesystem_object(named_after, opened_after)
+            or (
+                expected_inode is not None
+                and not _same_filesystem_object(opened_after, expected_inode)
+            )
         ):
             raise ValueError(f"existing publication changed during read: {name}")
         return b"".join(chunks)
@@ -384,6 +423,99 @@ def _create_publication_temp(parent_descriptor: int, final_name: str) -> tuple[i
     raise ValueError(f"failed to allocate unique publication temp for {final_name}")
 
 
+def _publication_name_metadata(parent_descriptor: int, name: str) -> os.stat_result:
+    try:
+        return os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except OSError as exc:
+        raise ValueError(f"failed to inspect publication name: {name}") from exc
+
+
+def _require_temp_name_binding(
+    parent_descriptor: int,
+    temp_name: str,
+    temp_metadata: os.stat_result,
+    relative_path: Path,
+) -> None:
+    named_temp = _publication_name_metadata(parent_descriptor, temp_name)
+    if (
+        stat.S_ISLNK(named_temp.st_mode)
+        or not stat.S_ISREG(named_temp.st_mode)
+        or stat.S_IMODE(named_temp.st_mode) != 0o600
+        or not _same_filesystem_object(named_temp, temp_metadata)
+    ):
+        raise ValueError(
+            f"publication temp name changed before link: {relative_path}"
+        )
+
+
+def _unlink_temp_name_if_bound(
+    parent_descriptor: int,
+    temp_descriptor: int,
+    temp_name: str,
+    relative_path: Path,
+) -> None:
+    opened_temp = os.fstat(temp_descriptor)
+    try:
+        named_temp = os.stat(
+            temp_name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise ValueError(
+            f"failed to inspect publication temp during cleanup: {relative_path}"
+        ) from exc
+    if (
+        stat.S_ISLNK(named_temp.st_mode)
+        or not stat.S_ISREG(named_temp.st_mode)
+        or stat.S_IMODE(named_temp.st_mode) != 0o600
+        or not _same_filesystem_object(named_temp, opened_temp)
+    ):
+        return
+    try:
+        os.unlink(temp_name, dir_fd=parent_descriptor)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise ValueError(
+            f"failed to remove publication temp: {relative_path}"
+        ) from exc
+
+
+def _rollback_linked_publication_if_unchanged(
+    parent_descriptor: int,
+    final_name: str,
+    first_metadata: os.stat_result,
+    relative_path: Path,
+) -> None:
+    try:
+        confirmed = os.stat(
+            final_name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        os.fsync(parent_descriptor)
+        return
+    except OSError as exc:
+        raise ValueError(
+            f"failed to confirm publication inode for rollback: {relative_path}"
+        ) from exc
+    if not _same_filesystem_object(confirmed, first_metadata):
+        return
+    try:
+        os.unlink(final_name, dir_fd=parent_descriptor)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise ValueError(
+            f"failed to roll back publication inode: {relative_path}"
+        ) from exc
+    os.fsync(parent_descriptor)
+
+
 def publish_json_once(
     *, release_root: Path, relative_path: Path, document: object
 ) -> None:
@@ -399,7 +531,6 @@ def publish_json_once(
         temp_descriptor, temp_name = _create_publication_temp(
             parent_descriptor, final_name
         )
-        temp_exists = True
         try:
             offset = 0
             while offset < len(payload):
@@ -418,8 +549,12 @@ def publish_json_once(
                 raise ValueError(
                     f"publication temp is not a 0600 regular file: {relative_path}"
                 )
-            os.close(temp_descriptor)
-            temp_descriptor = -1
+            _require_temp_name_binding(
+                parent_descriptor,
+                temp_name,
+                temp_metadata,
+                relative_path,
+            )
             try:
                 os.link(
                     temp_name,
@@ -440,28 +575,96 @@ def publish_json_once(
                         f"{relative_path}"
                     ) from exc
             else:
-                published = _read_existing_publication(parent_descriptor, final_name)
+                final_metadata = _publication_name_metadata(
+                    parent_descriptor, final_name
+                )
+                if (
+                    stat.S_ISLNK(final_metadata.st_mode)
+                    or not stat.S_ISREG(final_metadata.st_mode)
+                    or stat.S_IMODE(final_metadata.st_mode) != 0o600
+                    or not _same_filesystem_object(final_metadata, temp_metadata)
+                ):
+                    _rollback_linked_publication_if_unchanged(
+                        parent_descriptor,
+                        final_name,
+                        final_metadata,
+                        relative_path,
+                    )
+                    raise ValueError(
+                        f"published inode does not match temp: {relative_path}"
+                    )
+                try:
+                    published = _read_existing_publication(
+                        parent_descriptor,
+                        final_name,
+                        expected_inode=temp_metadata,
+                    )
+                except ValueError:
+                    try:
+                        current_final = os.stat(
+                            final_name,
+                            dir_fd=parent_descriptor,
+                            follow_symlinks=False,
+                        )
+                    except OSError:
+                        pass
+                    else:
+                        if _same_filesystem_object(current_final, temp_metadata):
+                            _rollback_linked_publication_if_unchanged(
+                                parent_descriptor,
+                                final_name,
+                                current_final,
+                                relative_path,
+                            )
+                    raise
                 if published != payload:
+                    current_final = _publication_name_metadata(
+                        parent_descriptor, final_name
+                    )
+                    if _same_filesystem_object(current_final, temp_metadata):
+                        _rollback_linked_publication_if_unchanged(
+                            parent_descriptor,
+                            final_name,
+                            current_final,
+                            relative_path,
+                        )
                     raise ValueError(
                         f"published bytes changed unexpectedly: {relative_path}"
                     )
         except OSError as exc:
             raise ValueError(f"failed to publish JSON: {relative_path}") from exc
         finally:
-            if temp_descriptor >= 0:
+            cleanup_error: ValueError | None = None
+            try:
+                _unlink_temp_name_if_bound(
+                    parent_descriptor,
+                    temp_descriptor,
+                    temp_name,
+                    relative_path,
+                )
+            except (OSError, ValueError) as exc:
+                cleanup_error = ValueError(
+                    f"failed to clean publication temp: {relative_path}"
+                )
+                cleanup_error.__cause__ = exc
+            try:
                 os.close(temp_descriptor)
-            if temp_exists:
-                try:
-                    os.unlink(temp_name, dir_fd=parent_descriptor)
-                except FileNotFoundError:
-                    temp_exists = False
-                except OSError as exc:
-                    raise ValueError(
-                        f"failed to remove publication temp: {relative_path}"
-                    ) from exc
-                else:
-                    temp_exists = False
-            os.fsync(parent_descriptor)
+            except OSError as exc:
+                if cleanup_error is None:
+                    cleanup_error = ValueError(
+                        f"failed to close publication temp: {relative_path}"
+                    )
+                    cleanup_error.__cause__ = exc
+            try:
+                os.fsync(parent_descriptor)
+            except OSError as exc:
+                if cleanup_error is None:
+                    cleanup_error = ValueError(
+                        f"failed to sync publication directory: {relative_path}"
+                    )
+                    cleanup_error.__cause__ = exc
+            if cleanup_error is not None:
+                raise cleanup_error
 
 
 def _declaration_document(
@@ -2208,7 +2411,13 @@ def main() -> int:
     arguments = parse_args()
     try:
         inventory = load_operator_inventory(arguments.operator_compose)
-        report_plan = load_report_plan(arguments.report_plan)
+        try:
+            plan_bytes = arguments.report_plan.read_bytes()
+        except OSError as exc:
+            raise ValueError(
+                f"failed to read report plan bytes: {arguments.report_plan}"
+            ) from exc
+        report_plan = load_report_plan_bytes(plan_bytes)
         smoke_manifest = load_smoke_manifest(arguments.smoke_manifest)
         release_tag = arguments.release_root.parent.name
         git_sha = arguments.release_root.name
@@ -2247,12 +2456,6 @@ def main() -> int:
             registration_cases + smoke_cases + declaration_cases,
             key=_case_sort_key,
         )
-        try:
-            plan_bytes = arguments.report_plan.read_bytes()
-        except OSError as exc:
-            raise ValueError(
-                f"failed to read report plan bytes: {arguments.report_plan}"
-            ) from exc
         envelope = {
             "schema_version": 1,
             "release_tag": release_tag,

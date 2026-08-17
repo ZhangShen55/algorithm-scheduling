@@ -38,6 +38,23 @@ COVERAGE_PARTIAL_OBSERVED_KEYS = frozenset({"smoke_gpu_trigger"})
 DECLARATION_COVERAGE_KEYS = frozenset(
     {"negative_declarations", "load_declarations"}
 )
+FIXED_CASE_KIND_COVERAGE = {
+    "registration_full": "registration_full",
+    "registration_profile": "registration_profiles",
+    "registration_recovery": "registration_recovery",
+    "registration_facerec": "registration_facerec",
+    "gpu_running": "gpu_running",
+    "gpu_stopped": "gpu_stopped",
+    "smoke_full": "smoke_full",
+}
+CASE_KINDS = frozenset(
+    {
+        *FIXED_CASE_KIND_COVERAGE,
+        "smoke_gpu_trigger",
+        "smoke_cpu_instance",
+        "execution_declaration",
+    }
+)
 CASE_FIELDS = (
     "case_id",
     "source_case_id",
@@ -350,12 +367,26 @@ def _validate_report_plan(value: object) -> dict[str, object]:
     return plan
 
 
+def load_report_plan_bytes(content: bytes) -> dict[str, object]:
+    if type(content) is not bytes:
+        raise ValueError("report plan content must be bytes")
+    try:
+        text = content.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ValueError("report plan bytes must be valid UTF-8") from exc
+    try:
+        loaded = strict_json_loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("report plan bytes must contain strict JSON") from exc
+    return _validate_report_plan(loaded)
+
+
 def load_report_plan(path: str | Path) -> dict[str, object]:
     try:
-        loaded = strict_json_loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        content = Path(path).read_bytes()
+    except OSError as exc:
         raise ValueError(f"failed to read report plan: {path}") from exc
-    return _validate_report_plan(loaded)
+    return load_report_plan_bytes(content)
 
 
 def expand_declaration_cases(plan: object) -> list[DeclarationCase]:
@@ -428,6 +459,129 @@ def _validate_execution_declaration(
         raise ValueError(f"{context}.mock must be false for execution_declaration")
 
 
+def _status_coverage(cases: list[dict[str, str]], expected: int) -> Coverage:
+    return {
+        "expected": expected,
+        "observed": len(cases),
+        "passed": sum(case["status"] == "通过" for case in cases),
+    }
+
+
+def _recompute_real_case_coverage(
+    cases_by_kind: dict[str, list[dict[str, str]]],
+) -> dict[str, Coverage]:
+    recomputed: dict[str, Coverage] = {}
+    for case_kind, coverage_key in FIXED_CASE_KIND_COVERAGE.items():
+        cases = cases_by_kind[case_kind]
+        expected = COVERAGE_EXPECTED[coverage_key]
+        if len(cases) != expected:
+            raise ValueError(
+                f"{case_kind} case count must equal {expected}, got {len(cases)}"
+            )
+        recomputed[coverage_key] = _status_coverage(cases, expected)
+
+    running_cases = cases_by_kind["gpu_running"]
+    stopped_cases = cases_by_kind["gpu_stopped"]
+    running_targets = {case["target"] for case in running_cases}
+    stopped_targets = {case["target"] for case in stopped_cases}
+    expected_gpu_targets = COVERAGE_EXPECTED["gpu_running"]
+    if len(running_targets) != expected_gpu_targets:
+        raise ValueError(
+            "gpu_running targets must contain exactly "
+            f"{expected_gpu_targets} distinct values"
+        )
+    if len(stopped_targets) != COVERAGE_EXPECTED["gpu_stopped"]:
+        raise ValueError(
+            "gpu_stopped targets must contain exactly "
+            f"{COVERAGE_EXPECTED['gpu_stopped']} distinct values"
+        )
+    if running_targets != stopped_targets:
+        raise ValueError("gpu_running and gpu_stopped target sets must be identical")
+
+    gpu_smoke_by_key: dict[tuple[str, str], dict[str, str]] = {}
+    for case in cases_by_kind["smoke_gpu_trigger"]:
+        target = case["target"]
+        if target not in running_targets:
+            raise ValueError(
+                "smoke_gpu_trigger target is not present in gpu_running targets: "
+                f"{target}"
+            )
+        key = (target, case["run_id"])
+        if key in gpu_smoke_by_key:
+            raise ValueError(
+                "smoke_gpu_trigger contains a duplicate target/run_id key: "
+                f"{target}/{case['run_id']}"
+            )
+        gpu_smoke_by_key[key] = case
+
+    gpu_observed = 0
+    gpu_passed = 0
+    for running in running_cases:
+        key = (running["target"], running["run_id"])
+        linked = gpu_smoke_by_key.get(key)
+        if linked is None:
+            if running["status"] == "通过":
+                raise ValueError(
+                    "passing gpu_running case has no matching smoke_gpu_trigger "
+                    f"target/run_id/status link: {running['target']}/{running['run_id']}"
+                )
+            continue
+        if linked["status"] != running["status"]:
+            raise ValueError(
+                "gpu_running and linked smoke_gpu_trigger statuses differ for "
+                f"{running['target']}/{running['run_id']}"
+            )
+        gpu_observed += 1
+        if linked["status"] == "通过":
+            gpu_passed += 1
+    recomputed["smoke_gpu_trigger"] = {
+        "expected": COVERAGE_EXPECTED["smoke_gpu_trigger"],
+        "observed": gpu_observed,
+        "passed": gpu_passed,
+    }
+
+    cpu_cases = cases_by_kind["smoke_cpu_instance"]
+    cpu_keys: set[tuple[str, str]] = set()
+    cpu_targets: set[str] = set()
+    passing_cpu_targets: set[str] = set()
+    for case in cpu_cases:
+        key = (case["target"], case["run_id"])
+        if key in cpu_keys:
+            raise ValueError(
+                "smoke_cpu_instance contains a duplicate target/run_id key: "
+                f"{case['target']}/{case['run_id']}"
+            )
+        cpu_keys.add(key)
+        cpu_targets.add(case["target"])
+        if case["status"] == "通过":
+            passing_cpu_targets.add(case["target"])
+    recomputed["smoke_cpu_instance"] = {
+        "expected": COVERAGE_EXPECTED["smoke_cpu_instance"],
+        "observed": len(cpu_targets),
+        "passed": len(passing_cpu_targets),
+    }
+    return recomputed
+
+
+def _require_recomputed_coverage(
+    reported: dict[str, object], recomputed: dict[str, Coverage]
+) -> None:
+    for coverage_key in COVERAGE_KEYS:
+        item = cast(dict[str, object], reported[coverage_key])
+        expected_item = recomputed[coverage_key]
+        expected_values = (
+            ("expected", expected_item["expected"]),
+            ("observed", expected_item["observed"]),
+            ("passed", expected_item["passed"]),
+        )
+        for field, expected_value in expected_values:
+            if item[field] != expected_value:
+                raise ValueError(
+                    f"coverage.{coverage_key}.{field} must equal recomputed "
+                    f"value {expected_value}"
+                )
+
+
 def validate_cases_envelope(document: object) -> None:
     envelope = _require_exact_object(
         document,
@@ -469,6 +623,9 @@ def validate_cases_envelope(document: object) -> None:
 
     seen_case_ids: set[str] = set()
     declaration_case_ids: set[str] = set()
+    cases_by_kind: dict[str, list[dict[str, str]]] = {
+        case_kind: [] for case_kind in CASE_KINDS
+    }
     for index, raw_case in enumerate(_require_list(envelope["cases"], "cases")):
         context = f"cases[{index}]"
         case = _require_exact_object(raw_case, CASE_FIELDS, context)
@@ -478,8 +635,11 @@ def validate_cases_envelope(document: object) -> None:
             for field in _CASE_STRING_FIELDS
             if field != "run_id"
         }
+        case_kind = strings["case_kind"]
+        if case_kind not in CASE_KINDS:
+            raise ValueError(f"{context}.case_kind is unknown: {case_kind}")
         raw_run_id = case["run_id"]
-        if strings["case_kind"] == "smoke_full":
+        if case_kind == "smoke_full":
             if type(raw_run_id) is not str or raw_run_id != "":
                 raise ValueError(
                     f"{context}.run_id must be empty for canonical full Smoke cases"
@@ -506,10 +666,7 @@ def validate_cases_envelope(document: object) -> None:
         seen_case_ids.add(case_id)
         if strings["status"] not in STATUSES:
             raise ValueError(f"{context}.status is unknown: {strings['status']}")
-        if (
-            strings["case_kind"] == "execution_declaration"
-            and strings["status"] != "未执行及原因"
-        ):
+        if case_kind == "execution_declaration" and strings["status"] != "未执行及原因":
             raise ValueError(
                 f"{context} execution_declaration status must be 未执行及原因"
             )
@@ -530,7 +687,7 @@ def validate_cases_envelope(document: object) -> None:
             mock=case["mock"],
             context=context,
         )
-        if strings["case_kind"] == "execution_declaration":
+        if case_kind == "execution_declaration":
             declaration_case_ids.add(case_id)
         if canonical_smoke_operator is not None:
             if strings["target"] != canonical_smoke_operator:
@@ -548,6 +705,7 @@ def validate_cases_envelope(document: object) -> None:
             raise ValueError(f"{context}.release_tag does not match the envelope")
         if strings["git_sha"] != git_sha:
             raise ValueError(f"{context}.git_sha does not match the envelope")
+        cases_by_kind[case_kind].append(strings)
 
     expected_declaration_ids = set(DECLARATION_CATEGORY_BY_CASE_ID)
     if declaration_case_ids != expected_declaration_ids:
@@ -556,3 +714,19 @@ def validate_cases_envelope(document: object) -> None:
             f"missing={sorted(expected_declaration_ids - declaration_case_ids)}, "
             f"unknown={sorted(declaration_case_ids - expected_declaration_ids)}"
         )
+
+    recomputed = _recompute_real_case_coverage(cases_by_kind)
+    recomputed["negative_declarations"] = {
+        "expected": COVERAGE_EXPECTED["negative_declarations"],
+        "observed": sum(
+            case_id.startswith(tuple(prefix for prefix, _, _ in EXPECTED_RANGES["negative"]))
+            for case_id in declaration_case_ids
+        ),
+        "passed": 0,
+    }
+    recomputed["load_declarations"] = {
+        "expected": COVERAGE_EXPECTED["load_declarations"],
+        "observed": sum(case_id.startswith("LOAD-") for case_id in declaration_case_ids),
+        "passed": 0,
+    }
+    _require_recomputed_coverage(coverage, recomputed)
