@@ -64,6 +64,19 @@ EXPECTED_COVERAGE_KEYS = (
     "negative_declarations",
     "load_declarations",
 )
+EXPECTED_COVERAGE_AUTHORITY = {
+    "registration_full": 1,
+    "registration_profiles": 4,
+    "registration_recovery": 18,
+    "registration_facerec": 1,
+    "gpu_running": 18,
+    "gpu_stopped": 18,
+    "smoke_full": 8,
+    "smoke_gpu_trigger": 18,
+    "smoke_cpu_instance": 6,
+    "negative_declarations": 217,
+    "load_declarations": 26,
+}
 EXPECTED_CASE_FIELDS = (
     "case_id",
     "source_case_id",
@@ -589,9 +602,10 @@ def _plan_document() -> dict[str, Any]:
 
 
 def _valid_case(case_id: str = "DEP-001") -> dict[str, Any]:
+    category = "load" if case_id.startswith("LOAD-") else "negative"
     return {
         "case_id": case_id,
-        "source_case_id": "DEP-001",
+        "source_case_id": case_id,
         "case_kind": "execution_declaration",
         "run_id": DECLARATION_PLACEHOLDER,
         "status": "未执行及原因",
@@ -599,7 +613,7 @@ def _valid_case(case_id: str = "DEP-001") -> dict[str, Any]:
         "finished_at": DECLARATION_PLACEHOLDER,
         "target": DECLARATION_TARGET,
         "command": DECLARATION_PLACEHOLDER,
-        "evidence": ["negative/cases.json"],
+        "evidence": [f"{category}/cases.json"],
         "reason": REASON,
         "mock": False,
         "release_tag": RELEASE_TAG,
@@ -614,10 +628,20 @@ def _valid_envelope() -> dict[str, Any]:
         "git_sha": GIT_SHA,
         "plan_sha256": PLAN_SHA256,
         "coverage": {
-            key: {"expected": 1, "observed": 1, "passed": 1}
-            for key in EXPECTED_COVERAGE_KEYS
+            key: {
+                "expected": expected,
+                "observed": expected,
+                "passed": 0
+                if key in {"negative_declarations", "load_declarations"}
+                else expected,
+            }
+            for key, expected in EXPECTED_COVERAGE_AUTHORITY.items()
         },
-        "cases": [_valid_case()],
+        "cases": [
+            _valid_case(f"{prefix}-{number:03d}")
+            for prefix, count in EXPECTED_COUNTS.items()
+            for number in range(1, count + 1)
+        ],
     }
 
 
@@ -723,6 +747,7 @@ def test_contract_exports_frozen_constants_and_typed_dicts() -> None:
     assert contract.SCHEMA_VERSION == 1
     assert contract.STATUSES == ("通过", "失败", "未执行及原因")
     assert contract.COVERAGE_KEYS == EXPECTED_COVERAGE_KEYS
+    assert contract.COVERAGE_EXPECTED == EXPECTED_COVERAGE_AUTHORITY
     assert contract.CASE_FIELDS == EXPECTED_CASE_FIELDS
     assert tuple(contract.Coverage.__annotations__) == ("expected", "observed", "passed")
     assert tuple(contract.CaseRecord.__annotations__) == EXPECTED_CASE_FIELDS
@@ -976,6 +1001,19 @@ def test_cases_envelope_accepts_strict_valid_document() -> None:
     contract.validate_cases_envelope(_valid_envelope())
 
 
+def test_cases_envelope_rejects_legacy_single_declaration_partial_document() -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    envelope["coverage"] = {
+        key: {"expected": 1, "observed": 1, "passed": 1}
+        for key in EXPECTED_COVERAGE_KEYS
+    }
+    envelope["cases"] = [_valid_case()]
+
+    with pytest.raises(ValueError, match=r"coverage\..*expected|authority"):
+        contract.validate_cases_envelope(envelope)
+
+
 def test_cases_envelope_rejects_execution_declaration_claiming_pass() -> None:
     contract = _contract_module()
     envelope = _valid_envelope()
@@ -1067,6 +1105,83 @@ def test_cases_envelope_rejects_unknown_coverage_key() -> None:
     envelope["coverage"]["unexpected"] = {"expected": 0, "observed": 0, "passed": 0}
 
     with pytest.raises(ValueError, match=r"coverage.*unexpected"):
+        contract.validate_cases_envelope(envelope)
+
+
+@pytest.mark.parametrize("coverage_key", EXPECTED_COVERAGE_KEYS)
+def test_cases_envelope_rejects_expected_coverage_authority_drift(
+    coverage_key: str,
+) -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    envelope["coverage"][coverage_key]["expected"] += 1
+
+    with pytest.raises(ValueError, match=rf"coverage\.{coverage_key}\.expected"):
+        contract.validate_cases_envelope(envelope)
+
+
+@pytest.mark.parametrize(
+    "coverage_key",
+    tuple(
+        key for key in EXPECTED_COVERAGE_KEYS if key != "smoke_gpu_trigger"
+    ),
+)
+def test_cases_envelope_requires_complete_observation_for_required_sources(
+    coverage_key: str,
+) -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    coverage = envelope["coverage"][coverage_key]
+    coverage["observed"] = coverage["expected"] - 1
+    coverage["passed"] = min(coverage["passed"], coverage["observed"])
+
+    with pytest.raises(ValueError, match=rf"coverage\.{coverage_key}\.observed"):
+        contract.validate_cases_envelope(envelope)
+
+
+def test_cases_envelope_allows_partial_gpu_trigger_observation() -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    envelope["coverage"]["smoke_gpu_trigger"] = {
+        "expected": 18,
+        "observed": 17,
+        "passed": 16,
+    }
+
+    contract.validate_cases_envelope(envelope)
+
+
+def test_cases_envelope_allows_real_failures_to_lower_passed_coverage() -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    for key, coverage in envelope["coverage"].items():
+        if key not in {"negative_declarations", "load_declarations"}:
+            coverage["passed"] = coverage["observed"] - 1
+
+    contract.validate_cases_envelope(envelope)
+
+
+@pytest.mark.parametrize(
+    "coverage_key", ("negative_declarations", "load_declarations")
+)
+def test_cases_envelope_declaration_coverage_never_reports_passed(
+    coverage_key: str,
+) -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    envelope["coverage"][coverage_key]["passed"] = 1
+
+    with pytest.raises(ValueError, match=rf"coverage\.{coverage_key}\.passed"):
+        contract.validate_cases_envelope(envelope)
+
+
+def test_cases_envelope_rejects_one_missing_execution_declaration() -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    removed = envelope["cases"].pop()
+    assert removed["case_id"] == "LOAD-026"
+
+    with pytest.raises(ValueError, match=r"declaration.*missing.*LOAD-026"):
         contract.validate_cases_envelope(envelope)
 
 
@@ -1185,13 +1300,53 @@ def test_cases_envelope_requires_real_bool_mock(mock: object) -> None:
         contract.validate_cases_envelope(envelope)
 
 
-def test_cases_envelope_rejects_duplicate_case_id() -> None:
+def test_cases_envelope_rejects_duplicate_execution_declaration_case_id() -> None:
     contract = _contract_module()
     envelope = _valid_envelope()
     envelope["cases"].append(copy.deepcopy(envelope["cases"][0]))
 
     with pytest.raises(ValueError, match=r"case_id.*DEP-001"):
         contract.validate_cases_envelope(envelope)
+
+
+def test_cases_envelope_rejects_declaration_evidence_for_wrong_category() -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    load_case = next(
+        case for case in envelope["cases"] if case["case_id"] == "LOAD-001"
+    )
+    load_case["evidence"] = ["negative/cases.json"]
+
+    with pytest.raises(ValueError, match=r"evidence.*load/cases\.json"):
+        contract.validate_cases_envelope(envelope)
+
+
+def test_cases_envelope_allows_extra_instance_smoke_history() -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    envelope["cases"].append(
+        {
+            "case_id": "SMOKE-CPU-ppt-slice-cpu0-historical-failure",
+            "source_case_id": "INF-PPT-SLICE",
+            "case_kind": "smoke_cpu_instance",
+            "run_id": "historical-failure",
+            "status": "失败",
+            "started_at": EVIDENCE_TIMESTAMP,
+            "finished_at": EVIDENCE_TIMESTAMP,
+            "target": "ppt-slice-cpu0",
+            "command": "deploy/scripts/run-operator-smoke --run-id historical-failure",
+            "evidence": [
+                "smoke/instances/ppt-slice-cpu0/runs/"
+                "historical-failure/ppt_slice.json"
+            ],
+            "reason": "historical attempt failed",
+            "mock": False,
+            "release_tag": RELEASE_TAG,
+            "git_sha": GIT_SHA,
+        }
+    )
+
+    contract.validate_cases_envelope(envelope)
 
 
 @pytest.mark.parametrize("field", ("release_tag", "git_sha"))
@@ -2721,7 +2876,7 @@ def test_instance_smoke_rejects_generated_case_id_collision(
 
 def _canonical_full_smoke_envelope() -> dict[str, Any]:
     envelope = _valid_envelope()
-    case = envelope["cases"][0]
+    case = copy.deepcopy(envelope["cases"][0])
     case["case_id"] = "SMOKE-FULL-INF-OCR"
     case["source_case_id"] = "INF-OCR"
     case["case_kind"] = "smoke_full"
@@ -2729,6 +2884,7 @@ def _canonical_full_smoke_envelope() -> dict[str, Any]:
     case["target"] = "ocr"
     case["evidence"] = ["smoke/ocr.json"]
     case["mock"] = False
+    envelope["cases"].insert(0, case)
     return envelope
 
 

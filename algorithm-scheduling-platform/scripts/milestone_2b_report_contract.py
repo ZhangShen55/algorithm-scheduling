@@ -21,6 +21,23 @@ COVERAGE_KEYS = (
     "negative_declarations",
     "load_declarations",
 )
+COVERAGE_EXPECTED = {
+    "registration_full": 1,
+    "registration_profiles": 4,
+    "registration_recovery": 18,
+    "registration_facerec": 1,
+    "gpu_running": 18,
+    "gpu_stopped": 18,
+    "smoke_full": 8,
+    "smoke_gpu_trigger": 18,
+    "smoke_cpu_instance": 6,
+    "negative_declarations": 217,
+    "load_declarations": 26,
+}
+COVERAGE_PARTIAL_OBSERVED_KEYS = frozenset({"smoke_gpu_trigger"})
+DECLARATION_COVERAGE_KEYS = frozenset(
+    {"negative_declarations", "load_declarations"}
+)
 CASE_FIELDS = (
     "case_id",
     "source_case_id",
@@ -432,6 +449,11 @@ def validate_cases_envelope(document: object) -> None:
         expected = _require_nonnegative_int(
             item["expected"], f"coverage.{key}.expected"
         )
+        authority_expected = COVERAGE_EXPECTED[key]
+        if expected != authority_expected:
+            raise ValueError(
+                f"coverage.{key}.expected must equal {authority_expected}"
+            )
         observed = _require_nonnegative_int(
             item["observed"], f"coverage.{key}.observed"
         )
@@ -440,8 +462,13 @@ def validate_cases_envelope(document: object) -> None:
             raise ValueError(
                 f"coverage.{key} must satisfy passed <= observed <= expected"
             )
+        if key not in COVERAGE_PARTIAL_OBSERVED_KEYS and observed != expected:
+            raise ValueError(f"coverage.{key}.observed must equal {expected}")
+        if key in DECLARATION_COVERAGE_KEYS and passed != 0:
+            raise ValueError(f"coverage.{key}.passed must equal 0")
 
     seen_case_ids: set[str] = set()
+    declaration_case_ids: set[str] = set()
     for index, raw_case in enumerate(_require_list(envelope["cases"], "cases")):
         context = f"cases[{index}]"
         case = _require_exact_object(raw_case, CASE_FIELDS, context)
@@ -503,6 +530,8 @@ def validate_cases_envelope(document: object) -> None:
             mock=case["mock"],
             context=context,
         )
+        if strings["case_kind"] == "execution_declaration":
+            declaration_case_ids.add(case_id)
         if canonical_smoke_operator is not None:
             if strings["target"] != canonical_smoke_operator:
                 raise ValueError(
@@ -519,3 +548,11 @@ def validate_cases_envelope(document: object) -> None:
             raise ValueError(f"{context}.release_tag does not match the envelope")
         if strings["git_sha"] != git_sha:
             raise ValueError(f"{context}.git_sha does not match the envelope")
+
+    expected_declaration_ids = set(DECLARATION_CATEGORY_BY_CASE_ID)
+    if declaration_case_ids != expected_declaration_ids:
+        raise ValueError(
+            "execution declaration authority mismatch: "
+            f"missing={sorted(expected_declaration_ids - declaration_case_ids)}, "
+            f"unknown={sorted(declaration_case_ids - expected_declaration_ids)}"
+        )
