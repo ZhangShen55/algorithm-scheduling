@@ -1351,7 +1351,6 @@ def test_cases_envelope_allows_real_failures_to_lower_passed_coverage() -> None:
         ("registration_facerec", "registration_facerec"),
         ("gpu_running", "gpu_running"),
         ("gpu_stopped", "gpu_stopped"),
-        ("smoke_full", "smoke_full"),
         ("smoke_gpu_trigger", "smoke_gpu_trigger"),
         ("smoke_cpu_instance", "smoke_cpu_instance"),
     ),
@@ -1371,6 +1370,33 @@ def test_cases_envelope_mock_pass_is_observed_but_never_passed(
         contract.validate_cases_envelope(envelope)
 
     envelope["coverage"][coverage_key]["passed"] -= 1
+    if case_kind == "gpu_running":
+        envelope["coverage"]["smoke_gpu_trigger"]["passed"] -= 1
+    contract.validate_cases_envelope(envelope)
+
+
+def test_cases_envelope_linked_gpu_smoke_pass_requires_real_running_case() -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    running = next(
+        case for case in envelope["cases"] if case["case_kind"] == "gpu_running"
+    )
+    linked = next(
+        case
+        for case in envelope["cases"]
+        if case["case_kind"] == "smoke_gpu_trigger"
+        and (case["target"], case["run_id"])
+        == (running["target"], running["run_id"])
+    )
+    assert linked["mock"] is False
+    assert running["status"] == linked["status"] == "通过"
+    running["mock"] = True
+    envelope["coverage"]["gpu_running"]["passed"] -= 1
+
+    with pytest.raises(ValueError, match=r"coverage\.smoke_gpu_trigger\.passed"):
+        contract.validate_cases_envelope(envelope)
+
+    envelope["coverage"]["smoke_gpu_trigger"]["passed"] -= 1
     contract.validate_cases_envelope(envelope)
 
 
@@ -3187,6 +3213,7 @@ def test_cases_envelope_rejects_nonempty_full_smoke_run_id() -> None:
     (
         ("target", "operator-registry"),
         ("evidence", ["registration/operator-registration.json"]),
+        ("mock", True),
     ),
 )
 def test_cases_envelope_rejects_noncanonical_full_smoke_authority_fields(
@@ -3874,6 +3901,113 @@ def test_publish_json_once_preserves_third_party_when_parent_becomes_writable(
     assert (os.lstat(output).st_dev, os.lstat(output).st_ino) == (
         os.lstat(third_party).st_dev,
         os.lstat(third_party).st_ino,
+    )
+
+
+def test_publish_json_once_rolls_back_own_final_when_release_root_is_rebound(
+    release_tree: ReleaseTree,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    aggregate = _aggregate_module()
+    release_tree.root.mkdir(parents=True)
+    displaced_root = release_tree.root.with_name(f"{release_tree.root.name}.displaced")
+    original_read = aggregate._read_existing_publication
+    rebound = False
+
+    def rebind_release_root_after_read(
+        parent_descriptor: int, name: str, **kwargs: object
+    ) -> bytes:
+        nonlocal rebound
+        content = original_read(parent_descriptor, name, **kwargs)
+        if kwargs.get("expected_inode") is not None:
+            release_tree.root.rename(displaced_root)
+            release_tree.root.mkdir(mode=0o700)
+            rebound = True
+        return content
+
+    monkeypatch.setattr(
+        aggregate, "_read_existing_publication", rebind_release_root_after_read
+    )
+
+    with pytest.raises(ValueError, match=r"release root.*changed|changed.*release root"):
+        aggregate.publish_json_once(
+            release_root=release_tree.root,
+            relative_path=Path("summary/cases.json"),
+            document={"schema_version": 1},
+        )
+
+    assert rebound is True
+    assert not (displaced_root / "summary" / "cases.json").exists()
+    assert not (release_tree.root / "summary" / "cases.json").exists()
+
+
+def test_publish_json_once_preserves_third_party_when_release_root_is_rebound(
+    release_tree: ReleaseTree,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    aggregate = _aggregate_module()
+    release_tree.root.mkdir(parents=True)
+    summary = release_tree.root / "summary"
+    summary.mkdir(mode=0o700)
+    old_third_party = summary / ".third-party"
+    old_third_party.write_bytes(b'{"old_third_party":true}\n')
+    old_third_party.chmod(0o600)
+    displaced_root = release_tree.root.with_name(f"{release_tree.root.name}.displaced")
+    replacement_root = release_tree.root.with_name(f"{release_tree.root.name}.replacement")
+    replacement_summary = replacement_root / "summary"
+    replacement_summary.mkdir(parents=True, mode=0o700)
+    replacement_final = replacement_summary / "cases.json"
+    replacement_final.write_bytes(b'{"new_third_party":true}\n')
+    replacement_final.chmod(0o600)
+    replacement_inode = (os.lstat(replacement_final).st_dev, os.lstat(replacement_final).st_ino)
+    original_read = aggregate._read_existing_publication
+    original_link = aggregate.os.link
+    rebound = False
+
+    def replace_final_and_release_root_after_read(
+        parent_descriptor: int, name: str, **kwargs: object
+    ) -> bytes:
+        nonlocal rebound
+        content = original_read(parent_descriptor, name, **kwargs)
+        if kwargs.get("expected_inode") is not None:
+            aggregate.os.unlink(name, dir_fd=parent_descriptor)
+            original_link(
+                old_third_party.name,
+                name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            release_tree.root.rename(displaced_root)
+            replacement_root.rename(release_tree.root)
+            rebound = True
+        return content
+
+    monkeypatch.setattr(
+        aggregate,
+        "_read_existing_publication",
+        replace_final_and_release_root_after_read,
+    )
+
+    with pytest.raises(ValueError, match=r"release root.*changed|changed.*release root"):
+        aggregate.publish_json_once(
+            release_root=release_tree.root,
+            relative_path=Path("summary/cases.json"),
+            document={"schema_version": 1},
+        )
+
+    assert rebound is True
+    displaced_final = displaced_root / "summary" / "cases.json"
+    displaced_third_party = displaced_root / "summary" / ".third-party"
+    assert displaced_final.read_bytes() == b'{"old_third_party":true}\n'
+    assert (os.lstat(displaced_final).st_dev, os.lstat(displaced_final).st_ino) == (
+        os.lstat(displaced_third_party).st_dev,
+        os.lstat(displaced_third_party).st_ino,
+    )
+    rebound_final = release_tree.root / "summary" / "cases.json"
+    assert rebound_final.read_bytes() == b'{"new_third_party":true}\n'
+    assert (os.lstat(rebound_final).st_dev, os.lstat(rebound_final).st_ino) == (
+        replacement_inode
     )
 
 

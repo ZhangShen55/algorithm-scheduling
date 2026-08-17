@@ -261,7 +261,10 @@ def _publication_directory_descriptor(
         | getattr(os, "O_DIRECTORY", 0)
         | getattr(os, "O_NOFOLLOW", 0)
     )
-    with _release_directory_descriptor(release_root, Path()) as root_descriptor:
+    with _release_directory_descriptor_access(
+        release_root, Path()
+    ) as release_access:
+        root_descriptor, verify_root = release_access
         try:
             named_parent = os.stat(
                 parent_name,
@@ -316,7 +319,7 @@ def _publication_directory_descriptor(
                 )
             _require_secure_publication_parent(opened_parent, parent_path)
 
-            def verify_parent() -> None:
+            def verify_directories() -> None:
                 try:
                     named_after = os.stat(
                         parent_name,
@@ -339,8 +342,9 @@ def _publication_directory_descriptor(
                     )
                 _require_secure_publication_parent(named_after, parent_path)
                 _require_secure_publication_parent(opened_after, parent_path)
+                verify_root()
 
-            yield parent_descriptor, verify_parent
+            yield parent_descriptor, verify_directories
         except OSError as exc:
             raise ValueError(
                 f"failed to access publication directory: {parent_path}"
@@ -550,7 +554,7 @@ def publish_json_once(
     parent_path = relative_path.parent
     final_name = relative_path.name
     with _publication_directory_descriptor(release_root, parent_path) as publication:
-        parent_descriptor, verify_parent = publication
+        parent_descriptor, verify_directories = publication
         temp_descriptor, temp_name = _create_publication_temp(
             parent_descriptor, final_name
         )
@@ -622,7 +626,7 @@ def publish_json_once(
                     raise ValueError(
                         f"published bytes changed unexpectedly: {relative_path}"
                     )
-            verify_parent()
+            verify_directories()
         except OSError as exc:
             if link_succeeded and temp_metadata is not None:
                 _rollback_linked_publication_if_unchanged(
@@ -1040,9 +1044,9 @@ def _same_filesystem_object(left: os.stat_result, right: os.stat_result) -> bool
 
 
 @contextmanager
-def _release_directory_descriptor(
+def _release_directory_descriptor_access(
     release_root: Path, relative_path: Path
-) -> Iterator[int]:
+) -> Iterator[tuple[int, Callable[[], None]]]:
     if relative_path.is_absolute() or ".." in relative_path.parts:
         raise ValueError(f"release directory path is unsafe: {relative_path}")
 
@@ -1094,35 +1098,57 @@ def _release_directory_descriptor(
                 bindings.append((current_descriptor, part, next_descriptor))
                 current_descriptor = next_descriptor
 
-            yield current_descriptor
-
-            for parent_descriptor, part, opened_descriptor in bindings:
-                named_directory = os.stat(
-                    part,
-                    dir_fd=parent_descriptor,
-                    follow_symlinks=False,
-                )
-                opened_directory = os.fstat(opened_descriptor)
-                if (
-                    stat.S_ISLNK(named_directory.st_mode)
-                    or not stat.S_ISDIR(named_directory.st_mode)
-                    or not _same_filesystem_object(named_directory, opened_directory)
-                ):
+            def verify_bindings() -> None:
+                try:
+                    for parent_descriptor, part, opened_descriptor in bindings:
+                        named_directory = os.stat(
+                            part,
+                            dir_fd=parent_descriptor,
+                            follow_symlinks=False,
+                        )
+                        opened_directory = os.fstat(opened_descriptor)
+                        if (
+                            stat.S_ISLNK(named_directory.st_mode)
+                            or not stat.S_ISDIR(named_directory.st_mode)
+                            or not _same_filesystem_object(
+                                named_directory, opened_directory
+                            )
+                        ):
+                            raise ValueError(
+                                "release source directory changed during access: "
+                                f"{relative_path}"
+                            )
+                    named_root_after = os.lstat(release_root)
+                    if (
+                        stat.S_ISLNK(named_root_after.st_mode)
+                        or not stat.S_ISDIR(named_root_after.st_mode)
+                        or not _same_filesystem_object(named_root_after, opened_root)
+                    ):
+                        raise ValueError(
+                            f"release root changed during access: {release_root}"
+                        )
+                except OSError as exc:
                     raise ValueError(
-                        "release source directory changed during access: "
-                        f"{relative_path}"
-                    )
-            named_root_after = os.lstat(release_root)
-            if (
-                stat.S_ISLNK(named_root_after.st_mode)
-                or not stat.S_ISDIR(named_root_after.st_mode)
-                or not _same_filesystem_object(named_root_after, opened_root)
-            ):
-                raise ValueError(f"release root changed during access: {release_root}")
+                        f"failed to access release source directory: {relative_path}"
+                    ) from exc
+
+            yield current_descriptor, verify_bindings
     except OSError as exc:
         raise ValueError(
             f"failed to access release source directory: {relative_path}"
         ) from exc
+
+
+@contextmanager
+def _release_directory_descriptor(
+    release_root: Path, relative_path: Path
+) -> Iterator[int]:
+    with _release_directory_descriptor_access(
+        release_root, relative_path
+    ) as directory_access:
+        directory_descriptor, verify_bindings = directory_access
+        yield directory_descriptor
+        verify_bindings()
 
 
 def _require_release_root(release_root: Path) -> None:

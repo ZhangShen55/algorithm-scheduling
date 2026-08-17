@@ -541,7 +541,12 @@ def _recompute_real_case_coverage(
                 f"{running['target']}/{running['run_id']}"
             )
         gpu_observed += 1
-        if linked["mock"] is False and linked["status"] == "通过":
+        if (
+            running["mock"] is False
+            and linked["mock"] is False
+            and running["status"] == "通过"
+            and linked["status"] == "通过"
+        ):
             gpu_passed += 1
     recomputed["smoke_gpu_trigger"] = {
         "expected": COVERAGE_EXPECTED["smoke_gpu_trigger"],
@@ -701,6 +706,8 @@ def validate_cases_envelope(document: object) -> None:
         if case_kind == "execution_declaration":
             declaration_case_ids.add(case_id)
         if canonical_smoke_operator is not None:
+            if mock is not False:
+                raise ValueError(f"{context}.mock must be false for full Smoke")
             if strings["target"] != canonical_smoke_operator:
                 raise ValueError(
                     f"{context}.target does not match the canonical full Smoke operator"
