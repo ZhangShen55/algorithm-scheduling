@@ -120,6 +120,12 @@ def _write_plan(tmp_path: Path, document: object) -> Path:
     return path
 
 
+def _write_raw_plan(tmp_path: Path, text: str) -> Path:
+    path = tmp_path / "report-plan.json"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
 def _remove_key(document: dict[str, Any], key: str) -> None:
     del document[key]
 
@@ -350,6 +356,63 @@ def test_report_plan_loader_rejects_non_object_json(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="object"):
         contract.load_report_plan(_write_plan(tmp_path, []))
+
+
+def test_strict_json_loads_exports_typed_reusable_parser() -> None:
+    contract = _contract_module()
+
+    assert get_type_hints(contract.strict_json_loads) == {
+        "text": str,
+        "return": object,
+    }
+    assert contract.strict_json_loads('{"values": [1, true, null]}') == {
+        "values": [1, True, None]
+    }
+
+
+@pytest.mark.parametrize("value", (b"{}", bytearray(b"{}"), 1, None))
+def test_strict_json_loads_rejects_non_string_input(value: Any) -> None:
+    contract = _contract_module()
+
+    with pytest.raises(ValueError, match="JSON text must be a string"):
+        contract.strict_json_loads(value)
+
+
+@pytest.mark.parametrize(
+    ("key", "needle", "replacement"),
+    (
+        (
+            "schema_version",
+            '{\n  "schema_version": 1,',
+            '{\n  "schema_version": 999,\n  "schema_version": 1,',
+        ),
+        (
+            "require_full",
+            '    "require_full": true,\n'
+            '    "require_gpu_recovery_instances": true,',
+            '    "require_full": false,\n'
+            '    "require_full": true,\n'
+            '    "require_gpu_recovery_instances": true,',
+        ),
+        (
+            "prefix",
+            '        "prefix": "DEP",\n        "first": 1,',
+            '        "prefix": "EVIL",\n'
+            '        "prefix": "DEP",\n'
+            '        "first": 1,',
+        ),
+    ),
+)
+def test_report_plan_loader_rejects_duplicate_fields_at_any_depth(
+    tmp_path: Path, key: str, needle: str, replacement: str
+) -> None:
+    contract = _contract_module()
+    plan_text = PLAN_PATH.read_text(encoding="utf-8")
+    assert plan_text.count(needle) == 1
+    duplicate_plan = plan_text.replace(needle, replacement, 1)
+
+    with pytest.raises(ValueError, match=rf"duplicate JSON field: {key}\b"):
+        contract.load_report_plan(_write_raw_plan(tmp_path, duplicate_plan))
 
 
 def test_cases_envelope_accepts_strict_valid_document() -> None:

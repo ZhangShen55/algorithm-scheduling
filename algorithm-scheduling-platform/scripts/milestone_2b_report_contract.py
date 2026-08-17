@@ -119,6 +119,27 @@ class DeclarationCase(TypedDict):
     reason: str
 
 
+def _reject_duplicate_json_fields(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    document: dict[str, object] = {}
+    for key, value in pairs:
+        if key in document:
+            raise ValueError(f"duplicate JSON field: {key}")
+        document[key] = value
+    return document
+
+
+def strict_json_loads(text: str) -> object:
+    if type(text) is not str:
+        raise ValueError("JSON text must be a string")
+    loaded: object = json.loads(
+        text,
+        object_pairs_hook=_reject_duplicate_json_fields,
+    )
+    return loaded
+
+
 def _require_exact_object(
     value: object, expected_fields: tuple[str, ...], context: str
 ) -> dict[str, object]:
@@ -279,7 +300,7 @@ def _validate_report_plan(value: object) -> dict[str, object]:
 
 def load_report_plan(path: str | Path) -> dict[str, object]:
     try:
-        loaded: object = json.loads(Path(path).read_text(encoding="utf-8"))
+        loaded = strict_json_loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"failed to read report plan: {path}") from exc
     return _validate_report_plan(loaded)
