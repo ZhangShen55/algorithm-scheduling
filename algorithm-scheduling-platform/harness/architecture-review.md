@@ -25,6 +25,9 @@
 | DEC-021 | 里程碑 2A 的重复 Kafka 消息、重复发布和 orchestrator 重启保持 DAG 幂等并恢复已提交 offset | orchestrator-service | `.venv/bin/python -m pytest -q -rs tests/integration/test_milestone_2a_runtime.py` | 符合 | `harness/scenarios/foundation-scheduling-closure.md` |
 | DEC-022 | 里程碑 2B 三卡部署必须以真实 x86_64/NVIDIA、模型、24 实例注册和算子推理证据为准 | deployment maintainers | `deploy/scripts/preflight && deploy/scripts/verify-operator-registration && deploy/scripts/run-operator-smoke` | 部分符合 | `harness/scenarios/milestone-2b-deploy.md` |
 | DEC-023 | OCR 单一 CPU/NVIDIA GPU Dockerfile 支持源码/Cython 构建；正式 AMD64 Cython 镜像以 tar 离线交付，并以 RTX 3090 实测参数同步平台副本 | ocr maintainers | `(cd ../ocr && conda run -n ocr-v6 python -m pytest -q tests && rg -n '13.468 QPS' docs/ocr-v6-rtx3090-benchmark.md && rg -n '8201d923' docs/ocr-v6-rtx3090-benchmark.md) && .venv/bin/python -m pytest -q tests/test_harness_consistency.py` | 符合 | `harness/scenarios/ocr-optional-cython-build-and-sync.md` |
+| DEC-024 | 2B 按 FaceRec、PPT/ASR、视觉、在线、243 条总验收的依赖顺序关闭，最终不允许未执行用例 | platform maintainers | `.venv/bin/python -m pytest -q tests/test_harness_consistency.py && openspec validate close-platform-runtime-and-harness-gaps --strict` | 待验证 | `harness/scenarios/milestone-2b-business-lanes-closure.md` |
 
 DEC-022 的当前部分符合边界：24 实例与 8/8 full Smoke 已验证；FaceRec 三实例
 GPU runtime 及对应 recovery 失败，217 条反例和 26 条压力用例为“未执行及原因”。
+DEC-024 的完成门槛不是文档或用例清单存在，而是新 release 中 FaceRec 三实例、四类真实
+业务泳道和全部 243 条用例均有运行证据且失败数为零。
