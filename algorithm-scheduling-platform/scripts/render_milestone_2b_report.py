@@ -1299,7 +1299,7 @@ def _verified_unlink_at(
     *,
     allowed_links: frozenset[int] = frozenset({1}),
 ) -> None:
-    _require_bound_private_at(
+    validated_metadata = _require_bound_private_at(
         parent_fd,
         name,
         expected_content,
@@ -1308,8 +1308,9 @@ def _verified_unlink_at(
         allowed_links=allowed_links,
     )
     named = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-    if not _same_filesystem_object(named, expected_metadata):
-        raise ValueError(f"{context} 删除前 inode 发生变化")
+    _require_private_regular(named, context, allowed_links=allowed_links)
+    if _metadata_snapshot(named) != _metadata_snapshot(validated_metadata):
+        raise ValueError(f"{context} 删除前 metadata 发生变化")
     os.unlink(name, dir_fd=parent_fd)
     os.fsync(parent_fd)
 
@@ -1452,6 +1453,17 @@ def _terminal_states(
     return states
 
 
+def _require_complete_terminal_pair(
+    summary_fd: int,
+    expected_outputs: Mapping[str, tuple[bytes, str]],
+) -> None:
+    terminal_states = _terminal_states(
+        summary_fd, expected_outputs, recovery=False
+    )
+    if not all(state is not None for state in terminal_states.values()):
+        raise ValueError("报告双文件终态不完整，保留事务 journal")
+
+
 def _publish_from_temporary(
     summary_fd: int,
     temporary_name: str,
@@ -1577,6 +1589,7 @@ def _recover_transaction(
             journal_temporary_metadata,
             "报告事务 journal 临时文件",
         )
+    _require_complete_terminal_pair(summary_fd, expected_outputs)
     _verified_unlink_at(
         summary_fd,
         REPORT_JOURNAL_NAME,
@@ -1723,6 +1736,7 @@ def publish_report_transaction(
                 "报告事务临时文件",
                 allowed_links=frozenset({2}),
             )
+        _require_complete_terminal_pair(summary_fd, output_by_name)
         _verified_unlink_at(
             summary_fd,
             REPORT_JOURNAL_NAME,

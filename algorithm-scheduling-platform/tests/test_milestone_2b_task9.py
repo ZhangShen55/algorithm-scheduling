@@ -4827,6 +4827,42 @@ def test_renderer_transaction_rejects_temp_replaced_before_hard_link(
     )
 
 
+def test_renderer_transaction_revalidates_terminals_after_temp_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = _release(tmp_path)
+    summary = release / "summary"
+    real_unlink = os.unlink
+    attacked = False
+
+    def unlink_then_tamper(name: str, *, dir_fd: int) -> None:
+        nonlocal attacked
+        real_unlink(name, dir_fd=dir_fd)
+        if name.startswith(".report.json.") and not attacked:
+            attacked = True
+            descriptor = os.open(
+                "report.json",
+                os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW,
+                dir_fd=dir_fd,
+            )
+            try:
+                os.write(descriptor, b"tampered-after-temp-cleanup\n")
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+
+    monkeypatch.setattr(RENDERER_MODULE.os, "unlink", unlink_then_tamper)
+
+    with pytest.raises(ValueError, match="摘要冲突"):
+        _publish_renderer_transaction(tmp_path)
+
+    assert attacked
+    assert (summary / ".report-transaction.journal").is_file()
+    assert (summary / "report.json").read_bytes() == b"tampered-after-temp-cleanup\n"
+    assert (summary / "report.md").read_bytes() == TRANSACTION_MARKDOWN
+
+
 def test_renderer_first_link_crash_recovers_hardlinked_temporary(tmp_path: Path) -> None:
     release = _release(tmp_path)
     env = os.environ.copy()
