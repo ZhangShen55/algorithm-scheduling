@@ -130,13 +130,21 @@ def _reject_duplicate_json_fields(
     return document
 
 
+def _reject_nonstandard_json_constant(constant: str) -> object:
+    raise ValueError(f"non-standard JSON constant is not allowed: {constant}")
+
+
 def strict_json_loads(text: str) -> object:
     if type(text) is not str:
         raise ValueError("JSON text must be a string")
-    loaded: object = json.loads(
-        text,
-        object_pairs_hook=_reject_duplicate_json_fields,
-    )
+    try:
+        loaded: object = json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_json_fields,
+            parse_constant=_reject_nonstandard_json_constant,
+        )
+    except RecursionError as exc:
+        raise ValueError("JSON nesting is too deep") from exc
     return loaded
 
 

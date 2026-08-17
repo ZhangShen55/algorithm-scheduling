@@ -378,6 +378,42 @@ def test_strict_json_loads_rejects_non_string_input(value: Any) -> None:
         contract.strict_json_loads(value)
 
 
+@pytest.mark.parametrize("constant", ("NaN", "Infinity", "-Infinity"))
+def test_strict_json_loads_rejects_nonstandard_constants(constant: str) -> None:
+    contract = _contract_module()
+
+    with pytest.raises(ValueError, match="non-standard JSON constant") as exc_info:
+        contract.strict_json_loads(constant)
+
+    assert constant in str(exc_info.value)
+
+
+def test_strict_json_loads_normalizes_excessive_nesting() -> None:
+    contract = _contract_module()
+    deeply_nested = "[" * 100_000 + "0" + "]" * 100_000
+
+    with pytest.raises(ValueError, match="JSON nesting is too deep") as exc_info:
+        contract.strict_json_loads(deeply_nested)
+
+    assert isinstance(exc_info.value.__cause__, RecursionError)
+
+
+@pytest.mark.parametrize("exception_type", (KeyboardInterrupt, MemoryError))
+def test_strict_json_loads_does_not_swallow_fatal_exceptions(
+    monkeypatch: pytest.MonkeyPatch,
+    exception_type: type[BaseException],
+) -> None:
+    contract = _contract_module()
+
+    def raise_fatal(*args: object, **kwargs: object) -> None:
+        raise exception_type("fatal")
+
+    monkeypatch.setattr(contract.json, "loads", raise_fatal)
+
+    with pytest.raises(exception_type, match="fatal"):
+        contract.strict_json_loads("{}")
+
+
 @pytest.mark.parametrize(
     ("key", "needle", "replacement"),
     (
