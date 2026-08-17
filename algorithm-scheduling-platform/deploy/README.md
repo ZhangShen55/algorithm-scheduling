@@ -228,6 +228,37 @@ Both roots use release tag and full commit SHA so evidence from different builds
 silently combined. See `deploy/reports/README.md` for categories, permissions and the
 redaction boundary.
 
+### Final SHA and report gate
+
+即使代码改动只影响 Harness，提交后得到的新最终 SHA 也会使旧镜像中的
+`org.opencontainers.image.revision` 和旧 release evidence 对本轮验收失效。
+四个平台和八个算子镜像必须按新最终 SHA 重新构建或重标，并重新取证；
+不得把旧 SHA 的构建、注册、GPU 或 Smoke 证据复制到新 release 目录。重标后的运行镜像仍必须通过 runtime/operator
+preflight 对最终 SHA 的 revision 校验。
+
+报告聚合只接受 [`deploy/reports/README.md`](reports/README.md) 列出的 canonical 文件，
+其中包括 `registration/operator-registration-profile-gpu0.json`、
+`negative/cases.json` 和 `load/cases.json`。阶段 6 必须先运行 aggregator，再运行 renderer：
+
+```bash
+.venv/bin/python scripts/aggregate_milestone_2b_cases.py \
+  --release-root "$RELEASE_ROOT" \
+  --operator-compose deploy/docker-compose.operators.yml \
+  --smoke-manifest deploy/operator-smoke-cases.json \
+  --report-plan deploy/milestone-2b-report-plan.json \
+  --output "$RELEASE_ROOT/summary/cases.json"
+
+.venv/bin/python scripts/render_milestone_2b_report.py \
+  --input "$RELEASE_ROOT/summary/cases.json" \
+  --release-root "$RELEASE_ROOT" \
+  --output-json "$RELEASE_ROOT/summary/report.json" \
+  --output-markdown "$RELEASE_ROOT/summary/report.md"
+```
+
+renderer 返回码 `0` 表示报告结论通过；返回码 `3` 表示报告已生成但验收未通过；其他
+非零返回码表示输入校验或发布错误。生成报告不等于验收通过，自动化必须保留并处理
+返回码，不能只检查 `report.md` 是否存在。
+
 The asset definition is `deploy/model-assets.json`: ASR Offline, ASR Online, OCR,
 VBas plain models, FaceRec and ScreenDet. PPT Slice and Text Analysis have no local
 model roots. The external manifest is an input artifact and must stay outside Git.

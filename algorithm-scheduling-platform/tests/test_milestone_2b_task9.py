@@ -2768,6 +2768,53 @@ def test_noncanonical_docs_do_not_offer_direct_operator_profile_up_commands() ->
         assert direct_up.search(normalized) is None, f"发现 direct-up 旁路: {document}"
 
 
+def test_stage6_docs_aggregate_before_render_and_gate_renderer_exit_status() -> None:
+    scenario = (
+        PLATFORM_ROOT / "harness/scenarios/milestone-2b-deploy.md"
+    ).read_text(encoding="utf-8")
+    stage6 = scenario.split(
+        "## 阶段 6：反例、压力、恢复和报告渲染", maxsplit=1
+    )[1]
+    aggregator = "scripts/aggregate_milestone_2b_cases.py"
+    renderer = "scripts/render_milestone_2b_report.py"
+
+    assert stage6.index(aggregator) < stage6.index(renderer)
+    assert '--output "$RELEASE_ROOT/summary/cases.json"' in stage6
+    assert "overall_status" in stage6
+    assert "返回码 `0`" in stage6
+    assert "返回码 `3`" in stage6
+    assert "报告已生成但验收未通过" in stage6
+    assert "其他返回码" in stage6
+    assert "生成报告不等于验收通过" in stage6
+    assert "不打印证据原文" in stage6
+
+
+def test_report_deploy_and_historical_docs_reference_canonical_aggregation_inputs() -> None:
+    documents = (
+        DEPLOY / "reports/README.md",
+        DEPLOY / "README.md",
+        WORKSPACE_ROOT
+        / "docs/superpowers/plans/2026-08-12-里程碑2B三卡部署验证实施计划.md",
+    )
+    required = (
+        "aggregate_milestone_2b_cases.py",
+        "operator-registration-profile-gpu0.json",
+        "negative/cases.json",
+        "load/cases.json",
+    )
+
+    for document in documents:
+        content = document.read_text(encoding="utf-8")
+        for expected in required:
+            assert expected in content, f"{document} 缺少 {expected}"
+
+    deploy_readme = documents[1].read_text(encoding="utf-8")
+    assert "新最终 SHA" in deploy_readme
+    assert "四个平台和八个算子镜像" in deploy_readme
+    assert "重新构建或重标" in deploy_readme
+    assert "重新取证" in deploy_readme
+
+
 def _fixture_manifest(tmp_path: Path) -> Path:
     source_root = tmp_path / "fixtures"
     source_root.mkdir(mode=0o700)

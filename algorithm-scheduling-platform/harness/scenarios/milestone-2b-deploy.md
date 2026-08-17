@@ -1032,16 +1032,63 @@ previous 续跑不得把 active paused ledger 复制成另一份可变账本。r
 不得删除卷、不得删除 `/data/result`。whole-stack `down` 只允许出现在与本服务器隔离的
 本地开发环境，不属于本场景。
 
-最后渲染当前 release 的 JSON/Markdown 汇总；renderer 要求通过用例有证据文件、
-未执行用例有中文原因、所有用例使用同一 release/SHA，并拒绝跨目录或包含敏感 token：
+最后先聚合当前 release 的 canonical 输入，再渲染 JSON/Markdown 汇总。aggregator 校验
+完整注册、GPU、Smoke 和声明输入，展开 `negative/cases.json` 与 `load/cases.json` 中的
+243 条声明，并以 write-once 方式生成 `summary/cases.json`；renderer 要求通过用例有
+证据文件、未执行用例有中文原因、所有用例使用同一 release/SHA，并拒绝跨目录或包含
+敏感 token：
 
 ```bash
-.venv/bin/python scripts/render_milestone_2b_report.py \
+.venv/bin/python scripts/aggregate_milestone_2b_cases.py \
+  --release-root "$RELEASE_ROOT" \
+  --operator-compose deploy/docker-compose.operators.yml \
+  --smoke-manifest deploy/operator-smoke-cases.json \
+  --report-plan deploy/milestone-2b-report-plan.json \
+  --output "$RELEASE_ROOT/summary/cases.json"
+
+renderer_status=0
+if .venv/bin/python scripts/render_milestone_2b_report.py \
   --input "$RELEASE_ROOT/summary/cases.json" \
   --release-root "$RELEASE_ROOT" \
   --output-json "$RELEASE_ROOT/summary/report.json" \
   --output-markdown "$RELEASE_ROOT/summary/report.md"
+then
+  renderer_status=0
+else
+  renderer_status=$?
+fi
+
+case "$renderer_status" in
+  0)
+    report_overall_status="$(
+      .venv/bin/python - "$RELEASE_ROOT/summary/report.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    print(json.load(stream)["overall_status"])
+PY
+    )"
+    if [[ "$report_overall_status" != "通过" ]]; then
+      echo "renderer 返回 0，但 overall_status 不是通过" >&2
+      exit 1
+    fi
+    printf '里程碑 2B 验收通过：overall_status=%s\n' "$report_overall_status"
+    ;;
+  3)
+    echo "报告已生成但验收未通过（renderer 返回码 3）" >&2
+    exit 3
+    ;;
+  *)
+    echo "报告输入校验或发布错误（renderer 返回码 $renderer_status）" >&2
+    exit "$renderer_status"
+    ;;
+esac
 ```
+
+返回码 `0` 且 `overall_status` 为“通过”才表示验收通过；返回码 `3` 表示报告已生成但
+验收未通过，其他返回码表示校验或发布错误。生成报告不等于验收通过。终端只输出
+`overall_status` 和返回码说明，不打印证据原文；证据摘要只保存在报告索引中。
 
 ## 当前未执行声明
 
