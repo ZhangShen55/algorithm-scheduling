@@ -5,6 +5,7 @@ import hashlib
 import importlib
 import inspect
 import json
+import os
 import subprocess
 import sys
 from collections import Counter
@@ -1596,6 +1597,84 @@ def test_release_evidence_rejects_path_outside_release_root(
         aggregate._read_release_text(release_tree.root, Path("../outside.json"))
 
 
+def test_release_evidence_rejects_parent_replacement_during_open(
+    release_tree: ReleaseTree,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release_tree.write_full_smoke()
+    aggregate = _aggregate_module()
+    smoke_root = release_tree.root / "smoke"
+    original_smoke_root = release_tree.root / "smoke-original"
+    outside_smoke_root = release_tree.root.parent / "outside-smoke"
+    outside_smoke_root.mkdir()
+    os.link(
+        smoke_root / "cases.json",
+        outside_smoke_root / "cases.json",
+    )
+    real_open = os.open
+    replaced = False
+
+    def replace_parent_then_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes] | int,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal replaced
+        old_style_open = (
+            dir_fd is None
+            and not isinstance(path, int)
+            and Path(path) == smoke_root / "cases.json"
+        )
+        dir_fd_open = dir_fd is not None and path == "smoke"
+        if not replaced and (old_style_open or dir_fd_open):
+            smoke_root.rename(original_smoke_root)
+            smoke_root.symlink_to(outside_smoke_root, target_is_directory=True)
+            replaced = True
+        if dir_fd is None:
+            return real_open(path, flags, mode)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(aggregate.os, "open", replace_parent_then_open)
+
+    with pytest.raises(ValueError, match="release source|unsafe|changed"):
+        aggregate._read_release_text(release_tree.root, Path("smoke/cases.json"))
+
+    assert replaced
+
+
+def _open_descriptor_count() -> int | None:
+    for directory in (Path("/proc/self/fd"), Path("/dev/fd")):
+        try:
+            return len(os.listdir(directory))
+        except OSError:
+            continue
+    return None
+
+
+def test_release_evidence_rejection_does_not_leak_file_descriptors(
+    release_tree: ReleaseTree,
+) -> None:
+    unsafe_parent = release_tree.root / "smoke" / "unsafe"
+    unsafe_parent.parent.mkdir(parents=True)
+    outside = release_tree.root.parent / "outside"
+    outside.mkdir()
+    unsafe_parent.symlink_to(outside, target_is_directory=True)
+    aggregate = _aggregate_module()
+    before = _open_descriptor_count()
+    if before is None:
+        pytest.skip("the platform does not expose an fd directory")
+
+    for _ in range(100):
+        with pytest.raises(ValueError, match="release source|unsafe|missing"):
+            aggregate._read_release_text(
+                release_tree.root, Path("smoke/unsafe/cases.json")
+            )
+
+    assert _open_descriptor_count() == before
+
+
 @pytest.mark.parametrize(
     ("side", "path", "value", "message"),
     (
@@ -2395,6 +2474,47 @@ def test_instance_smoke_rejects_unknown_compose_instance(
         release_tree.collect_smoke()
 
 
+def test_instance_smoke_rejects_instances_replacement_during_scan(
+    release_tree: ReleaseTree,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    aggregate = _aggregate_module()
+    instances_root = release_tree.root / "smoke" / "instances"
+    original_metadata = os.stat(instances_root, follow_symlinks=False)
+    moved_instances_root = release_tree.root.parent / "original-instances"
+    outside_instances_root = release_tree.root.parent / "outside-instances"
+    outside_instances_root.mkdir()
+    real_listdir = os.listdir
+    replaced = False
+
+    def replace_instances_then_list(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes] | int,
+    ) -> list[str]:
+        nonlocal replaced
+        if isinstance(path, int):
+            opened = os.fstat(path)
+            scans_instances = (opened.st_dev, opened.st_ino) == (
+                original_metadata.st_dev,
+                original_metadata.st_ino,
+            )
+        else:
+            scans_instances = Path(path) == instances_root
+        if not replaced and scans_instances:
+            instances_root.rename(moved_instances_root)
+            instances_root.symlink_to(outside_instances_root, target_is_directory=True)
+            replaced = True
+        return real_listdir(path)
+
+    monkeypatch.setattr(aggregate.os, "listdir", replace_instances_then_list)
+
+    with pytest.raises(ValueError, match="release (source )?directory"):
+        release_tree.collect_smoke()
+
+    assert replaced
+
+
 @pytest.mark.parametrize("source_name", ("extra.json", "latest"))
 def test_instance_smoke_rejects_extra_run_source(
     release_tree: ReleaseTree,
@@ -2498,3 +2618,40 @@ def test_cases_envelope_allows_empty_run_id_only_for_full_smoke() -> None:
     case["run_id"] = ""
 
     contract.validate_cases_envelope(envelope)
+
+
+def test_cases_envelope_rejects_relabelled_declaration_with_empty_run_id() -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    case = envelope["cases"][0]
+    case["case_kind"] = "smoke_full"
+    case["run_id"] = ""
+
+    with pytest.raises(ValueError, match="source_case_id|canonical|Smoke"):
+        contract.validate_cases_envelope(envelope)
+
+
+def test_cases_envelope_rejects_unknown_full_smoke_source() -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    case = envelope["cases"][0]
+    case["case_id"] = "SMOKE-FULL-INF-UNKNOWN"
+    case["source_case_id"] = "INF-UNKNOWN"
+    case["case_kind"] = "smoke_full"
+    case["run_id"] = ""
+
+    with pytest.raises(ValueError, match="source_case_id|canonical|Smoke"):
+        contract.validate_cases_envelope(envelope)
+
+
+def test_cases_envelope_rejects_wrong_full_smoke_case_id() -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    case = envelope["cases"][0]
+    case["case_id"] = "SMOKE-FULL-INF-ASR-ONLINE"
+    case["source_case_id"] = "INF-OCR"
+    case["case_kind"] = "smoke_full"
+    case["run_id"] = ""
+
+    with pytest.raises(ValueError, match="case_id|canonical|Smoke"):
+        contract.validate_cases_envelope(envelope)

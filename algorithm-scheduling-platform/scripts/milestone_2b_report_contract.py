@@ -80,6 +80,18 @@ EXPECTED_RANGES = {
     ),
     "load": (("LOAD", 1, 26),),
 }
+SMOKE_FULL_SOURCE_CASE_IDS = frozenset(
+    {
+        "INF-ASR-OFFLINE",
+        "INF-ASR-ONLINE",
+        "INF-FACEREC",
+        "INF-OCR",
+        "INF-PPT-SLICE",
+        "INF-SCREEN-DET",
+        "INF-TEXT-ANALYSIS",
+        "INF-VBAS",
+    }
+)
 
 _PREFIX_PATTERN = re.compile(r"[A-Z]+")
 _GIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
@@ -386,7 +398,21 @@ def validate_cases_envelope(document: object) -> None:
             if field != "run_id"
         }
         raw_run_id = case["run_id"]
-        if raw_run_id == "" and strings["case_kind"] == "smoke_full":
+        if type(raw_run_id) is str and raw_run_id == "":
+            if strings["case_kind"] != "smoke_full":
+                raise ValueError(
+                    f"{context}.run_id may be empty only for canonical full Smoke cases"
+                )
+            source_case_id = strings["source_case_id"]
+            if source_case_id not in SMOKE_FULL_SOURCE_CASE_IDS:
+                raise ValueError(
+                    f"{context}.source_case_id is not a canonical full Smoke source"
+                )
+            expected_case_id = f"SMOKE-FULL-{source_case_id}"
+            if strings["case_id"] != expected_case_id:
+                raise ValueError(
+                    f"{context}.case_id must equal {expected_case_id} for full Smoke"
+                )
             strings["run_id"] = ""
         else:
             strings["run_id"] = _require_string(raw_run_id, f"{context}.run_id")

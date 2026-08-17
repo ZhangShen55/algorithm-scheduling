@@ -9,6 +9,8 @@ import os
 import re
 import stat
 import sys
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -424,13 +426,99 @@ def registration_paths(inventory: OperatorInventory) -> dict[str, Path]:
     return paths
 
 
-def _require_release_root(release_root: Path) -> None:
+def _same_filesystem_object(left: os.stat_result, right: os.stat_result) -> bool:
+    return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+
+
+@contextmanager
+def _release_directory_descriptor(
+    release_root: Path, relative_path: Path
+) -> Iterator[int]:
+    if relative_path.is_absolute() or ".." in relative_path.parts:
+        raise ValueError(f"release directory path is unsafe: {relative_path}")
+
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
     try:
-        metadata = os.lstat(release_root)
+        with ExitStack() as descriptors:
+            named_root = os.lstat(release_root)
+            if stat.S_ISLNK(named_root.st_mode) or not stat.S_ISDIR(named_root.st_mode):
+                raise ValueError(f"release root must be a real directory: {release_root}")
+            current_descriptor = os.open(release_root, directory_flags)
+            descriptors.callback(os.close, current_descriptor)
+            opened_root = os.fstat(current_descriptor)
+            if not stat.S_ISDIR(opened_root.st_mode) or not _same_filesystem_object(
+                named_root, opened_root
+            ):
+                raise ValueError(f"release root changed while opening: {release_root}")
+
+            bindings: list[tuple[int, str, int]] = []
+            for part in relative_path.parts:
+                named_directory = os.stat(
+                    part,
+                    dir_fd=current_descriptor,
+                    follow_symlinks=False,
+                )
+                if stat.S_ISLNK(named_directory.st_mode) or not stat.S_ISDIR(
+                    named_directory.st_mode
+                ):
+                    raise ValueError(
+                        f"release source directory is unsafe: {relative_path}"
+                    )
+                next_descriptor = os.open(
+                    part,
+                    directory_flags,
+                    dir_fd=current_descriptor,
+                )
+                descriptors.callback(os.close, next_descriptor)
+                opened_directory = os.fstat(next_descriptor)
+                if not stat.S_ISDIR(opened_directory.st_mode) or not (
+                    _same_filesystem_object(named_directory, opened_directory)
+                ):
+                    raise ValueError(
+                        "release source directory changed while opening: "
+                        f"{relative_path}"
+                    )
+                bindings.append((current_descriptor, part, next_descriptor))
+                current_descriptor = next_descriptor
+
+            yield current_descriptor
+
+            for parent_descriptor, part, opened_descriptor in bindings:
+                named_directory = os.stat(
+                    part,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+                opened_directory = os.fstat(opened_descriptor)
+                if (
+                    stat.S_ISLNK(named_directory.st_mode)
+                    or not stat.S_ISDIR(named_directory.st_mode)
+                    or not _same_filesystem_object(named_directory, opened_directory)
+                ):
+                    raise ValueError(
+                        "release source directory changed during access: "
+                        f"{relative_path}"
+                    )
+            named_root_after = os.lstat(release_root)
+            if (
+                stat.S_ISLNK(named_root_after.st_mode)
+                or not stat.S_ISDIR(named_root_after.st_mode)
+                or not _same_filesystem_object(named_root_after, opened_root)
+            ):
+                raise ValueError(f"release root changed during access: {release_root}")
     except OSError as exc:
-        raise ValueError(f"release root is missing or unreadable: {release_root}") from exc
-    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-        raise ValueError(f"release root must be a real directory: {release_root}")
+        raise ValueError(
+            f"failed to access release source directory: {relative_path}"
+        ) from exc
+
+
+def _require_release_root(release_root: Path) -> None:
+    with _release_directory_descriptor(release_root, Path()):
+        pass
 
 
 def _read_release_text(release_root: Path, relative_path: Path) -> str:
@@ -438,44 +526,55 @@ def _read_release_text(release_root: Path, relative_path: Path) -> str:
         raise ValueError(f"release source path escapes release root: {relative_path}")
     if not relative_path.parts:
         raise ValueError("release source path must not be empty")
-    _require_release_root(release_root)
-
-    current = release_root
-    for part in relative_path.parts[:-1]:
-        current /= part
+    parent_path = Path(*relative_path.parts[:-1])
+    source_name = relative_path.parts[-1]
+    chunks: list[bytes] = []
+    with _release_directory_descriptor(release_root, parent_path) as parent_descriptor:
+        descriptor = -1
         try:
-            metadata = os.lstat(current)
-        except OSError as exc:
-            raise ValueError(f"release source directory is missing: {relative_path}") from exc
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-            raise ValueError(
-                f"release source directory is unsafe for {relative_path}: {current}"
+            metadata = os.stat(
+                source_name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
             )
-
-    candidate = release_root.joinpath(*relative_path.parts)
-    try:
-        metadata = os.lstat(candidate)
-    except OSError as exc:
-        raise ValueError(f"required release source is missing: {relative_path}") from exc
-    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-        raise ValueError(f"release source must be a regular non-symlink file: {relative_path}")
-
-    descriptor = -1
-    try:
-        descriptor = os.open(candidate, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        opened = os.fstat(descriptor)
-        if not stat.S_ISREG(opened.st_mode):
-            raise ValueError(f"release source must be a regular file: {relative_path}")
-        if (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino):
-            raise ValueError(f"release source changed while opening: {relative_path}")
-        chunks: list[bytes] = []
-        while chunk := os.read(descriptor, 65_536):
-            chunks.append(chunk)
-    except OSError as exc:
-        raise ValueError(f"failed to read release source: {relative_path}") from exc
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                raise ValueError(
+                    "release source must be a regular non-symlink file: "
+                    f"{relative_path}"
+                )
+            descriptor = os.open(
+                source_name,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=parent_descriptor,
+            )
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode):
+                raise ValueError(f"release source must be a regular file: {relative_path}")
+            if not _same_filesystem_object(metadata, opened):
+                raise ValueError(f"release source changed while opening: {relative_path}")
+            while chunk := os.read(descriptor, 65_536):
+                chunks.append(chunk)
+            named_after = os.stat(
+                source_name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                stat.S_ISLNK(named_after.st_mode)
+                or not stat.S_ISREG(named_after.st_mode)
+                or not _same_filesystem_object(named_after, opened)
+            ):
+                raise ValueError(f"release source changed while reading: {relative_path}")
+        except OSError as exc:
+            raise ValueError(f"failed to read release source: {relative_path}") from exc
+        finally:
+            if descriptor >= 0:
+                try:
+                    os.close(descriptor)
+                except OSError as exc:
+                    raise ValueError(
+                        f"failed to close release source: {relative_path}"
+                    ) from exc
     try:
         return b"".join(chunks).decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -1150,20 +1249,18 @@ def _real_directory_entries(
 ) -> dict[str, os.stat_result]:
     if relative_path.is_absolute() or ".." in relative_path.parts or not relative_path.parts:
         raise ValueError(f"release directory path is unsafe: {relative_path}")
-    _require_release_root(release_root)
-    current = release_root
-    for part in relative_path.parts:
-        current /= part
+    with _release_directory_descriptor(release_root, relative_path) as directory_descriptor:
         try:
-            metadata = os.lstat(current)
+            return {
+                name: os.stat(
+                    name,
+                    dir_fd=directory_descriptor,
+                    follow_symlinks=False,
+                )
+                for name in os.listdir(directory_descriptor)
+            }
         except OSError as exc:
-            raise ValueError(f"required release directory is missing: {relative_path}") from exc
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-            raise ValueError(f"release source directory is unsafe: {relative_path}")
-    try:
-        return {entry.name: os.lstat(entry) for entry in current.iterdir()}
-    except OSError as exc:
-        raise ValueError(f"failed to scan release directory: {relative_path}") from exc
+            raise ValueError(f"failed to scan release directory: {relative_path}") from exc
 
 
 def _require_real_subdirectory(
