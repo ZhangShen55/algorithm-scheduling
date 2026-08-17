@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import contextvars
 import errno
 import fcntl
 import hashlib
@@ -13,7 +14,7 @@ import secrets
 import stat
 import sys
 from collections.abc import Callable, Iterator
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -135,8 +136,7 @@ PUBLISH_PATHS = frozenset(
         Path("summary/cases.json"),
     }
 )
-
-
+CASE_EVIDENCE_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9_.-]*\.json")
 @dataclass(frozen=True)
 class OperatorInstance:
     service_name: str
@@ -162,6 +162,19 @@ class OperatorInventory:
         return tuple(
             instance for instance in self.instances if instance.physical_gpu is None
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _ReleaseRootLockState:
+    path: Path
+    exclusive: bool
+    descriptor: int
+    metadata: os.stat_result
+
+
+_ACTIVE_RELEASE_ROOT_LOCK: contextvars.ContextVar[
+    _ReleaseRootLockState | None
+] = contextvars.ContextVar("milestone_2b_release_root_lock", default=None)
 
 
 @dataclass(frozen=True)
@@ -264,104 +277,108 @@ def _require_secure_publication_parent(
 def _publication_directory_descriptor(
     release_root: Path, parent_path: Path
 ) -> Iterator[tuple[int, Callable[[], None]]]:
-    if parent_path.is_absolute() or len(parent_path.parts) != 1:
+    if (
+        parent_path.is_absolute()
+        or ".." in parent_path.parts
+        or not parent_path.parts
+    ):
         raise ValueError(f"publication parent path is not canonical: {parent_path}")
-    parent_name = parent_path.parts[0]
     directory_flags = (
         os.O_RDONLY
         | getattr(os, "O_DIRECTORY", 0)
         | getattr(os, "O_NOFOLLOW", 0)
     )
-    with _release_directory_descriptor_access(
-        release_root, Path()
-    ) as release_access:
-        root_descriptor, verify_root = release_access
-        try:
-            named_parent = os.stat(
-                parent_name,
-                dir_fd=root_descriptor,
-                follow_symlinks=False,
-            )
-        except FileNotFoundError:
+    with (
+        _release_directory_descriptor_access(release_root, Path()) as release_access,
+        ExitStack() as descriptors,
+    ):
+        current_descriptor, verify_root = release_access
+        bindings: list[tuple[int, str, int, Path]] = []
+        for index, part in enumerate(parent_path.parts):
+            traversed = Path(*parent_path.parts[: index + 1])
             try:
-                os.mkdir(parent_name, mode=0o700, dir_fd=root_descriptor)
-            except FileExistsError:
-                pass
-            else:
-                os.fsync(root_descriptor)
-            try:
-                named_parent = os.stat(
-                    parent_name,
-                    dir_fd=root_descriptor,
+                named = os.stat(
+                    part,
+                    dir_fd=current_descriptor,
                     follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                try:
+                    os.mkdir(part, mode=0o700, dir_fd=current_descriptor)
+                except FileExistsError:
+                    pass
+                else:
+                    os.fsync(current_descriptor)
+                try:
+                    named = os.stat(
+                        part,
+                        dir_fd=current_descriptor,
+                        follow_symlinks=False,
+                    )
+                except OSError as exc:
+                    raise ValueError(
+                        f"failed to create publication directory: {traversed}"
+                    ) from exc
+            except OSError as exc:
+                raise ValueError(
+                    f"failed to inspect publication directory: {traversed}"
+                ) from exc
+            if stat.S_ISLNK(named.st_mode) or not stat.S_ISDIR(named.st_mode):
+                raise ValueError(
+                    f"publication parent must be a real directory: {traversed}"
+                )
+            _require_secure_publication_parent(named, traversed)
+            try:
+                opened_descriptor = os.open(
+                    part,
+                    directory_flags,
+                    dir_fd=current_descriptor,
                 )
             except OSError as exc:
                 raise ValueError(
-                    f"failed to create publication directory: {parent_path}"
+                    f"failed to open publication directory: {traversed}"
                 ) from exc
-        except OSError as exc:
-            raise ValueError(
-                f"failed to inspect publication directory: {parent_path}"
-            ) from exc
-        if stat.S_ISLNK(named_parent.st_mode) or not stat.S_ISDIR(
-            named_parent.st_mode
-        ):
-            raise ValueError(
-                f"publication parent must be a real directory: {parent_path}"
-            )
-        _require_secure_publication_parent(named_parent, parent_path)
-        try:
-            parent_descriptor = os.open(
-                parent_name,
-                directory_flags,
-                dir_fd=root_descriptor,
-            )
-        except OSError as exc:
-            raise ValueError(
-                f"failed to open publication directory: {parent_path}"
-            ) from exc
-        try:
-            opened_parent = os.fstat(parent_descriptor)
-            if not stat.S_ISDIR(opened_parent.st_mode) or not _same_filesystem_object(
-                named_parent, opened_parent
+            descriptors.callback(os.close, opened_descriptor)
+            opened = os.fstat(opened_descriptor)
+            if not stat.S_ISDIR(opened.st_mode) or not _same_filesystem_object(
+                named, opened
             ):
                 raise ValueError(
-                    f"publication directory changed while opening: {parent_path}"
+                    f"publication directory changed while opening: {traversed}"
                 )
-            _require_secure_publication_parent(opened_parent, parent_path)
+            _require_secure_publication_parent(opened, traversed)
+            bindings.append(
+                (current_descriptor, part, opened_descriptor, traversed)
+            )
+            current_descriptor = opened_descriptor
 
-            def verify_directories() -> None:
-                try:
+        def verify_directories() -> None:
+            try:
+                for parent_descriptor, part, opened_descriptor, traversed in bindings:
                     named_after = os.stat(
-                        parent_name,
-                        dir_fd=root_descriptor,
+                        part,
+                        dir_fd=parent_descriptor,
                         follow_symlinks=False,
                     )
-                    opened_after = os.fstat(parent_descriptor)
-                except OSError as exc:
-                    raise ValueError(
-                        "failed to recheck publication directory: "
-                        f"{parent_path}"
-                    ) from exc
-                if (
-                    stat.S_ISLNK(named_after.st_mode)
-                    or not stat.S_ISDIR(named_after.st_mode)
-                    or not _same_filesystem_object(named_after, opened_after)
-                ):
-                    raise ValueError(
-                        f"publication directory changed during access: {parent_path}"
-                    )
-                _require_secure_publication_parent(named_after, parent_path)
-                _require_secure_publication_parent(opened_after, parent_path)
+                    opened_after = os.fstat(opened_descriptor)
+                    if (
+                        stat.S_ISLNK(named_after.st_mode)
+                        or not stat.S_ISDIR(named_after.st_mode)
+                        or not _same_filesystem_object(named_after, opened_after)
+                    ):
+                        raise ValueError(
+                            "publication directory changed during access: "
+                            f"{traversed}"
+                        )
+                    _require_secure_publication_parent(named_after, traversed)
+                    _require_secure_publication_parent(opened_after, traversed)
                 verify_root()
+            except OSError as exc:
+                raise ValueError(
+                    f"failed to recheck publication directory: {parent_path}"
+                ) from exc
 
-            yield parent_descriptor, verify_directories
-        except OSError as exc:
-            raise ValueError(
-                f"failed to access publication directory: {parent_path}"
-            ) from exc
-        finally:
-            os.close(parent_descriptor)
+        yield current_descriptor, verify_directories
 
 
 def _read_existing_publication(
@@ -895,39 +912,66 @@ def _publish_json_locked(
 def publish_json_once(
     *, release_root: Path, relative_path: Path, document: object
 ) -> None:
-    if relative_path not in PUBLISH_PATHS:
+    if not _is_canonical_publication_path(relative_path):
         raise ValueError(f"publication path is not canonical: {relative_path}")
-    _require_release_root(release_root)
-    payload = _stable_json_bytes(document)
-    parent_path = relative_path.parent
-    final_name = relative_path.name
-    with _publication_directory_descriptor(release_root, parent_path) as publication:
-        parent_descriptor, verify_directories = publication
-        lock_acquired = False
-        try:
+    release_lock = (
+        _release_root_lock(release_root, exclusive=True, blocking=True)
+        if relative_path in PUBLISH_PATHS
+        else nullcontext()
+    )
+    with release_lock:
+        _require_release_root(release_root)
+        payload = _stable_json_bytes(document)
+        parent_path = relative_path.parent
+        final_name = relative_path.name
+        with _publication_directory_descriptor(release_root, parent_path) as publication:
+            parent_descriptor, verify_directories = publication
+            lock_acquired = False
             try:
-                fcntl.flock(parent_descriptor, fcntl.LOCK_EX)
-            except OSError as exc:
-                raise ValueError(
-                    f"failed to lock publication directory: {relative_path}"
-                ) from exc
-            lock_acquired = True
-            verify_directories()
-            _publish_json_locked(
-                parent_descriptor=parent_descriptor,
-                verify_directories=verify_directories,
-                final_name=final_name,
-                relative_path=relative_path,
-                payload=payload,
-            )
-        finally:
-            if lock_acquired:
                 try:
-                    fcntl.flock(parent_descriptor, fcntl.LOCK_UN)
+                    fcntl.flock(parent_descriptor, fcntl.LOCK_EX)
                 except OSError as exc:
                     raise ValueError(
-                        f"failed to unlock publication directory: {relative_path}"
+                        f"failed to lock publication directory: {relative_path}"
                     ) from exc
+                lock_acquired = True
+                verify_directories()
+                _publish_json_locked(
+                    parent_descriptor=parent_descriptor,
+                    verify_directories=verify_directories,
+                    final_name=final_name,
+                    relative_path=relative_path,
+                    payload=payload,
+                )
+            finally:
+                if lock_acquired:
+                    try:
+                        fcntl.flock(parent_descriptor, fcntl.LOCK_UN)
+                    except OSError as exc:
+                        raise ValueError(
+                            f"failed to unlock publication directory: {relative_path}"
+                        ) from exc
+
+
+def _is_canonical_publication_path(relative_path: Path) -> bool:
+    if relative_path in PUBLISH_PATHS:
+        return True
+    if relative_path.is_absolute() or ".." in relative_path.parts:
+        return False
+    parts = relative_path.parts
+    if len(parts) == 4 and parts[1] == "evidence":
+        category, _, case_id, evidence_name = parts
+        return (
+            DECLARATION_CATEGORY_BY_CASE_ID.get(case_id) == category
+            and CASE_EVIDENCE_NAME_PATTERN.fullmatch(evidence_name) is not None
+        )
+    if len(parts) == 3 and parts[1] == "executions":
+        category, _, execution_name = parts
+        if not execution_name.endswith(".json"):
+            return False
+        case_id = execution_name.removesuffix(".json")
+        return DECLARATION_CATEGORY_BY_CASE_ID.get(case_id) == category
+    return False
 
 
 def _declaration_document(
@@ -1303,6 +1347,27 @@ def _same_filesystem_object(left: os.stat_result, right: os.stat_result) -> bool
     return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
 
 
+def _verify_locked_release_root(state: _ReleaseRootLockState) -> os.stat_result:
+    try:
+        named_root = os.lstat(state.path)
+        locked_root = os.fstat(state.descriptor)
+    except OSError as exc:
+        raise ValueError(
+            f"failed to verify locked release root: {state.path}"
+        ) from exc
+    if (
+        stat.S_ISLNK(named_root.st_mode)
+        or not stat.S_ISDIR(named_root.st_mode)
+        or not stat.S_ISDIR(locked_root.st_mode)
+        or not _same_filesystem_object(state.metadata, locked_root)
+        or not _same_filesystem_object(named_root, locked_root)
+    ):
+        raise ValueError(
+            f"release root binding changed while locked: {state.path}"
+        )
+    return locked_root
+
+
 @contextmanager
 def _release_directory_descriptor_access(
     release_root: Path, relative_path: Path
@@ -1317,16 +1382,39 @@ def _release_directory_descriptor_access(
     )
     try:
         with ExitStack() as descriptors:
-            named_root = os.lstat(release_root)
-            if stat.S_ISLNK(named_root.st_mode) or not stat.S_ISDIR(named_root.st_mode):
-                raise ValueError(f"release root must be a real directory: {release_root}")
-            current_descriptor = os.open(release_root, directory_flags)
+            active_lock = _ACTIVE_RELEASE_ROOT_LOCK.get()
+            if active_lock is not None:
+                if active_lock.path != release_root:
+                    raise ValueError(
+                        "release root access differs from the active root lock"
+                    )
+                opened_root = _verify_locked_release_root(active_lock)
+                current_descriptor = os.dup(active_lock.descriptor)
+            else:
+                named_root = os.lstat(release_root)
+                if stat.S_ISLNK(named_root.st_mode) or not stat.S_ISDIR(
+                    named_root.st_mode
+                ):
+                    raise ValueError(
+                        f"release root must be a real directory: {release_root}"
+                    )
+                current_descriptor = os.open(release_root, directory_flags)
+                opened_root = os.fstat(current_descriptor)
+                if not stat.S_ISDIR(
+                    opened_root.st_mode
+                ) or not _same_filesystem_object(named_root, opened_root):
+                    os.close(current_descriptor)
+                    raise ValueError(
+                        f"release root changed while opening: {release_root}"
+                    )
             descriptors.callback(os.close, current_descriptor)
-            opened_root = os.fstat(current_descriptor)
-            if not stat.S_ISDIR(opened_root.st_mode) or not _same_filesystem_object(
-                named_root, opened_root
-            ):
-                raise ValueError(f"release root changed while opening: {release_root}")
+            duplicated_root = os.fstat(current_descriptor)
+            if not stat.S_ISDIR(
+                duplicated_root.st_mode
+            ) or not _same_filesystem_object(opened_root, duplicated_root):
+                raise ValueError(
+                    f"locked release root changed while duplicating: {release_root}"
+                )
 
             bindings: list[tuple[int, str, int]] = []
             for part in relative_path.parts:
@@ -1382,11 +1470,15 @@ def _release_directory_descriptor_access(
                     if (
                         stat.S_ISLNK(named_root_after.st_mode)
                         or not stat.S_ISDIR(named_root_after.st_mode)
-                        or not _same_filesystem_object(named_root_after, opened_root)
+                        or not _same_filesystem_object(
+                            named_root_after, duplicated_root
+                        )
                     ):
                         raise ValueError(
                             f"release root changed during access: {release_root}"
                         )
+                    if active_lock is not None:
+                        _verify_locked_release_root(active_lock)
                 except OSError as exc:
                     raise ValueError(
                         f"failed to access release source directory: {relative_path}"
@@ -1416,7 +1508,66 @@ def _require_release_root(release_root: Path) -> None:
         pass
 
 
-def _read_release_text(release_root: Path, relative_path: Path) -> str:
+@contextmanager
+def _release_root_lock(
+    release_root: Path,
+    *,
+    exclusive: bool,
+    blocking: bool = False,
+) -> Iterator[None]:
+    active = _ACTIVE_RELEASE_ROOT_LOCK.get()
+    if active is not None:
+        if active.path != release_root or (exclusive and not active.exclusive):
+            raise ValueError("release root lock cannot be changed while held")
+        _verify_locked_release_root(active)
+        try:
+            yield
+        finally:
+            _verify_locked_release_root(active)
+        return
+
+    operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+    if not blocking:
+        operation |= fcntl.LOCK_NB
+    with _release_directory_descriptor_access(
+        release_root, Path()
+    ) as directory_access:
+        root_descriptor, verify_root = directory_access
+        locked = False
+        try:
+            try:
+                fcntl.flock(root_descriptor, operation)
+            except BlockingIOError as exc:
+                raise ValueError("release root is locked by another lifecycle stage") from exc
+            except OSError as exc:
+                raise ValueError("failed to lock release root") from exc
+            locked = True
+            opened_root = os.fstat(root_descriptor)
+            verify_root()
+            state = _ReleaseRootLockState(
+                path=release_root,
+                exclusive=exclusive,
+                descriptor=root_descriptor,
+                metadata=opened_root,
+            )
+            _verify_locked_release_root(state)
+            token = _ACTIVE_RELEASE_ROOT_LOCK.set(state)
+            try:
+                yield
+            finally:
+                _ACTIVE_RELEASE_ROOT_LOCK.reset(token)
+            verify_root()
+        finally:
+            if locked:
+                try:
+                    fcntl.flock(root_descriptor, fcntl.LOCK_UN)
+                except OSError as exc:
+                    raise ValueError("failed to unlock release root") from exc
+
+
+def _read_release_text_with_metadata(
+    release_root: Path, relative_path: Path
+) -> tuple[str, os.stat_result]:
     if relative_path.is_absolute() or ".." in relative_path.parts:
         raise ValueError(f"release source path escapes release root: {relative_path}")
     if not relative_path.parts:
@@ -1424,6 +1575,7 @@ def _read_release_text(release_root: Path, relative_path: Path) -> str:
     parent_path = Path(*relative_path.parts[:-1])
     source_name = relative_path.parts[-1]
     chunks: list[bytes] = []
+    opened_after: os.stat_result | None = None
     with _release_directory_descriptor(release_root, parent_path) as parent_descriptor:
         descriptor = -1
         try:
@@ -1442,13 +1594,14 @@ def _read_release_text(release_root: Path, relative_path: Path) -> str:
                 os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
                 dir_fd=parent_descriptor,
             )
-            opened = os.fstat(descriptor)
-            if not stat.S_ISREG(opened.st_mode):
+            opened_before = os.fstat(descriptor)
+            if not stat.S_ISREG(opened_before.st_mode):
                 raise ValueError(f"release source must be a regular file: {relative_path}")
-            if not _same_filesystem_object(metadata, opened):
+            if not _same_filesystem_object(metadata, opened_before):
                 raise ValueError(f"release source changed while opening: {relative_path}")
             while chunk := os.read(descriptor, 65_536):
                 chunks.append(chunk)
+            opened_after = os.fstat(descriptor)
             named_after = os.stat(
                 source_name,
                 dir_fd=parent_descriptor,
@@ -1457,7 +1610,9 @@ def _read_release_text(release_root: Path, relative_path: Path) -> str:
             if (
                 stat.S_ISLNK(named_after.st_mode)
                 or not stat.S_ISREG(named_after.st_mode)
-                or not _same_filesystem_object(named_after, opened)
+                or not stat.S_ISREG(opened_after.st_mode)
+                or not _same_filesystem_object(opened_before, opened_after)
+                or not _same_filesystem_object(named_after, opened_after)
             ):
                 raise ValueError(f"release source changed while reading: {relative_path}")
         except OSError as exc:
@@ -1470,19 +1625,34 @@ def _read_release_text(release_root: Path, relative_path: Path) -> str:
                     raise ValueError(
                         f"failed to close release source: {relative_path}"
                     ) from exc
+    if opened_after is None:
+        raise ValueError(f"failed to read release source: {relative_path}")
     try:
-        return b"".join(chunks).decode("utf-8")
+        text = b"".join(chunks).decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError(f"release source is not UTF-8: {relative_path}") from exc
+    return text, opened_after
 
 
-def _load_release_json(release_root: Path, relative_path: Path) -> dict[str, Any]:
-    text = _read_release_text(release_root, relative_path)
+def _read_release_text(release_root: Path, relative_path: Path) -> str:
+    text, _metadata = _read_release_text_with_metadata(release_root, relative_path)
+    return text
+
+
+def _load_release_json_with_metadata(
+    release_root: Path, relative_path: Path
+) -> tuple[dict[str, Any], os.stat_result]:
+    text, metadata = _read_release_text_with_metadata(release_root, relative_path)
     try:
         loaded = strict_json_loads(text)
     except (json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f"invalid JSON release source {relative_path}: {exc}") from exc
-    return _require_object(loaded, f"release source {relative_path}")
+    return _require_object(loaded, f"release source {relative_path}"), metadata
+
+
+def _load_release_json(release_root: Path, relative_path: Path) -> dict[str, Any]:
+    document, _metadata = _load_release_json_with_metadata(release_root, relative_path)
+    return document
 
 
 def _load_release_json_list(release_root: Path, relative_path: Path) -> list[Any]:
@@ -1578,9 +1748,20 @@ def collect_case_executions(
                 raise ValueError(
                     f"execution record must be one regular JSON file: {relative_path}"
                 )
-            document = _load_release_json(release_root, relative_path)
+            document, opened_metadata = _load_release_json_with_metadata(
+                release_root, relative_path
+            )
+            _require_regular_source(opened_metadata, relative_path)
+            if metadata.st_nlink != 1 or opened_metadata.st_nlink != 1:
+                raise ValueError(
+                    f"execution record must be one regular JSON file: {relative_path}"
+                )
+            if not _same_filesystem_object(metadata, opened_metadata):
+                raise ValueError(
+                    f"execution record changed between scan and read: {relative_path}"
+                )
             _require_exact_fields(document, EXECUTION_FIELDS, relative_path.as_posix())
-            loaded.append((category, relative_path, document, metadata))
+            loaded.append((category, relative_path, document, opened_metadata))
 
     case_ids = [
         _require_string(document.get("case_id"), f"{relative_path}.case_id")
@@ -1627,12 +1808,18 @@ def collect_case_executions(
             context=context,
         )
         for evidence_path in evidence_paths:
-            evidence_metadata = _release_source_metadata(release_root, evidence_path)
+            evidence, evidence_metadata = _load_release_json_with_metadata(
+                release_root, evidence_path
+            )
+            _require_regular_source(evidence_metadata, evidence_path)
+            if evidence_metadata.st_nlink != 1:
+                raise ValueError(
+                    f"release source must not be hard linked: {evidence_path}"
+                )
             if _same_filesystem_object(execution_metadata, evidence_metadata):
                 raise ValueError(
                     f"{evidence_path} must be raw evidence, not the execution record"
                 )
-            evidence = _load_release_json(release_root, evidence_path)
             validate_raw_execution_evidence(
                 evidence,
                 evidence_path.as_posix(),
@@ -2923,6 +3110,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     arguments = parse_args()
+    release_locks = ExitStack()
     try:
         inventory = load_operator_inventory(arguments.operator_compose)
         try:
@@ -2940,6 +3128,9 @@ def main() -> int:
         expected_output = arguments.release_root / "summary" / "cases.json"
         if arguments.output != expected_output:
             raise ValueError(f"--output must equal {expected_output}")
+        release_locks.enter_context(
+            _release_root_lock(arguments.release_root, exclusive=True)
+        )
         registration_cases, registration_coverage = collect_registration_gpu_cases(
             release_root=arguments.release_root,
             inventory=inventory,
@@ -3037,9 +3228,15 @@ def main() -> int:
             relative_path=Path("summary/cases.json"),
             document=envelope,
         )
+        release_locks.close()
         return 0
     except (OSError, ValueError) as exc:
-        print(f"milestone 2B aggregation failed: {exc}", file=sys.stderr)
+        error_text = str(exc)
+        try:
+            release_locks.close()
+        except (OSError, ValueError) as lock_exc:
+            error_text = str(lock_exc)
+        print(f"milestone 2B aggregation failed: {error_text}", file=sys.stderr)
         return 1
 
 

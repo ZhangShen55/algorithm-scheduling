@@ -6118,6 +6118,55 @@ def test_publish_json_once_preserves_third_party_when_release_root_is_rebound(
     )
 
 
+def test_exclusive_release_lock_rejects_rebound_replacement_without_writing_it(
+    release_tree: ReleaseTree,
+) -> None:
+    aggregate = _aggregate_module()
+    release_tree.root.mkdir(parents=True)
+    displaced_root = release_tree.root.with_name(
+        f"{release_tree.root.name}.displaced"
+    )
+    replacement_root = release_tree.root.with_name(
+        f"{release_tree.root.name}.replacement"
+    )
+    seal = replacement_root / "negative/cases.json"
+    seal.parent.mkdir(parents=True)
+    seal.write_text(
+        '{"schema_version":1,"cases":[]}\n',
+        encoding="utf-8",
+    )
+    sentinel = replacement_root / "preflight/sentinel.txt"
+    sentinel.parent.mkdir()
+    sentinel.write_bytes(b"replacement must remain immutable\n")
+    before = {
+        path.relative_to(replacement_root).as_posix(): (
+            path.read_bytes() if path.is_file() else None
+        )
+        for path in sorted(replacement_root.rglob("*"))
+    }
+
+    with pytest.raises(ValueError, match="release root.*changed|binding|inode"):
+        with aggregate._release_root_lock(
+            release_tree.root,
+            exclusive=True,
+        ):
+            release_tree.root.rename(displaced_root)
+            replacement_root.rename(release_tree.root)
+            aggregate.publish_json_once(
+                release_root=release_tree.root,
+                relative_path=Path("summary/cases.json"),
+                document={"schema_version": 1},
+            )
+
+    after = {
+        path.relative_to(release_tree.root).as_posix(): (
+            path.read_bytes() if path.is_file() else None
+        )
+        for path in sorted(release_tree.root.rglob("*"))
+    }
+    assert after == before
+
+
 def test_publish_json_once_rechecks_release_root_after_temp_cleanup(
     release_tree: ReleaseTree,
     monkeypatch: pytest.MonkeyPatch,
@@ -6202,6 +6251,163 @@ def test_publish_json_once_rejects_unsafe_parent_or_final_binding(
     elif unsafe_kind == "final_symlink":
         assert (outside / "cases.json").read_bytes() == b"outside"
 
+
+def test_publish_json_once_supports_canonical_case_execution_paths(
+    release_tree: ReleaseTree,
+) -> None:
+    aggregate = _aggregate_module()
+    release_tree.root.mkdir(parents=True)
+    evidence_path = Path("negative/evidence/DEP-001/result.json")
+    execution_path = Path("negative/executions/DEP-001.json")
+
+    aggregate.publish_json_once(
+        release_root=release_tree.root,
+        relative_path=evidence_path,
+        document={"kind": "raw"},
+    )
+    aggregate.publish_json_once(
+        release_root=release_tree.root,
+        relative_path=execution_path,
+        document={"kind": "execution"},
+    )
+
+    assert json.loads((release_tree.root / evidence_path).read_bytes()) == {
+        "kind": "raw"
+    }
+    assert json.loads((release_tree.root / execution_path).read_bytes()) == {
+        "kind": "execution"
+    }
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        Path("load/evidence/DEP-001/result.json"),
+        Path("negative/evidence/UNKNOWN-001/result.json"),
+        Path("negative/evidence/DEP-001/../result.json"),
+        Path("negative/evidence/DEP-001/.hidden.json"),
+        Path("negative/evidence/DEP-001/nested/result.json"),
+        Path("negative/executions/DEP-001/extra.json"),
+    ),
+)
+def test_publish_json_once_rejects_noncanonical_case_paths(
+    release_tree: ReleaseTree,
+    relative_path: Path,
+) -> None:
+    aggregate = _aggregate_module()
+    release_tree.root.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="canonical|authority|publication path"):
+        aggregate.publish_json_once(
+            release_root=release_tree.root,
+            relative_path=relative_path,
+            document={"kind": "raw"},
+        )
+
+
+def test_publish_json_once_never_overwrites_case_evidence(
+    release_tree: ReleaseTree,
+) -> None:
+    aggregate = _aggregate_module()
+    release_tree.root.mkdir(parents=True)
+    evidence_path = Path("negative/evidence/DEP-001/result.json")
+    aggregate.publish_json_once(
+        release_root=release_tree.root,
+        relative_path=evidence_path,
+        document={"attempt": 1},
+    )
+
+    with pytest.raises(ValueError, match="already exists"):
+        aggregate.publish_json_once(
+            release_root=release_tree.root,
+            relative_path=evidence_path,
+            document={"attempt": 2},
+        )
+
+    assert json.loads((release_tree.root / evidence_path).read_bytes()) == {
+        "attempt": 1
+    }
+
+
+def test_publish_json_once_rejects_symlinked_case_evidence_directory(
+    release_tree: ReleaseTree,
+    tmp_path: Path,
+) -> None:
+    aggregate = _aggregate_module()
+    release_tree.root.mkdir(parents=True)
+    evidence_root = release_tree.root / "negative" / "evidence"
+    evidence_root.mkdir(parents=True)
+    outside = tmp_path / "outside-case"
+    outside.mkdir()
+    (evidence_root / "DEP-001").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="directory|publication parent"):
+        aggregate.publish_json_once(
+            release_root=release_tree.root,
+            relative_path=Path("negative/evidence/DEP-001/result.json"),
+            document={"attempt": 1},
+        )
+
+    assert tuple(outside.iterdir()) == ()
+
+
+def test_publish_json_once_rejects_hard_linked_case_evidence(
+    release_tree: ReleaseTree,
+    tmp_path: Path,
+) -> None:
+    aggregate = _aggregate_module()
+    release_tree.root.mkdir(parents=True)
+    case_root = release_tree.root / "negative" / "evidence" / "DEP-001"
+    case_root.mkdir(parents=True)
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"attacker":true}\n', encoding="utf-8")
+    outside.chmod(0o600)
+    os.link(outside, case_root / "result.json")
+
+    with pytest.raises(ValueError, match="link|nlink|publication"):
+        aggregate.publish_json_once(
+            release_root=release_tree.root,
+            relative_path=Path("negative/evidence/DEP-001/result.json"),
+            document={"attempt": 1},
+        )
+
+    assert outside.read_text(encoding="utf-8") == '{"attacker":true}\n'
+
+
+def test_release_json_with_metadata_rejects_name_rebind_during_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    aggregate = _aggregate_module()
+    release_root = tmp_path / "release"
+    source = release_root / "negative/evidence/DEP-001/result.json"
+    source.parent.mkdir(parents=True)
+    source.write_text('{"version":1}\n', encoding="utf-8")
+    source.chmod(0o600)
+    replacement = source.with_name("replacement.json")
+    replacement.write_text('{"version":2}\n', encoding="utf-8")
+    replacement.chmod(0o600)
+    backup = source.with_name("original.json")
+    original_read = os.read
+    rebound = False
+
+    def read_then_rebind(descriptor: int, size: int) -> bytes:
+        nonlocal rebound
+        chunk = original_read(descriptor, size)
+        if chunk and not rebound:
+            source.rename(backup)
+            replacement.rename(source)
+            rebound = True
+        return chunk
+
+    monkeypatch.setattr(os, "read", read_then_rebind)
+    with pytest.raises(ValueError, match="changed|binding|rebind"):
+        aggregate._load_release_json_with_metadata(
+            release_root,
+            Path("negative/evidence/DEP-001/result.json"),
+        )
+
+    assert rebound is True
 
 def test_task4_cli_rejects_wrong_output_without_summary(
     release_tree: ReleaseTree,
