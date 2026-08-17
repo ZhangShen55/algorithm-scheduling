@@ -1797,6 +1797,85 @@ def _write_maintenance_provenance(
     return provenance
 
 
+def _prepare_cross_sha_operator_ledger_chain(
+    environment: dict[str, str],
+    *,
+    baseline_ids: list[str],
+    new_ids: list[str],
+) -> tuple[Path, Path, Path, Path, Path]:
+    authority_root = _release_root_for_sha(environment, "d" * 40)
+    authority_snapshot, authority_paused = _write_maintenance_ledgers(authority_root)
+    ledger_root = _release_root_for_sha(environment, "c" * 40)
+    _write_operator_ledgers(ledger_root, baseline_ids, new_ids)
+    ledger_provenance = _write_maintenance_provenance(
+        ledger_root,
+        source_release_root=authority_root,
+        authoritative_snapshot=authority_snapshot,
+        authoritative_paused=authority_paused,
+    )
+    immediate_root = _previous_release_root(environment)
+    immediate_provenance = _write_maintenance_provenance(
+        immediate_root,
+        source_release_root=ledger_root,
+        authoritative_snapshot=authority_snapshot,
+        authoritative_paused=authority_paused,
+    )
+    return (
+        authority_root,
+        ledger_root,
+        immediate_root,
+        ledger_provenance,
+        immediate_provenance,
+    )
+
+
+def _run_operator_ledger_resolver(
+    environment: dict[str, str], previous_root: Path
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            str(PYTHON),
+            str(SCRIPTS / "operator_lifecycle.py"),
+            "resolve-operator-ledgers",
+            "--report-root",
+            environment["REPORT_ROOT"],
+            "--release-tag",
+            TAG,
+            "--previous-release-root",
+            str(previous_root),
+        ],
+        cwd=PLATFORM_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _prepare_deep_maintenance_state_chain(
+    environment: dict[str, str], baseline_id: str
+) -> tuple[Path, Path]:
+    ledger_root = _release_root_for_sha(environment, "d" * 40)
+    authoritative_snapshot, authoritative_paused = _write_maintenance_ledgers(
+        ledger_root
+    )
+    _write_operator_ledgers(ledger_root, [baseline_id], [])
+    intermediate_root = _release_root_for_sha(environment, "c" * 40)
+    _write_maintenance_provenance(
+        intermediate_root,
+        source_release_root=ledger_root,
+        authoritative_snapshot=authoritative_snapshot,
+        authoritative_paused=authoritative_paused,
+    )
+    immediate_root = _previous_release_root(environment)
+    _write_maintenance_provenance(
+        immediate_root,
+        source_release_root=intermediate_root,
+        authoritative_snapshot=authoritative_snapshot,
+        authoritative_paused=authoritative_paused,
+    )
+    return immediate_root, intermediate_root
+
+
 def _release_tag_lock_path(environment: dict[str, str]) -> Path:
     return (
         Path(environment["REPORT_ROOT"])
@@ -1981,6 +2060,182 @@ def test_third_sha_uses_previous_operator_ledgers_and_original_maintenance_autho
         "source_release_root": str(previous_root),
     }
     assert not (Path(environment["FAKE_DOCKER_STATE"]) / "maintenance.log").exists()
+
+
+def test_fourth_sha_resolves_nearest_complete_operator_ledgers_through_provenance(
+    tmp_path: Path,
+) -> None:
+    project_root, release_root, environment, baseline_id, _ = _prepare_fake_lifecycle(
+        tmp_path
+    )
+    (
+        authority_root,
+        ledger_root,
+        immediate_root,
+        ledger_provenance,
+        immediate_provenance,
+    ) = _prepare_cross_sha_operator_ledger_chain(
+        environment,
+        baseline_ids=[baseline_id],
+        new_ids=[],
+    )
+    original_ledger_provenance = ledger_provenance.read_bytes()
+    original_immediate_provenance = immediate_provenance.read_bytes()
+    environment["PREVIOUS_RELEASE_ROOT"] = str(immediate_root)
+
+    completed, _ = _run_prepared_lifecycle(
+        project_root, environment, _stage_one_and_three_initialization()
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert _ledger_ids(release_root, "baseline-operator-container-ids.txt") == [
+        baseline_id
+    ]
+    assert _ledger_ids(release_root, "new-operator-container-ids.txt") == []
+    assert ledger_provenance.read_bytes() == original_ledger_provenance
+    assert immediate_provenance.read_bytes() == original_immediate_provenance
+    _, _, current_provenance = _maintenance_paths(release_root)
+    assert stat.S_IMODE(current_provenance.stat().st_mode) == 0o400
+    assert json.loads(current_provenance.read_text(encoding="utf-8")) == {
+        "authoritative_paused_ledger": str(
+            _maintenance_paths(authority_root)[1]
+        ),
+        "authoritative_snapshot": str(_maintenance_paths(authority_root)[0]),
+        "source_git_sha": immediate_root.name,
+        "source_release_root": str(immediate_root),
+    }
+    assert ledger_root != immediate_root
+    assert not (Path(environment["FAKE_DOCKER_STATE"]) / "maintenance.log").exists()
+
+
+def test_cross_sha_operator_ledger_resolution_preserves_current_minus_previous_gate(
+    tmp_path: Path,
+) -> None:
+    project_root, release_root, environment, _, _ = _prepare_fake_lifecycle(tmp_path)
+    authority_root, _, immediate_root, _, _ = _prepare_cross_sha_operator_ledger_chain(
+        environment,
+        baseline_ids=[],
+        new_ids=[],
+    )
+    environment["PREVIOUS_RELEASE_ROOT"] = str(immediate_root)
+
+    completed, _ = _run_prepared_lifecycle(
+        project_root, environment, _stage_one_and_three_initialization()
+    )
+
+    assert completed.returncode != 0
+    assert "current - previous baseline" in completed.stderr
+    ledger_dir = release_root / "container-maintenance"
+    assert not (ledger_dir / "baseline-operator-container-ids.txt").exists()
+    assert not (ledger_dir / "new-operator-container-ids.txt").exists()
+    _, _, current_provenance = _maintenance_paths(release_root)
+    current_payload = json.loads(current_provenance.read_text(encoding="utf-8"))
+    assert current_payload["source_release_root"] == str(immediate_root)
+    assert current_payload["authoritative_snapshot"] == str(
+        _maintenance_paths(authority_root)[0]
+    )
+
+
+def test_operator_ledger_resolver_rejects_partial_ancestor(tmp_path: Path) -> None:
+    _, _, environment, baseline_id, _ = _prepare_fake_lifecycle(tmp_path)
+    authority_root = _release_root_for_sha(environment, "d" * 40)
+    authority_snapshot, authority_paused = _write_maintenance_ledgers(authority_root)
+    partial_root = _release_root_for_sha(environment, "c" * 40)
+    partial_dir = partial_root / "container-maintenance"
+    partial_dir.mkdir(parents=True)
+    (partial_dir / "baseline-operator-container-ids.txt").write_text(
+        f"{baseline_id}\n", encoding="utf-8"
+    )
+    immediate_root = _previous_release_root(environment)
+    _write_maintenance_provenance(
+        immediate_root,
+        source_release_root=partial_root,
+        authoritative_snapshot=authority_snapshot,
+        authoritative_paused=authority_paused,
+    )
+
+    completed = _run_operator_ledger_resolver(environment, immediate_root)
+
+    assert completed.returncode != 0
+    assert "partial" in completed.stderr
+
+
+def test_operator_ledger_resolver_rejects_provenance_cycle(tmp_path: Path) -> None:
+    _, _, environment, _, _ = _prepare_fake_lifecycle(tmp_path)
+    authority_root = _release_root_for_sha(environment, "d" * 40)
+    authority_snapshot, authority_paused = _write_maintenance_ledgers(authority_root)
+    first_root = _previous_release_root(environment)
+    second_root = _release_root_for_sha(environment, "c" * 40)
+    _write_maintenance_provenance(
+        first_root,
+        source_release_root=second_root,
+        authoritative_snapshot=authority_snapshot,
+        authoritative_paused=authority_paused,
+    )
+    _write_maintenance_provenance(
+        second_root,
+        source_release_root=first_root,
+        authoritative_snapshot=authority_snapshot,
+        authoritative_paused=authority_paused,
+    )
+
+    completed = _run_operator_ledger_resolver(environment, first_root)
+
+    assert completed.returncode != 0
+    assert "operator ledger provenance cycle" in completed.stderr
+
+
+def test_operator_ledger_resolver_rejects_chain_without_ledger_ancestor(
+    tmp_path: Path,
+) -> None:
+    _, _, environment, _, _ = _prepare_fake_lifecycle(tmp_path)
+    authority_root = _release_root_for_sha(environment, "d" * 40)
+    authority_snapshot, authority_paused = _write_maintenance_ledgers(authority_root)
+    empty_root = _release_root_for_sha(environment, "c" * 40)
+    (empty_root / "container-maintenance").mkdir(parents=True)
+    immediate_root = _previous_release_root(environment)
+    _write_maintenance_provenance(
+        immediate_root,
+        source_release_root=empty_root,
+        authoritative_snapshot=authority_snapshot,
+        authoritative_paused=authority_paused,
+    )
+
+    completed = _run_operator_ledger_resolver(environment, immediate_root)
+
+    assert completed.returncode != 0
+    assert "no complete operator ledger ancestor" in completed.stderr
+
+
+def test_operator_ledger_resolver_rejects_deep_partial_maintenance_state(
+    tmp_path: Path,
+) -> None:
+    _, _, environment, baseline_id, _ = _prepare_fake_lifecycle(tmp_path)
+    immediate_root, intermediate_root = _prepare_deep_maintenance_state_chain(
+        environment, baseline_id
+    )
+    intermediate_snapshot, _, _ = _maintenance_paths(intermediate_root)
+    intermediate_snapshot.write_text('{"name":"partial"}\n', encoding="utf-8")
+
+    completed = _run_operator_ledger_resolver(environment, immediate_root)
+
+    assert completed.returncode != 0
+    assert "maintenance snapshot/paused ledger state is partial" in completed.stderr
+
+
+def test_operator_ledger_resolver_rejects_deep_direct_and_provenance_ambiguity(
+    tmp_path: Path,
+) -> None:
+    _, _, environment, baseline_id, _ = _prepare_fake_lifecycle(tmp_path)
+    immediate_root, intermediate_root = _prepare_deep_maintenance_state_chain(
+        environment, baseline_id
+    )
+    _write_maintenance_ledgers(intermediate_root)
+
+    completed = _run_operator_ledger_resolver(environment, immediate_root)
+
+    assert completed.returncode != 0
+    assert "maintenance state is ambiguous" in completed.stderr
 
 
 def test_same_sha_existing_provenance_rejects_rebinding_to_another_previous_release(

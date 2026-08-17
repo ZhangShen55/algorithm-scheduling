@@ -1,5 +1,28 @@
 # Change Ledger
 
+## 2026-08-17 - 跨 SHA 算子账本来源只读回溯
+
+- 根因：维护 authority 与算子 baseline/new 的生命周期不同。立即前驱可能只有合法的
+  `0400` maintenance provenance，而最近的完整算子账本对位于更早 release；旧阶段 3
+  直接拼接 `PREVIOUS_RELEASE_ROOT/container-maintenance/{baseline,new}`，因此会在合法的
+  A（snapshot/paused）→B（完整算子账本+provenance）→C（仅 provenance）→D（当前）链上
+  错误停在 C。
+- 修复：`operator_lifecycle.py resolve-operator-ledgers` 从立即前驱开始只读解析，遇到最近的
+  完整 baseline/new 对即返回；无账本的每个候选必须先通过完整 maintenance 状态机，只有
+  唯一合法的 provenance 状态才可沿 `source_release_root` 回溯。provenance 的所有权、`0400`、
+  schema、source SHA/root 和 authority 路径继续严格校验；operator ledger partial、maintenance
+  snapshot/paused partial、direct+provenance 歧义、环和最终无完整账本祖先均 fail closed，
+  不创建、复制或改写任何账本/provenance。
+- 阶段 3：canonical 场景改用 resolver 返回的账本路径；账本排序、完整 ID、Docker inspect、
+  Compose project/service 身份、`current - resolved baseline == resolved new` 和同目录临时文件
+  原子发布门禁保持不变。D 的 maintenance provenance 仍记录立即前驱 C，权威 snapshot/paused
+  仍位于 A，不因查找 B 的算子账本而改绑。
+- 本地证据：首轮新增成功链路及 mismatch、operator partial、cycle、no-ancestor 五个回归，
+  修复前 5 项均按目标原因失败；质量复审再新增深层 maintenance snapshot/paused partial 与
+  direct+provenance 歧义两个回归，旧 resolver 均错误返回成功。最终聚焦测试 `7 passed`，
+  完整阶段 3 合同回归 `168 passed`，Ruff、`compileall` 和 Git diff 检查通过。该证据没有
+  连接远端服务器，也不表示阶段 3、24 实例或真实推理已重新通过。
+
 ## 2026-08-16 - 阶段 3 就绪竞态与 ASR Online 运行依赖修复
 
 - 平台启动竞态：提交 `02203a5b25324767b569bff79b065f79b856d1a0` 的阶段 3 首次重建

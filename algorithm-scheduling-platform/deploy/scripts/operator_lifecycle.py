@@ -17,6 +17,8 @@ SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SNAPSHOT_NAME = "existing-containers.jsonl"
 PAUSED_NAME = f"{SNAPSHOT_NAME}.paused.jsonl"
 PROVENANCE_NAME = "operator-maintenance-provenance.json"
+OPERATOR_BASELINE_NAME = "baseline-operator-container-ids.txt"
+OPERATOR_NEW_NAME = "new-operator-container-ids.txt"
 PROVENANCE_KEYS = {
     "authoritative_paused_ledger",
     "authoritative_snapshot",
@@ -262,6 +264,58 @@ def resolve_maintenance(args: argparse.Namespace) -> None:
         selected["authoritative_paused_ledger"],
     )
     sys.stdout.write("\n".join(output) + "\n")
+
+
+def _operator_ledger_pair(
+    layout: ReleaseLayout, release_root: Path
+) -> tuple[Path, Path] | None:
+    directory = layout.validate_maintenance_directory(release_root)
+    baseline = directory / OPERATOR_BASELINE_NAME
+    new = directory / OPERATOR_NEW_NAME
+    baseline_present = _path_exists(baseline)
+    new_present = _path_exists(new)
+    if baseline_present != new_present:
+        raise LifecycleError("operator ledger state is partial")
+    if not baseline_present:
+        return None
+    _require_owned_file(baseline, "operator baseline ledger")
+    _require_owned_file(new, "operator new ledger")
+    return baseline, new
+
+
+def resolve_operator_ledgers(args: argparse.Namespace) -> None:
+    layout = ReleaseLayout(args.report_root, args.release_tag)
+    release_root = layout.validate_release_root(
+        args.previous_release_root, "PREVIOUS_RELEASE_ROOT"
+    )
+    visited: set[Path] = set()
+
+    while True:
+        if release_root in visited:
+            raise LifecycleError("operator ledger provenance cycle detected")
+        visited.add(release_root)
+
+        pair = _operator_ledger_pair(layout, release_root)
+        if pair is not None:
+            baseline, new = pair
+            sys.stdout.write(
+                "\n".join((str(release_root), str(baseline), str(new))) + "\n"
+            )
+            return
+
+        maintenance_kind, maintenance_state = _maintenance_state(
+            layout, release_root
+        )
+        if maintenance_kind == "provenance":
+            assert maintenance_state is not None
+            release_root = Path(maintenance_state["source_release_root"])
+            continue
+        if maintenance_kind == "direct":
+            raise LifecycleError(
+                "operator ledger ancestor has direct maintenance state "
+                "without a complete operator ledger pair"
+            )
+        raise LifecycleError("no complete operator ledger ancestor")
 
 
 def _fsync_directory(directory: Path) -> None:
@@ -614,6 +668,12 @@ def build_parser() -> argparse.ArgumentParser:
     resolve.add_argument("--release-root", required=True)
     resolve.add_argument("--previous-release-root", default="")
     resolve.set_defaults(handler=resolve_maintenance)
+
+    resolve_ledgers = commands.add_parser("resolve-operator-ledgers")
+    resolve_ledgers.add_argument("--report-root", required=True)
+    resolve_ledgers.add_argument("--release-tag", required=True)
+    resolve_ledgers.add_argument("--previous-release-root", required=True)
+    resolve_ledgers.set_defaults(handler=resolve_operator_ledgers)
 
     publish = commands.add_parser("publish-provenance")
     publish.add_argument("--report-root", required=True)

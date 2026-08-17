@@ -672,8 +672,21 @@ if ((BASELINE_LEDGER_PRESENT == 1)); then
   refresh_new_operator_ledger
 elif [[ -n "$PREVIOUS_RELEASE_ROOT" ]]; then
   validate_previous_release_root
-  PREVIOUS_BASELINE_OPERATOR_IDS="$PREVIOUS_RELEASE_ROOT/container-maintenance/baseline-operator-container-ids.txt"
-  PREVIOUS_NEW_OPERATOR_IDS="$PREVIOUS_RELEASE_ROOT/container-maintenance/new-operator-container-ids.txt"
+  if ! OPERATOR_LEDGER_STATE_OUTPUT="$(
+    "$DEPLOY_PYTHON" deploy/scripts/operator_lifecycle.py resolve-operator-ledgers \
+      --report-root "$REPORT_ROOT" --release-tag "$RELEASE_TAG" \
+      --previous-release-root "$PREVIOUS_RELEASE_ROOT"
+  )"; then
+    exit 1
+  fi
+  mapfile -t OPERATOR_LEDGER_STATE_FIELDS <<<"$OPERATOR_LEDGER_STATE_OUTPUT"
+  if ((${#OPERATOR_LEDGER_STATE_FIELDS[@]} != 3)); then
+    echo "算子账本解析结果不完整" >&2
+    exit 1
+  fi
+  OPERATOR_LEDGER_SOURCE_ROOT="${OPERATOR_LEDGER_STATE_FIELDS[0]}"
+  PREVIOUS_BASELINE_OPERATOR_IDS="${OPERATOR_LEDGER_STATE_FIELDS[1]}"
+  PREVIOUS_NEW_OPERATOR_IDS="${OPERATOR_LEDGER_STATE_FIELDS[2]}"
   validate_operator_ledger_file "$PREVIOUS_BASELINE_OPERATOR_IDS"
   validate_operator_ledger_file "$PREVIOUS_NEW_OPERATOR_IDS"
 
@@ -762,10 +775,17 @@ test "$(wc -l <"$NEW_OPERATOR_IDS" | tr -d ' ')" = 24
 当前 release 的 baseline/new 要么同时不存在，要么同时为非 symlink 普通文件；
 只存在一个时 fail closed。两者已完整存在表示同 SHA 恢复：保留原 baseline，
 只按当前 Docker 状态刷新 new。新 SHA 且显式给出 `PREVIOUS_RELEASE_ROOT` 时，
-previous root 必须属于同一 `REPORT_ROOT`/release tag 且以不同的 40 位 SHA 结尾；
-previous baseline/new 必须按字节序排序、ID 唯一，并通过 inspect 与 Compose
-project/service 身份校验。只有重算的 `current - previous baseline` 与 previous new
-逐字节一致时，才原子继承 previous baseline 并立即刷新当前 new。因此旧 SHA
+previous root 必须属于同一 `REPORT_ROOT`/release tag 且以不同的 40 位 SHA 结尾。
+只读 `resolve-operator-ledgers` 从该立即前驱开始，遇到最近的完整 baseline/new 对即返回；
+没有账本时只允许沿严格验证的 maintenance provenance `source_release_root` 回溯。
+任一候选只有一份账本、provenance 形成环或最终没有完整账本祖先时均 fail closed。
+resolver 不得修改当前或祖先 provenance；因此 A（snapshot/paused）→B（完整算子账本）
+→C（仅 provenance）→D（当前）中，D 的 maintenance provenance 仍记录 C 且 authority
+仍为 A，阶段 3 仅把 B 作为账本来源。
+
+resolver 返回的 baseline/new 必须按字节序排序、ID 唯一，并通过 inspect 与 Compose
+project/service 身份校验。只有重算的 `current - resolved baseline` 与 resolved new
+逐字节一致时，才原子继承 resolved baseline 并立即刷新当前 new。因此旧 SHA
 启动的算子仍属于本轮可清理集合；Compose 以同 service 替换容器 ID 后，下一次
 刷新会用新 ID 替换账本记录，不通过删除容器规避校验。
 
