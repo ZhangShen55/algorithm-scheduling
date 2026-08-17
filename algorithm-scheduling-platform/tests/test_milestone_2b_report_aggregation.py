@@ -7,6 +7,7 @@ import importlib
 import inspect
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -3733,6 +3734,33 @@ def test_full_smoke_rejects_evidence_drift(
         release_tree.collect_smoke()
 
 
+@pytest.mark.parametrize(
+    "summary",
+    (
+        {},
+        {"verified": True},
+        {"attempts": []},
+        {"attempts": [{}]},
+        {"attempts": ["not-an-object"]},
+    ),
+)
+def test_task4_cli_rejects_invalid_passing_smoke_summary_before_publication(
+    release_tree: ReleaseTree,
+    summary: object,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    evidence = release_tree.read_json("smoke/ocr.json")
+    evidence["summary"] = summary
+    release_tree.replace_json("smoke/ocr.json", evidence)
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 1
+    assert "summary" in completed.stderr or "attempts" in completed.stderr
+    assert not (release_tree.root / "summary/cases.json").exists()
+
+
 def test_smoke_case_ids_are_unique_and_cpu_retry_history_is_preserved(
     release_tree: ReleaseTree,
 ) -> None:
@@ -4382,6 +4410,84 @@ def test_publish_json_once_rejects_same_bytes_existing_final_with_alias(
 
     assert output.read_bytes() == alias.read_bytes()
     assert os.lstat(output).st_nlink == 2
+
+
+def test_publish_json_once_recovers_after_process_exit_immediately_after_link(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.root.mkdir(parents=True)
+    child_prefix = (
+        "from pathlib import Path\n"
+        "import os\n"
+        "import sys\n"
+        "from scripts import aggregate_milestone_2b_cases as aggregate\n"
+        "document = {'schema_version': 1, 'value': 'same'}\n"
+    )
+    publish = (
+        "aggregate.publish_json_once(\n"
+        "    release_root=Path(sys.argv[1]),\n"
+        "    relative_path=Path('summary/cases.json'),\n"
+        "    document=document,\n"
+        ")\n"
+    )
+    crash_after_link = (
+        child_prefix
+        + "real_link = os.link\n"
+        + "def link_then_exit(*args, **kwargs):\n"
+        + "    real_link(*args, **kwargs)\n"
+        + "    os._exit(86)\n"
+        + "aggregate.os.link = link_then_exit\n"
+        + publish
+    )
+
+    crashed = subprocess.run(
+        [sys.executable, "-c", crash_after_link, str(release_tree.root)],
+        cwd=PLATFORM_ROOT,
+        check=False,
+    )
+
+    assert crashed.returncode == 86
+    summary = release_tree.root / "summary"
+    output = summary / "cases.json"
+    expected_bytes = output.read_bytes()
+    temporaries = [
+        entry
+        for entry in summary.iterdir()
+        if re.fullmatch(r"\.cases\.json\.[0-9a-f]{32}\.tmp", entry.name)
+    ]
+    assert len(temporaries) == 1
+    temporary = temporaries[0]
+    output_metadata = os.lstat(output)
+    temporary_metadata = os.lstat(temporary)
+    assert (output_metadata.st_dev, output_metadata.st_ino) == (
+        temporary_metadata.st_dev,
+        temporary_metadata.st_ino,
+    )
+    assert output_metadata.st_nlink == temporary_metadata.st_nlink == 2
+
+    retry = subprocess.run(
+        [sys.executable, "-c", child_prefix + publish, str(release_tree.root)],
+        cwd=PLATFORM_ROOT,
+        check=False,
+    )
+
+    assert retry.returncode == 0
+    assert output.read_bytes() == expected_bytes
+    assert stat.S_IMODE(os.lstat(output).st_mode) == 0o600
+    assert os.lstat(output).st_nlink == 1
+    assert {entry.name for entry in summary.iterdir()} == {"cases.json"}
+
+    third = subprocess.run(
+        [sys.executable, "-c", child_prefix + publish, str(release_tree.root)],
+        cwd=PLATFORM_ROOT,
+        check=False,
+    )
+
+    assert third.returncode == 0
+    assert output.read_bytes() == expected_bytes
+    assert stat.S_IMODE(os.lstat(output).st_mode) == 0o600
+    assert os.lstat(output).st_nlink == 1
+    assert {entry.name for entry in summary.iterdir()} == {"cases.json"}
 
 
 @pytest.mark.parametrize("same_content", (True, False))

@@ -123,7 +123,8 @@ release/SHA 一致性和覆盖计数，然后 write-once 发布：
 summary/cases.json
 ```
 
-完整 envelope 有 335 条用例：60 条注册/GPU 证据、32 条 Smoke 和 243 条执行声明。
+无额外 Smoke 重试时，完整 envelope 有 335 条用例：60 条注册/GPU 证据、32 条 Smoke
+和 243 条执行声明。保留历史重试时，用例总数至少为 335 条，并按实际重试数量增加。
 每条用例保留 `mock` 字段；聚合覆盖率分别统计期望、观察和通过数量。renderer 只把
 `mock=false` 计入真实验证的通过、失败和未执行计数，同时在明细中明确标识“真实”或
 `Mock`；Mock 结果不能替代真实验收。

@@ -568,6 +568,113 @@ def _rollback_linked_publication_if_unchanged(
     os.fsync(parent_descriptor)
 
 
+def _recover_interrupted_publication(
+    *,
+    parent_descriptor: int,
+    verify_directories: Callable[[], None],
+    final_name: str,
+    expected_inode: os.stat_result,
+    relative_path: Path,
+    payload: bytes,
+) -> os.stat_result:
+    temp_pattern = re.compile(
+        rf"\.{re.escape(final_name)}\.[0-9a-f]{{32}}\.tmp"
+    )
+    try:
+        names = os.listdir(parent_descriptor)
+    except OSError as exc:
+        raise ValueError(
+            f"failed to scan interrupted publication: {relative_path}"
+        ) from exc
+
+    matching_names: list[str] = []
+    for name in names:
+        if temp_pattern.fullmatch(name) is None:
+            continue
+        try:
+            metadata = os.stat(
+                name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise ValueError(
+                f"failed to inspect interrupted publication temp: {relative_path}"
+            ) from exc
+        if _same_filesystem_object(metadata, expected_inode):
+            matching_names.append(name)
+    if len(matching_names) != 1:
+        raise ValueError(
+            "interrupted publication must have exactly one matching canonical "
+            f"hard-link temp: {relative_path}"
+        )
+
+    temp_name = matching_names[0]
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        temp_descriptor = os.open(
+            temp_name,
+            flags,
+            dir_fd=parent_descriptor,
+        )
+    except OSError as exc:
+        raise ValueError(
+            f"failed to open interrupted publication temp: {relative_path}"
+        ) from exc
+    try:
+        opened_temp = os.fstat(temp_descriptor)
+        named_temp = _publication_name_metadata(parent_descriptor, temp_name)
+        current_final = _publication_name_metadata(parent_descriptor, final_name)
+        for metadata, context in (
+            (opened_temp, "opened interrupted publication temp"),
+            (named_temp, "named interrupted publication temp"),
+            (current_final, "interrupted publication final"),
+        ):
+            _require_publication_file_metadata(
+                metadata,
+                f"{context} for {relative_path}",
+                expected_nlink=2,
+            )
+            if not _same_filesystem_object(metadata, expected_inode):
+                raise ValueError(
+                    f"interrupted publication inode changed: {relative_path}"
+                )
+        verify_directories()
+        try:
+            os.unlink(temp_name, dir_fd=parent_descriptor)
+        except OSError as exc:
+            raise ValueError(
+                f"failed to remove interrupted publication temp: {relative_path}"
+            ) from exc
+        os.fsync(parent_descriptor)
+        recovered = _read_existing_publication(
+            parent_descriptor,
+            final_name,
+            expected_inode=opened_temp,
+            expected_nlink=1,
+        )
+        if recovered != payload:
+            raise ValueError(
+                f"recovered publication bytes changed unexpectedly: {relative_path}"
+            )
+        verify_directories()
+        recovered_metadata = os.fstat(temp_descriptor)
+        _require_publication_file_metadata(
+            recovered_metadata,
+            f"recovered publication for {relative_path}",
+            expected_nlink=1,
+        )
+        return recovered_metadata
+    except OSError as exc:
+        raise ValueError(
+            f"failed to recover interrupted publication: {relative_path}"
+        ) from exc
+    finally:
+        os.close(temp_descriptor)
+
+
 def _publish_json_locked(
     *,
     parent_descriptor: int,
@@ -582,6 +689,7 @@ def _publish_json_locked(
     link_succeeded = False
     temp_name_cleaned = False
     parent_synced = False
+    recovered_inode: os.stat_result | None = None
     try:
         offset = 0
         while offset < len(payload):
@@ -613,16 +721,36 @@ def _publish_json_locked(
                 raise ValueError(
                     f"failed to hard-link publication: {relative_path}"
                 ) from exc
-            existing = _read_existing_publication(
-                parent_descriptor,
-                final_name,
-                expected_nlink=1,
+            existing_metadata = _publication_name_metadata(
+                parent_descriptor, final_name
             )
+            if existing_metadata.st_nlink == 2:
+                existing = _read_existing_publication(
+                    parent_descriptor,
+                    final_name,
+                    expected_inode=existing_metadata,
+                    expected_nlink=2,
+                )
+            else:
+                existing = _read_existing_publication(
+                    parent_descriptor,
+                    final_name,
+                    expected_nlink=1,
+                )
             if existing != payload:
                 raise ValueError(
                     "publication already exists with different bytes: "
                     f"{relative_path}"
                 ) from exc
+            if existing_metadata.st_nlink == 2:
+                recovered_inode = _recover_interrupted_publication(
+                    parent_descriptor=parent_descriptor,
+                    verify_directories=verify_directories,
+                    final_name=final_name,
+                    expected_inode=existing_metadata,
+                    relative_path=relative_path,
+                    payload=payload,
+                )
         else:
             link_succeeded = True
             linked_temp = os.fstat(temp_descriptor)
@@ -687,6 +815,17 @@ def _publish_json_locked(
             if not _same_filesystem_object(current_final, current_temp):
                 raise ValueError(
                     f"published final changed after temp cleanup: {relative_path}"
+                )
+        elif recovered_inode is not None:
+            current = _read_existing_publication(
+                parent_descriptor,
+                final_name,
+                expected_inode=recovered_inode,
+                expected_nlink=1,
+            )
+            if current != payload:
+                raise ValueError(
+                    f"recovered publication changed after cleanup: {relative_path}"
                 )
         verify_directories()
     except OSError as exc:
@@ -1899,7 +2038,22 @@ def _validate_smoke_evidence(
 
     status = _smoke_evidence_status(payload["status"], context)
     if status == "通过":
-        _require_object(payload.get("summary"), f"{context}.summary")
+        summary = _require_object(payload.get("summary"), f"{context}.summary")
+        if not summary:
+            raise ValueError(f"{context}.summary must not be empty")
+        attempts = _require_list(
+            summary.get("attempts"), f"{context}.summary.attempts"
+        )
+        if not attempts:
+            raise ValueError(f"{context}.summary.attempts must not be empty")
+        for index, attempt in enumerate(attempts):
+            attempt_payload = _require_object(
+                attempt, f"{context}.summary.attempts[{index}]"
+            )
+            if not attempt_payload:
+                raise ValueError(
+                    f"{context}.summary.attempts[{index}] must not be empty"
+                )
         if "reason" in payload:
             raise ValueError(f"{context}.reason is not allowed for PASS")
         return status, None

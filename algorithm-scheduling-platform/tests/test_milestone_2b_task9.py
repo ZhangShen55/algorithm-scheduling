@@ -2947,6 +2947,10 @@ def test_report_readme_locks_complete_canonical_evidence_inventory() -> None:
     ):
         assert contract_text in readme, f"reports README 缺少合同说明: {contract_text}"
 
+    assert "无额外 Smoke 重试时，完整 envelope 有 335 条" in readme
+    assert "保留历史重试时，用例总数至少为 335 条" in readme
+    assert "按实际重试数量增加" in readme
+
 
 def test_historical_task16_uses_canonical_aggregation_and_renderer_parameters() -> None:
     plan = (
