@@ -1046,19 +1046,19 @@ previous 续跑不得把 active paused ledger 复制成另一份可变账本。r
   --report-plan deploy/milestone-2b-report-plan.json \
   --output "$RELEASE_ROOT/summary/cases.json"
 
-renderer_status=0
+report_status=0
 if .venv/bin/python scripts/render_milestone_2b_report.py \
   --input "$RELEASE_ROOT/summary/cases.json" \
   --release-root "$RELEASE_ROOT" \
   --output-json "$RELEASE_ROOT/summary/report.json" \
   --output-markdown "$RELEASE_ROOT/summary/report.md"
 then
-  renderer_status=0
+  report_status=0
 else
-  renderer_status=$?
+  report_status=$?
 fi
 
-case "$renderer_status" in
+case "$report_status" in
   0)
     report_overall_status="$(
       .venv/bin/python - "$RELEASE_ROOT/summary/report.json" <<'PY'
@@ -1080,8 +1080,8 @@ PY
     exit 3
     ;;
   *)
-    echo "报告输入校验或发布错误（renderer 返回码 $renderer_status）" >&2
-    exit "$renderer_status"
+    echo "报告输入校验或发布错误（renderer 返回码 $report_status）" >&2
+    exit "$report_status"
     ;;
 esac
 ```

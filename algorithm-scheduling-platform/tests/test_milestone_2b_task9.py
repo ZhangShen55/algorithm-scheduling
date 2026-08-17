@@ -2768,51 +2768,204 @@ def test_noncanonical_docs_do_not_offer_direct_operator_profile_up_commands() ->
         assert direct_up.search(normalized) is None, f"发现 direct-up 旁路: {document}"
 
 
-def test_stage6_docs_aggregate_before_render_and_gate_renderer_exit_status() -> None:
+def _heading_section(document: str, heading: str) -> str:
+    tail = document.split(f"{heading}\n", maxsplit=1)[1]
+    next_heading = re.search(r"(?m)^## ", tail)
+    return tail if next_heading is None else tail[: next_heading.start()]
+
+
+def _canonical_report_gate_bash(section: str) -> str:
+    blocks = re.findall(r"```bash\n(.*?)\n```", section, re.DOTALL)
+    matches = [
+        block
+        for block in blocks
+        if "scripts/aggregate_milestone_2b_cases.py" in block
+        and "scripts/render_milestone_2b_report.py" in block
+    ]
+    assert len(matches) == 1, "阶段 6 必须只有一个 canonical 聚合/渲染 Bash 段"
+    return matches[0]
+
+
+def _documented_command_tokens(block: str, script: str) -> list[str]:
+    normalized = re.sub(r"\\\n[ \t]*", " ", block)
+    matches = []
+    for raw_line in normalized.splitlines():
+        line = raw_line.strip()
+        if line.startswith("if "):
+            line = line.removeprefix("if ")
+        if line.startswith(f".venv/bin/python {script} "):
+            matches.append(shlex.split(line))
+    assert len(matches) == 1, f"缺少唯一 canonical 命令: {script}"
+    return matches[0]
+
+
+def test_stage6_docs_use_canonical_aggregation_and_renderer_gate() -> None:
     scenario = (
         PLATFORM_ROOT / "harness/scenarios/milestone-2b-deploy.md"
     ).read_text(encoding="utf-8")
-    stage6 = scenario.split(
-        "## 阶段 6：反例、压力、恢复和报告渲染", maxsplit=1
-    )[1]
+    stage6 = _heading_section(
+        scenario, "## 阶段 6：反例、压力、恢复和报告渲染"
+    )
+    gate = _canonical_report_gate_bash(stage6)
     aggregator = "scripts/aggregate_milestone_2b_cases.py"
     renderer = "scripts/render_milestone_2b_report.py"
 
-    assert stage6.index(aggregator) < stage6.index(renderer)
-    assert '--output "$RELEASE_ROOT/summary/cases.json"' in stage6
-    assert "overall_status" in stage6
-    assert "返回码 `0`" in stage6
-    assert "返回码 `3`" in stage6
-    assert "报告已生成但验收未通过" in stage6
-    assert "其他返回码" in stage6
+    assert gate.index(aggregator) < gate.index(renderer)
+    assert _documented_command_tokens(gate, aggregator) == [
+        ".venv/bin/python",
+        aggregator,
+        "--release-root",
+        "$RELEASE_ROOT",
+        "--operator-compose",
+        "deploy/docker-compose.operators.yml",
+        "--smoke-manifest",
+        "deploy/operator-smoke-cases.json",
+        "--report-plan",
+        "deploy/milestone-2b-report-plan.json",
+        "--output",
+        "$RELEASE_ROOT/summary/cases.json",
+    ]
+    assert _documented_command_tokens(gate, renderer) == [
+        ".venv/bin/python",
+        renderer,
+        "--input",
+        "$RELEASE_ROOT/summary/cases.json",
+        "--release-root",
+        "$RELEASE_ROOT",
+        "--output-json",
+        "$RELEASE_ROOT/summary/report.json",
+        "--output-markdown",
+        "$RELEASE_ROOT/summary/report.md",
+    ]
+    assert re.search(r'(?m)^case "\$report_status" in$', gate)
+    for branch in ("0", "3", "*"):
+        assert re.search(rf"(?m)^  {re.escape(branch)}\)$", gate)
+    assert re.search(r"(?m)^    exit 3$", gate)
+    assert re.search(r'(?m)^    exit "\$report_status"$', gate)
+    assert "overall_status" in gate
+    assert "报告已生成但验收未通过" in gate
     assert "生成报告不等于验收通过" in stage6
-    assert "不打印证据原文" in stage6
 
 
-def test_report_deploy_and_historical_docs_reference_canonical_aggregation_inputs() -> None:
-    documents = (
-        DEPLOY / "reports/README.md",
-        DEPLOY / "README.md",
-        WORKSPACE_ROOT
-        / "docs/superpowers/plans/2026-08-12-里程碑2B三卡部署验证实施计划.md",
+def test_report_readme_locks_complete_canonical_evidence_inventory() -> None:
+    readme = (DEPLOY / "reports/README.md").read_text(encoding="utf-8")
+    compose = yaml.safe_load(
+        (DEPLOY / "docker-compose.operators.yml").read_text(encoding="utf-8")
     )
-    required = (
-        "aggregate_milestone_2b_cases.py",
-        "operator-registration-profile-gpu0.json",
+    gpu_instances = sorted(
+        service["environment"]["PLATFORM_INSTANCE_ID"]
+        for service in compose["services"].values()
+        if "PLATFORM_GPU_ID" in service["environment"]
+    )
+    assert len(gpu_instances) == 18
+    facerec_instances = [
+        instance for instance in gpu_instances if instance.startswith("facerec-")
+    ]
+    assert len(facerec_instances) == 3
+    facerec_digest = hashlib.sha256(
+        "\n".join(facerec_instances).encode("utf-8")
+    ).hexdigest()[:12]
+    smoke_manifest = json.loads(
+        (DEPLOY / "operator-smoke-cases.json").read_text(encoding="utf-8")
+    )
+    operator_codes = sorted(case["operator_code"] for case in smoke_manifest["cases"])
+    assert len(operator_codes) == 8
+
+    canonical_paths = [
+        "registration/operator-registration.json",
+        *[
+            f"registration/operator-registration-profile-{profile}.json"
+            for profile in ("gpu0", "gpu1", "gpu2", "cpu")
+        ],
+        *[
+            f"registration/operator-registration-instance-{instance}.json"
+            for instance in gpu_instances
+        ],
+        f"registration/operator-registration-instances-{facerec_digest}.json",
+        *[f"gpu-instances/{instance}.json" for instance in gpu_instances],
+        *[f"recovery/{instance}-stopped.json" for instance in gpu_instances],
+        "smoke/cases.json",
+        *[f"smoke/{operator_code}.json" for operator_code in operator_codes],
+        "smoke/instances/{instance_id}/runs/{run_id}/cases.json",
         "negative/cases.json",
         "load/cases.json",
-    )
+        "summary/cases.json",
+        "summary/report.json",
+        "summary/report.md",
+    ]
+    for path in canonical_paths:
+        assert path in readme, f"reports README 缺少 canonical 路径: {path}"
 
-    for document in documents:
-        content = document.read_text(encoding="utf-8")
-        for expected in required:
-            assert expected in content, f"{document} 缺少 {expected}"
+    for contract_text in (
+        "0600",
+        "权限",
+        "write-once",
+        "schema_version",
+        "envelope",
+        "243",
+        "真实",
+        "Mock",
+        "overall_status",
+        "SHA-256 证据摘要",
+        "不输出证据原文",
+    ):
+        assert contract_text in readme, f"reports README 缺少合同说明: {contract_text}"
 
-    deploy_readme = documents[1].read_text(encoding="utf-8")
-    assert "新最终 SHA" in deploy_readme
-    assert "四个平台和八个算子镜像" in deploy_readme
-    assert "重新构建或重标" in deploy_readme
-    assert "重新取证" in deploy_readme
+
+def test_historical_task16_uses_canonical_aggregation_and_renderer_parameters() -> None:
+    plan = (
+        WORKSPACE_ROOT
+        / "docs/superpowers/plans/2026-08-12-里程碑2B三卡部署验证实施计划.md"
+    ).read_text(encoding="utf-8")
+    task16 = plan.split("### Task 16: 清理、恢复、验收和分支交付", maxsplit=1)[1]
+    step4 = task16.split("- [ ] **Step 4: 汇总报告并更新事实文档**", maxsplit=1)[
+        1
+    ].split("- [ ] **Step 5:", maxsplit=1)[0]
+    block = re.search(r"```bash\n(.*?)\n```", step4, re.DOTALL)
+    assert block is not None
+    commands = block.group(1)
+
+    assert _documented_command_tokens(
+        commands, "scripts/aggregate_milestone_2b_cases.py"
+    ) == [
+        ".venv/bin/python",
+        "scripts/aggregate_milestone_2b_cases.py",
+        "--release-root",
+        "$RELEASE_ROOT",
+        "--operator-compose",
+        "deploy/docker-compose.operators.yml",
+        "--smoke-manifest",
+        "deploy/operator-smoke-cases.json",
+        "--report-plan",
+        "deploy/milestone-2b-report-plan.json",
+        "--output",
+        "$RELEASE_ROOT/summary/cases.json",
+    ]
+    assert _documented_command_tokens(
+        commands, "scripts/render_milestone_2b_report.py"
+    ) == [
+        ".venv/bin/python",
+        "scripts/render_milestone_2b_report.py",
+        "--input",
+        "$RELEASE_ROOT/summary/cases.json",
+        "--release-root",
+        "$RELEASE_ROOT",
+        "--output-json",
+        "$RELEASE_ROOT/summary/report.json",
+        "--output-markdown",
+        "$RELEASE_ROOT/summary/report.md",
+    ]
+    assert "--input deploy/reports/milestone-2b" not in task16
+    assert "--output harness/reports/milestone-2b-summary.md" not in task16
+
+
+def test_deploy_readme_invalidates_old_sha_images_and_evidence() -> None:
+    readme = (DEPLOY / "README.md").read_text(encoding="utf-8")
+
+    assert "新最终 SHA" in readme
+    assert "四个平台和八个算子镜像" in readme
+    assert "重新构建或重标" in readme
+    assert "重新取证" in readme
 
 
 def _fixture_manifest(tmp_path: Path) -> Path:
