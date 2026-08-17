@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import TypedDict, cast
@@ -134,6 +135,13 @@ def _reject_nonstandard_json_constant(constant: str) -> object:
     raise ValueError(f"non-standard JSON constant is not allowed: {constant}")
 
 
+def _parse_finite_json_float(number: str) -> float:
+    parsed = float(number)
+    if not math.isfinite(parsed):
+        raise ValueError(f"non-finite JSON number is not allowed: {number}")
+    return parsed
+
+
 def strict_json_loads(text: str) -> object:
     if type(text) is not str:
         raise ValueError("JSON text must be a string")
@@ -142,6 +150,7 @@ def strict_json_loads(text: str) -> object:
             text,
             object_pairs_hook=_reject_duplicate_json_fields,
             parse_constant=_reject_nonstandard_json_constant,
+            parse_float=_parse_finite_json_float,
         )
     except RecursionError as exc:
         raise ValueError("JSON nesting is too deep") from exc
