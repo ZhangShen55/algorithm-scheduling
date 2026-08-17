@@ -63,6 +63,7 @@ EVIDENCE_STATUS = {
 FORBIDDEN_COMMAND = re.compile(
     r"(?i)(repository\s*\.\s*(complete|finish|mark)|complete_node|mark_node_completed|authorization\s*:|bearer\s+|token\s*=)"
 )
+CONTAINER_ID_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
 @dataclass(frozen=True)
@@ -688,8 +689,18 @@ def _gpu_target(
         raise ValueError(f"{context}.target.physical_gpu 与 Compose 不匹配")
     if target.get("process_name") != authority.process_name:
         raise ValueError(f"{context}.target.process_name 与 Compose 不匹配")
-    if "container" in target and target["container"] != authority.service_name:
+    target_container = _require_string(
+        target.get("container"), f"{context}.target.container"
+    )
+    if target_container == authority.service_name:
+        return
+    if CONTAINER_ID_PATTERN.fullmatch(target_container) is None:
         raise ValueError(f"{context}.target.container 与 Compose 不匹配")
+    if "container" not in payload and payload.get("status") == "FAIL":
+        return
+    nested = _require_object(payload.get("container"), f"{context}.container")
+    if nested.get("id") != target_container:
+        raise ValueError(f"{context}.target.container 与 container.id 不匹配")
 
 
 def _gpu_container(
@@ -698,9 +709,12 @@ def _gpu_container(
     container = _require_object(value, context)
     if container.get("instance_id") != authority.instance_id:
         raise ValueError(f"{context}.instance_id 与 Compose 不匹配")
-    if container.get("name") != authority.service_name:
-        raise ValueError(f"{context}.name 与 Compose 不匹配")
-    _require_string(container.get("id"), f"{context}.id")
+    container_id = _require_string(container.get("id"), f"{context}.id")
+    if CONTAINER_ID_PATTERN.fullmatch(container_id) is None:
+        raise ValueError(f"{context}.id 必须是 64 位小写十六进制 Docker ID")
+    container_name = _require_string(container.get("name"), f"{context}.name")
+    if container_name not in {authority.service_name, container_id}:
+        raise ValueError(f"{context}.name 与 Compose 或 container.id 不匹配")
     if "init_host_pid" in container:
         pid = _require_nonnegative_int(container["init_host_pid"], f"{context}.init_host_pid")
         if pid == 0:
@@ -905,6 +919,10 @@ def _validate_gpu_recovery(
     if snapshot.relative_path != f"recovery/{target}-stopped.json":
         raise ValueError(f"{context} 不是用例要求的规范 GPU recovery 证据路径")
     _gpu_target(payload, authority, context)
+    running_target = _require_object(running.get("target"), f"{runtime.relative_path}.target")
+    stopped_target = _require_object(payload.get("target"), f"{context}.target")
+    if stopped_target["container"] != running_target["container"]:
+        raise ValueError(f"{context}.target.container 与对应 runtime 不匹配")
     _require_case_status_match(case, snapshot)
     status = _mapped_evidence_status(snapshot)
     if "release_sha" in payload and payload["release_sha"] != git_sha:

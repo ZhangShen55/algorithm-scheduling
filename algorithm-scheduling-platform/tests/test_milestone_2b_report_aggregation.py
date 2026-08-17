@@ -936,6 +936,220 @@ def test_task6_renderer_requires_gpu_common_v1_fields(
     _assert_renderer_published_nothing(release_tree)
 
 
+def test_task6_renderer_accepts_full_container_id_from_gpu_collector(
+    release_tree: ReleaseTree,
+) -> None:
+    _prepare_renderer_release(release_tree)
+    instance_id = "asr-offline-gpu0"
+    container_id = "c" * 64
+    for relative_path in (
+        f"gpu-instances/{instance_id}.json",
+        f"recovery/{instance_id}-stopped.json",
+    ):
+        payload = release_tree.read_json(relative_path)
+        payload["target"]["container"] = container_id
+        payload["container"]["id"] = container_id
+        payload["container"]["name"] = container_id
+        release_tree.replace_json(relative_path, payload)
+        (release_tree.root / relative_path).chmod(0o600)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 3, completed.stderr
+    assert (release_tree.root / "summary/report.json").is_file()
+    assert (release_tree.root / "summary/report.md").is_file()
+
+
+def test_task6_renderer_accepts_failed_gpu_pair_without_nested_container(
+    release_tree: ReleaseTree,
+) -> None:
+    envelope = _prepare_renderer_release(release_tree)
+    instance_id = "asr-offline-gpu0"
+    container_id = "d" * 64
+    reason = "GPU framework probe could not run"
+    running_case = next(
+        item
+        for item in envelope["cases"]
+        if item["case_kind"] == "gpu_running" and item["target"] == instance_id
+    )
+    linked_smoke = next(
+        item
+        for item in envelope["cases"]
+        if item["case_kind"] == "smoke_gpu_trigger"
+        and (item["target"], item["run_id"])
+        == (instance_id, running_case["run_id"])
+    )
+    envelope["cases"].remove(linked_smoke)
+    envelope["coverage"]["smoke_gpu_trigger"]["observed"] -= 1
+    envelope["coverage"]["smoke_gpu_trigger"]["passed"] -= 1
+    for case_kind, coverage_key in (
+        ("gpu_running", "gpu_running"),
+        ("gpu_stopped", "gpu_stopped"),
+    ):
+        case = next(
+            item
+            for item in envelope["cases"]
+            if item["case_kind"] == case_kind and item["target"] == instance_id
+        )
+        case["status"] = "失败"
+        case["reason"] = reason
+        envelope["coverage"][coverage_key]["passed"] -= 1
+        relative_path = case["evidence"][0]
+        payload = release_tree.read_json(relative_path)
+        payload["status"] = "FAIL"
+        payload["reason"] = reason
+        payload["target"]["container"] = container_id
+        for field in (
+            "release_sha",
+            "container",
+            "gpu",
+            "activity",
+            "synchronous_samples",
+            "prior_cuda_pids",
+            "remaining_cuda_pids",
+        ):
+            payload.pop(field, None)
+        release_tree.replace_json(relative_path, payload)
+        (release_tree.root / relative_path).chmod(0o600)
+    _write_renderer_envelope(release_tree, envelope)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 3, completed.stderr
+    assert release_tree.read_json("summary/report.json")["overall_status"] == "失败"
+
+
+@pytest.mark.parametrize("target_container", (None, "arbitrary-container", "A" * 64))
+def test_task6_renderer_rejects_missing_or_noncanonical_target_container(
+    target_container: str | None,
+) -> None:
+    renderer = _renderer_module()
+    authority = renderer.OperatorAuthority(
+        service_name="asr-offline-gpu0",
+        instance_id="asr-offline-gpu0",
+        operator_code="asr_offline",
+        profile="gpu0",
+        physical_gpu=0,
+        process_name="asr_offline",
+    )
+    target = {
+        "instance_id": authority.instance_id,
+        "physical_gpu": authority.physical_gpu,
+        "process_name": authority.process_name,
+    }
+    if target_container is not None:
+        target["container"] = target_container
+
+    with pytest.raises(ValueError, match="target.container"):
+        renderer._gpu_target(
+            {"status": "FAIL", "target": target}, authority, "runtime"
+        )
+
+
+def test_task6_renderer_rejects_target_container_id_mismatch_with_nested_id() -> None:
+    renderer = _renderer_module()
+    authority = renderer.OperatorAuthority(
+        service_name="asr-offline-gpu0",
+        instance_id="asr-offline-gpu0",
+        operator_code="asr_offline",
+        profile="gpu0",
+        physical_gpu=0,
+        process_name="asr_offline",
+    )
+    payload = {
+        "status": "PASS",
+        "target": {
+            "container": "c" * 64,
+            "instance_id": authority.instance_id,
+            "physical_gpu": authority.physical_gpu,
+            "process_name": authority.process_name,
+        },
+        "container": {"id": "d" * 64},
+    }
+
+    with pytest.raises(ValueError, match="target.container.*container.id"):
+        renderer._gpu_target(payload, authority, "runtime")
+
+
+@pytest.mark.parametrize(
+    ("container_id", "container_name", "message"),
+    (
+        ("arbitrary-container", "asr-offline-gpu0", "id"),
+        ("A" * 64, "asr-offline-gpu0", "id"),
+        ("c" * 64, "d" * 64, "name"),
+    ),
+)
+def test_task6_renderer_rejects_noncanonical_nested_container_identity(
+    container_id: str,
+    container_name: str,
+    message: str,
+) -> None:
+    renderer = _renderer_module()
+    authority = renderer.OperatorAuthority(
+        service_name="asr-offline-gpu0",
+        instance_id="asr-offline-gpu0",
+        operator_code="asr_offline",
+        profile="gpu0",
+        physical_gpu=0,
+        process_name="asr_offline",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        renderer._gpu_container(
+            {
+                "id": container_id,
+                "name": container_name,
+                "instance_id": authority.instance_id,
+            },
+            authority,
+            "runtime.container",
+        )
+
+
+def test_task6_renderer_rejects_different_runtime_and_recovery_container_ids(
+    release_tree: ReleaseTree,
+) -> None:
+    _prepare_renderer_release(release_tree)
+    instance_id = "asr-offline-gpu0"
+    for relative_path, container_id in (
+        (f"gpu-instances/{instance_id}.json", "c" * 64),
+        (f"recovery/{instance_id}-stopped.json", "d" * 64),
+    ):
+        payload = release_tree.read_json(relative_path)
+        payload["target"]["container"] = container_id
+        payload["container"]["id"] = container_id
+        payload["container"]["name"] = container_id
+        release_tree.replace_json(relative_path, payload)
+        (release_tree.root / relative_path).chmod(0o600)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 1
+    assert "target.container" in completed.stderr and "runtime" in completed.stderr
+    _assert_renderer_published_nothing(release_tree)
+
+
+@pytest.mark.parametrize(
+    "field", ("container", "gpu", "activity", "synchronous_samples")
+)
+def test_task6_renderer_keeps_pass_runtime_completeness_requirement(
+    release_tree: ReleaseTree,
+    field: str,
+) -> None:
+    _prepare_renderer_release(release_tree)
+    relative_path = "gpu-instances/asr-offline-gpu0.json"
+    payload = release_tree.read_json(relative_path)
+    payload.pop(field)
+    release_tree.replace_json(relative_path, payload)
+    (release_tree.root / relative_path).chmod(0o600)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 1
+    assert field in completed.stderr
+    _assert_renderer_published_nothing(release_tree)
+
+
 def test_task6_renderer_recovery_fail_remaining_pids_must_belong_to_runtime(
     release_tree: ReleaseTree,
 ) -> None:
