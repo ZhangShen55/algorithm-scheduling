@@ -2928,7 +2928,14 @@ def _smoke_handler(
             image_dir = "unexpected" if ppt_layout == "wrong_image" else "slices"
             image = manifest.parent / image_dir / "ppt-0001-f17-t16s.jpg"
             image.parent.mkdir(parents=True, exist_ok=True)
-            image.write_bytes(b"jpeg")
+            if ppt_layout == "symlink_image":
+                target = image.with_name("real-ppt-0001-f17-t16s.jpg")
+                target.write_bytes(b"jpeg")
+                image.symlink_to(target.name)
+            elif ppt_layout == "directory_image":
+                image.mkdir()
+            else:
+                image.write_bytes(b"jpeg")
             manifest.write_text(
                 json.dumps(
                     {
@@ -3588,6 +3595,31 @@ def test_ppt_smoke_rejects_artifacts_outside_the_current_task_scope(
     assert expected_reason in completed.stderr
 
 
+@pytest.mark.parametrize("ppt_layout", ("symlink_image", "directory_image"))
+def test_ppt_smoke_rejects_symlink_and_non_regular_slice_images(
+    tmp_path: Path,
+    ppt_layout: str,
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    submitted: list[dict[str, Any]] = []
+    handler = _smoke_handler(tmp_path, ppt_layout=ppt_layout)
+
+    def inspect(path: str, headers: Any, body: bytes) -> tuple[int, Any]:
+        if path == "/LocalVideoPPTSliceTasks/v1.0.0":
+            submitted.append(json.loads(body))
+        return handler(path, headers, body)
+
+    with _WebSocketServer() as ws_url, _Server(
+        {}, inspect
+    ) as http_url:
+        completed = _run_smoke(tmp_path, http_url, ws_url, manifest, cases="ppt_slice")
+
+    assert completed.returncode != 0
+    evidence = json.loads((_release(tmp_path) / "smoke/ppt_slice.json").read_text())
+    assert evidence["status"] == "失败"
+    _assert_ppt_failure_context(evidence, submitted)
+
+
 def test_text_analysis_smoke_uses_the_current_course_overview_contract(
     tmp_path: Path,
 ) -> None:
@@ -4001,21 +4033,55 @@ def test_smoke_runner_marks_operator_error_failed(tmp_path: Path) -> None:
     assert completed.returncode != 0
     cases = json.loads((_release(tmp_path) / "smoke" / "cases.json").read_text())
     assert cases[0]["status"] == "失败"
+    evidence = json.loads((_release(tmp_path) / "smoke" / "ocr.json").read_text())
+    assert "summary" not in evidence
+
+
+def _assert_ppt_failure_context(
+    evidence: dict[str, Any],
+    submitted: list[dict[str, Any]],
+) -> None:
+    assert len(submitted) == 1
+    summary = evidence["summary"]
+    expected_ids = {
+        "task_id": submitted[0]["task_id"],
+        "operator_task_id": submitted[0]["operator_task_id"],
+    }
+    assert {
+        "task_id": summary["task_id"],
+        "operator_task_id": summary["operator_task_id"],
+    } == expected_ids
+    assert summary["attempt_count"] == 1
+    assert len(summary["attempts"]) == 1
+    failed_attempt = summary["attempts"][0]
+    assert {key: failed_attempt[key] for key in expected_ids} == expected_ids
+    assert failed_attempt["status"] == "失败"
+    assert failed_attempt["reason"] == evidence["reason"]
 
 
 def test_smoke_runner_does_not_accept_ppt_status_50_without_terminal_callback(
     tmp_path: Path,
 ) -> None:
     manifest = _fixture_manifest(tmp_path)
+    submitted: list[dict[str, Any]] = []
+    handler = _smoke_handler(tmp_path, ppt_callback=False)
+
+    def inspect(path: str, headers: Any, body: bytes) -> tuple[int, Any]:
+        if path == "/LocalVideoPPTSliceTasks/v1.0.0":
+            submitted.append(json.loads(body))
+        return handler(path, headers, body)
+
     with (
         _WebSocketServer() as ws_url,
-        _Server({}, _smoke_handler(tmp_path, ppt_callback=False)) as http_url,
+        _Server({}, inspect) as http_url,
     ):
         completed = _run_smoke(
             tmp_path, http_url, ws_url, manifest, cases="ppt_slice", timeout="0.2"
         )
     assert completed.returncode != 0
     assert "终态回调" in completed.stderr
+    evidence = json.loads((_release(tmp_path) / "smoke/ppt_slice.json").read_text())
+    _assert_ppt_failure_context(evidence, submitted)
 
 
 def test_registration_http_timeout_is_bounded_and_reported(tmp_path: Path) -> None:
