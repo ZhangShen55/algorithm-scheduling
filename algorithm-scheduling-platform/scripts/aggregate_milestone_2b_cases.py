@@ -404,7 +404,7 @@ def _validate_registration(
     if payload.get("selection") != selection:
         raise ValueError(f"{context}: selection does not match {selection}")
 
-    status = payload.get("status")
+    status = _require_string(payload.get("status"), f"{context}: status")
     if status not in {"通过", "失败"}:
         raise ValueError(f"{context}: status must be 通过 or 失败")
     started_at = _require_string(payload.get("started_at"), f"{context}: started_at")
@@ -566,30 +566,68 @@ def _sample_host_pids(
     for sample_index, raw_sample in enumerate(samples):
         sample_context = f"{context}[{sample_index}]"
         sample = _require_object(raw_sample, sample_context)
-        if "processes" not in sample:
-            continue
-        processes = _require_list(sample["processes"], f"{sample_context}.processes")
+        processes = _require_list(
+            sample.get("processes"), f"{sample_context}.processes"
+        )
         sample_host_pids: set[int] = set()
         for process_index, raw_process in enumerate(processes):
             process_context = f"{sample_context}.processes[{process_index}]"
             process = _require_object(raw_process, process_context)
-            if (
-                "process_name" in process
-                and process["process_name"] != instance.process_name
-            ):
+            process_name = _require_string(
+                process.get("process_name"), f"{process_context}.process_name"
+            )
+            if process_name != instance.process_name:
                 raise ValueError(
                     f"{process_context}.process_name does not match inventory"
                 )
-            if "host_pid" in process:
-                host_pid = _require_nonnegative_int(
-                    process["host_pid"], f"{process_context}.host_pid"
+            host_pid = _require_nonnegative_int(
+                process.get("host_pid"), f"{process_context}.host_pid"
+            )
+            if host_pid == 0:
+                raise ValueError(f"{process_context}.host_pid must be positive")
+            mapping = _require_object(
+                process.get("mapping"), f"{process_context}.mapping"
+            )
+            for field in ("docker_top", "cgroup_full_container_id"):
+                if type(mapping.get(field)) is not bool or mapping[field] is not True:
+                    raise ValueError(
+                        f"{process_context}.mapping.{field} must be boolean true"
+                    )
+            raw_nspid = _require_list(
+                mapping.get("nspid"), f"{process_context}.mapping.nspid"
+            )
+            if not raw_nspid:
+                raise ValueError(
+                    f"{process_context}.mapping.nspid must be a non-empty list"
                 )
-                if host_pid == 0:
-                    raise ValueError(f"{process_context}.host_pid must be positive")
-                if host_pid in sample_host_pids:
-                    raise ValueError(f"{process_context}.host_pid is duplicate")
-                sample_host_pids.add(host_pid)
-                host_pids.add(host_pid)
+            namespace_pids = [
+                _require_nonnegative_int(
+                    namespace_pid,
+                    f"{process_context}.mapping.nspid[{namespace_index}]",
+                )
+                for namespace_index, namespace_pid in enumerate(raw_nspid)
+            ]
+            if any(namespace_pid == 0 for namespace_pid in namespace_pids):
+                raise ValueError(
+                    f"{process_context}.mapping.nspid must contain positive integers"
+                )
+            if namespace_pids[0] != host_pid:
+                raise ValueError(
+                    f"{process_context}.mapping.nspid[0] must equal host_pid"
+                )
+            container_pid = _require_nonnegative_int(
+                process.get("container_pid"), f"{process_context}.container_pid"
+            )
+            if container_pid == 0:
+                raise ValueError(f"{process_context}.container_pid must be positive")
+            if container_pid != namespace_pids[-1]:
+                raise ValueError(
+                    f"{process_context}.container_pid must equal mapping.nspid[-1]"
+                )
+            if host_pid in sample_host_pids:
+                raise ValueError(f"{process_context}.host_pid is duplicate")
+            sample_host_pids.add(host_pid)
+            host_pids.add(host_pid)
     return host_pids
 
 
@@ -632,7 +670,7 @@ def validate_gpu_pair(
         if payload.get("mode") != expected_mode:
             raise ValueError(f"{context}.mode must equal {expected_mode}")
         _validate_gpu_target(payload, instance, context)
-        status_value = payload.get("status")
+        status_value = _require_string(payload.get("status"), f"{context}.status")
         if status_value not in {"PASS", "FAIL"}:
             raise ValueError(f"{context}.status must be PASS or FAIL")
         if "release_sha" in payload and payload["release_sha"] != git_sha:

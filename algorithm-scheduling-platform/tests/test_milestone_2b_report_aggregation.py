@@ -307,6 +307,7 @@ class ReleaseTree:
                                 "mapping": {
                                     "docker_top": True,
                                     "cgroup_full_container_id": True,
+                                    "nspid": [host_pid, 42],
                                 },
                             }
                         ],
@@ -323,6 +324,7 @@ class ReleaseTree:
                                 "mapping": {
                                     "docker_top": True,
                                     "cgroup_full_container_id": True,
+                                    "nspid": [host_pid, 42],
                                 },
                             }
                         ],
@@ -1371,6 +1373,21 @@ def test_failed_registration_requires_nonempty_issues(
         release_tree.collect_registration_gpu()
 
 
+@pytest.mark.parametrize("status", ([], {}))
+def test_registration_rejects_non_string_status_as_value_error(
+    release_tree: ReleaseTree,
+    status: object,
+) -> None:
+    release_tree.write_complete_sources()
+    relative = "registration/operator-registration.json"
+    payload = release_tree.read_json(relative)
+    payload["status"] = status
+    release_tree.replace_json(relative, payload)
+
+    with pytest.raises(ValueError, match="status"):
+        release_tree.collect_registration_gpu()
+
+
 @pytest.mark.parametrize(
     ("relative", "raw_text", "message"),
     (
@@ -1497,6 +1514,56 @@ def test_running_pass_requires_at_least_one_mapped_host_pid(
         _validate_gpu_pair(release_tree, running, stopped)
 
 
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        (lambda process: process.pop("host_pid"), "host_pid"),
+        (lambda process: process.pop("process_name"), "process_name"),
+        (lambda process: process.pop("mapping"), "mapping"),
+        (
+            lambda process: process["mapping"].__setitem__("docker_top", False),
+            "docker_top",
+        ),
+        (
+            lambda process: process["mapping"].__setitem__(
+                "cgroup_full_container_id", False
+            ),
+            "cgroup_full_container_id",
+        ),
+        (
+            lambda process: process["mapping"].__setitem__("docker_top", 1),
+            "docker_top",
+        ),
+        (
+            lambda process: process["mapping"].__setitem__(
+                "cgroup_full_container_id", "true"
+            ),
+            "cgroup_full_container_id",
+        ),
+        (lambda process: process["mapping"].pop("nspid"), "nspid"),
+        (
+            lambda process: process["mapping"].__setitem__("nspid", [20_001, 42]),
+            "nspid",
+        ),
+        (lambda process: process.pop("container_pid"), "container_pid"),
+        (lambda process: process.__setitem__("container_pid", 43), "container_pid"),
+    ),
+)
+def test_running_pid_requires_proven_container_mapping(
+    release_tree: ReleaseTree,
+    mutation: Callable[[dict[str, Any]], object],
+    message: str,
+) -> None:
+    release_tree.write_all_gpu_pairs()
+    running = release_tree.read_json("gpu-instances/asr-offline-gpu0.json")
+    stopped = release_tree.read_json("recovery/asr-offline-gpu0-stopped.json")
+    process = running["synchronous_samples"][0]["processes"][0]
+    mutation(process)
+
+    with pytest.raises(ValueError, match=message):
+        _validate_gpu_pair(release_tree, running, stopped)
+
+
 def test_stopped_pass_requires_explicit_prior_cuda_pids(
     release_tree: ReleaseTree,
 ) -> None:
@@ -1506,6 +1573,25 @@ def test_stopped_pass_requires_explicit_prior_cuda_pids(
     del stopped["prior_cuda_pids"]
 
     with pytest.raises(ValueError, match="prior_cuda_pids"):
+        _validate_gpu_pair(release_tree, running, stopped)
+
+
+@pytest.mark.parametrize(
+    ("side", "status"),
+    (("running", []), ("running", {}), ("stopped", []), ("stopped", {})),
+)
+def test_gpu_rejects_non_string_status_as_value_error(
+    release_tree: ReleaseTree,
+    side: str,
+    status: object,
+) -> None:
+    release_tree.write_all_gpu_pairs()
+    running = release_tree.read_json("gpu-instances/asr-offline-gpu0.json")
+    stopped = release_tree.read_json("recovery/asr-offline-gpu0-stopped.json")
+    target = running if side == "running" else stopped
+    target["status"] = status
+
+    with pytest.raises(ValueError, match="status"):
         _validate_gpu_pair(release_tree, running, stopped)
 
 
