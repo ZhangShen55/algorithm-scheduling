@@ -148,7 +148,7 @@ class ReleaseTree:
             }
         return dict(sorted(instances.items()))
 
-    def _write_json(self, relative_path: str, payload: dict[str, Any]) -> Path:
+    def _write_json(self, relative_path: str, payload: object) -> Path:
         path = self.root / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
@@ -161,6 +161,9 @@ class ReleaseTree:
         payload = json.loads((self.root / relative_path).read_text(encoding="utf-8"))
         assert isinstance(payload, dict)
         return payload
+
+    def read_value(self, relative_path: str) -> Any:
+        return json.loads((self.root / relative_path).read_text(encoding="utf-8"))
 
     def replace_json(self, relative_path: str, payload: dict[str, Any]) -> None:
         self._write_json(relative_path, payload)
@@ -351,6 +354,133 @@ class ReleaseTree:
     def write_complete_sources(self) -> None:
         self.write_all_registrations()
         self.write_all_gpu_pairs()
+
+    def _smoke_manifest_cases(self) -> list[dict[str, Any]]:
+        document = json.loads(SMOKE_MANIFEST_PATH.read_text(encoding="utf-8"))
+        assert isinstance(document, dict)
+        cases = document["cases"]
+        assert isinstance(cases, list)
+        assert all(isinstance(case, dict) for case in cases)
+        return cases
+
+    def _smoke_case_for_instance(self, instance_id: str) -> dict[str, Any]:
+        matches = [
+            case
+            for case in self._smoke_manifest_cases()
+            if instance_id.startswith(case["operator_code"].replace("_", "-") + "-")
+        ]
+        assert len(matches) == 1
+        return matches[0]
+
+    def _write_smoke_case(
+        self,
+        root: str,
+        case: dict[str, Any],
+        *,
+        target: str,
+        status: str,
+        mock: bool = False,
+    ) -> dict[str, Any]:
+        operator_code = case["operator_code"]
+        relative = f"{root}/{operator_code}.json"
+        evidence_status = {
+            "通过": "PASS",
+            "失败": "失败",
+            "未执行及原因": "未执行及原因",
+        }[status]
+        reason = {
+            "通过": "直接调用响应符合算子合同",
+            "失败": "injected smoke failure",
+            "未执行及原因": "fixture unavailable",
+        }[status]
+        evidence: dict[str, Any] = {
+            "schema_version": 1,
+            "evidence_type": "operator_smoke",
+            "operator_code": operator_code,
+            "target": target,
+            "checks": case["checks"],
+            "status": evidence_status,
+            "mock": mock,
+            "release_tag": self.release_tag,
+            "git_sha": self.git_sha,
+        }
+        if status == "通过":
+            evidence["summary"] = {"verified": True}
+        else:
+            evidence["reason"] = reason
+        self._write_json(relative, evidence)
+        return {
+            "case_id": case["case_id"],
+            "status": status,
+            "started_at": EVIDENCE_TIMESTAMP,
+            "finished_at": EVIDENCE_TIMESTAMP,
+            "target": target,
+            "command": "deploy/scripts/run-operator-smoke --run-id auto",
+            "evidence": [] if status == "未执行及原因" else [relative],
+            "reason": reason,
+            "mock": mock,
+            "release_tag": self.release_tag,
+            "git_sha": self.git_sha,
+        }
+
+    def write_full_smoke(
+        self, statuses: dict[str, str] | None = None
+    ) -> None:
+        selected_statuses = statuses or {}
+        logical_cases = [
+            self._write_smoke_case(
+                "smoke",
+                case,
+                target=case["operator_code"],
+                status=selected_statuses.get(case["operator_code"], "通过"),
+            )
+            for case in self._smoke_manifest_cases()
+        ]
+        self._write_json("smoke/cases.json", logical_cases)
+
+    def write_instance_smoke(
+        self,
+        instance_id: str,
+        run_id: str,
+        *,
+        status: str = "通过",
+        mock: bool = False,
+    ) -> None:
+        case = self._smoke_case_for_instance(instance_id)
+        root = f"smoke/instances/{instance_id}/runs/{run_id}"
+        logical = self._write_smoke_case(
+            root,
+            case,
+            target=instance_id,
+            status=status,
+            mock=mock,
+        )
+        self._write_json(f"{root}/cases.json", [logical])
+
+    def write_all_instance_smoke(self) -> None:
+        for instance_id in self.instances:
+            self.write_instance_smoke(instance_id, f"run-{instance_id}")
+
+    def write_complete_smoke_sources(
+        self, full_statuses: dict[str, str] | None = None
+    ) -> None:
+        self.write_full_smoke(full_statuses)
+        self.write_all_instance_smoke()
+
+    def collect_smoke(self) -> tuple[list[CaseRecord], dict[str, Coverage]]:
+        aggregate = _aggregate_module()
+        contract = _contract_module()
+        inventory = aggregate.load_operator_inventory(self.compose_path)
+        plan = contract.load_report_plan(self.report_plan_path)
+        manifest = aggregate.load_smoke_manifest(SMOKE_MANIFEST_PATH)
+        return aggregate.collect_smoke_cases(
+            release_root=self.root,
+            inventory=inventory,
+            report_plan=plan,
+            smoke_manifest=manifest,
+            release_tag=self.release_tag,
+            git_sha=self.git_sha,
+        )
 
     def collect_registration_gpu(
         self,
@@ -1808,16 +1938,563 @@ def test_gpu_fail_rejects_missing_reason_and_present_identity_drift(
         _validate_gpu_pair(release_tree, running, stopped)
 
 
-def test_task2_cli_fails_closed_without_creating_any_output(
+def test_task3_cli_fails_closed_without_creating_any_output(
     release_tree: ReleaseTree,
 ) -> None:
     release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
 
     completed = release_tree.run_aggregator()
 
     assert completed.returncode != 0
-    assert "Smoke and declaration coverage" in completed.stderr
+    assert "Declaration coverage" in completed.stderr
     assert not (release_tree.root / "summary" / "cases.json").exists()
     assert not (release_tree.root / "summary").exists()
     assert not (release_tree.root / "negative").exists()
     assert not (release_tree.root / "load").exists()
+
+
+def test_task3_cli_validates_gpu_smoke_link_before_failing_closed(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    running_path = "gpu-instances/asr-offline-gpu0.json"
+    running = release_tree.read_json(running_path)
+    running["activity"]["run_id"] = "missing-run"
+    release_tree.replace_json(running_path, running)
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode != 0
+    assert "missing-run" in completed.stderr
+    assert "Declaration coverage" not in completed.stderr
+    assert not (release_tree.root / "summary").exists()
+    assert not (release_tree.root / "negative").exists()
+    assert not (release_tree.root / "load").exists()
+
+
+def _smoke_manifest_document() -> dict[str, Any]:
+    loaded = json.loads(SMOKE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert isinstance(loaded, dict)
+    return loaded
+
+
+def _write_smoke_manifest(tmp_path: Path, document: object) -> Path:
+    path = tmp_path / "operator-smoke-cases.json"
+    path.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def test_smoke_manifest_loader_matches_the_real_compose_operator_set() -> None:
+    aggregate = _aggregate_module()
+    manifest = aggregate.load_smoke_manifest(SMOKE_MANIFEST_PATH)
+    inventory = aggregate.load_operator_inventory(COMPOSE_PATH)
+
+    assert len(manifest) == 8
+    assert {case["operator_code"] for case in manifest} == {
+        instance.operator_code for instance in inventory.instances
+    }
+    assert manifest == _smoke_manifest_document()["cases"]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda document: document.__setitem__("schema_version", True),
+        lambda document: document.__setitem__("unknown", "value"),
+        lambda document: document.pop("cases"),
+        lambda document: document["cases"].pop(),
+        lambda document: document["cases"][0].__setitem__("case_id", 7),
+        lambda document: document["cases"][0].__setitem__("operator_code", False),
+        lambda document: document["cases"][0].__setitem__("fixtures", "fixture"),
+        lambda document: document["cases"][0].__setitem__("checks", [True]),
+        lambda document: document["cases"][0]["fixtures"].append("bad\x00fixture"),
+        lambda document: document["cases"][0]["checks"].append(
+            document["cases"][0]["checks"][0]
+        ),
+        lambda document: document["cases"][1].__setitem__(
+            "case_id", document["cases"][0]["case_id"]
+        ),
+        lambda document: document["cases"][1].__setitem__(
+            "operator_code", document["cases"][0]["operator_code"]
+        ),
+        lambda document: document["cases"][0].__setitem__(
+            "operator_code", "unknown_operator"
+        ),
+        lambda document: document["cases"][0].__setitem__("unknown", "value"),
+    ),
+)
+def test_smoke_manifest_loader_rejects_structural_drift(
+    tmp_path: Path,
+    mutation: Callable[[dict[str, Any]], object],
+) -> None:
+    document = _smoke_manifest_document()
+    mutation(document)
+
+    with pytest.raises(ValueError):
+        _aggregate_module().load_smoke_manifest(_write_smoke_manifest(tmp_path, document))
+
+
+def test_smoke_manifest_loader_rejects_duplicate_json_fields(tmp_path: Path) -> None:
+    raw = SMOKE_MANIFEST_PATH.read_text(encoding="utf-8").replace(
+        '"schema_version": 1,',
+        '"schema_version": 1, "schema_version": 1,',
+        1,
+    )
+    path = tmp_path / "duplicate-smoke-manifest.json"
+    path.write_text(raw, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="duplicate"):
+        _aggregate_module().load_smoke_manifest(path)
+
+
+def test_instance_smoke_case_id_is_scoped_and_content_addressed() -> None:
+    aggregate = _aggregate_module()
+    run_id = "retry-20260817"
+    source_case_id = "INF-PPT-SLICE"
+    digest = hashlib.sha256(f"{run_id}\0{source_case_id}".encode()).hexdigest()[:12]
+
+    assert aggregate.instance_smoke_case_id(
+        "cpu", "ppt-slice-cpu0", run_id, source_case_id
+    ) == f"SMOKE-CPU-ppt-slice-cpu0-{digest}"
+    assert aggregate.instance_smoke_case_id(
+        "gpu", "ppt-slice-cpu0", run_id, source_case_id
+    ) == f"SMOKE-GPU-ppt-slice-cpu0-{digest}"
+
+
+@pytest.mark.parametrize("scope", ("", "GPU", "full", 1, True))
+def test_instance_smoke_case_id_rejects_unknown_scope(scope: object) -> None:
+    with pytest.raises(ValueError, match="scope"):
+        _aggregate_module().instance_smoke_case_id(
+            scope, "ppt-slice-cpu0", "run-1", "INF-PPT-SLICE"
+        )
+
+
+def _release_file_snapshot(root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+
+def test_full_smoke_collects_exact_manifest_cases_without_writing(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    manifest = _smoke_manifest_document()["cases"]
+    before = _release_file_snapshot(release_tree.root)
+
+    cases, coverage = release_tree.collect_smoke()
+
+    full_cases = [case for case in cases if case["case_kind"] == "smoke_full"]
+    assert {case["case_id"] for case in full_cases} == {
+        f"SMOKE-FULL-{source['case_id']}" for source in manifest
+    }
+    assert {case["source_case_id"] for case in full_cases} == {
+        source["case_id"] for source in manifest
+    }
+    assert all(case["run_id"] == "" for case in full_cases)
+    assert all(case["status"] == "通过" for case in full_cases)
+    assert {
+        tuple(case["evidence"])
+        for case in full_cases
+    } == {
+        (f"smoke/{source['operator_code']}.json",) for source in manifest
+    }
+    assert coverage["smoke_full"] == {"expected": 8, "observed": 8, "passed": 8}
+    assert _release_file_snapshot(release_tree.root) == before
+    assert not (release_tree.root / "summary").exists()
+    assert not (release_tree.root / "negative").exists()
+    assert not (release_tree.root / "load").exists()
+
+
+def test_full_smoke_preserves_failed_and_unexecuted_evidence(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources(
+        {"ocr": "失败", "vbas": "未执行及原因"}
+    )
+
+    cases, coverage = release_tree.collect_smoke()
+
+    full_by_source = {
+        case["source_case_id"]: case
+        for case in cases
+        if case["case_kind"] == "smoke_full"
+    }
+    assert full_by_source["INF-OCR"]["status"] == "失败"
+    assert full_by_source["INF-VBAS"]["status"] == "未执行及原因"
+    assert full_by_source["INF-VBAS"]["evidence"] == ["smoke/vbas.json"]
+    assert coverage["smoke_full"] == {"expected": 8, "observed": 8, "passed": 6}
+
+
+def test_full_smoke_rejects_partial_cases_as_full(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    logical_cases = release_tree.read_value("smoke/cases.json")
+    assert isinstance(logical_cases, list)
+    logical_cases.pop()
+    release_tree._write_json("smoke/cases.json", logical_cases)
+
+    with pytest.raises(ValueError, match="8|manifest|cases"):
+        release_tree.collect_smoke()
+
+    assert not (release_tree.root / "summary").exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("status", "成功", "status"),
+        ("operator_code", "vbas", "operator_code"),
+        ("target", "ocr-gpu0", "target"),
+        ("checks", ["different_check"], "checks"),
+        ("mock", True, "mock"),
+        ("release_tag", "different-release", "release_tag"),
+        ("git_sha", "b" * 40, "git_sha"),
+    ),
+)
+def test_full_smoke_rejects_evidence_drift(
+    release_tree: ReleaseTree,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    evidence = release_tree.read_json("smoke/ocr.json")
+    evidence[field] = value
+    release_tree.replace_json("smoke/ocr.json", evidence)
+
+    with pytest.raises(ValueError, match=message):
+        release_tree.collect_smoke()
+
+
+def test_smoke_case_ids_are_unique_and_cpu_retry_history_is_preserved(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    cpu_instance = release_tree.cpu_instances[0]
+    release_tree.write_instance_smoke(cpu_instance, "retry-failed", status="失败")
+
+    cases, coverage = release_tree.collect_smoke()
+
+    assert len(cases) == 8 + 18 + 6 + 1
+    assert len({case["case_id"] for case in cases}) == len(cases)
+    cpu_cases = [
+        case
+        for case in cases
+        if case["case_kind"] == "smoke_cpu_instance"
+        and case["target"] == cpu_instance
+    ]
+    assert {case["run_id"] for case in cpu_cases} == {
+        f"run-{cpu_instance}",
+        "retry-failed",
+    }
+    assert {case["status"] for case in cpu_cases} == {"通过", "失败"}
+    assert coverage["smoke_gpu_trigger"] == {
+        "expected": 18,
+        "observed": 18,
+        "passed": 18,
+    }
+    assert coverage["smoke_cpu_instance"] == {
+        "expected": 6,
+        "observed": 6,
+        "passed": 6,
+    }
+
+
+def test_gpu_running_activity_missing_run_fails_without_summary(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    running_path = "gpu-instances/asr-offline-gpu0.json"
+    running = release_tree.read_json(running_path)
+    running["activity"]["run_id"] = "missing-run"
+    release_tree.replace_json(running_path, running)
+
+    with pytest.raises(ValueError, match="missing-run|run_id|run"):
+        release_tree.collect_smoke()
+
+    assert not (release_tree.root / "summary").exists()
+
+
+def test_cpu_instance_with_only_failed_run_is_observed_but_not_passed(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    cpu_instance = release_tree.cpu_instances[0]
+    release_tree.write_instance_smoke(
+        cpu_instance, f"run-{cpu_instance}", status="失败"
+    )
+
+    cases, coverage = release_tree.collect_smoke()
+
+    failed = [
+        case
+        for case in cases
+        if case["case_kind"] == "smoke_cpu_instance"
+        and case["target"] == cpu_instance
+    ]
+    assert len(failed) == 1
+    assert failed[0]["status"] == "失败"
+    assert coverage["smoke_cpu_instance"] == {
+        "expected": 6,
+        "observed": 6,
+        "passed": 5,
+    }
+
+
+def test_gpu_running_fail_with_run_id_links_the_exact_failed_run(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    instance_id = "asr-offline-gpu0"
+    linked_run = f"run-{instance_id}"
+    release_tree.write_instance_smoke(instance_id, linked_run, status="失败")
+    release_tree.write_instance_smoke(instance_id, "historical-pass")
+    running_path = f"gpu-instances/{instance_id}.json"
+    running = release_tree.read_json(running_path)
+    running["status"] = "FAIL"
+    running["reason"] = "trigger failed after run_id"
+    release_tree.replace_json(running_path, running)
+
+    cases, coverage = release_tree.collect_smoke()
+
+    instance_cases = [
+        case
+        for case in cases
+        if case["case_kind"] == "smoke_gpu_trigger" and case["target"] == instance_id
+    ]
+    assert {(case["run_id"], case["status"]) for case in instance_cases} == {
+        (linked_run, "失败"),
+        ("historical-pass", "通过"),
+    }
+    assert coverage["smoke_gpu_trigger"] == {
+        "expected": 18,
+        "observed": 18,
+        "passed": 17,
+    }
+
+
+def test_gpu_running_fail_without_run_id_does_not_use_unlinked_history(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    instance_id = "asr-offline-gpu0"
+    running_path = f"gpu-instances/{instance_id}.json"
+    running = release_tree.read_json(running_path)
+    running["status"] = "FAIL"
+    running["reason"] = "trigger failed before run_id"
+    running["activity"].pop("run_id")
+    release_tree.replace_json(running_path, running)
+
+    cases, coverage = release_tree.collect_smoke()
+
+    historical = [
+        case
+        for case in cases
+        if case["case_kind"] == "smoke_gpu_trigger" and case["target"] == instance_id
+    ]
+    assert len(historical) == 1
+    assert historical[0]["status"] == "通过"
+    assert coverage["smoke_gpu_trigger"] == {
+        "expected": 18,
+        "observed": 17,
+        "passed": 17,
+    }
+
+
+def test_gpu_running_fail_with_run_id_rejects_a_passing_linked_run(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    instance_id = "asr-offline-gpu0"
+    running_path = f"gpu-instances/{instance_id}.json"
+    running = release_tree.read_json(running_path)
+    running["status"] = "FAIL"
+    running["reason"] = "trigger failed after run_id"
+    release_tree.replace_json(running_path, running)
+
+    with pytest.raises(ValueError, match="FAIL|failed|失败|status"):
+        release_tree.collect_smoke()
+
+
+def test_cpu_instance_without_any_run_fails_closed(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    instance_id = release_tree.cpu_instances[0]
+    instance_root = release_tree.root / "smoke" / "instances" / instance_id
+    run_root = instance_root / "runs" / f"run-{instance_id}"
+    for source in tuple(run_root.iterdir()):
+        source.unlink()
+    run_root.rmdir()
+    (instance_root / "runs").rmdir()
+    instance_root.rmdir()
+
+    with pytest.raises(ValueError, match=instance_id):
+        release_tree.collect_smoke()
+
+
+def test_instance_smoke_rejects_wrong_compose_target(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    instance_id = release_tree.cpu_instances[0]
+    run_id = f"run-{instance_id}"
+    root = f"smoke/instances/{instance_id}/runs/{run_id}"
+    logical_cases = release_tree.read_value(f"{root}/cases.json")
+    assert isinstance(logical_cases, list)
+    logical_cases[0]["target"] = release_tree.cpu_instances[1]
+    release_tree._write_json(f"{root}/cases.json", logical_cases)
+    operator_code = release_tree._smoke_case_for_instance(instance_id)["operator_code"]
+    evidence = release_tree.read_json(f"{root}/{operator_code}.json")
+    evidence["target"] = release_tree.cpu_instances[1]
+    release_tree.replace_json(f"{root}/{operator_code}.json", evidence)
+
+    with pytest.raises(ValueError, match="target"):
+        release_tree.collect_smoke()
+
+
+def test_cpu_instance_rejects_mock_only_run(release_tree: ReleaseTree) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    instance_id = release_tree.cpu_instances[0]
+    release_tree.write_instance_smoke(
+        instance_id, f"run-{instance_id}", mock=True
+    )
+
+    with pytest.raises(ValueError, match="mock"):
+        release_tree.collect_smoke()
+
+
+def test_instance_smoke_rejects_unknown_compose_instance(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    unknown = release_tree.root / "smoke" / "instances" / "unknown-gpu0" / "runs"
+    unknown.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="unknown-gpu0|unknown instance"):
+        release_tree.collect_smoke()
+
+
+@pytest.mark.parametrize("source_name", ("extra.json", "latest"))
+def test_instance_smoke_rejects_extra_run_source(
+    release_tree: ReleaseTree,
+    source_name: str,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    instance_id = release_tree.cpu_instances[0]
+    run_id = f"run-{instance_id}"
+    extra = (
+        release_tree.root
+        / "smoke"
+        / "instances"
+        / instance_id
+        / "runs"
+        / run_id
+        / source_name
+    )
+    if source_name.endswith(".json"):
+        extra.write_text("{}", encoding="utf-8")
+    else:
+        extra.mkdir()
+
+    with pytest.raises(ValueError, match="extra|canonical|source"):
+        release_tree.collect_smoke()
+
+
+def test_instance_smoke_rejects_missing_operator_evidence(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    instance_id = release_tree.cpu_instances[0]
+    run_id = f"run-{instance_id}"
+    operator_code = release_tree._smoke_case_for_instance(instance_id)["operator_code"]
+    evidence = (
+        release_tree.root
+        / "smoke"
+        / "instances"
+        / instance_id
+        / "runs"
+        / run_id
+        / f"{operator_code}.json"
+    )
+    evidence.unlink()
+
+    with pytest.raises(ValueError, match="missing|source"):
+        release_tree.collect_smoke()
+
+
+def test_instance_smoke_rejects_unsafe_run_id(release_tree: ReleaseTree) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    instance_id = release_tree.cpu_instances[0]
+    runs_root = release_tree.root / "smoke" / "instances" / instance_id / "runs"
+    (runs_root / f"run-{instance_id}").rename(runs_root / "unsafe run")
+
+    with pytest.raises(ValueError, match="run_id|run ID|unsafe"):
+        release_tree.collect_smoke()
+
+
+def test_instance_smoke_rejects_symlink_source(release_tree: ReleaseTree) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    instance_id = release_tree.cpu_instances[0]
+    run_id = f"run-{instance_id}"
+    run_root = release_tree.root / "smoke" / "instances" / instance_id / "runs" / run_id
+    operator_code = release_tree._smoke_case_for_instance(instance_id)["operator_code"]
+    evidence = run_root / f"{operator_code}.json"
+    evidence.unlink()
+    evidence.symlink_to(run_root / "cases.json")
+
+    with pytest.raises(ValueError, match="symlink|regular|source"):
+        release_tree.collect_smoke()
+
+
+def test_instance_smoke_rejects_generated_case_id_collision(
+    release_tree: ReleaseTree,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    aggregate = _aggregate_module()
+    monkeypatch.setattr(
+        aggregate,
+        "instance_smoke_case_id",
+        lambda *_: "SMOKE-INSTANCE-COLLISION",
+    )
+
+    with pytest.raises(ValueError, match="collision|duplicate|unique"):
+        release_tree.collect_smoke()
+
+
+def test_cases_envelope_allows_empty_run_id_only_for_full_smoke() -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    case = envelope["cases"][0]
+    case["case_id"] = "SMOKE-FULL-INF-OCR"
+    case["source_case_id"] = "INF-OCR"
+    case["case_kind"] = "smoke_full"
+    case["run_id"] = ""
+
+    contract.validate_cases_envelope(envelope)

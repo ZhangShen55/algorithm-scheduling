@@ -383,7 +383,13 @@ def validate_cases_envelope(document: object) -> None:
         strings = {
             field: _require_string(case[field], f"{context}.{field}")
             for field in _CASE_STRING_FIELDS
+            if field != "run_id"
         }
+        raw_run_id = case["run_id"]
+        if raw_run_id == "" and strings["case_kind"] == "smoke_full":
+            strings["run_id"] = ""
+        else:
+            strings["run_id"] = _require_string(raw_run_id, f"{context}.run_id")
         case_id = strings["case_id"]
         if case_id in seen_case_ids:
             raise ValueError(f"{context}.case_id is duplicate: {case_id}")
