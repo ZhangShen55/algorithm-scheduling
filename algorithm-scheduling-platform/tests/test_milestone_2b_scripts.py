@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -854,6 +855,28 @@ def _run(script: str, *arguments: Path | str, environment: dict[str, str]) -> An
         capture_output=True,
         check=False,
     )
+
+
+@pytest.mark.parametrize(
+    ("process_name", "expected_framework", "expected_interpreter"),
+    [
+        ("asr_offline", "torch", "python"),
+        ("asr_online", "torch", "python"),
+        ("vbas", "torch", "python"),
+        ("screen_det", "torch", "python"),
+        ("ocr", "paddle", "python"),
+        ("facerec", "fastdeploy", "python3"),
+    ],
+)
+def test_gpu_framework_default_probe_interpreter_contract(
+    process_name: str, expected_framework: str, expected_interpreter: str
+) -> None:
+    namespace = runpy.run_path(str(SCRIPTS / "verify-gpu-instance"))
+
+    framework, argv = namespace["_framework_probe_argv"](process_name)
+
+    assert framework == expected_framework
+    assert argv[:2] == [expected_interpreter, "-c"]
 
 
 def _wait_for_path(path: Path, process: subprocess.Popen[str]) -> None:

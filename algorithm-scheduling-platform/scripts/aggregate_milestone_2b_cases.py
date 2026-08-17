@@ -65,6 +65,7 @@ GPU_ENVIRONMENT_FIELDS = (
 INSTANCE_ID_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 OPERATOR_CODE_PATTERN = re.compile(r"[a-z][a-z0-9_]*")
 GIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
+CONTAINER_ID_PATTERN = re.compile(r"[0-9a-f]{64}")
 SOURCE_CASE_ID_PATTERN = re.compile(r"[A-Z0-9]+(?:-[A-Z0-9]+)*")
 RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 SMOKE_MANIFEST_FIELDS = {"schema_version", "cases"}
@@ -1636,8 +1637,18 @@ def _validate_gpu_target(
         raise ValueError(f"{context}.target.physical_gpu does not match inventory")
     if target.get("process_name") != instance.process_name:
         raise ValueError(f"{context}.target.process_name does not match inventory")
-    if "container" in target and target["container"] != instance.service_name:
+    target_container = _require_string(
+        target.get("container"), f"{context}.target.container"
+    )
+    if target_container == instance.service_name:
+        return
+    if CONTAINER_ID_PATTERN.fullmatch(target_container) is None:
         raise ValueError(f"{context}.target.container does not match inventory")
+    if "container" not in payload and payload.get("status") == "FAIL":
+        return
+    nested = _require_object(payload.get("container"), f"{context}.container")
+    if nested.get("id") != target_container:
+        raise ValueError(f"{context}.target.container does not match container.id")
 
 
 def _validate_container(
@@ -1648,9 +1659,12 @@ def _validate_container(
     container = _require_object(value, context)
     if container.get("instance_id") != instance.instance_id:
         raise ValueError(f"{context}.instance_id does not match inventory")
-    if container.get("name") != instance.service_name:
-        raise ValueError(f"{context}.name does not match inventory")
-    _require_string(container.get("id"), f"{context}.id")
+    container_id = _require_string(container.get("id"), f"{context}.id")
+    if CONTAINER_ID_PATTERN.fullmatch(container_id) is None:
+        raise ValueError(f"{context}.id must be a 64-character lowercase container ID")
+    container_name = _require_string(container.get("name"), f"{context}.name")
+    if container_name not in {instance.service_name, container_id}:
+        raise ValueError(f"{context}.name does not match container id or inventory")
     if "init_host_pid" in container:
         pid = _require_nonnegative_int(
             container["init_host_pid"], f"{context}.init_host_pid"
@@ -1835,6 +1849,17 @@ def validate_gpu_pair(
                 instance,
                 f"{context}.synchronous_samples",
             )
+
+    running_target = _require_object(
+        running.get("target"), f"{instance.instance_id}.running.target"
+    )
+    stopped_target = _require_object(
+        stopped.get("target"), f"{instance.instance_id}.stopped.target"
+    )
+    if stopped_target["container"] != running_target["container"]:
+        raise ValueError(
+            f"{instance.instance_id}.stopped target.container does not match running"
+        )
 
     running_pids: set[int] = set()
     if "synchronous_samples" in running:

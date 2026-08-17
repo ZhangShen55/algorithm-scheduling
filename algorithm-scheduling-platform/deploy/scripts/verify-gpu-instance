@@ -369,7 +369,7 @@ def _framework_probe_argv(process_name: str) -> tuple[str, list[str]]:
             "print(json.dumps({'framework_gpu_available':"
             "fastdeploy.is_built_with_gpu()}))"
         )
-        return "fastdeploy", ["python", "-c", source]
+        return "fastdeploy", ["python3", "-c", source]
     raise VerificationError(f"未为算子 {process_name} 定义受控 GPU 框架探针")
 
 

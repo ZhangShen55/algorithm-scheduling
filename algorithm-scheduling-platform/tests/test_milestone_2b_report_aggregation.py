@@ -280,8 +280,11 @@ class ReleaseTree:
             assert isinstance(physical_gpu, int)
             assert isinstance(process_name, str)
             host_pid = 20_000 + index
+            container_id = hashlib.sha256(
+                f"container:{instance_id}".encode()
+            ).hexdigest()
             container = {
-                "id": f"container-{instance_id}",
+                "id": container_id,
                 "name": instance["service_name"],
                 "instance_id": instance_id,
                 "init_host_pid": 10_000 + index,
@@ -3116,6 +3119,153 @@ def test_gpu_pair_rejects_core_contract_drift(
     _set_nested(target, path, value)
 
     with pytest.raises(ValueError, match=message):
+        _validate_gpu_pair(release_tree, running, stopped)
+
+
+def test_gpu_pair_accepts_full_container_id_used_by_evidence_collector(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_all_gpu_pairs()
+    running = release_tree.read_json("gpu-instances/asr-offline-gpu0.json")
+    stopped = release_tree.read_json("recovery/asr-offline-gpu0-stopped.json")
+    container_id = "c" * 64
+    for payload in (running, stopped):
+        payload["target"]["container"] = container_id
+        payload["container"]["id"] = container_id
+        payload["container"]["name"] = container_id
+
+    _validate_gpu_pair(release_tree, running, stopped)
+
+
+def test_gpu_fail_without_nested_container_accepts_full_container_id(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_all_gpu_pairs()
+    running = release_tree.read_json("gpu-instances/asr-offline-gpu0.json")
+    stopped = release_tree.read_json("recovery/asr-offline-gpu0-stopped.json")
+    container_id = "d" * 64
+    for payload in (running, stopped):
+        payload["status"] = "FAIL"
+        payload["reason"] = "runtime evidence unavailable"
+        payload["target"]["container"] = container_id
+        for field in (
+            "release_sha",
+            "container",
+            "gpu",
+            "activity",
+            "synchronous_samples",
+            "prior_cuda_pids",
+            "remaining_cuda_pids",
+        ):
+            payload.pop(field, None)
+
+    _validate_gpu_pair(release_tree, running, stopped)
+
+
+def test_gpu_pair_rejects_noncanonical_nested_container_id(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_all_gpu_pairs()
+    running = release_tree.read_json("gpu-instances/asr-offline-gpu0.json")
+    stopped = release_tree.read_json("recovery/asr-offline-gpu0-stopped.json")
+    for payload in (running, stopped):
+        payload["container"]["id"] = "arbitrary-container-id"
+
+    with pytest.raises(ValueError, match="container.*id"):
+        _validate_gpu_pair(release_tree, running, stopped)
+
+
+def test_gpu_pair_accepts_service_name_target_with_full_nested_container_id(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_all_gpu_pairs()
+    running = release_tree.read_json("gpu-instances/asr-offline-gpu0.json")
+    stopped = release_tree.read_json("recovery/asr-offline-gpu0-stopped.json")
+
+    _validate_gpu_pair(release_tree, running, stopped)
+
+
+def test_gpu_pair_rejects_target_container_id_mismatch(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_all_gpu_pairs()
+    running = release_tree.read_json("gpu-instances/asr-offline-gpu0.json")
+    stopped = release_tree.read_json("recovery/asr-offline-gpu0-stopped.json")
+    running["target"]["container"] = "e" * 64
+
+    with pytest.raises(ValueError, match="target.container.*container.id"):
+        _validate_gpu_pair(release_tree, running, stopped)
+
+
+def test_gpu_pair_rejects_container_name_unrelated_to_id_or_service(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_all_gpu_pairs()
+    running = release_tree.read_json("gpu-instances/asr-offline-gpu0.json")
+    stopped = release_tree.read_json("recovery/asr-offline-gpu0-stopped.json")
+    for payload in (running, stopped):
+        payload["container"]["name"] = "f" * 64
+
+    with pytest.raises(ValueError, match="container.name"):
+        _validate_gpu_pair(release_tree, running, stopped)
+
+
+@pytest.mark.parametrize("target_container", ("arbitrary-container", "A" * 64))
+def test_gpu_fail_without_nested_container_rejects_noncanonical_target(
+    release_tree: ReleaseTree,
+    target_container: str,
+) -> None:
+    release_tree.write_all_gpu_pairs()
+    running = release_tree.read_json("gpu-instances/asr-offline-gpu0.json")
+    stopped = release_tree.read_json("recovery/asr-offline-gpu0-stopped.json")
+    running["status"] = "FAIL"
+    running["reason"] = "runtime evidence unavailable"
+    running["target"]["container"] = target_container
+    running.pop("container")
+
+    with pytest.raises(ValueError, match="target.container"):
+        _validate_gpu_pair(release_tree, running, stopped)
+
+
+def test_gpu_fail_without_nested_container_requires_target_container(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_all_gpu_pairs()
+    running = release_tree.read_json("gpu-instances/asr-offline-gpu0.json")
+    stopped = release_tree.read_json("recovery/asr-offline-gpu0-stopped.json")
+    running["status"] = "FAIL"
+    running["reason"] = "runtime evidence unavailable"
+    stopped["status"] = "FAIL"
+    stopped["reason"] = "runtime evidence unavailable"
+    running["target"].pop("container")
+    running.pop("container")
+
+    with pytest.raises(ValueError, match="target.container"):
+        _validate_gpu_pair(release_tree, running, stopped)
+
+
+def test_gpu_fail_pair_rejects_different_full_target_container_ids(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_all_gpu_pairs()
+    running = release_tree.read_json("gpu-instances/asr-offline-gpu0.json")
+    stopped = release_tree.read_json("recovery/asr-offline-gpu0-stopped.json")
+    for payload, container_id in ((running, "a" * 64), (stopped, "b" * 64)):
+        payload["status"] = "FAIL"
+        payload["reason"] = "runtime evidence unavailable"
+        payload["target"]["container"] = container_id
+        for field in (
+            "release_sha",
+            "container",
+            "gpu",
+            "activity",
+            "synchronous_samples",
+            "prior_cuda_pids",
+            "remaining_cuda_pids",
+        ):
+            payload.pop(field, None)
+
+    with pytest.raises(ValueError, match="target.container.*running"):
         _validate_gpu_pair(release_tree, running, stopped)
 
 
