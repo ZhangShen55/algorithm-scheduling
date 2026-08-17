@@ -1,5 +1,41 @@
 # Change Ledger
 
+## 2026-08-17 - 里程碑 2B 三卡现场验收与失败报告固化
+
+- 执行版本：目标服务器以 release `v1.0_260812` 和部署提交
+  `7efac20cf980ee64ea78fe297af6dfdfb2df5b28` 完成阶段 1-6。证据根目录为
+  `/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/reports/milestone-2b/releases/v1.0_260812/7efac20cf980ee64ea78fe297af6dfdfb2df5b28`。
+- 部署与注册：四个平台服务、PostgreSQL、Kafka、Redis 和 MongoDB 全部健康；
+  24 个算子实例全部完成启动、注册、首次心跳、`ONLINE` 和 `model_ready=true`。
+  验收后只停止本轮 24 个算子容器，原有容器按快照恢复；八个平台/基础设施
+  容器继续 healthy，GPU 已完全释放，根分区剩余约 164 GB。
+- 真实推理：18 个 GPU 实例均进入逐实例验证流程，15 个通过；FaceRec
+  gpu0/gpu1/gpu2 因验收工具在只提供 `/usr/bin/python3` 的镜像内调用 `python`
+  而失败。同一镜像改用 `python3` 直接执行 FastDeploy 探针返回
+  `framework_gpu_available=true`，因此失败定位为 Harness 解释器合同错误，
+  不是 FaceRec 推理、GPU、注册或容量故障。旧 release 的三条运行 FAIL 和三条
+  恢复 FAIL 原样保留。
+- Smoke 结果：PPT Slice 三实例和 Text Analysis 三实例的 CPU Smoke 为
+  `6/6` 通过；ASR Offline、ASR Online、OCR、VBas、FaceRec、ScreenDet、PPT Slice
+  和 Text Analysis 八类 full Smoke 为 `8/8` 通过。PPT 使用约 55 分钟、
+  454 MB 的真实 P 视频，四次均完成切片、终态回调和 manifest 对账。
+  FaceRec full Smoke 完成人物建立、跨实例识别、查询、清理和不保存原图验证。
+- 报告工具：`349f4a7673e1cc203661a11c422f30b4408a1073` 修正 FaceRec 探针和
+  aggregator 对完整容器 ID 的证据合同；
+  `22a2d55f4523785e62cb384fb1a0ee3a6077d25e` 进一步对齐 renderer。两个工具提交
+  都晚于部署 SHA，只读处理旧 release 证据，没有改写历史 FAIL。
+- 最终结论：权威 cases 共 332 条，83 通过、6 失败、243 条为“未执行及原因”；
+  renderer 返回码为 `3`，`overall_status=失败`。`summary/cases.json`、`summary/report.json` 和
+  `summary/report.md` 的 SHA-256 分别为 `4e75f1a657096adba74c9766f2ce24e3d1e69224c3ed1fc827e57e1706a9a877`、
+  `8670fdc434e7e8ce19be1728743769928d7c8b699c1b1ce0791445b996b79fe7`、
+  `0aa03b2a524a38fe78e22e96ef2dab64343c076b343ae689154da2672af0d8ca`。本轮没有 OOM、
+  NVIDIA Xid、kernel OOM 或磁盘不足。
+- 完成边界：本轮已证明三卡部署、24 实例注册、15 个非 FaceRec GPU 实例的
+  运行证据及八类业务直接 Smoke；没有完成 217 条反例和 26 条压力用例，
+  也没有贯通 Kafka 驱动的 PPT/ASR/视觉/在线完整业务泳道。后续必须在新 release SHA
+  下重跑 FaceRec 三实例 GPU 证据并执行尚未执行的反例/压力用例，才能重新评估
+  里程碑 2B 是否通过。
+
 ## 2026-08-17 - 跨 SHA 算子账本来源只读回溯
 
 - 根因：维护 authority 与算子 baseline/new 的生命周期不同。立即前驱可能只有合法的

@@ -1091,12 +1091,37 @@ esac
 验收未通过，其他返回码表示校验或发布错误。生成报告不等于验收通过。终端只输出
 `overall_status` 和返回码说明，不打印证据原文；证据摘要只保存在报告索引中。
 
-## 当前未执行声明
+## 2026-08-17 现场执行结果
 
-本地静态、单元和部署合同测试已执行。目标 x86_64 服务器已取得旧 SHA
-`e65dd576b3b53b73a874bb131449ef031423057b` 的模型资产校验和八算子镜像构建证据；
-该历史证据不能代替本轮最终发布 SHA 的验收。最终 SHA 对应的四平台/八算子镜像
-重建、基础设施与平台运行状态、runtime attestation、24 个算子实例同时 ONLINE、
-18 个 GPU 实例真实性、八类真实模型/课程媒体 Smoke、反例、压力、恢复和完整
-离线/在线泳道均待本轮现场证据确认。后续报告必须继续逐项给出真实证据或中文
-未执行原因。
+本次以 release `v1.0_260812` 和部署 SHA
+`7efac20cf980ee64ea78fe297af6dfdfb2df5b28` 完成阶段 1-6。先前“当前未执行声明”中
+关于四平台、24 实例和八类 Smoke 尚未执行的描述，已由下列现场事实取代：
+
+- 四个平台服务和 PostgreSQL、Kafka、Redis、MongoDB 全部 healthy。
+- 24 个算子实例全部完成注册、首次心跳、`ONLINE` 和 `model_ready=true`。
+- 18 个 GPU 实例均执行验证流程，15 个通过；FaceRec 三实例因 Harness
+  默认调用镜像中不存在的 `python` 而失败。`python3` 直接 FastDeploy 探针确认
+  `framework_gpu_available=true`，但旧 release 中的真实 FAIL 不修改。
+- GPU 实例停止、CUDA PID 残留校验、重启和注册恢复动作全部执行。
+- PPT Slice/Text Analysis 六个 CPU 实例 Smoke `6/6` 通过，八类 full Smoke `8/8`
+  通过。PPT 使用约 55 分钟、454 MB 的真实 P 视频；FaceRec 验证了三实例共享
+  MongoDB 的人物建立、识别、查询和清理。
+- 验收后本轮 24 个算子容器已停止，原容器已恢复；八个平台/基础设施容器
+  保持 healthy，GPU 无残留进程。本轮无 OOM、NVIDIA Xid、kernel OOM 或磁盘不足。
+
+报告生成保留了部署证据和工具版本的区别：
+
+- aggregator 工具使用后续修复提交
+  `349f4a7673e1cc203661a11c422f30b4408a1073` 生成 write-once `summary/cases.json`。
+- renderer 使用包含完整容器 ID 合同修复的提交
+  `22a2d55f4523785e62cb384fb1a0ee3a6077d25e` 生成 `summary/report.json` 和
+  `summary/report.md`。
+- 三个报告文件的 SHA-256 分别为
+  `4e75f1a657096adba74c9766f2ce24e3d1e69224c3ed1fc827e57e1706a9a877`、
+  `8670fdc434e7e8ce19be1728743769928d7c8b699c1b1ce0791445b996b79fe7` 和
+  `0aa03b2a524a38fe78e22e96ef2dab64343c076b343ae689154da2672af0d8ca`。
+
+最终报告共 332 条用例：83 通过、6 失败、243 条“未执行及原因”。六条失败是
+FaceRec 三条 GPU runtime 及对应的三条 recovery；217 条反例和 26 条压力用例仍未执行。
+renderer 按预期返回 `3`，`overall_status=失败`。因此本次已完成部署与真实算子
+直接 Smoke，但里程碑 2B 整体验收未通过；完整业务泳道也不在本次通过范围内。
