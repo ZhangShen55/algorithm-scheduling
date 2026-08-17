@@ -817,12 +817,44 @@ runtime preflight，避免容器刚进入 running、应用仍在启动时产生�
 shell；输出只能写入当前 release 的 `gpu-instances/`，不能覆盖已有证据：
 
 ```bash
+resolve_operator_container_id() {
+  local service_name="$1"
+  local -a container_ids=()
+  local container_id actual_id compose_project compose_service
+  mapfile -t container_ids < <(
+    docker compose -f deploy/docker-compose.operators.yml \
+      ps --all --no-trunc -q "$service_name"
+  )
+  if [[ "${#container_ids[@]}" -ne 1 ]]; then
+    echo "权威 Compose 中 ${service_name} 必须精确对应一个容器" >&2
+    return 1
+  fi
+  container_id="${container_ids[0]}"
+  actual_id="$(docker inspect -f '{{.Id}}' "$container_id")" || return 1
+  compose_project="$(
+    docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$container_id"
+  )" || return 1
+  compose_service="$(
+    docker inspect -f '{{ index .Config.Labels "com.docker.compose.service" }}' "$container_id"
+  )" || return 1
+  if [[ ! "$container_id" =~ ^[0-9a-f]{64}$ || "$actual_id" != "$container_id" || \
+        "$compose_project" != "algorithm-operators" || "$compose_service" != "$service_name" ]]; then
+    echo "算子 Compose 容器身份不匹配: ${service_name}" >&2
+    return 1
+  fi
+  printf '%s\n' "$container_id"
+}
+
+service_name=asr-offline-gpu0
+instance_id=asr-offline-gpu0
+container_id="$(resolve_operator_container_id "$service_name")"
+
 cat >/tmp/asr-offline-gpu0-trigger.json <<JSON
-["/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/scripts/run-operator-smoke", "--release-tag", "${RELEASE_TAG}", "--git-sha", "${EXPECTED_GIT_SHA}", "--reports-root", "${REPORT_ROOT}", "--fixture-manifest", "/root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/manifest.json", "--external-fixture-root", "/root/workspace/.algorithm-scheduling-fixtures/v1.0_260812", "--fixture-target-root", "/data/course/_harness/fixtures", "--result-root", "/data/result/_harness", "--endpoints-json", "/root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/endpoints.json", "--operator", "asr_offline", "--instance", "asr-offline-gpu0", "--run-id", "auto", "--repeat", "1", "--hold-seconds", "30"]
+["/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/scripts/run-operator-smoke", "--release-tag", "${RELEASE_TAG}", "--git-sha", "${EXPECTED_GIT_SHA}", "--reports-root", "${REPORT_ROOT}", "--fixture-manifest", "/root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/manifest.json", "--external-fixture-root", "/root/workspace/.algorithm-scheduling-fixtures/v1.0_260812", "--fixture-target-root", "/data/course/_harness/fixtures", "--result-root", "/data/result", "--endpoints-json", "/root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/endpoints.json", "--operator", "asr_offline", "--instance", "asr-offline-gpu0", "--run-id", "auto", "--repeat", "1", "--hold-seconds", "30"]
 JSON
 
 deploy/scripts/verify-gpu-instance \
-  --container asr-offline-gpu0 --instance-id asr-offline-gpu0 \
+  --container "$container_id" --instance-id "$instance_id" \
   --physical-gpu 0 --process-name asr_offline \
   --trigger-file /tmp/asr-offline-gpu0-trigger.json \
   --output "$RELEASE_ROOT/gpu-instances/asr-offline-gpu0.json"
@@ -836,17 +868,17 @@ deploy/scripts/verify-gpu-instance \
 再验证下一个实例。示例的停止后半程为：
 
 ```bash
-docker stop asr-offline-gpu0
+docker stop "$container_id"
 deploy/scripts/verify-gpu-instance \
-  --container asr-offline-gpu0 --instance-id asr-offline-gpu0 \
+  --container "$container_id" --instance-id "$instance_id" \
   --physical-gpu 0 --process-name asr_offline --assert-stopped \
   --evidence "$RELEASE_ROOT/gpu-instances/asr-offline-gpu0.json" \
   --output "$RELEASE_ROOT/recovery/asr-offline-gpu0-stopped.json"
-docker restart asr-offline-gpu0
+docker restart "$container_id"
 deploy/scripts/verify-operator-registration \
   --control-url http://127.0.0.1:18100 \
   --release-tag "$RELEASE_TAG" --git-sha "$EXPECTED_GIT_SHA" \
-  --reports-root "$REPORT_ROOT" --instance asr-offline-gpu0
+  --reports-root "$REPORT_ROOT" --instance "$instance_id"
 ```
 
 不得把已经取得停止证据的实例留在停止状态。每次恢复只使用
@@ -903,7 +935,7 @@ do
     --fixture-manifest /root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/manifest.json \
     --external-fixture-root /root/workspace/.algorithm-scheduling-fixtures/v1.0_260812 \
     --fixture-target-root /data/course/_harness/fixtures \
-    --result-root /data/result/_harness \
+    --result-root /data/result \
     --callback-listen-host "$ALGORITHM_PLATFORM_GATEWAY" \
     --callback-advertise-base-url "http://${ALGORITHM_PLATFORM_GATEWAY}:19090" \
     --endpoints-json /root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/endpoints.json \
@@ -915,9 +947,10 @@ done
 注册报告确认它们同时 `ONLINE` 且 `model_ready=true`：
 
 ```bash
-for face_instance in facerec-gpu0 facerec-gpu1 facerec-gpu2
+for service_name in facerec-gpu0 facerec-gpu1 facerec-gpu2
 do
-  test "$(docker inspect -f '{{.State.Running}}' "$face_instance")" = true
+  container_id="$(resolve_operator_container_id "$service_name")"
+  test "$(docker inspect -f '{{.State.Running}}' "$container_id")" = true
 done
 deploy/scripts/verify-operator-registration \
   --control-url http://127.0.0.1:18100 \
@@ -936,7 +969,7 @@ deploy/scripts/run-operator-smoke \
   --fixture-manifest /root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/manifest.json \
   --external-fixture-root /root/workspace/.algorithm-scheduling-fixtures/v1.0_260812 \
   --fixture-target-root /data/course/_harness/fixtures \
-  --result-root /data/result/_harness \
+  --result-root /data/result \
   --callback-listen-host "$ALGORITHM_PLATFORM_GATEWAY" \
   --callback-advertise-base-url "http://${ALGORITHM_PLATFORM_GATEWAY}:19090" \
   --endpoints-json /root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/endpoints-full.json

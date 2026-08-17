@@ -910,7 +910,7 @@ def test_gpu_acceptance_docs_contain_complete_executable_commands() -> None:
         "com.docker.compose.project", 1
     )[1].split("service_name=", 1)[0]
     assert scenario.count("deploy/scripts/preflight operators --profile gpu0") == 1
-    assert "--instance asr-offline-gpu0" in scenario
+    assert '--instance "$instance_id"' in scenario
     assert scenario.count("deploy/scripts/verify-operator-registration") == 2
     full_endpoints_arg = (
         "--endpoints-json "
@@ -943,7 +943,32 @@ def test_gpu_acceptance_docs_contain_complete_executable_commands() -> None:
     ):
         option_index = trigger_argv.index(option)
         assert trigger_argv[option_index + 1] == value
-    assert "--instance-id asr-offline-gpu0" in scenario
+    assert '--instance-id "$instance_id"' in scenario
+
+
+def test_stage45_docs_resolve_compose_container_ids_and_use_the_real_result_root() -> None:
+    readme = (DEPLOY / "README.md").read_text(encoding="utf-8")
+    scenario = (
+        PLATFORM_ROOT / "harness/scenarios/milestone-2b-deploy.md"
+    ).read_text(encoding="utf-8")
+
+    for document in (readme, scenario):
+        assert 'mapfile -t container_ids < <(' in document
+        assert "docker compose -f deploy/docker-compose.operators.yml" in document
+        assert 'ps --all --no-trunc -q "$service_name"' in document
+        assert '[[ "${#container_ids[@]}" -ne 1 ]]' in document
+        assert '--container "$container_id"' in document
+        assert 'docker stop "$container_id"' in document
+        assert 'docker restart "$container_id"' in document
+        assert "/data/result/_harness" not in document
+        assert "--container asr-offline-gpu0" not in document
+        assert "docker stop asr-offline-gpu0" not in document
+        assert "docker restart asr-offline-gpu0" not in document
+
+    assert '"--result-root", "/data/result"' in readme
+    assert '"--result-root", "/data/result"' in scenario
+    assert "--result-root /data/result" in scenario
+    assert "docker inspect -f '{{.State.Running}}' \"$face_instance\"" not in scenario
 
 
 def test_canonical_scenario_uses_atomic_stop_only_operator_ledger() -> None:
@@ -2796,6 +2821,7 @@ def _smoke_handler(
     cleanup_leaves_person: bool = False,
     vbas_failed: bool = False,
     screen_failed: bool = False,
+    ppt_layout: str = "valid",
 ) -> Any:
     state: dict[str, Any] = {"created": False, "number": None}
 
@@ -2897,7 +2923,10 @@ def _smoke_handler(
             return 200, {"model": "fake", "result": {"overview": {"full_overview": "概览"}}}
         if path == "/LocalVideoPPTSliceTasks/v1.0.0":
             manifest = tmp_path / "result" / body["task_id"] / "ppt" / "manifest.json"
-            image = manifest.parent / "slices" / "ppt-0001-f17-t16s.jpg"
+            if ppt_layout == "wrong_manifest":
+                manifest = manifest.parent / "unexpected" / "manifest.json"
+            image_dir = "unexpected" if ppt_layout == "wrong_image" else "slices"
+            image = manifest.parent / image_dir / "ppt-0001-f17-t16s.jpg"
             image.parent.mkdir(parents=True, exist_ok=True)
             image.write_bytes(b"jpeg")
             manifest.write_text(
@@ -3503,6 +3532,87 @@ def test_ppt_callback_url_is_not_container_loopback_and_manifest_uses_images(
         completed = _run_smoke(tmp_path, http_url, ws_url, manifest, cases="ppt_slice")
     assert completed.returncode == 0, completed.stderr
     assert callback_urls and callback_urls[0].startswith("http://")
+
+
+def test_ppt_smoke_isolates_each_attempt_and_records_the_task_id(tmp_path: Path) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    submitted_task_ids: list[str] = []
+    handler = _smoke_handler(tmp_path)
+
+    def inspect(path: str, headers: Any, body: bytes) -> tuple[int, Any]:
+        if path == "/LocalVideoPPTSliceTasks/v1.0.0":
+            submitted_task_ids.append(json.loads(body)["task_id"])
+        return handler(path, headers, body)
+
+    with _WebSocketServer() as ws_url, _Server({}, inspect) as http_url:
+        completed = _run_smoke(
+            tmp_path,
+            http_url,
+            ws_url,
+            manifest,
+            cases="ppt_slice",
+            extra_arguments=("--repeat", "2"),
+        )
+
+    assert completed.returncode == 0, completed.stderr
+    assert len(submitted_task_ids) == 2
+    assert len(set(submitted_task_ids)) == 2
+    assert all(re.fullmatch(r"harness-ppt-[0-9a-f]{32}", value) for value in submitted_task_ids)
+    evidence = json.loads((_release(tmp_path) / "smoke/ppt_slice.json").read_text(encoding="utf-8"))
+    attempts = evidence["summary"]["attempts"]
+    assert [attempt["task_id"] for attempt in attempts] == submitted_task_ids
+    assert evidence["summary"]["task_id"] == submitted_task_ids[-1]
+    for task_id in submitted_task_ids:
+        assert (tmp_path / "result" / task_id / "ppt" / "manifest.json").is_file()
+
+
+@pytest.mark.parametrize(
+    ("ppt_layout", "expected_reason"),
+    (
+        ("wrong_manifest", "PPT manifest 不在当前 Smoke 任务的精确位置"),
+        ("wrong_image", "PPT 切片图片越出当前 Smoke 任务的 slices 目录"),
+    ),
+)
+def test_ppt_smoke_rejects_artifacts_outside_the_current_task_scope(
+    tmp_path: Path,
+    ppt_layout: str,
+    expected_reason: str,
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    with _WebSocketServer() as ws_url, _Server(
+        {}, _smoke_handler(tmp_path, ppt_layout=ppt_layout)
+    ) as http_url:
+        completed = _run_smoke(tmp_path, http_url, ws_url, manifest, cases="ppt_slice")
+
+    assert completed.returncode != 0
+    assert expected_reason in completed.stderr
+
+
+def test_text_analysis_smoke_uses_the_current_course_overview_contract(
+    tmp_path: Path,
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    overview_requests: list[dict[str, Any]] = []
+    handler = _smoke_handler(tmp_path)
+
+    def inspect(path: str, headers: Any, body: bytes) -> tuple[int, Any]:
+        if path == "/v1/course_overviews":
+            overview_requests.append(json.loads(body))
+        return handler(path, headers, body)
+
+    with _WebSocketServer() as ws_url, _Server({}, inspect) as http_url:
+        completed = _run_smoke(
+            tmp_path,
+            http_url,
+            ws_url,
+            manifest,
+            cases="text_analysis",
+        )
+
+    assert completed.returncode == 0, completed.stderr
+    assert overview_requests == [
+        {"textSegments": [{"text": "函数课程", "bg": 0, "ed": 10}]}
+    ]
 
 
 def test_facerec_requires_three_distinct_instances_and_exact_created_match(

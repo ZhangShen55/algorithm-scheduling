@@ -266,13 +266,45 @@ smoke request is still running. The trigger file is a JSON argv array and is exe
 without a shell; command arguments are not copied into the report:
 
 ```bash
+resolve_operator_container_id() {
+  local service_name="$1"
+  local -a container_ids=()
+  local container_id actual_id compose_project compose_service
+  mapfile -t container_ids < <(
+    docker compose -f deploy/docker-compose.operators.yml \
+      ps --all --no-trunc -q "$service_name"
+  )
+  if [[ "${#container_ids[@]}" -ne 1 ]]; then
+    echo "expected exactly one Compose container for ${service_name}" >&2
+    return 1
+  fi
+  container_id="${container_ids[0]}"
+  actual_id="$(docker inspect -f '{{.Id}}' "$container_id")" || return 1
+  compose_project="$(
+    docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$container_id"
+  )" || return 1
+  compose_service="$(
+    docker inspect -f '{{ index .Config.Labels "com.docker.compose.service" }}' "$container_id"
+  )" || return 1
+  if [[ ! "$container_id" =~ ^[0-9a-f]{64}$ || "$actual_id" != "$container_id" || \
+        "$compose_project" != "algorithm-operators" || "$compose_service" != "$service_name" ]]; then
+    echo "Compose container identity mismatch for ${service_name}" >&2
+    return 1
+  fi
+  printf '%s\n' "$container_id"
+}
+
+service_name=asr-offline-gpu0
+instance_id=asr-offline-gpu0
+container_id="$(resolve_operator_container_id "$service_name")"
+
 cat >/tmp/asr-offline-gpu0-trigger.json <<JSON
-["/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/scripts/run-operator-smoke", "--release-tag", "${RELEASE_TAG}", "--git-sha", "${RELEASE_GIT_SHA}", "--reports-root", "/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/reports", "--fixture-manifest", "/root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/manifest.json", "--external-fixture-root", "/root/workspace/.algorithm-scheduling-fixtures/v1.0_260812", "--fixture-target-root", "/data/course/_harness/fixtures", "--result-root", "/data/result/_harness", "--endpoints-json", "/root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/endpoints.json", "--operator", "asr_offline", "--instance", "asr-offline-gpu0", "--run-id", "auto", "--repeat", "1", "--hold-seconds", "30"]
+["/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/scripts/run-operator-smoke", "--release-tag", "${RELEASE_TAG}", "--git-sha", "${RELEASE_GIT_SHA}", "--reports-root", "/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/reports", "--fixture-manifest", "/root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/manifest.json", "--external-fixture-root", "/root/workspace/.algorithm-scheduling-fixtures/v1.0_260812", "--fixture-target-root", "/data/course/_harness/fixtures", "--result-root", "/data/result", "--endpoints-json", "/root/workspace/.algorithm-scheduling-fixtures/v1.0_260812/endpoints.json", "--operator", "asr_offline", "--instance", "asr-offline-gpu0", "--run-id", "auto", "--repeat", "1", "--hold-seconds", "30"]
 JSON
 
 deploy/scripts/verify-gpu-instance \
-  --container asr-offline-gpu0 \
-  --instance-id asr-offline-gpu0 \
+  --container "$container_id" \
+  --instance-id "$instance_id" \
   --physical-gpu 0 \
   --process-name asr_offline \
   --trigger-file /tmp/asr-offline-gpu0-trigger.json \
@@ -285,20 +317,20 @@ full-container-ID cgroup mapping and a matching process name. After stopping the
 container, run the complete stopped check:
 
 ```bash
-docker stop asr-offline-gpu0
+docker stop "$container_id"
 deploy/scripts/verify-gpu-instance \
-  --container asr-offline-gpu0 \
-  --instance-id asr-offline-gpu0 \
+  --container "$container_id" \
+  --instance-id "$instance_id" \
   --physical-gpu 0 \
   --process-name asr_offline \
   --assert-stopped \
   --evidence "deploy/reports/milestone-2b/releases/${RELEASE_TAG}/${RELEASE_GIT_SHA}/gpu-instances/asr-offline-gpu0.json" \
   --output "deploy/reports/milestone-2b/releases/${RELEASE_TAG}/${RELEASE_GIT_SHA}/recovery/asr-offline-gpu0-stopped.json"
-docker restart asr-offline-gpu0
+docker restart "$container_id"
 deploy/scripts/verify-operator-registration \
   --control-url http://127.0.0.1:18100 \
   --release-tag "$RELEASE_TAG" --git-sha "$RELEASE_GIT_SHA" \
-  --reports-root "$PWD/deploy/reports" --instance asr-offline-gpu0
+  --reports-root "$PWD/deploy/reports" --instance "$instance_id"
 ```
 
 每个 GPU 实例都必须执行同一顺序：真实推理采样、`docker stop`、立即

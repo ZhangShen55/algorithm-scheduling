@@ -904,7 +904,8 @@ def smoke_ppt(
     result_root: Path,
     activity: ActivityEmitter | None = None,
 ) -> dict[str, Any]:
-    operator_task_id = "smoke-ppt-" + uuid.uuid4().hex
+    task_id = "harness-ppt-" + uuid.uuid4().hex
+    operator_task_id = "harness-ppt-operator-" + uuid.uuid4().hex
     with CallbackCapture(
         listen_host=callback_listen_host,
         advertise_base_url=callback_advertise_base_url,
@@ -914,7 +915,7 @@ def smoke_ppt(
                 endpoint.rstrip("/") + "/LocalVideoPPTSliceTasks/v1.0.0",
                 json={
                     "video_path": str(fixtures["ppt_video"]),
-                    "task_id": "smoke-ppt",
+                    "task_id": task_id,
                     "operator_task_id": operator_task_id,
                     "result_callback_uri": callback.url,
                     "threshold": 0.98,
@@ -924,38 +925,59 @@ def smoke_ppt(
             accepted_response,
             "PPT Slice",
         )
-        if accepted.get("status") != 50:
+        if (
+            accepted.get("status") != 50
+            or accepted.get("task_id") != task_id
+            or accepted.get("operator_task_id") != operator_task_id
+        ):
             raise RuntimeError("PPT Slice 未受理任务")
         if not callback.event.wait(timeout):
             raise RuntimeError("PPT Slice status 50 后未收到终态回调")
         terminal = callback.payload or {}
-        if terminal.get("status") != 60 or terminal.get("operator_task_id") != operator_task_id:
+        if (
+            terminal.get("status") != 60
+            or terminal.get("task_id") != task_id
+            or terminal.get("operator_task_id") != operator_task_id
+        ):
             raise RuntimeError("PPT Slice 终态回调不是成功终态")
         manifest = Path(str(terminal.get("manifest_path", "")))
-        if not inside(manifest, result_root):
-            raise RuntimeError("PPT manifest 越出受控 result root")
+        expected_manifest = result_root / task_id / "ppt" / "manifest.json"
+        if Path(os.path.abspath(manifest)) != Path(os.path.abspath(expected_manifest)):
+            raise RuntimeError("PPT manifest 不在当前 Smoke 任务的精确位置")
         reject_symlink_chain(manifest, "PPT manifest")
         payload = json.loads(manifest.read_text(encoding="utf-8"))
         count = terminal.get("count")
         images = payload.get("images") if isinstance(payload, dict) else None
         if (
-            not isinstance(count, int)
+            not isinstance(payload, dict)
+            or payload.get("task_id") != task_id
+            or payload.get("operator_task_id") != operator_task_id
+            or not isinstance(count, int)
             or count < 0
             or not isinstance(images, list)
             or len(images) != count
         ):
             raise RuntimeError("PPT manifest images 与终态 count 不一致")
+        slices_root = expected_manifest.parent / "slices"
         for item in images:
+            image_path = Path(str(item.get("path", ""))) if isinstance(item, dict) else Path()
             if (
                 not isinstance(item, dict)
                 or set(item) != {"frame_seq", "snap_time", "path"}
                 or not isinstance(item["frame_seq"], int)
                 or not isinstance(item["snap_time"], int)
-                or not inside(Path(str(item["path"])), result_root)
-                or not Path(str(item["path"])).is_file()
+                or not inside(image_path, slices_root)
+                or not image_path.is_file()
             ):
-                raise RuntimeError("PPT manifest images 字段或图片路径不合法")
-        return {"terminal_status": 60, "slide_count": count, "manifest_verified": True}
+                raise RuntimeError("PPT 切片图片越出当前 Smoke 任务的 slices 目录")
+            reject_symlink_chain(image_path, "PPT 切片图片")
+        return {
+            "task_id": task_id,
+            "operator_task_id": operator_task_id,
+            "terminal_status": 60,
+            "slide_count": count,
+            "manifest_verified": True,
+        }
 
 
 def smoke_text(
@@ -977,7 +999,7 @@ def smoke_text(
         http.post(
             endpoint.rstrip("/") + "/v1/course_overviews",
             json={
-                "textSegments": [{"segment_text": "函数课程", "bg": 0, "ed": 10, "role": "teacher"}]
+                "textSegments": [{"text": "函数课程", "bg": 0, "ed": 10}]
             },
         ),
         "Text Analysis overview",
