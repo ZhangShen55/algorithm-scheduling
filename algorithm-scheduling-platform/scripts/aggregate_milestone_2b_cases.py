@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import fcntl
 import hashlib
 import importlib
 import json
@@ -358,15 +359,17 @@ def _read_existing_publication(
     name: str,
     *,
     expected_inode: os.stat_result | None = None,
+    expected_nlink: int = 1,
 ) -> bytes:
     try:
         named = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
     except OSError as exc:
         raise ValueError(f"failed to inspect existing publication: {name}") from exc
-    if stat.S_ISLNK(named.st_mode) or not stat.S_ISREG(named.st_mode):
-        raise ValueError(f"existing publication must be a regular file: {name}")
-    if stat.S_IMODE(named.st_mode) != 0o600:
-        raise ValueError(f"existing publication must have mode 0600: {name}")
+    _require_publication_file_metadata(
+        named,
+        f"existing publication {name}",
+        expected_nlink=expected_nlink,
+    )
     if expected_inode is not None and not _same_filesystem_object(
         named, expected_inode
     ):
@@ -378,9 +381,12 @@ def _read_existing_publication(
         raise ValueError(f"failed to open existing publication: {name}") from exc
     try:
         opened = os.fstat(descriptor)
-        if not stat.S_ISREG(opened.st_mode) or not _same_filesystem_object(
-            named, opened
-        ):
+        _require_publication_file_metadata(
+            opened,
+            f"opened publication {name}",
+            expected_nlink=expected_nlink,
+        )
+        if not _same_filesystem_object(named, opened):
             raise ValueError(f"existing publication changed while opening: {name}")
         if expected_inode is not None and not _same_filesystem_object(
             opened, expected_inode
@@ -394,15 +400,19 @@ def _read_existing_publication(
             chunks.append(chunk)
         named_after = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
         opened_after = os.fstat(descriptor)
-        if (
-            stat.S_ISLNK(named_after.st_mode)
-            or not stat.S_ISREG(named_after.st_mode)
-            or stat.S_IMODE(named_after.st_mode) != 0o600
-            or not _same_filesystem_object(named_after, opened_after)
-            or (
-                expected_inode is not None
-                and not _same_filesystem_object(opened_after, expected_inode)
-            )
+        _require_publication_file_metadata(
+            named_after,
+            f"existing publication {name}",
+            expected_nlink=expected_nlink,
+        )
+        _require_publication_file_metadata(
+            opened_after,
+            f"opened publication {name}",
+            expected_nlink=expected_nlink,
+        )
+        if not _same_filesystem_object(named_after, opened_after) or (
+            expected_inode is not None
+            and not _same_filesystem_object(opened_after, expected_inode)
         ):
             raise ValueError(f"existing publication changed during read: {name}")
         return b"".join(chunks)
@@ -443,19 +453,43 @@ def _publication_name_metadata(parent_descriptor: int, name: str) -> os.stat_res
         raise ValueError(f"failed to inspect publication name: {name}") from exc
 
 
+def _require_publication_file_metadata(
+    metadata: os.stat_result,
+    context: str,
+    *,
+    expected_nlink: int,
+) -> None:
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ValueError(f"{context} must be a regular file")
+    if metadata.st_uid != os.getuid():
+        raise ValueError(f"{context} must be owned by the current UID")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise ValueError(f"{context} must have mode 0600")
+    if metadata.st_nlink != expected_nlink:
+        raise ValueError(
+            f"{context} must have exactly {expected_nlink} link(s), "
+            f"got {metadata.st_nlink}"
+        )
+
+
 def _require_temp_name_binding(
     parent_descriptor: int,
     temp_name: str,
     temp_metadata: os.stat_result,
     relative_path: Path,
 ) -> None:
+    _require_publication_file_metadata(
+        temp_metadata,
+        f"publication temp for {relative_path}",
+        expected_nlink=1,
+    )
     named_temp = _publication_name_metadata(parent_descriptor, temp_name)
-    if (
-        stat.S_ISLNK(named_temp.st_mode)
-        or not stat.S_ISREG(named_temp.st_mode)
-        or stat.S_IMODE(named_temp.st_mode) != 0o600
-        or not _same_filesystem_object(named_temp, temp_metadata)
-    ):
+    _require_publication_file_metadata(
+        named_temp,
+        f"named publication temp for {relative_path}",
+        expected_nlink=1,
+    )
+    if not _same_filesystem_object(named_temp, temp_metadata):
         raise ValueError(
             f"publication temp name changed before link: {relative_path}"
         )
@@ -466,7 +500,7 @@ def _unlink_temp_name_if_bound(
     temp_descriptor: int,
     temp_name: str,
     relative_path: Path,
-) -> None:
+) -> bool:
     opened_temp = os.fstat(temp_descriptor)
     try:
         named_temp = os.stat(
@@ -475,7 +509,7 @@ def _unlink_temp_name_if_bound(
             follow_symlinks=False,
         )
     except FileNotFoundError:
-        return
+        return True
     except OSError as exc:
         raise ValueError(
             f"failed to inspect publication temp during cleanup: {relative_path}"
@@ -483,28 +517,33 @@ def _unlink_temp_name_if_bound(
     if (
         stat.S_ISLNK(named_temp.st_mode)
         or not stat.S_ISREG(named_temp.st_mode)
+        or named_temp.st_uid != os.getuid()
         or stat.S_IMODE(named_temp.st_mode) != 0o600
         or not _same_filesystem_object(named_temp, opened_temp)
     ):
-        return
+        return False
     try:
         os.unlink(temp_name, dir_fd=parent_descriptor)
     except FileNotFoundError:
-        return
+        return True
     except OSError as exc:
         raise ValueError(
             f"failed to remove publication temp: {relative_path}"
         ) from exc
+    return True
 
 
 def _rollback_linked_publication_if_unchanged(
     parent_descriptor: int,
     final_name: str,
-    temp_metadata: os.stat_result,
+    temp_descriptor: int,
     relative_path: Path,
 ) -> None:
+    # This conditional unlink relies on every publisher honoring the parent flock.
+    # A same-UID process that bypasses that lock can still race the name lookup.
+    temp_metadata = os.fstat(temp_descriptor)
     try:
-        first_final = os.stat(
+        current_final = os.stat(
             final_name,
             dir_fd=parent_descriptor,
             follow_symlinks=False,
@@ -516,22 +555,7 @@ def _rollback_linked_publication_if_unchanged(
         raise ValueError(
             f"failed to inspect publication inode for rollback: {relative_path}"
         ) from exc
-    if not _same_filesystem_object(first_final, temp_metadata):
-        return
-    try:
-        confirmed_final = os.stat(
-            final_name,
-            dir_fd=parent_descriptor,
-            follow_symlinks=False,
-        )
-    except FileNotFoundError:
-        os.fsync(parent_descriptor)
-        return
-    except OSError as exc:
-        raise ValueError(
-            f"failed to confirm publication inode for rollback: {relative_path}"
-        ) from exc
-    if not _same_filesystem_object(confirmed_final, temp_metadata):
+    if not _same_filesystem_object(current_final, temp_metadata):
         return
     try:
         os.unlink(final_name, dir_fd=parent_descriptor)
@@ -542,6 +566,181 @@ def _rollback_linked_publication_if_unchanged(
             f"failed to roll back publication inode: {relative_path}"
         ) from exc
     os.fsync(parent_descriptor)
+
+
+def _publish_json_locked(
+    *,
+    parent_descriptor: int,
+    verify_directories: Callable[[], None],
+    final_name: str,
+    relative_path: Path,
+    payload: bytes,
+) -> None:
+    temp_descriptor, temp_name = _create_publication_temp(
+        parent_descriptor, final_name
+    )
+    link_succeeded = False
+    temp_name_cleaned = False
+    parent_synced = False
+    try:
+        offset = 0
+        while offset < len(payload):
+            written = os.write(temp_descriptor, payload[offset:])
+            if written <= 0:
+                raise ValueError(
+                    f"short write while publishing JSON: {relative_path}"
+                )
+            offset += written
+        os.fchmod(temp_descriptor, 0o600)
+        os.fsync(temp_descriptor)
+        temp_metadata = os.fstat(temp_descriptor)
+        _require_temp_name_binding(
+            parent_descriptor,
+            temp_name,
+            temp_metadata,
+            relative_path,
+        )
+        try:
+            os.link(
+                temp_name,
+                final_name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            if exc.errno != errno.EEXIST:
+                raise ValueError(
+                    f"failed to hard-link publication: {relative_path}"
+                ) from exc
+            existing = _read_existing_publication(
+                parent_descriptor,
+                final_name,
+                expected_nlink=1,
+            )
+            if existing != payload:
+                raise ValueError(
+                    "publication already exists with different bytes: "
+                    f"{relative_path}"
+                ) from exc
+        else:
+            link_succeeded = True
+            linked_temp = os.fstat(temp_descriptor)
+            _require_publication_file_metadata(
+                linked_temp,
+                f"linked publication temp for {relative_path}",
+                expected_nlink=2,
+            )
+            final_metadata = _publication_name_metadata(
+                parent_descriptor, final_name
+            )
+            _require_publication_file_metadata(
+                final_metadata,
+                f"published final for {relative_path}",
+                expected_nlink=2,
+            )
+            if not _same_filesystem_object(linked_temp, temp_metadata) or not (
+                _same_filesystem_object(final_metadata, linked_temp)
+            ):
+                raise ValueError(
+                    f"published inode does not match temp: {relative_path}"
+                )
+            published = _read_existing_publication(
+                parent_descriptor,
+                final_name,
+                expected_inode=linked_temp,
+                expected_nlink=2,
+            )
+            if published != payload:
+                raise ValueError(
+                    f"published bytes changed unexpectedly: {relative_path}"
+                )
+
+        temp_name_cleaned = _unlink_temp_name_if_bound(
+            parent_descriptor,
+            temp_descriptor,
+            temp_name,
+            relative_path,
+        )
+        if not temp_name_cleaned:
+            raise ValueError(
+                f"publication temp name changed during cleanup: {relative_path}"
+            )
+        os.fsync(parent_descriptor)
+        parent_synced = True
+
+        if link_succeeded:
+            current_temp = os.fstat(temp_descriptor)
+            _require_publication_file_metadata(
+                current_temp,
+                f"published temp descriptor for {relative_path}",
+                expected_nlink=1,
+            )
+            current_final = _publication_name_metadata(
+                parent_descriptor, final_name
+            )
+            _require_publication_file_metadata(
+                current_final,
+                f"published final for {relative_path}",
+                expected_nlink=1,
+            )
+            if not _same_filesystem_object(current_final, current_temp):
+                raise ValueError(
+                    f"published final changed after temp cleanup: {relative_path}"
+                )
+        verify_directories()
+    except OSError as exc:
+        if link_succeeded:
+            _rollback_linked_publication_if_unchanged(
+                parent_descriptor,
+                final_name,
+                temp_descriptor,
+                relative_path,
+            )
+        raise ValueError(f"failed to publish JSON: {relative_path}") from exc
+    except ValueError:
+        if link_succeeded:
+            _rollback_linked_publication_if_unchanged(
+                parent_descriptor,
+                final_name,
+                temp_descriptor,
+                relative_path,
+            )
+        raise
+    finally:
+        cleanup_error: ValueError | None = None
+        if not temp_name_cleaned:
+            try:
+                _unlink_temp_name_if_bound(
+                    parent_descriptor,
+                    temp_descriptor,
+                    temp_name,
+                    relative_path,
+                )
+            except (OSError, ValueError) as exc:
+                cleanup_error = ValueError(
+                    f"failed to clean publication temp: {relative_path}"
+                )
+                cleanup_error.__cause__ = exc
+        if not parent_synced:
+            try:
+                os.fsync(parent_descriptor)
+            except OSError as exc:
+                if cleanup_error is None:
+                    cleanup_error = ValueError(
+                        f"failed to sync publication directory: {relative_path}"
+                    )
+                    cleanup_error.__cause__ = exc
+        try:
+            os.close(temp_descriptor)
+        except OSError as exc:
+            if cleanup_error is None:
+                cleanup_error = ValueError(
+                    f"failed to close publication temp: {relative_path}"
+                )
+                cleanup_error.__cause__ = exc
+        if cleanup_error is not None:
+            raise cleanup_error
 
 
 def publish_json_once(
@@ -555,128 +754,31 @@ def publish_json_once(
     final_name = relative_path.name
     with _publication_directory_descriptor(release_root, parent_path) as publication:
         parent_descriptor, verify_directories = publication
-        temp_descriptor, temp_name = _create_publication_temp(
-            parent_descriptor, final_name
-        )
-        link_succeeded = False
-        temp_metadata: os.stat_result | None = None
+        lock_acquired = False
         try:
-            offset = 0
-            while offset < len(payload):
-                written = os.write(temp_descriptor, payload[offset:])
-                if written <= 0:
-                    raise ValueError(
-                        f"short write while publishing JSON: {relative_path}"
-                    )
-                offset += written
-            os.fchmod(temp_descriptor, 0o600)
-            os.fsync(temp_descriptor)
-            temp_metadata = os.fstat(temp_descriptor)
-            if not stat.S_ISREG(temp_metadata.st_mode) or stat.S_IMODE(
-                temp_metadata.st_mode
-            ) != 0o600:
+            try:
+                fcntl.flock(parent_descriptor, fcntl.LOCK_EX)
+            except OSError as exc:
                 raise ValueError(
-                    f"publication temp is not a 0600 regular file: {relative_path}"
-                )
-            _require_temp_name_binding(
-                parent_descriptor,
-                temp_name,
-                temp_metadata,
-                relative_path,
-            )
-            try:
-                os.link(
-                    temp_name,
-                    final_name,
-                    src_dir_fd=parent_descriptor,
-                    dst_dir_fd=parent_descriptor,
-                    follow_symlinks=False,
-                )
-            except OSError as exc:
-                if exc.errno != errno.EEXIST:
-                    raise ValueError(
-                        f"failed to hard-link publication: {relative_path}"
-                    ) from exc
-                existing = _read_existing_publication(parent_descriptor, final_name)
-                if existing != payload:
-                    raise ValueError(
-                        "publication already exists with different bytes: "
-                        f"{relative_path}"
-                    ) from exc
-            else:
-                link_succeeded = True
-                final_metadata = _publication_name_metadata(
-                    parent_descriptor, final_name
-                )
-                if (
-                    stat.S_ISLNK(final_metadata.st_mode)
-                    or not stat.S_ISREG(final_metadata.st_mode)
-                    or stat.S_IMODE(final_metadata.st_mode) != 0o600
-                    or not _same_filesystem_object(final_metadata, temp_metadata)
-                ):
-                    raise ValueError(
-                        f"published inode does not match temp: {relative_path}"
-                    )
-                published = _read_existing_publication(
-                    parent_descriptor,
-                    final_name,
-                    expected_inode=temp_metadata,
-                )
-                if published != payload:
-                    raise ValueError(
-                        f"published bytes changed unexpectedly: {relative_path}"
-                    )
+                    f"failed to lock publication directory: {relative_path}"
+                ) from exc
+            lock_acquired = True
             verify_directories()
-        except OSError as exc:
-            if link_succeeded and temp_metadata is not None:
-                _rollback_linked_publication_if_unchanged(
-                    parent_descriptor,
-                    final_name,
-                    temp_metadata,
-                    relative_path,
-                )
-            raise ValueError(f"failed to publish JSON: {relative_path}") from exc
-        except ValueError:
-            if link_succeeded and temp_metadata is not None:
-                _rollback_linked_publication_if_unchanged(
-                    parent_descriptor,
-                    final_name,
-                    temp_metadata,
-                    relative_path,
-                )
-            raise
+            _publish_json_locked(
+                parent_descriptor=parent_descriptor,
+                verify_directories=verify_directories,
+                final_name=final_name,
+                relative_path=relative_path,
+                payload=payload,
+            )
         finally:
-            cleanup_error: ValueError | None = None
-            try:
-                _unlink_temp_name_if_bound(
-                    parent_descriptor,
-                    temp_descriptor,
-                    temp_name,
-                    relative_path,
-                )
-            except (OSError, ValueError) as exc:
-                cleanup_error = ValueError(
-                    f"failed to clean publication temp: {relative_path}"
-                )
-                cleanup_error.__cause__ = exc
-            try:
-                os.close(temp_descriptor)
-            except OSError as exc:
-                if cleanup_error is None:
-                    cleanup_error = ValueError(
-                        f"failed to close publication temp: {relative_path}"
-                    )
-                    cleanup_error.__cause__ = exc
-            try:
-                os.fsync(parent_descriptor)
-            except OSError as exc:
-                if cleanup_error is None:
-                    cleanup_error = ValueError(
-                        f"failed to sync publication directory: {relative_path}"
-                    )
-                    cleanup_error.__cause__ = exc
-            if cleanup_error is not None:
-                raise cleanup_error
+            if lock_acquired:
+                try:
+                    fcntl.flock(parent_descriptor, fcntl.LOCK_UN)
+                except OSError as exc:
+                    raise ValueError(
+                        f"failed to unlock publication directory: {relative_path}"
+                    ) from exc
 
 
 def _declaration_document(

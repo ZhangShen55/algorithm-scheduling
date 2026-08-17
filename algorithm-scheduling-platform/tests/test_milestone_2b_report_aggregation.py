@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import fcntl
 import hashlib
 import importlib
 import inspect
@@ -675,12 +676,12 @@ def _valid_observed_cases() -> list[dict[str, Any]]:
         ],
         *[
             _valid_observed_case(
-                case_id=f"REG-RECOVERY-{index:02d}",
+                case_id=f"REG-RECOVERY-{target}",
                 case_kind="registration_recovery",
                 run_id=target,
                 target=target,
             )
-            for index, target in enumerate(gpu_targets, start=1)
+            for target in gpu_targets
         ],
         _valid_observed_case(
             case_id="REG-FACEREC-THREE",
@@ -1288,16 +1289,22 @@ def test_cases_envelope_allows_partial_gpu_trigger_observation() -> None:
     running_cases = [
         case for case in envelope["cases"] if case["case_kind"] == "gpu_running"
     ]
+    stopped_cases = [
+        case for case in envelope["cases"] if case["case_kind"] == "gpu_stopped"
+    ]
     smoke_cases = [
         case
         for case in envelope["cases"]
         if case["case_kind"] == "smoke_gpu_trigger"
     ]
     running_cases[0]["status"] = "失败"
+    stopped_cases[0]["status"] = "失败"
     envelope["cases"].remove(smoke_cases[0])
     running_cases[1]["status"] = "失败"
+    stopped_cases[1]["status"] = "失败"
     smoke_cases[1]["status"] = "失败"
     envelope["coverage"]["gpu_running"]["passed"] = 16
+    envelope["coverage"]["gpu_stopped"]["passed"] = 16
     envelope["coverage"]["smoke_gpu_trigger"] = {
         "expected": 18,
         "observed": 17,
@@ -1631,6 +1638,49 @@ def test_cases_envelope_rejects_duplicate_gpu_running_target() -> None:
         contract.validate_cases_envelope(envelope)
 
 
+def test_cases_envelope_rejects_gpu_stopped_run_different_from_running() -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    stopped = next(
+        case for case in envelope["cases"] if case["case_kind"] == "gpu_stopped"
+    )
+    stopped["run_id"] = "different-stop-run"
+
+    with pytest.raises(ValueError, match=r"gpu_(?:running|stopped).*run_id|run_id.*gpu"):
+        contract.validate_cases_envelope(envelope)
+
+
+def test_cases_envelope_rejects_passing_stop_after_failed_running_case() -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    running = next(
+        case for case in envelope["cases"] if case["case_kind"] == "gpu_running"
+    )
+    stopped = next(
+        case
+        for case in envelope["cases"]
+        if case["case_kind"] == "gpu_stopped"
+        and case["target"] == running["target"]
+    )
+    linked = next(
+        case
+        for case in envelope["cases"]
+        if case["case_kind"] == "smoke_gpu_trigger"
+        and (case["target"], case["run_id"])
+        == (running["target"], running["run_id"])
+    )
+    running["status"] = "失败"
+    running["reason"] = "running evidence failed"
+    linked["status"] = "失败"
+    linked["reason"] = "linked Smoke failed"
+    envelope["coverage"]["gpu_running"]["passed"] -= 1
+    envelope["coverage"]["smoke_gpu_trigger"]["passed"] -= 1
+    assert stopped["status"] == "通过"
+
+    with pytest.raises(ValueError, match=r"gpu_(?:running|stopped).*status|status.*gpu"):
+        contract.validate_cases_envelope(envelope)
+
+
 def test_cases_envelope_rejects_gpu_smoke_linked_to_wrong_run() -> None:
     contract = _contract_module()
     envelope = _valid_envelope()
@@ -1642,6 +1692,130 @@ def test_cases_envelope_rejects_gpu_smoke_linked_to_wrong_run() -> None:
     linked["run_id"] = "wrong-run"
 
     with pytest.raises(ValueError, match="gpu_running|matching|linked"):
+        contract.validate_cases_envelope(envelope)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("case_id", "REG-FULL-IMPOSTOR"),
+        ("target", "not-operator-registry"),
+        ("run_id", "not-full"),
+    ),
+)
+def test_cases_envelope_rejects_noncanonical_full_registration_identity(
+    field: str,
+    value: str,
+) -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    case = next(
+        case for case in envelope["cases"] if case["case_kind"] == "registration_full"
+    )
+    case[field] = value
+
+    with pytest.raises(ValueError, match=rf"registration_full.*{field}|{field}.*registration_full"):
+        contract.validate_cases_envelope(envelope)
+
+
+def test_cases_envelope_rejects_registration_profile_impostor() -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    case = next(
+        case
+        for case in envelope["cases"]
+        if case["case_kind"] == "registration_profile" and case["target"] == "gpu0"
+    )
+    case["case_id"] = "REG-PROFILE-gpu3"
+    case["target"] = "gpu3"
+    case["run_id"] = "gpu3"
+
+    with pytest.raises(ValueError, match=r"registration_profile|profile"):
+        contract.validate_cases_envelope(envelope)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("case_id", "REG-FACEREC-IMPOSTOR"),
+        ("target", "facerec-two"),
+        ("run_id", "facerec-two"),
+    ),
+)
+def test_cases_envelope_rejects_noncanonical_facerec_registration_identity(
+    field: str,
+    value: str,
+) -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    case = next(
+        case
+        for case in envelope["cases"]
+        if case["case_kind"] == "registration_facerec"
+    )
+    case[field] = value
+
+    with pytest.raises(
+        ValueError,
+        match=rf"registration_facerec.*{field}|{field}.*registration_facerec",
+    ):
+        contract.validate_cases_envelope(envelope)
+
+
+def test_cases_envelope_rejects_duplicate_registration_recovery_target() -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    recovery = [
+        case
+        for case in envelope["cases"]
+        if case["case_kind"] == "registration_recovery"
+    ]
+    recovery[1]["target"] = recovery[0]["target"]
+
+    with pytest.raises(ValueError, match=r"registration_recovery|recovery.*target"):
+        contract.validate_cases_envelope(envelope)
+
+
+def test_cases_envelope_rejects_missing_registration_recovery_target() -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    recovery = next(
+        case
+        for case in envelope["cases"]
+        if case["case_kind"] == "registration_recovery"
+    )
+    recovery["case_id"] = "REG-RECOVERY-unknown-gpu-target"
+    recovery["target"] = "unknown-gpu-target"
+    recovery["run_id"] = "unknown-gpu-target"
+
+    with pytest.raises(ValueError, match=r"registration_recovery|recovery.*target"):
+        contract.validate_cases_envelope(envelope)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("case_id", "REG-RECOVERY-IMPOSTOR"),
+        ("run_id", "recovery-impostor-run"),
+    ),
+)
+def test_cases_envelope_rejects_registration_recovery_identity_mismatch(
+    field: str,
+    value: str,
+) -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    recovery = next(
+        case
+        for case in envelope["cases"]
+        if case["case_kind"] == "registration_recovery"
+    )
+    recovery[field] = value
+
+    with pytest.raises(
+        ValueError,
+        match=rf"registration_recovery.*{field}|{field}.*registration_recovery",
+    ):
         contract.validate_cases_envelope(envelope)
 
 
@@ -3433,6 +3607,7 @@ def test_publish_json_once_uses_durable_hard_link_and_preserves_conflicts(
     assert stat.S_IFREG in fsync_types
     assert stat.S_IFDIR in fsync_types
     assert stat.S_IMODE(os.lstat(output).st_mode) == 0o600
+    assert os.lstat(output).st_nlink == 1
     assert {entry.name for entry in output.parent.iterdir()} == {"cases.json"}
 
     aggregate.publish_json_once(
@@ -3452,10 +3627,36 @@ def test_publish_json_once_uses_durable_hard_link_and_preserves_conflicts(
     assert {entry.name for entry in output.parent.iterdir()} == {"cases.json"}
 
 
+def test_publish_json_once_rejects_same_bytes_existing_final_with_alias(
+    release_tree: ReleaseTree,
+) -> None:
+    aggregate = _aggregate_module()
+    release_tree.root.mkdir(parents=True)
+    document = {"schema_version": 1, "value": "same"}
+    aggregate.publish_json_once(
+        release_root=release_tree.root,
+        relative_path=Path("summary/cases.json"),
+        document=document,
+    )
+    output = release_tree.root / "summary" / "cases.json"
+    alias = output.with_name("cases.alias.json")
+    os.link(output, alias)
+    assert os.lstat(output).st_nlink == 2
+
+    with pytest.raises(ValueError, match=r"link|nlink|single"):
+        aggregate.publish_json_once(
+            release_root=release_tree.root,
+            relative_path=Path("summary/cases.json"),
+            document=document,
+        )
+
+    assert output.read_bytes() == alias.read_bytes()
+    assert os.lstat(output).st_nlink == 2
+
+
 @pytest.mark.parametrize("same_content", (True, False))
 def test_publish_json_once_is_concurrent_create_if_absent(
     release_tree: ReleaseTree,
-    monkeypatch: pytest.MonkeyPatch,
     same_content: bool,
 ) -> None:
     aggregate = _aggregate_module()
@@ -3467,15 +3668,6 @@ def test_publish_json_once_is_concurrent_create_if_absent(
             "value": "first" if same_content else "second",
         },
     )
-    link_barrier = threading.Barrier(2)
-    original_link = aggregate.os.link
-
-    def synchronized_link(source: object, destination: object, **kwargs: object) -> None:
-        link_barrier.wait(timeout=5)
-        original_link(source, destination, **kwargs)
-
-    monkeypatch.setattr(aggregate.os, "link", synchronized_link)
-
     def publish(document: dict[str, object]) -> str | None:
         try:
             aggregate.publish_json_once(
@@ -3500,7 +3692,84 @@ def test_publish_json_once_is_concurrent_create_if_absent(
         assert json.loads(output.read_bytes()) == documents[winner]
         assert "different bytes" in results[1 - winner]
     assert stat.S_IMODE(os.lstat(output).st_mode) == 0o600
+    assert os.lstat(output).st_nlink == 1
     assert {entry.name for entry in output.parent.iterdir()} == {"cases.json"}
+
+
+def test_publish_json_once_serializes_writers_on_parent_directory_fd(
+    release_tree: ReleaseTree,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    aggregate = _aggregate_module()
+    release_tree.root.mkdir(parents=True)
+    original_flock = fcntl.flock
+    original_create_temp = aggregate._create_publication_temp
+    state_lock = threading.Lock()
+    first_entered = threading.Event()
+    second_lock_attempted = threading.Event()
+    second_entered = threading.Event()
+    second_progress = threading.Event()
+    release_first = threading.Event()
+    lock_attempts = 0
+    critical_entries = 0
+
+    def observed_flock(descriptor: int, operation: int) -> None:
+        nonlocal lock_attempts
+        if operation == fcntl.LOCK_EX:
+            with state_lock:
+                lock_attempts += 1
+                attempt = lock_attempts
+            if attempt == 2:
+                second_lock_attempted.set()
+                second_progress.set()
+        original_flock(descriptor, operation)
+
+    def controlled_create_temp(
+        parent_descriptor: int, final_name: str
+    ) -> tuple[int, str]:
+        nonlocal critical_entries
+        with state_lock:
+            critical_entries += 1
+            entry = critical_entries
+        if entry == 1:
+            first_entered.set()
+            assert release_first.wait(timeout=5)
+        elif entry == 2:
+            second_entered.set()
+            second_progress.set()
+        return original_create_temp(parent_descriptor, final_name)
+
+    monkeypatch.setattr(fcntl, "flock", observed_flock)
+    monkeypatch.setattr(aggregate, "_create_publication_temp", controlled_create_temp)
+
+    document = {"schema_version": 1, "value": "same"}
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(
+            aggregate.publish_json_once,
+            release_root=release_tree.root,
+            relative_path=Path("summary/cases.json"),
+            document=document,
+        )
+        assert first_entered.wait(timeout=5)
+        second = executor.submit(
+            aggregate.publish_json_once,
+            release_root=release_tree.root,
+            relative_path=Path("summary/cases.json"),
+            document=document,
+        )
+        try:
+            assert second_progress.wait(timeout=5)
+            assert second_lock_attempted.is_set()
+            assert not second_entered.is_set()
+        finally:
+            release_first.set()
+        first.result(timeout=5)
+        second.result(timeout=5)
+
+    assert second_entered.is_set()
+    output = release_tree.root / "summary" / "cases.json"
+    assert json.loads(output.read_bytes()) == document
+    assert os.lstat(output).st_nlink == 1
 
 
 def test_publish_json_once_keeps_temp_descriptor_open_through_link(
@@ -3590,6 +3859,67 @@ def test_publish_json_once_preserves_wrong_inode_link(
         os.lstat(attacker).st_ino,
     )
     assert attacker.read_bytes() == b'{"attacker":true}\n'
+
+
+def test_publish_json_once_rejects_extra_temp_link_after_fsync(
+    release_tree: ReleaseTree,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    aggregate = _aggregate_module()
+    release_tree.root.mkdir(parents=True)
+    original_create_temp = aggregate._create_publication_temp
+    original_fsync = aggregate.os.fsync
+    original_link = aggregate.os.link
+    temp_descriptor: int | None = None
+    parent_descriptor: int | None = None
+    temp_name: str | None = None
+    alias_name = ".cases.json.injected-alias"
+
+    def observed_create_temp(
+        opened_parent: int, final_name: str
+    ) -> tuple[int, str]:
+        nonlocal parent_descriptor, temp_descriptor, temp_name
+        descriptor, name = original_create_temp(opened_parent, final_name)
+        parent_descriptor = opened_parent
+        temp_descriptor = descriptor
+        temp_name = name
+        return descriptor, name
+
+    def inject_alias_after_fsync(descriptor: int) -> None:
+        original_fsync(descriptor)
+        if descriptor != temp_descriptor or temp_name is None:
+            return
+        assert parent_descriptor is not None
+        try:
+            aggregate.os.stat(
+                alias_name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            original_link(
+                temp_name,
+                alias_name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+
+    monkeypatch.setattr(aggregate, "_create_publication_temp", observed_create_temp)
+    monkeypatch.setattr(aggregate.os, "fsync", inject_alias_after_fsync)
+
+    output = release_tree.root / "summary" / "cases.json"
+    with pytest.raises(ValueError, match=r"link|nlink|single|temp"):
+        aggregate.publish_json_once(
+            release_root=release_tree.root,
+            relative_path=Path("summary/cases.json"),
+            document={"schema_version": 1},
+        )
+
+    assert not output.exists()
+    alias = output.with_name(alias_name)
+    assert alias.is_file()
+    assert os.lstat(alias).st_nlink == 1
 
 
 def test_publish_json_once_preserves_rebound_temp_name_and_wrong_final(
@@ -3890,7 +4220,10 @@ def test_publish_json_once_preserves_third_party_when_parent_becomes_writable(
     )
 
     output = summary / "cases.json"
-    with pytest.raises(ValueError, match="writable|mode|publication parent"):
+    with pytest.raises(
+        ValueError,
+        match="writable|mode|publication parent|link|inode|published",
+    ):
         aggregate.publish_json_once(
             release_root=release_tree.root,
             relative_path=Path("summary/cases.json"),
@@ -3989,7 +4322,10 @@ def test_publish_json_once_preserves_third_party_when_release_root_is_rebound(
         replace_final_and_release_root_after_read,
     )
 
-    with pytest.raises(ValueError, match=r"release root.*changed|changed.*release root"):
+    with pytest.raises(
+        ValueError,
+        match=r"release root.*changed|changed.*release root|link|inode|published",
+    ):
         aggregate.publish_json_once(
             release_root=release_tree.root,
             relative_path=Path("summary/cases.json"),
@@ -4009,6 +4345,50 @@ def test_publish_json_once_preserves_third_party_when_release_root_is_rebound(
     assert (os.lstat(rebound_final).st_dev, os.lstat(rebound_final).st_ino) == (
         replacement_inode
     )
+
+
+def test_publish_json_once_rechecks_release_root_after_temp_cleanup(
+    release_tree: ReleaseTree,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    aggregate = _aggregate_module()
+    release_tree.root.mkdir(parents=True)
+    displaced_root = release_tree.root.with_name(f"{release_tree.root.name}.displaced")
+    original_cleanup = aggregate._unlink_temp_name_if_bound
+    rebound = False
+
+    def rebind_at_temp_cleanup(
+        parent_descriptor: int,
+        temp_descriptor: int,
+        temp_name: str,
+        relative_path: Path,
+    ) -> bool:
+        nonlocal rebound
+        if not rebound:
+            release_tree.root.rename(displaced_root)
+            release_tree.root.mkdir(mode=0o700)
+            rebound = True
+        return original_cleanup(
+            parent_descriptor,
+            temp_descriptor,
+            temp_name,
+            relative_path,
+        )
+
+    monkeypatch.setattr(
+        aggregate, "_unlink_temp_name_if_bound", rebind_at_temp_cleanup
+    )
+
+    with pytest.raises(ValueError, match=r"release root.*changed|changed.*release root"):
+        aggregate.publish_json_once(
+            release_root=release_tree.root,
+            relative_path=Path("summary/cases.json"),
+            document={"schema_version": 1},
+        )
+
+    assert rebound is True
+    assert not (displaced_root / "summary" / "cases.json").exists()
+    assert not (release_tree.root / "summary" / "cases.json").exists()
 
 
 @pytest.mark.parametrize(

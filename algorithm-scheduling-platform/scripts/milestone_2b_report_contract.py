@@ -173,6 +173,7 @@ class DeclarationCase(TypedDict):
 
 
 class _CoverageCase(TypedDict):
+    case_id: str
     target: str
     run_id: str
     status: str
@@ -476,6 +477,22 @@ def _status_coverage(cases: list[_CoverageCase], expected: int) -> Coverage:
     }
 
 
+def _require_case_identity(
+    case: _CoverageCase,
+    context: str,
+    *,
+    case_id: str,
+    target: str,
+    run_id: str,
+) -> None:
+    if case["case_id"] != case_id:
+        raise ValueError(f"{context}.case_id must equal {case_id}")
+    if case["target"] != target:
+        raise ValueError(f"{context}.target must equal {target}")
+    if case["run_id"] != run_id:
+        raise ValueError(f"{context}.run_id must equal {run_id}")
+
+
 def _recompute_real_case_coverage(
     cases_by_kind: dict[str, list[_CoverageCase]],
 ) -> dict[str, Coverage]:
@@ -488,6 +505,42 @@ def _recompute_real_case_coverage(
                 f"{case_kind} case count must equal {expected}, got {len(cases)}"
             )
         recomputed[coverage_key] = _status_coverage(cases, expected)
+
+    full_registration = cases_by_kind["registration_full"][0]
+    _require_case_identity(
+        full_registration,
+        "registration_full",
+        case_id="REG-FULL",
+        target="operator-registry",
+        run_id="full",
+    )
+
+    expected_profiles = frozenset({"gpu0", "gpu1", "gpu2", "cpu"})
+    profile_cases = cases_by_kind["registration_profile"]
+    profile_targets = {case["target"] for case in profile_cases}
+    if profile_targets != expected_profiles:
+        raise ValueError(
+            "registration_profile targets must equal "
+            f"{sorted(expected_profiles)}, got {sorted(profile_targets)}"
+        )
+    for case in profile_cases:
+        profile = case["target"]
+        _require_case_identity(
+            case,
+            f"registration_profile[{profile}]",
+            case_id=f"REG-PROFILE-{profile}",
+            target=profile,
+            run_id=profile,
+        )
+
+    facerec_registration = cases_by_kind["registration_facerec"][0]
+    _require_case_identity(
+        facerec_registration,
+        "registration_facerec",
+        case_id="REG-FACEREC-THREE",
+        target="facerec-three",
+        run_id="facerec-three",
+    )
 
     running_cases = cases_by_kind["gpu_running"]
     stopped_cases = cases_by_kind["gpu_stopped"]
@@ -506,6 +559,41 @@ def _recompute_real_case_coverage(
         )
     if running_targets != stopped_targets:
         raise ValueError("gpu_running and gpu_stopped target sets must be identical")
+
+    running_by_target = {case["target"]: case for case in running_cases}
+    stopped_by_target = {case["target"]: case for case in stopped_cases}
+    for target, running in running_by_target.items():
+        stopped = stopped_by_target[target]
+        if stopped["run_id"] != running["run_id"]:
+            raise ValueError(
+                "gpu_stopped.run_id must equal gpu_running.run_id for target "
+                f"{target}"
+            )
+        if stopped["status"] == "通过" and running["status"] != "通过":
+            raise ValueError(
+                "gpu_stopped status 通过 requires gpu_running status 通过 for target "
+                f"{target}"
+            )
+
+    recovery_cases = cases_by_kind["registration_recovery"]
+    recovery_targets = {case["target"] for case in recovery_cases}
+    if len(recovery_targets) != len(recovery_cases):
+        raise ValueError("registration_recovery targets must be unique")
+    if recovery_targets != running_targets:
+        raise ValueError(
+            "registration_recovery targets must equal gpu_running targets: "
+            f"missing={sorted(running_targets - recovery_targets)}, "
+            f"unknown={sorted(recovery_targets - running_targets)}"
+        )
+    for case in recovery_cases:
+        target = case["target"]
+        _require_case_identity(
+            case,
+            f"registration_recovery[{target}]",
+            case_id=f"REG-RECOVERY-{target}",
+            target=target,
+            run_id=target,
+        )
 
     gpu_smoke_by_key: dict[tuple[str, str], _CoverageCase] = {}
     for case in cases_by_kind["smoke_gpu_trigger"]:
@@ -723,6 +811,7 @@ def validate_cases_envelope(document: object) -> None:
             raise ValueError(f"{context}.git_sha does not match the envelope")
         cases_by_kind[case_kind].append(
             {
+                "case_id": strings["case_id"],
                 "target": strings["target"],
                 "run_id": strings["run_id"],
                 "status": strings["status"],
