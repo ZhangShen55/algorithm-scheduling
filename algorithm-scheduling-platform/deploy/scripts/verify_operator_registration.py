@@ -360,6 +360,7 @@ def main() -> int:
     args = parse_args()
     started_at = datetime.now(UTC).isoformat()
     output: Path | None = None
+    base_report: dict[str, Any] | None = None
     last_issues: list[str] = []
     last_specific_issues: list[str] = []
     observed_count = 0
@@ -394,6 +395,15 @@ def main() -> int:
                 else f"operator-registration-{output_suffix}.json"
             )
         )
+        base_report = {
+            "schema_version": 1,
+            "evidence_type": "operator_registration",
+            "mock": False,
+            "target": "operator-registry",
+            "release_tag": tag,
+            "git_sha": sha,
+            "started_at": started_at,
+        }
         deadline = time.monotonic() + args.timeout_seconds
         while True:
             remaining = deadline - time.monotonic()
@@ -451,14 +461,8 @@ def main() -> int:
             time.sleep(min(args.poll_seconds, max(0, deadline - time.monotonic())))
         status = "通过" if not last_issues else "失败"
         report = {
-            "schema_version": 1,
-            "evidence_type": "operator_registration",
+            **base_report,
             "status": status,
-            "mock": False,
-            "target": "operator-registry",
-            "release_tag": tag,
-            "git_sha": sha,
-            "started_at": started_at,
             "finished_at": datetime.now(UTC).isoformat(),
             "control_endpoint": (
                 f"{parsed.scheme}://{parsed.hostname}:"
@@ -479,15 +483,12 @@ def main() -> int:
         print(str(output))
         return 0
     except Exception as exc:  # noqa: BLE001 - CLI must persist a failure report when possible
-        if output is not None:
+        if output is not None and base_report is not None:
             atomic_json(
                 output,
                 {
-                    "schema_version": 1,
+                    **base_report,
                     "status": "失败",
-                    "release_tag": args.release_tag,
-                    "git_sha": args.git_sha,
-                    "started_at": started_at,
                     "finished_at": datetime.now(UTC).isoformat(),
                     "selection": selection,
                     "summary": {

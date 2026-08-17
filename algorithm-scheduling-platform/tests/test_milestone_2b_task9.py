@@ -507,6 +507,42 @@ def test_registration_persistent_protocol_failure_is_bounded_and_keeps_cause(
     assert "503" in completed.stderr and "全局超时" in completed.stderr
 
 
+def test_registration_exception_report_keeps_the_typed_envelope(
+    tmp_path: Path,
+) -> None:
+    instances = _expected_instances()
+    responses = _events(instances)
+    first_instance = sorted(item["instance_id"] for item in instances)[0]
+    responses[f"/ops/operator-instances/{first_instance}/events?limit=100"] = (
+        200,
+        [{"event_type": "HEARTBEAT_SUMMARY", "event_payload": ["invalid"]}],
+    )
+
+    with _Server(responses) as url:
+        completed = _run_registration(tmp_path, url, timeout="0.08")
+
+    assert completed.returncode == 2
+    report = json.loads(
+        (
+            _release(tmp_path)
+            / "registration"
+            / "operator-registration.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert report["schema_version"] == 1
+    assert report["evidence_type"] == "operator_registration"
+    assert report["mock"] is False
+    assert report["target"] == "operator-registry"
+    assert report["status"] == "失败"
+    assert report["release_tag"] == TAG
+    assert report["git_sha"] == SHA
+    assert report["started_at"]
+    assert report["finished_at"]
+    assert report["selection"] == {"mode": "full", "values": []}
+    assert report["summary"] == {"expected": 24, "observed": 24, "valid": 0}
+    assert report["issues"]
+
+
 def _case(case_id: str, *, status: str = "通过", mock: bool = False) -> dict[str, Any]:
     return {
         "case_id": case_id,
