@@ -80,18 +80,16 @@ EXPECTED_RANGES = {
     ),
     "load": (("LOAD", 1, 26),),
 }
-SMOKE_FULL_SOURCE_CASE_IDS = frozenset(
-    {
-        "INF-ASR-OFFLINE",
-        "INF-ASR-ONLINE",
-        "INF-FACEREC",
-        "INF-OCR",
-        "INF-PPT-SLICE",
-        "INF-SCREEN-DET",
-        "INF-TEXT-ANALYSIS",
-        "INF-VBAS",
-    }
-)
+SMOKE_FULL_OPERATOR_BY_SOURCE_CASE_ID = {
+    "INF-ASR-OFFLINE": "asr_offline",
+    "INF-ASR-ONLINE": "asr_online",
+    "INF-FACEREC": "facerec",
+    "INF-OCR": "ocr",
+    "INF-PPT-SLICE": "ppt_slice",
+    "INF-SCREEN-DET": "screen_det",
+    "INF-TEXT-ANALYSIS": "text_analysis",
+    "INF-VBAS": "vbas",
+}
 
 _PREFIX_PATTERN = re.compile(r"[A-Z]+")
 _GIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
@@ -392,6 +390,7 @@ def validate_cases_envelope(document: object) -> None:
     for index, raw_case in enumerate(_require_list(envelope["cases"], "cases")):
         context = f"cases[{index}]"
         case = _require_exact_object(raw_case, CASE_FIELDS, context)
+        canonical_smoke_operator: str | None = None
         strings = {
             field: _require_string(case[field], f"{context}.{field}")
             for field in _CASE_STRING_FIELDS
@@ -404,7 +403,10 @@ def validate_cases_envelope(document: object) -> None:
                     f"{context}.run_id may be empty only for canonical full Smoke cases"
                 )
             source_case_id = strings["source_case_id"]
-            if source_case_id not in SMOKE_FULL_SOURCE_CASE_IDS:
+            canonical_smoke_operator = SMOKE_FULL_OPERATOR_BY_SOURCE_CASE_ID.get(
+                source_case_id
+            )
+            if canonical_smoke_operator is None:
                 raise ValueError(
                     f"{context}.source_case_id is not a canonical full Smoke source"
                 )
@@ -423,13 +425,28 @@ def validate_cases_envelope(document: object) -> None:
         if strings["status"] not in STATUSES:
             raise ValueError(f"{context}.status is unknown: {strings['status']}")
 
-        evidence = _require_list(case["evidence"], f"{context}.evidence")
-        for evidence_index, evidence_path in enumerate(evidence):
+        evidence = [
             _require_string(
                 evidence_path, f"{context}.evidence[{evidence_index}]"
             )
+            for evidence_index, evidence_path in enumerate(
+                _require_list(case["evidence"], f"{context}.evidence")
+            )
+        ]
         if type(case["mock"]) is not bool:
             raise ValueError(f"{context}.mock must be a boolean")
+        if canonical_smoke_operator is not None:
+            if strings["target"] != canonical_smoke_operator:
+                raise ValueError(
+                    f"{context}.target does not match the canonical full Smoke operator"
+                )
+            expected_evidence = [f"smoke/{canonical_smoke_operator}.json"]
+            if evidence != expected_evidence:
+                raise ValueError(
+                    f"{context}.evidence must equal {expected_evidence} for full Smoke"
+                )
+            if case["mock"] is not False:
+                raise ValueError(f"{context}.mock must be false for full Smoke")
         if strings["release_tag"] != release_tag:
             raise ValueError(f"{context}.release_tag does not match the envelope")
         if strings["git_sha"] != git_sha:

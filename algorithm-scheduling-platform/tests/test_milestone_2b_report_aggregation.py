@@ -2608,16 +2608,43 @@ def test_instance_smoke_rejects_generated_case_id_collision(
         release_tree.collect_smoke()
 
 
-def test_cases_envelope_allows_empty_run_id_only_for_full_smoke() -> None:
-    contract = _contract_module()
+def _canonical_full_smoke_envelope() -> dict[str, Any]:
     envelope = _valid_envelope()
     case = envelope["cases"][0]
     case["case_id"] = "SMOKE-FULL-INF-OCR"
     case["source_case_id"] = "INF-OCR"
     case["case_kind"] = "smoke_full"
     case["run_id"] = ""
+    case["target"] = "ocr"
+    case["evidence"] = ["smoke/ocr.json"]
+    case["mock"] = False
+    return envelope
 
-    contract.validate_cases_envelope(envelope)
+
+def test_cases_envelope_allows_empty_run_id_only_for_full_smoke() -> None:
+    contract = _contract_module()
+
+    contract.validate_cases_envelope(_canonical_full_smoke_envelope())
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("target", "operator-registry"),
+        ("evidence", ["registration/operator-registration.json"]),
+        ("mock", True),
+    ),
+)
+def test_cases_envelope_rejects_noncanonical_full_smoke_authority_fields(
+    field: str,
+    value: object,
+) -> None:
+    contract = _contract_module()
+    envelope = _canonical_full_smoke_envelope()
+    envelope["cases"][0][field] = value
+
+    with pytest.raises(ValueError, match=field):
+        contract.validate_cases_envelope(envelope)
 
 
 def test_cases_envelope_rejects_relabelled_declaration_with_empty_run_id() -> None:
