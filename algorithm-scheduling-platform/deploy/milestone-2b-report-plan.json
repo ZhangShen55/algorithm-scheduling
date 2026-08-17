@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "registration": {
+    "profiles": [
+      "gpu0",
+      "gpu1",
+      "gpu2",
+      "cpu"
+    ],
+    "require_full": true,
+    "require_gpu_recovery_instances": true,
+    "facerec_instances": [
+      "facerec-gpu0",
+      "facerec-gpu1",
+      "facerec-gpu2"
+    ]
+  },
+  "smoke": {
+    "require_full": true,
+    "require_gpu_linked_runs": true,
+    "require_cpu_instances": true
+  },
+  "declarations": {
+    "reason": "当前仓库没有该用例的受控目标服务器 runner 与运行证据 schema；本 release 未执行，现有本地单元测试或正向健康检查不等价于现场执行。",
+    "negative": [
+      {
+        "prefix": "DEP",
+        "first": 1,
+        "last": 20
+      },
+      {
+        "prefix": "GPU",
+        "first": 1,
+        "last": 20
+      },
+      {
+        "prefix": "REG",
+        "first": 1,
+        "last": 20
+      },
+      {
+        "prefix": "INF",
+        "first": 1,
+        "last": 16
+      },
+      {
+        "prefix": "JOB",
+        "first": 1,
+        "last": 20
+      },
+      {
+        "prefix": "FILE",
+        "first": 1,
+        "last": 16
+      },
+      {
+        "prefix": "PPT",
+        "first": 1,
+        "last": 15
+      },
+      {
+        "prefix": "OCR",
+        "first": 1,
+        "last": 5
+      },
+      {
+        "prefix": "KEY",
+        "first": 1,
+        "last": 5
+      },
+      {
+        "prefix": "ASR",
+        "first": 1,
+        "last": 18
+      },
+      {
+        "prefix": "VIS",
+        "first": 1,
+        "last": 28
+      },
+      {
+        "prefix": "ONL",
+        "first": 1,
+        "last": 20
+      },
+      {
+        "prefix": "FACE",
+        "first": 1,
+        "last": 14
+      }
+    ],
+    "load": [
+      {
+        "prefix": "LOAD",
+        "first": 1,
+        "last": 26
+      }
+    ]
+  }
+}
