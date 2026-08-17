@@ -442,9 +442,9 @@ def _validate_registration(
             raise ValueError(f"{context}: passing registration must not contain issues")
         reason = "registration evidence passed"
     else:
-        if valid > observed or observed > expected:
+        if valid > min(expected, observed):
             raise ValueError(
-                f"{context}: summary must satisfy valid <= observed <= expected"
+                f"{context}: summary must satisfy valid <= min(expected, observed)"
             )
         if not issues:
             raise ValueError(f"{context}: failed registration must contain issues")
@@ -680,6 +680,10 @@ def validate_gpu_pair(
             raise ValueError(
                 f"{instance.instance_id}.running PASS requires synchronous_samples"
             )
+        if not running_pids:
+            raise ValueError(
+                f"{instance.instance_id}.running PASS requires at least one host_pid"
+            )
 
     if "container" in stopped and "container" in running:
         if stopped["container"] != running["container"]:
@@ -716,6 +720,11 @@ def validate_gpu_pair(
         if running["status"] != "PASS":
             raise ValueError(
                 f"{instance.instance_id}.stopped PASS requires matching running PASS"
+            )
+        if not prior_pids:
+            raise ValueError(
+                f"{instance.instance_id}.stopped PASS requires non-empty "
+                "prior_cuda_pids"
             )
         if stopped.get("container") != running.get("container"):
             raise ValueError(f"{instance.instance_id}.stopped container does not match running")

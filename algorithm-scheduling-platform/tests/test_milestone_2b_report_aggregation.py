@@ -1328,6 +1328,34 @@ def test_failed_registration_is_observed_but_not_passed(
     }
 
 
+@pytest.mark.parametrize("payload_observed", (23, 25))
+def test_failed_registration_preserves_observed_count_drift(
+    release_tree: ReleaseTree,
+    payload_observed: int,
+) -> None:
+    release_tree.write_complete_sources()
+    relative = "registration/operator-registration.json"
+    payload = release_tree.read_json(relative)
+    payload["status"] = "失败"
+    payload["summary"] = {
+        "expected": 24,
+        "observed": payload_observed,
+        "valid": 0,
+    }
+    payload["issues"] = ["registration topology drift"]
+    release_tree.replace_json(relative, payload)
+
+    cases, coverage = release_tree.collect_registration_gpu()
+
+    case = next(item for item in cases if item["case_id"] == "REG-FULL")
+    assert case["status"] == "失败"
+    assert coverage["registration_full"] == {
+        "expected": 1,
+        "observed": 1,
+        "passed": 0,
+    }
+
+
 def test_failed_registration_requires_nonempty_issues(
     release_tree: ReleaseTree,
 ) -> None:
@@ -1453,6 +1481,31 @@ def test_running_pass_requires_complete_runtime_identity(
     del running[field]
 
     with pytest.raises(ValueError, match=field):
+        _validate_gpu_pair(release_tree, running, stopped)
+
+
+def test_running_pass_requires_at_least_one_mapped_host_pid(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_all_gpu_pairs()
+    running = release_tree.read_json("gpu-instances/asr-offline-gpu0.json")
+    stopped = release_tree.read_json("recovery/asr-offline-gpu0-stopped.json")
+    for sample in running["synchronous_samples"]:
+        sample["processes"] = []
+
+    with pytest.raises(ValueError, match="host_pid"):
+        _validate_gpu_pair(release_tree, running, stopped)
+
+
+def test_stopped_pass_requires_explicit_prior_cuda_pids(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_all_gpu_pairs()
+    running = release_tree.read_json("gpu-instances/asr-offline-gpu0.json")
+    stopped = release_tree.read_json("recovery/asr-offline-gpu0-stopped.json")
+    del stopped["prior_cuda_pids"]
+
+    with pytest.raises(ValueError, match="prior_cuda_pids"):
         _validate_gpu_pair(release_tree, running, stopped)
 
 
