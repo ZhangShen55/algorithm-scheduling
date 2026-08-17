@@ -2799,6 +2799,59 @@ def _documented_command_tokens(block: str, script: str) -> list[str]:
     return matches[0]
 
 
+def _assert_stage6_renderer_status_gate(gate: str, renderer: str) -> None:
+    normalized = re.sub(r"\\\n[ \t]*", " ", gate)
+    renderer_gate = re.search(
+        rf"(?ms)^if (?P<command>\.venv/bin/python {re.escape(renderer)} [^\n]+)\n"
+        r"then\n(?P<success>.*?)^else\n(?P<failure>.*?)^fi\n"
+        r"(?P<before_case>.*?)^(?P<case>case \"\$report_status\" in\n.*\nesac)$",
+        normalized,
+    )
+    assert renderer_gate is not None, "renderer 必须由 if/then/else/fi 捕获返回码"
+    assert shlex.split(renderer_gate["command"]) == [
+        ".venv/bin/python",
+        renderer,
+        "--input",
+        "$RELEASE_ROOT/summary/cases.json",
+        "--release-root",
+        "$RELEASE_ROOT",
+        "--output-json",
+        "$RELEASE_ROOT/summary/report.json",
+        "--output-markdown",
+        "$RELEASE_ROOT/summary/report.md",
+    ]
+    assert renderer_gate["success"].strip() == "report_status=0"
+    assert renderer_gate["failure"].strip() == "report_status=$?"
+    assert renderer_gate["before_case"].strip() == "set -e"
+
+    case_gate = re.fullmatch(
+        r"(?ms)case \"\$report_status\" in\n"
+        r"  0\)\n(?P<success>.*?)^    ;;\n"
+        r"  3\)\n(?P<acceptance_failed>.*?)^    ;;\n"
+        r"  \*\)\n(?P<error>.*?)^    ;;\n"
+        r"esac",
+        renderer_gate["case"],
+    )
+    assert case_gate is not None, "report_status 必须具有 0、3 和其他三个分支"
+
+    success = case_gate["success"]
+    assert (
+        '.venv/bin/python - "$RELEASE_ROOT/summary/report.json" <<\'PY\''
+        in success
+    )
+    assert 'print(json.load(stream)["overall_status"])' in success
+    overall_gate = re.search(
+        r'(?ms)^    if \[\[ "\$report_overall_status" != "通过" \]\]; then\n'
+        r"(?P<failure>.*?)^    fi$",
+        success,
+    )
+    assert overall_gate is not None, "0 分支必须只接受 overall_status=通过"
+    assert "overall_status" in overall_gate["failure"]
+    assert re.search(r"(?m)^      exit 1$", overall_gate["failure"])
+    assert re.search(r"(?m)^    exit 3$", case_gate["acceptance_failed"])
+    assert re.search(r'(?m)^    exit "\$report_status"$', case_gate["error"])
+
+
 def test_stage6_docs_use_canonical_aggregation_and_renderer_gate() -> None:
     scenario = (
         PLATFORM_ROOT / "harness/scenarios/milestone-2b-deploy.md"
@@ -2825,24 +2878,7 @@ def test_stage6_docs_use_canonical_aggregation_and_renderer_gate() -> None:
         "--output",
         "$RELEASE_ROOT/summary/cases.json",
     ]
-    assert _documented_command_tokens(gate, renderer) == [
-        ".venv/bin/python",
-        renderer,
-        "--input",
-        "$RELEASE_ROOT/summary/cases.json",
-        "--release-root",
-        "$RELEASE_ROOT",
-        "--output-json",
-        "$RELEASE_ROOT/summary/report.json",
-        "--output-markdown",
-        "$RELEASE_ROOT/summary/report.md",
-    ]
-    assert re.search(r'(?m)^case "\$report_status" in$', gate)
-    for branch in ("0", "3", "*"):
-        assert re.search(rf"(?m)^  {re.escape(branch)}\)$", gate)
-    assert re.search(r"(?m)^    exit 3$", gate)
-    assert re.search(r'(?m)^    exit "\$report_status"$', gate)
-    assert "overall_status" in gate
+    _assert_stage6_renderer_status_gate(gate, renderer)
     assert "报告已生成但验收未通过" in gate
     assert "生成报告不等于验收通过" in stage6
 

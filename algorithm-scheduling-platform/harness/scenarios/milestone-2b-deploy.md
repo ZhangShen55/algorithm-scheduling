@@ -1057,6 +1057,7 @@ then
 else
   report_status=$?
 fi
+set -e
 
 case "$report_status" in
   0)
