@@ -11,7 +11,6 @@ import os
 import re
 import stat
 import sys
-import tempfile
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
@@ -1148,170 +1147,425 @@ def validate_release_envelope(
     return cases, evidence_snapshots, release_tag, git_sha
 
 
-def fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+REPORT_OUTPUT_NAMES = ("report.json", "report.md")
+REPORT_JOURNAL_NAME = ".report-transaction.journal"
+_LOWER_HEX_32 = re.compile(r"[0-9a-f]{32}\Z")
+_LOWER_HEX_64 = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def _stat_at(parent_fd: int, name: str) -> os.stat_result | None:
     try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+        return os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
 
 
-def require_safe_output(path: Path, content: bytes) -> str:
-    if path.is_symlink():
-        raise ValueError(f"输出路径不安全: {path}")
-    if path.exists():
-        if not path.is_file():
-            raise ValueError(f"输出路径不安全: {path}")
-        if path.read_bytes() == content:
-            return "same"
-        raise ValueError(f"拒绝覆盖同一 release/SHA 的不同报告: {path}")
-    return "missing"
+def _write_all(descriptor: int, content: bytes) -> None:
+    offset = 0
+    while offset < len(content):
+        offset += os.write(descriptor, content[offset:])
 
 
-def write_private_temp(parent: Path, name: str, content: bytes) -> Path:
-    descriptor, temporary_name = tempfile.mkstemp(prefix=name, dir=parent)
-    temporary = Path(temporary_name)
+def _require_private_regular(
+    metadata: os.stat_result,
+    context: str,
+    *,
+    allowed_links: frozenset[int] = frozenset({1}),
+) -> None:
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ValueError(f"{context} 必须是普通文件")
+    if metadata.st_uid != os.geteuid():
+        raise ValueError(f"{context} 必须由当前 UID 所有")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise ValueError(f"{context} 权限必须是 0600")
+    if metadata.st_nlink not in allowed_links:
+        raise ValueError(f"{context} 硬链接数不安全")
+
+
+def _read_private_at(
+    parent_fd: int,
+    name: str,
+    context: str,
+    *,
+    allowed_links: frozenset[int] = frozenset({1}),
+) -> tuple[bytes, os.stat_result] | None:
+    named = _stat_at(parent_fd, name)
+    if named is None:
+        return None
+    _require_private_regular(named, context, allowed_links=allowed_links)
+    descriptor = -1
     try:
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "wb", closefd=True) as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        descriptor = -1
-        return temporary
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_fd,
+        )
+        opened = os.fstat(descriptor)
+        _require_private_regular(opened, context, allowed_links=allowed_links)
+        if not _same_filesystem_object(named, opened):
+            raise ValueError(f"{context} 打开期间发生变化")
+        chunks: list[bytes] = []
+        while chunk := os.read(descriptor, 65_536):
+            chunks.append(chunk)
+        opened_after = os.fstat(descriptor)
+        named_after = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        _require_private_regular(opened_after, context, allowed_links=allowed_links)
+        _require_private_regular(named_after, context, allowed_links=allowed_links)
+        if (
+            _metadata_snapshot(opened) != _metadata_snapshot(opened_after)
+            or _metadata_snapshot(named_after) != _metadata_snapshot(opened_after)
+        ):
+            raise ValueError(f"{context} 读取期间发生变化")
+    except OSError as exc:
+        raise ValueError(f"无法安全读取{context}") from exc
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+    content = b"".join(chunks)
+    if len(content) != opened.st_size:
+        raise ValueError(f"{context} 字节数与文件大小不一致")
+    return content, opened_after
 
 
-def write_journal_atomic(
-    parent: Path,
-    journal: Path,
-    payload: dict[str, list[str]],
-    *,
-    allow_crash_injection: bool = False,
-) -> None:
-    content = json.dumps(payload, ensure_ascii=False).encode()
-    temporary = write_private_temp(parent, f"{journal.name}.", content)
+def _create_private_at(parent_fd: int, name: str, content: bytes) -> None:
+    descriptor = -1
     try:
-        if allow_crash_injection and os.getenv(
-            "REPORT_TRANSACTION_CRASH_DURING_JOURNAL_REPLACE"
-        ):
-            os._exit(87)
-        os.replace(temporary, journal)
-        fsync_directory(parent)
+        descriptor = os.open(
+            name,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=parent_fd,
+        )
+        os.fchmod(descriptor, 0o600)
+        _write_all(descriptor, content)
+        os.fsync(descriptor)
+    except OSError as exc:
+        raise ValueError(f"无法安全创建事务文件: {name}") from exc
     finally:
-        temporary.unlink(missing_ok=True)
+        if descriptor >= 0:
+            os.close(descriptor)
+    os.fsync(parent_fd)
 
 
-def cleanup_orphan_journal_temporaries(parent: Path, journal: Path) -> None:
-    for candidate in parent.glob(f"{journal.name}.*"):
-        metadata = os.lstat(candidate)
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-            raise ValueError("报告事务 journal 临时路径不安全")
-        candidate.unlink()
-    fsync_directory(parent)
+def _unlink_at(parent_fd: int, name: str) -> None:
+    os.unlink(name, dir_fd=parent_fd)
+    os.fsync(parent_fd)
 
 
-def recover_transaction(parent: Path, journal: Path) -> None:
-    if not journal.exists():
-        cleanup_orphan_journal_temporaries(parent, journal)
-        return
+def _journal_bytes(payload: Mapping[str, object]) -> bytes:
+    return json.dumps(
+        payload,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _validate_journal(
+    content: bytes,
+    expected_outputs: Mapping[str, tuple[bytes, str]],
+) -> tuple[dict[str, Any], str]:
     try:
-        state = json.loads(journal.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("报告事务 journal 不合法，拒绝覆盖未知输出") from exc
-    if not isinstance(state, dict) or set(state) != {"published", "temporaries"}:
+        parsed = strict_json_loads(content.decode("utf-8", errors="strict"))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("报告事务 journal 不合法") from exc
+    payload = _require_object(parsed, "报告事务 journal")
+    if set(payload) != {
+        "schema_version",
+        "transaction_id",
+        "state",
+        "outputs",
+        "temporaries",
+    }:
         raise ValueError("报告事务 journal 不合法")
-    if not all(
-        isinstance(state[field], list)
-        and all(isinstance(item, str) for item in state[field])
-        for field in ("published", "temporaries")
+    transaction_id = payload.get("transaction_id")
+    if (
+        type(payload.get("schema_version")) is not int
+        or payload["schema_version"] != 1
+        or type(transaction_id) is not str
+        or _LOWER_HEX_32.fullmatch(transaction_id) is None
+        or payload.get("state") != "publishing"
+        or type(payload.get("state")) is not str
     ):
         raise ValueError("报告事务 journal 不合法")
-    for name in state["published"]:
-        candidate = parent / safe_relative(str(name))
-        if candidate.parent != parent or candidate.is_symlink():
-            raise ValueError("报告事务发布路径不安全")
-        candidate.unlink(missing_ok=True)
-    for name in state["temporaries"]:
-        candidate = parent / safe_relative(str(name))
-        if candidate.parent != parent or candidate.is_symlink():
-            raise ValueError("报告事务临时路径不安全")
-        candidate.unlink(missing_ok=True)
-    journal.unlink()
-    cleanup_orphan_journal_temporaries(parent, journal)
-    fsync_directory(parent)
+    output_states = _require_object(payload.get("outputs"), "报告事务 journal.outputs")
+    if set(output_states) != set(REPORT_OUTPUT_NAMES):
+        raise ValueError("报告事务 journal 不合法")
+    for name in REPORT_OUTPUT_NAMES:
+        output_state = _require_object(
+            output_states.get(name), f"报告事务 journal.outputs.{name}"
+        )
+        if set(output_state) != {"sha256", "published"}:
+            raise ValueError("报告事务 journal 不合法")
+        digest = output_state.get("sha256")
+        if (
+            type(digest) is not str
+            or _LOWER_HEX_64.fullmatch(digest) is None
+            or digest != expected_outputs[name][1]
+            or type(output_state.get("published")) is not bool
+        ):
+            raise ValueError("报告事务 journal 不合法")
+    temporaries = _require_object(
+        payload.get("temporaries"), "报告事务 journal.temporaries"
+    )
+    if not set(temporaries).issubset(REPORT_OUTPUT_NAMES):
+        raise ValueError("报告事务 journal 不合法")
+    for name, temporary_name in temporaries.items():
+        if (
+            type(temporary_name) is not str
+            or temporary_name != f".{name}.{transaction_id}.tmp"
+        ):
+            raise ValueError("报告事务 journal 不合法")
+    return payload, transaction_id
+
+
+def _read_and_validate_journal(
+    summary_fd: int,
+    expected_outputs: Mapping[str, tuple[bytes, str]],
+) -> tuple[dict[str, Any], str, bytes] | None:
+    try:
+        snapshot = _read_private_at(
+            summary_fd, REPORT_JOURNAL_NAME, "报告事务 journal"
+        )
+    except ValueError as exc:
+        raise ValueError("报告事务 journal 不合法") from exc
+    if snapshot is None:
+        return None
+    content, _metadata = snapshot
+    payload, transaction_id = _validate_journal(content, expected_outputs)
+    return payload, transaction_id, content
+
+
+def _validate_transaction_temporary(
+    summary_fd: int,
+    name: str,
+    expected_content: bytes,
+    terminal_metadata: os.stat_result | None,
+) -> os.stat_result | None:
+    snapshot = _read_private_at(
+        summary_fd,
+        name,
+        "报告事务临时文件",
+        allowed_links=frozenset({1, 2}),
+    )
+    if snapshot is None:
+        return None
+    content, metadata = snapshot
+    if content != expected_content:
+        raise ValueError("报告事务临时文件摘要冲突")
+    if metadata.st_nlink == 2 and (
+        terminal_metadata is None
+        or not _same_filesystem_object(metadata, terminal_metadata)
+    ):
+        raise ValueError("报告事务临时文件硬链接状态不安全")
+    return metadata
+
+
+def _terminal_states(
+    summary_fd: int,
+    expected_outputs: Mapping[str, tuple[bytes, str]],
+    *,
+    recovery: bool,
+) -> dict[str, os.stat_result | None]:
+    states: dict[str, os.stat_result | None] = {}
+    allowed_links = frozenset({1, 2}) if recovery else frozenset({1})
+    for name in REPORT_OUTPUT_NAMES:
+        try:
+            snapshot = _read_private_at(
+                summary_fd,
+                name,
+                f"报告输出 {name}",
+                allowed_links=allowed_links,
+            )
+        except ValueError as exc:
+            raise ValueError(f"拒绝覆盖不安全报告输出: {name}") from exc
+        if snapshot is None:
+            states[name] = None
+            continue
+        content, metadata = snapshot
+        if hashlib.sha256(content).hexdigest() != expected_outputs[name][1]:
+            raise ValueError(f"拒绝覆盖报告输出摘要冲突: {name}")
+        states[name] = metadata
+    return states
+
+
+def _publish_from_temporary(
+    summary_fd: int,
+    temporary_name: str,
+    output_name: str,
+) -> None:
+    try:
+        os.link(
+            temporary_name,
+            output_name,
+            src_dir_fd=summary_fd,
+            dst_dir_fd=summary_fd,
+            follow_symlinks=False,
+        )
+    except FileExistsError as exc:
+        raise ValueError(f"拒绝覆盖已存在报告输出: {output_name}") from exc
+    except OSError as exc:
+        raise ValueError(f"无法安全发布报告输出: {output_name}") from exc
+    os.fsync(summary_fd)
+
+
+def _recover_transaction(
+    summary_fd: int,
+    expected_outputs: Mapping[str, tuple[bytes, str]],
+    journal: tuple[dict[str, Any], str, bytes],
+) -> None:
+    payload, transaction_id, journal_content = journal
+    terminal_states = _terminal_states(summary_fd, expected_outputs, recovery=True)
+    temporary_names = {
+        name: f".{name}.{transaction_id}.tmp" for name in REPORT_OUTPUT_NAMES
+    }
+    temporary_states = {
+        name: _validate_transaction_temporary(
+            summary_fd,
+            temporary_names[name],
+            expected_outputs[name][0],
+            terminal_states[name],
+        )
+        for name in REPORT_OUTPUT_NAMES
+    }
+    for name in REPORT_OUTPUT_NAMES:
+        terminal_metadata = terminal_states[name]
+        temporary_metadata = temporary_states[name]
+        if terminal_metadata is not None and terminal_metadata.st_nlink == 2 and (
+            temporary_metadata is None
+            or not _same_filesystem_object(terminal_metadata, temporary_metadata)
+        ):
+            raise ValueError("报告终态硬链接状态不安全")
+    journal_temporary = f"{REPORT_JOURNAL_NAME}.{transaction_id}.tmp"
+    journal_temporary_snapshot = _read_private_at(
+        summary_fd, journal_temporary, "报告事务 journal 临时文件"
+    )
+    if journal_temporary_snapshot is not None:
+        temporary_content, _metadata = journal_temporary_snapshot
+        replacement_payload, replacement_id = _validate_journal(
+            temporary_content, expected_outputs
+        )
+        if replacement_id != transaction_id or replacement_payload != payload:
+            raise ValueError("报告事务 journal 临时文件不合法")
+    for name in REPORT_OUTPUT_NAMES:
+        if terminal_states[name] is not None:
+            continue
+        temporary_name = temporary_names[name]
+        if temporary_states[name] is None:
+            _create_private_at(summary_fd, temporary_name, expected_outputs[name][0])
+        _publish_from_temporary(summary_fd, temporary_name, name)
+        terminal_states[name] = os.stat(
+            name, dir_fd=summary_fd, follow_symlinks=False
+        )
+    for name in REPORT_OUTPUT_NAMES:
+        temporary_name = temporary_names[name]
+        if _stat_at(summary_fd, temporary_name) is not None:
+            _unlink_at(summary_fd, temporary_name)
+    if journal_temporary_snapshot is not None:
+        _unlink_at(summary_fd, journal_temporary)
+    _unlink_at(summary_fd, REPORT_JOURNAL_NAME)
+
+
+def _write_initial_journal(
+    summary_fd: int,
+    payload: Mapping[str, object],
+) -> bytes:
+    content = _journal_bytes(payload)
+    _create_private_at(summary_fd, REPORT_JOURNAL_NAME, content)
+    return content
+
+
+def _replace_journal_for_crash_injection(
+    summary_fd: int,
+    transaction_id: str,
+    content: bytes,
+) -> None:
+    temporary_name = f"{REPORT_JOURNAL_NAME}.{transaction_id}.tmp"
+    _create_private_at(summary_fd, temporary_name, content)
+    if os.getenv("REPORT_TRANSACTION_CRASH_DURING_JOURNAL_REPLACE"):
+        os._exit(87)
+    try:
+        os.rename(
+            temporary_name,
+            REPORT_JOURNAL_NAME,
+            src_dir_fd=summary_fd,
+            dst_dir_fd=summary_fd,
+        )
+    except OSError as exc:
+        raise ValueError("无法安全替换报告事务 journal") from exc
+    os.fsync(summary_fd)
 
 
 def publish_report_transaction(
     release_root: Path,
     outputs: tuple[tuple[Path, bytes], tuple[Path, bytes]],
+    *,
+    expected_root_identity: RootIdentity,
 ) -> None:
-    parents = {path.parent.resolve(strict=True) for path, _ in outputs}
-    if len(parents) != 1:
-        raise ValueError("JSON 与 Markdown 必须位于同一个 release 汇总目录")
-    parent = next(iter(parents))
-    if parent != (release_root / "summary").resolve(strict=True):
-        raise ValueError("报告输出必须位于当前 release 的 summary 目录")
-    lock = parent / ".report-transaction.lock"
-    lock_fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    journal = parent / ".report-transaction.journal"
-    temporaries: list[Path] = []
-    published: list[Path] = []
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        recover_transaction(parent, journal)
-        states = [require_safe_output(path, content) for path, content in outputs]
-        if states == ["same", "same"]:
+    if len(outputs) != len(REPORT_OUTPUT_NAMES):
+        raise ValueError("报告事务必须精确包含 JSON 与 Markdown")
+    expected_paths = {
+        name: release_root / "summary" / name for name in REPORT_OUTPUT_NAMES
+    }
+    output_by_name: dict[str, tuple[bytes, str]] = {}
+    for path, content in outputs:
+        if path.name not in expected_paths or path != expected_paths[path.name]:
+            raise ValueError("报告输出必须位于当前 release 的 summary 目录")
+        if path.name in output_by_name:
+            raise ValueError("报告事务包含重复输出")
+        output_by_name[path.name] = (content, hashlib.sha256(content).hexdigest())
+    if set(output_by_name) != set(REPORT_OUTPUT_NAMES):
+        raise ValueError("报告事务必须精确包含 JSON 与 Markdown")
+    with _release_directory_descriptor(
+        release_root,
+        PurePosixPath("summary"),
+        expected_root_identity,
+    ) as summary_fd:
+        fcntl.flock(summary_fd, fcntl.LOCK_EX)
+        journal = _read_and_validate_journal(summary_fd, output_by_name)
+        if journal is not None:
+            _recover_transaction(summary_fd, output_by_name, journal)
+        terminal_states = _terminal_states(
+            summary_fd, output_by_name, recovery=False
+        )
+        if all(state is not None for state in terminal_states.values()):
             return
-        if "same" in states:
+        if any(state is not None for state in terminal_states.values()):
             raise ValueError("报告双文件状态不一致，拒绝补写半套报告")
         transaction_id = uuid.uuid4().hex
-        for path, content in outputs:
-            temporaries.append(
-                write_private_temp(parent, f".{path.name}.{transaction_id}.", content)
-            )
-        journal_payload = {
-            "published": [],
-            "temporaries": [path.name for path in temporaries],
+        temporary_names = {
+            name: f".{name}.{transaction_id}.tmp" for name in REPORT_OUTPUT_NAMES
         }
-        write_journal_atomic(parent, journal, journal_payload)
-        for index, ((destination, _), temporary) in enumerate(
-            zip(outputs, temporaries, strict=True)
-        ):
-            require_safe_output(destination, outputs[index][1])
-            journal_payload["published"] = [
-                path.name for path in (*published, destination)
-            ]
-            journal_payload["temporaries"] = [
-                path.name for path in temporaries if path.exists()
-            ]
-            write_journal_atomic(
-                parent,
-                journal,
-                journal_payload,
-                allow_crash_injection=index == 0,
-            )
-            os.replace(temporary, destination)
-            published.append(destination)
-            fsync_directory(parent)
+        payload: dict[str, object] = {
+            "schema_version": 1,
+            "transaction_id": transaction_id,
+            "state": "publishing",
+            "outputs": {
+                name: {"sha256": output_by_name[name][1], "published": False}
+                for name in REPORT_OUTPUT_NAMES
+            },
+            "temporaries": temporary_names,
+        }
+        journal_content = _write_initial_journal(summary_fd, payload)
+        _replace_journal_for_crash_injection(
+            summary_fd, transaction_id, journal_content
+        )
+        for index, name in enumerate(REPORT_OUTPUT_NAMES):
+            temporary_name = temporary_names[name]
+            _create_private_at(summary_fd, temporary_name, output_by_name[name][0])
+            _publish_from_temporary(summary_fd, temporary_name, name)
             if index == 0 and os.getenv("REPORT_TRANSACTION_CRASH_AFTER_FIRST_RENAME"):
                 os._exit(86)
             if index == 0 and os.getenv("REPORT_TRANSACTION_FAIL_AFTER_FIRST_RENAME"):
                 raise RuntimeError("注入第一文件发布后的事务失败")
-        journal.unlink()
-        fsync_directory(parent)
-    except Exception:
-        for path in published:
-            path.unlink(missing_ok=True)
-        for path in temporaries:
-            path.unlink(missing_ok=True)
-        journal.unlink(missing_ok=True)
-        fsync_directory(parent)
-        raise
-    finally:
-        os.close(lock_fd)
+            if index == 1 and os.getenv("REPORT_TRANSACTION_CRASH_AFTER_SECOND_RENAME"):
+                os._exit(88)
+            _unlink_at(summary_fd, temporary_name)
+        _unlink_at(summary_fd, REPORT_JOURNAL_NAME)
 
 
 def _require_canonical_cli_paths(arguments: argparse.Namespace) -> None:
@@ -1469,6 +1723,7 @@ def main() -> int:
         publish_report_transaction(
             args.release_root,
             outputs,
+            expected_root_identity=root_identity,
         )
         return 0 if conclusion == "通过" else 3
     except (OSError, ValueError, json.JSONDecodeError, TypeError) as exc:

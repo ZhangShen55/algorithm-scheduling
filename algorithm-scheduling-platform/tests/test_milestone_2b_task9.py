@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import importlib
 import importlib.util
 import json
@@ -602,7 +603,9 @@ publish_report_transaction(
         (summary / "report.json", b'{"schema_version":2,"overall_status":"through"}\\n'),
         (summary / "report.md", b"# report\\n"),
     ),
+    expected_root_identity=tuple(map(int, sys.argv[2].split(":"))),
 )
+raise SystemExit(3)
 """
 
 
@@ -633,6 +636,7 @@ def _publish_renderer_transaction(
             json_content=json_content,
             markdown_content=markdown_content,
         ),
+        expected_root_identity=RENDERER_MODULE.release_root_identity(release),
     )
 
 
@@ -640,13 +644,53 @@ def _run_renderer_transaction_subprocess(
     release: Path, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [str(PYTHON), "-c", TRANSACTION_SUBPROCESS, str(release)],
+        [
+            str(PYTHON),
+            "-c",
+            TRANSACTION_SUBPROCESS,
+            str(release),
+            ":".join(map(str, RENDERER_MODULE.release_root_identity(release))),
+        ],
         cwd=PLATFORM_ROOT,
         env=env,
         text=True,
         capture_output=True,
         check=False,
     )
+
+
+def _transaction_journal_payload(
+    transaction_id: str = "a" * 32,
+    *,
+    published: tuple[bool, bool] = (False, False),
+    temporaries: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    names = ("report.json", "report.md")
+    contents = (TRANSACTION_JSON, TRANSACTION_MARKDOWN)
+    return {
+        "schema_version": 1,
+        "transaction_id": transaction_id,
+        "state": "publishing",
+        "outputs": {
+            name: {
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "published": is_published,
+            }
+            for name, content, is_published in zip(
+                names, contents, published, strict=True
+            )
+        },
+        "temporaries": {
+            name: f".{name}.{transaction_id}.tmp" for name in temporaries
+        },
+    }
+
+
+def _write_transaction_journal(release: Path, payload: object) -> Path:
+    journal = release / "summary/.report-transaction.journal"
+    journal.write_text(json.dumps(payload, allow_nan=True), encoding="utf-8")
+    journal.chmod(0o600)
+    return journal
 
 
 def test_renderer_snapshot_rejects_release_root_rebind_between_files(
@@ -4383,7 +4427,7 @@ def test_renderer_recovers_after_process_crash_after_first_rename(tmp_path: Path
     failed = _run_renderer_transaction_subprocess(release, env)
     assert failed.returncode != 0
     recovered = _run_renderer_transaction_subprocess(release)
-    assert recovered.returncode == 0, recovered.stderr
+    assert recovered.returncode == 3, recovered.stderr
     assert (release / "summary" / "report.json").is_file()
     assert (release / "summary" / "report.md").is_file()
     assert not (release / "summary" / ".report-transaction.journal").exists()
@@ -4398,7 +4442,7 @@ def test_renderer_recovers_after_crash_during_atomic_journal_replace(tmp_path: P
     failed = _run_renderer_transaction_subprocess(release, env)
     assert failed.returncode != 0
     recovered = _run_renderer_transaction_subprocess(release)
-    assert recovered.returncode == 0, recovered.stderr
+    assert recovered.returncode == 3, recovered.stderr
     assert (release / "summary" / "report.json").is_file()
     assert (release / "summary" / "report.md").is_file()
     assert not list((release / "summary").glob(".report-transaction.journal.*"))
@@ -4439,3 +4483,302 @@ def test_renderer_concurrent_different_content_has_one_winner(tmp_path: Path) ->
         ]
         results = [future.result() for future in futures]
     assert sorted(results) == [False, True]
+
+
+def test_renderer_valid_shape_journal_cannot_delete_cases_input(tmp_path: Path) -> None:
+    release = _release(tmp_path)
+    cases = release / "summary/cases.json"
+    cases.write_bytes(b'{"schema_version":1}\n')
+    cases.chmod(0o600)
+    before = (cases.read_bytes(), os.lstat(cases).st_ino)
+    payload = _transaction_journal_payload()
+    payload["outputs"]["cases.json"] = {
+        "sha256": hashlib.sha256(cases.read_bytes()).hexdigest(),
+        "published": True,
+    }
+    journal = _write_transaction_journal(release, payload)
+
+    with pytest.raises(ValueError, match="journal.*不合法"):
+        _publish_renderer_transaction(tmp_path)
+
+    assert (cases.read_bytes(), os.lstat(cases).st_ino) == before
+    assert journal.exists()
+
+
+def test_renderer_complete_pair_survives_crash_after_second_rename(
+    tmp_path: Path,
+) -> None:
+    release = _release(tmp_path)
+    env = os.environ.copy()
+    env["REPORT_TRANSACTION_CRASH_AFTER_SECOND_RENAME"] = "1"
+
+    crashed = _run_renderer_transaction_subprocess(release, env)
+
+    assert crashed.returncode == 88, crashed.stderr
+    before = {
+        name: (path.read_bytes(), os.lstat(path).st_ino)
+        for name in ("report.json", "report.md")
+        if (path := release / "summary" / name).is_file()
+    }
+    assert set(before) == {"report.json", "report.md"}
+    recovered = _run_renderer_transaction_subprocess(release)
+    assert recovered.returncode == 3, recovered.stderr
+    assert {
+        name: (path.read_bytes(), os.lstat(path).st_ino)
+        for name in ("report.json", "report.md")
+        if (path := release / "summary" / name).is_file()
+    } == before
+    assert not (release / "summary/.report-transaction.journal").exists()
+
+
+def test_renderer_rolls_forward_single_matching_terminal(tmp_path: Path) -> None:
+    release = _release(tmp_path)
+    report_json = release / "summary/report.json"
+    report_json.write_bytes(TRANSACTION_JSON)
+    report_json.chmod(0o600)
+    json_inode = os.lstat(report_json).st_ino
+    _write_transaction_journal(
+        release,
+        _transaction_journal_payload(published=(True, False), temporaries=("report.md",)),
+    )
+
+    _publish_renderer_transaction(tmp_path)
+
+    assert report_json.read_bytes() == TRANSACTION_JSON
+    assert os.lstat(report_json).st_ino == json_inode
+    assert (release / "summary/report.md").read_bytes() == TRANSACTION_MARKDOWN
+    assert not (release / "summary/.report-transaction.journal").exists()
+
+
+def test_renderer_complete_matching_pair_recovery_does_not_rewrite(
+    tmp_path: Path,
+) -> None:
+    release = _release(tmp_path)
+    before: dict[str, tuple[bytes, int]] = {}
+    for name, content in (
+        ("report.json", TRANSACTION_JSON),
+        ("report.md", TRANSACTION_MARKDOWN),
+    ):
+        path = release / "summary" / name
+        path.write_bytes(content)
+        path.chmod(0o600)
+        before[name] = (path.read_bytes(), os.lstat(path).st_ino)
+    _write_transaction_journal(
+        release,
+        _transaction_journal_payload(published=(False, True)),
+    )
+
+    _publish_renderer_transaction(tmp_path)
+
+    assert {
+        name: (path.read_bytes(), os.lstat(path).st_ino)
+        for name in before
+        if (path := release / "summary" / name).is_file()
+    } == before
+
+
+def test_renderer_exception_after_first_publish_preserves_recoverable_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release = _release(tmp_path)
+    monkeypatch.setenv("REPORT_TRANSACTION_FAIL_AFTER_FIRST_RENAME", "1")
+
+    with pytest.raises(RuntimeError, match="注入"):
+        _publish_renderer_transaction(tmp_path)
+
+    first = release / "summary/report.json"
+    before = (first.read_bytes(), os.lstat(first).st_ino)
+    assert (release / "summary/.report-transaction.journal").exists()
+    monkeypatch.delenv("REPORT_TRANSACTION_FAIL_AFTER_FIRST_RENAME")
+    _publish_renderer_transaction(tmp_path)
+    assert (first.read_bytes(), os.lstat(first).st_ino) == before
+    assert (release / "summary/report.md").read_bytes() == TRANSACTION_MARKDOWN
+
+
+@pytest.mark.parametrize("journal_kind", ("symlink", "0644", "hardlink", "directory"))
+def test_renderer_rejects_unsafe_journal_metadata_without_namespace_mutation(
+    tmp_path: Path, journal_kind: str
+) -> None:
+    release = _release(tmp_path)
+    summary = release / "summary"
+    journal = summary / ".report-transaction.journal"
+    payload = json.dumps(_transaction_journal_payload()).encode()
+    if journal_kind == "symlink":
+        target = tmp_path / "outside-journal"
+        target.write_bytes(payload)
+        target.chmod(0o600)
+        journal.symlink_to(target)
+    elif journal_kind == "0644":
+        journal.write_bytes(payload)
+        journal.chmod(0o644)
+    elif journal_kind == "hardlink":
+        journal.write_bytes(payload)
+        journal.chmod(0o600)
+        os.link(journal, summary / ".journal-second-link")
+    else:
+        journal.mkdir(mode=0o700)
+    before = sorted(path.name for path in summary.iterdir())
+
+    with pytest.raises(ValueError, match="journal"):
+        _publish_renderer_transaction(tmp_path)
+
+    assert sorted(path.name for path in summary.iterdir()) == before
+    assert not (summary / "report.json").exists()
+    assert not (summary / "report.md").exists()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {**_transaction_journal_payload(), "extra": True},
+        {key: value for key, value in _transaction_journal_payload().items() if key != "state"},
+        {**_transaction_journal_payload(), "schema_version": 2},
+        {**_transaction_journal_payload(), "transaction_id": "A" * 32},
+        {**_transaction_journal_payload(), "state": "rollback"},
+        {
+            **_transaction_journal_payload(),
+            "outputs": {
+                "report.json": {"sha256": "b" * 64, "published": False}
+            },
+        },
+        {
+            **_transaction_journal_payload(),
+            "outputs": {
+                **_transaction_journal_payload()["outputs"],
+                "report.md": {"sha256": "B" * 64, "published": False},
+            },
+        },
+        {
+            **_transaction_journal_payload(),
+            "outputs": {
+                **_transaction_journal_payload()["outputs"],
+                "report.md": {
+                    "sha256": hashlib.sha256(TRANSACTION_MARKDOWN).hexdigest(),
+                    "published": 1,
+                },
+            },
+        },
+        {
+            **_transaction_journal_payload(),
+            "temporaries": {"cases.json": ".cases.json." + "a" * 32 + ".tmp"},
+        },
+        {**_transaction_journal_payload(), "temporaries": {"report.md": ".report.md.wrong.tmp"}},
+    ),
+)
+def test_renderer_rejects_invalid_journal_schema_without_mutation(
+    tmp_path: Path, payload: object
+) -> None:
+    release = _release(tmp_path)
+    journal = _write_transaction_journal(release, payload)
+
+    with pytest.raises(ValueError, match="journal.*不合法"):
+        _publish_renderer_transaction(tmp_path)
+
+    assert journal.exists()
+    assert not (release / "summary/report.json").exists()
+    assert not (release / "summary/report.md").exists()
+
+
+@pytest.mark.parametrize(
+    "content",
+    (
+        b'{"schema_version":1,"schema_version":1}',
+        b'{"schema_version":NaN}',
+    ),
+)
+def test_renderer_rejects_non_strict_journal_json(tmp_path: Path, content: bytes) -> None:
+    release = _release(tmp_path)
+    journal = release / "summary/.report-transaction.journal"
+    journal.write_bytes(content)
+    journal.chmod(0o600)
+
+    with pytest.raises(ValueError, match="journal.*不合法"):
+        _publish_renderer_transaction(tmp_path)
+
+    assert journal.read_bytes() == content
+
+
+def test_renderer_valid_journal_digest_conflict_fails_closed(tmp_path: Path) -> None:
+    release = _release(tmp_path)
+    report_json = release / "summary/report.json"
+    report_json.write_bytes(b"different\n")
+    before = (report_json.read_bytes(), os.lstat(report_json).st_ino)
+    journal = _write_transaction_journal(
+        release, _transaction_journal_payload(published=(True, False))
+    )
+
+    with pytest.raises(ValueError, match="摘要|拒绝覆盖"):
+        _publish_renderer_transaction(tmp_path)
+
+    assert (report_json.read_bytes(), os.lstat(report_json).st_ino) == before
+    assert journal.exists()
+    assert not (release / "summary/report.md").exists()
+
+
+def test_renderer_journal_rejects_terminal_hardlinked_to_unknown_name(
+    tmp_path: Path,
+) -> None:
+    release = _release(tmp_path)
+    summary = release / "summary"
+    for name, content in (
+        ("report.json", TRANSACTION_JSON),
+        ("report.md", TRANSACTION_MARKDOWN),
+    ):
+        path = summary / name
+        path.write_bytes(content)
+        path.chmod(0o600)
+    os.link(summary / "report.json", summary / ".unknown-report-link")
+    journal = _write_transaction_journal(
+        release, _transaction_journal_payload(published=(True, True))
+    )
+    before = {
+        path.name: (path.read_bytes(), os.lstat(path).st_ino)
+        for path in (summary / "report.json", summary / "report.md")
+    }
+
+    with pytest.raises(ValueError, match="硬链接|不安全"):
+        _publish_renderer_transaction(tmp_path)
+
+    assert {
+        path.name: (path.read_bytes(), os.lstat(path).st_ino)
+        for path in (summary / "report.json", summary / "report.md")
+    } == before
+    assert journal.exists()
+
+
+def test_renderer_first_link_crash_recovers_hardlinked_temporary(tmp_path: Path) -> None:
+    release = _release(tmp_path)
+    env = os.environ.copy()
+    env["REPORT_TRANSACTION_CRASH_AFTER_FIRST_RENAME"] = "1"
+
+    crashed = _run_renderer_transaction_subprocess(release, env)
+
+    assert crashed.returncode == 86, crashed.stderr
+    report_json = release / "summary/report.json"
+    assert os.lstat(report_json).st_nlink == 2
+    recovered = _run_renderer_transaction_subprocess(release)
+    assert recovered.returncode == 3, recovered.stderr
+    assert os.lstat(report_json).st_nlink == 1
+    assert not list((release / "summary").glob(".report.*.tmp"))
+
+
+def test_renderer_publisher_rejects_root_rebind_without_publishing_to_either_root(
+    tmp_path: Path,
+) -> None:
+    release = _release(tmp_path)
+    root_identity = RENDERER_MODULE.release_root_identity(release)
+    outputs = _transaction_outputs(release)
+    displaced = release.with_name(f"{release.name}-displaced")
+    release.rename(displaced)
+    (release / "summary").mkdir(parents=True, mode=0o700)
+
+    with pytest.raises(ValueError, match="root.*锚"):
+        publish_report_transaction(
+            release,
+            outputs,
+            expected_root_identity=root_identity,
+        )
+
+    for root in (release, displaced):
+        assert not (root / "summary/report.json").exists()
+        assert not (root / "summary/report.md").exists()
