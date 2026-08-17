@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import signal
@@ -30,6 +31,28 @@ EVIDENCE_CATEGORIES = {
     "recovery",
     "summary",
 }
+
+
+def test_historical_schema1_release_fixture_still_renders(tmp_path: Path) -> None:
+    from tests.test_milestone_2b_report_aggregation import (
+        ReleaseTree,
+        _prepare_renderer_release,
+        _run_task6_renderer,
+    )
+
+    release_tree = ReleaseTree(tmp_path)
+    envelope = _prepare_renderer_release(release_tree)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert envelope["schema_version"] == 1
+    assert completed.returncode == 3, completed.stderr
+    report = json.loads(
+        (release_tree.root / "summary/report.json").read_text(encoding="utf-8")
+    )
+    assert report["schema_version"] == 2
+    assert report["cases_schema_version"] == 1
+    assert report["overall_status"] == "未执行及原因"
 
 
 def _run_prepare(

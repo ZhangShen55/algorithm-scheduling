@@ -22,14 +22,18 @@ import yaml  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from scripts.milestone_2b_report_contract import (
+        DECLARATION_CATEGORY_BY_CASE_ID,
         DECLARATION_PLACEHOLDER,
         DECLARATION_TARGET,
+        EXECUTION_CASE_KIND_BY_CATEGORY,
+        EXECUTION_RECORD_FIELDS,
         CaseRecord,
         Coverage,
         expand_declaration_cases,
         load_report_plan_bytes,
         strict_json_loads,
         validate_cases_envelope,
+        validate_raw_execution_evidence,
     )
 else:
     _contract = importlib.import_module(
@@ -39,12 +43,16 @@ else:
     )
     DECLARATION_PLACEHOLDER = _contract.DECLARATION_PLACEHOLDER
     DECLARATION_TARGET = _contract.DECLARATION_TARGET
+    DECLARATION_CATEGORY_BY_CASE_ID = _contract.DECLARATION_CATEGORY_BY_CASE_ID
+    EXECUTION_CASE_KIND_BY_CATEGORY = _contract.EXECUTION_CASE_KIND_BY_CATEGORY
+    EXECUTION_RECORD_FIELDS = _contract.EXECUTION_RECORD_FIELDS
     CaseRecord = _contract.CaseRecord
     Coverage = _contract.Coverage
     expand_declaration_cases = _contract.expand_declaration_cases
     load_report_plan_bytes = _contract.load_report_plan_bytes
     strict_json_loads = _contract.strict_json_loads
     validate_cases_envelope = _contract.validate_cases_envelope
+    validate_raw_execution_evidence = _contract.validate_raw_execution_evidence
 
 EXPECTED_PROFILES = ("gpu0", "gpu1", "gpu2", "cpu")
 EXPECTED_FACEREC_INSTANCES = (
@@ -119,6 +127,7 @@ DECLARATION_FIELDS = {
     "cases",
 }
 DECLARATION_CASE_FIELDS = {"case_id", "status"}
+EXECUTION_FIELDS = set(EXECUTION_RECORD_FIELDS)
 PUBLISH_PATHS = frozenset(
     {
         Path("negative/cases.json"),
@@ -981,6 +990,7 @@ def materialize_declaration_cases(
     report_plan: dict[str, Any],
     release_tag: str,
     git_sha: str,
+    executed_case_ids: frozenset[str] = frozenset(),
 ) -> tuple[list[CaseRecord], dict[str, Coverage]]:
     _require_string(release_tag, "release_tag")
     if GIT_SHA_PATTERN.fullmatch(git_sha) is None:
@@ -991,8 +1001,13 @@ def materialize_declaration_cases(
     cases: list[CaseRecord] = []
     coverage: dict[str, Coverage] = {}
     for category in DECLARATION_CATEGORIES:
-        source_cases = [
+        authority_source_cases = [
             case for case in expanded if case.get("case_kind") == category
+        ]
+        source_cases = [
+            case
+            for case in authority_source_cases
+            if case["case_id"] not in executed_case_ids
         ]
         relative_path = Path(f"{category}/cases.json")
         document = _declaration_document(
@@ -1002,24 +1017,27 @@ def materialize_declaration_cases(
             git_sha=git_sha,
             reason=reason,
         )
-        try:
-            publish_json_once(
-                release_root=release_root,
-                relative_path=relative_path,
-                document=document,
-            )
-        except ValueError as publication_error:
+        if source_cases:
             try:
-                existing = _load_release_json(release_root, relative_path)
-            except ValueError as read_error:
-                raise publication_error from read_error
-            _validate_declaration_document(
-                existing,
-                expected=document,
-                context=relative_path.as_posix(),
-            )
-            raise publication_error
+                publish_json_once(
+                    release_root=release_root,
+                    relative_path=relative_path,
+                    document=document,
+                )
+            except ValueError as publication_error:
+                try:
+                    existing = _load_release_json(release_root, relative_path)
+                except ValueError as read_error:
+                    raise publication_error from read_error
+                _validate_declaration_document(
+                    existing,
+                    expected=document,
+                    context=relative_path.as_posix(),
+                )
+                raise publication_error
         for source_case in source_cases:
+            if source_case["case_id"] in executed_case_ids:
+                continue
             cases.append(
                 _case_record(
                     case_id=cast(str, source_case["case_id"]),
@@ -1037,7 +1055,7 @@ def materialize_declaration_cases(
                 )
             )
         coverage[f"{category}_declarations"] = {
-            "expected": len(source_cases),
+            "expected": len(authority_source_cases),
             "observed": len(source_cases),
             "passed": 0,
         }
@@ -1474,6 +1492,182 @@ def _load_release_json_list(release_root: Path, relative_path: Path) -> list[Any
     except (json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f"invalid JSON release source {relative_path}: {exc}") from exc
     return _require_list(loaded, f"release source {relative_path}")
+
+
+def _release_source_metadata(
+    release_root: Path, relative_path: Path
+) -> os.stat_result:
+    if relative_path.is_absolute() or ".." in relative_path.parts or not relative_path.parts:
+        raise ValueError(f"release source path escapes release root: {relative_path}")
+    parent_path = Path(*relative_path.parts[:-1])
+    source_name = relative_path.parts[-1]
+    with _release_directory_descriptor(release_root, parent_path) as parent_descriptor:
+        try:
+            metadata = os.stat(
+                source_name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise ValueError(f"failed to stat release source: {relative_path}") from exc
+        _require_regular_source(metadata, relative_path)
+        if metadata.st_nlink != 1:
+            raise ValueError(f"release source must not be hard linked: {relative_path}")
+        return metadata
+
+
+def _execution_evidence_paths(
+    value: object,
+    *,
+    category: str,
+    case_id: str,
+    context: str,
+) -> list[Path]:
+    raw_paths = _require_list(value, f"{context}.evidence")
+    if not raw_paths:
+        raise ValueError(f"{context}.evidence must contain raw execution evidence")
+    paths: list[Path] = []
+    expected_prefix = (category, "evidence", case_id)
+    for index, raw_path in enumerate(raw_paths):
+        relative = Path(_require_string(raw_path, f"{context}.evidence[{index}]"))
+        if (
+            relative.is_absolute()
+            or ".." in relative.parts
+            or len(relative.parts) <= len(expected_prefix)
+            or relative.parts[: len(expected_prefix)] != expected_prefix
+            or relative.suffix != ".json"
+        ):
+            raise ValueError(
+                f"{context}.evidence[{index}] must be JSON evidence below "
+                f"{category}/evidence/{case_id}/"
+            )
+        paths.append(relative)
+    if len(paths) != len(set(paths)):
+        raise ValueError(f"{context}.evidence must contain unique paths")
+    return paths
+
+
+def collect_case_executions(
+    *,
+    release_root: Path,
+    release_tag: str,
+    git_sha: str,
+) -> list[CaseRecord]:
+    _require_string(release_tag, "release_tag")
+    if GIT_SHA_PATTERN.fullmatch(git_sha) is None:
+        raise ValueError("git_sha must be 40 lowercase hexadecimal characters")
+    root_entries = _real_directory_entries(release_root, Path())
+    loaded: list[tuple[str, Path, dict[str, Any], os.stat_result]] = []
+    for category in DECLARATION_CATEGORIES:
+        category_metadata = root_entries.get(category)
+        if category_metadata is None:
+            continue
+        _require_real_subdirectory(category_metadata, Path(category))
+        category_entries = _real_directory_entries(release_root, Path(category))
+        executions_metadata = category_entries.get("executions")
+        if executions_metadata is None:
+            continue
+        executions_root = Path(category) / "executions"
+        _require_real_subdirectory(executions_metadata, executions_root)
+        for name, metadata in sorted(
+            _real_directory_entries(release_root, executions_root).items()
+        ):
+            relative_path = executions_root / name
+            _require_regular_source(metadata, relative_path)
+            if metadata.st_nlink != 1 or relative_path.suffix != ".json":
+                raise ValueError(
+                    f"execution record must be one regular JSON file: {relative_path}"
+                )
+            document = _load_release_json(release_root, relative_path)
+            _require_exact_fields(document, EXECUTION_FIELDS, relative_path.as_posix())
+            loaded.append((category, relative_path, document, metadata))
+
+    case_ids = [
+        _require_string(document.get("case_id"), f"{relative_path}.case_id")
+        for _category, relative_path, document, _metadata in loaded
+    ]
+    duplicate_ids = sorted(
+        case_id for case_id in set(case_ids) if case_ids.count(case_id) > 1
+    )
+    if duplicate_ids:
+        raise ValueError(f"duplicate execution record case_id: {duplicate_ids}")
+
+    cases: list[CaseRecord] = []
+    for category, relative_path, document, execution_metadata in loaded:
+        context = relative_path.as_posix()
+        case_id = _require_string(document.get("case_id"), f"{context}.case_id")
+        authority_category = DECLARATION_CATEGORY_BY_CASE_ID.get(case_id)
+        if authority_category != category:
+            raise ValueError(f"{context}.case_id does not belong to {category}")
+        expected_path = Path(category) / "executions" / f"{case_id}.json"
+        if relative_path != expected_path:
+            raise ValueError(f"execution record path must equal {expected_path}")
+        if type(document.get("schema_version")) is not int or document["schema_version"] != 2:
+            raise ValueError(f"{context}.schema_version must equal 2")
+        expected_type = f"{category}_case"
+        if document.get("evidence_type") != expected_type:
+            raise ValueError(f"{context}.evidence_type must equal {expected_type}")
+        status = _require_string(document.get("status"), f"{context}.status")
+        if status not in {"通过", "失败"}:
+            raise ValueError(f"{context}.status must equal 通过 or 失败")
+        if document.get("mock") is not False:
+            raise ValueError(f"{context}.mock must be false")
+        if (
+            document.get("release_tag") != release_tag
+            or document.get("git_sha") != git_sha
+        ):
+            raise ValueError(f"{context} release_tag/git_sha does not match release")
+        command = _require_string(document.get("command"), f"{context}.command")
+        if command == DECLARATION_PLACEHOLDER:
+            raise ValueError(f"{context}.command must record the real command")
+        evidence_paths = _execution_evidence_paths(
+            document.get("evidence"),
+            category=category,
+            case_id=case_id,
+            context=context,
+        )
+        for evidence_path in evidence_paths:
+            evidence_metadata = _release_source_metadata(release_root, evidence_path)
+            if _same_filesystem_object(execution_metadata, evidence_metadata):
+                raise ValueError(
+                    f"{evidence_path} must be raw evidence, not the execution record"
+                )
+            evidence = _load_release_json(release_root, evidence_path)
+            validate_raw_execution_evidence(
+                evidence,
+                evidence_path.as_posix(),
+                expected_case_id=case_id,
+            )
+            if (
+                evidence.get("release_tag") != release_tag
+                or evidence.get("git_sha") != git_sha
+            ):
+                raise ValueError(
+                    f"{evidence_path} release_tag/git_sha does not match release"
+                )
+        cases.append(
+            {
+                "case_id": case_id,
+                "source_case_id": case_id,
+                "case_kind": EXECUTION_CASE_KIND_BY_CATEGORY[category],
+                "run_id": case_id,
+                "status": status,
+                "started_at": _require_string(
+                    document.get("started_at"), f"{context}.started_at"
+                ),
+                "finished_at": _require_string(
+                    document.get("finished_at"), f"{context}.finished_at"
+                ),
+                "target": _require_string(document.get("target"), f"{context}.target"),
+                "command": command,
+                "evidence": [path.as_posix() for path in evidence_paths],
+                "reason": _require_string(document.get("reason"), f"{context}.reason"),
+                "mock": False,
+                "release_tag": release_tag,
+                "git_sha": git_sha,
+            }
+        )
+    return cases
 
 
 def _registration_authority(report_plan: dict[str, Any]) -> None:
@@ -2163,7 +2357,7 @@ def _smoke_case_record(
 def _real_directory_entries(
     release_root: Path, relative_path: Path
 ) -> dict[str, os.stat_result]:
-    if relative_path.is_absolute() or ".." in relative_path.parts or not relative_path.parts:
+    if relative_path.is_absolute() or ".." in relative_path.parts:
         raise ValueError(f"release directory path is unsafe: {relative_path}")
     with _release_directory_descriptor(release_root, relative_path) as directory_descriptor:
         try:
@@ -2696,10 +2890,14 @@ def _case_sort_key(case: CaseRecord) -> tuple[int, str, str, str]:
         group = 3
     elif case_kind in {"smoke_gpu_trigger", "smoke_cpu_instance"}:
         group = 4
+    elif case_kind == "negative_execution":
+        group = 5
     elif case_kind == "execution_declaration" and evidence == [
         "negative/cases.json"
     ]:
         group = 5
+    elif case_kind == "load_execution":
+        group = 6
     elif case_kind == "execution_declaration" and evidence == ["load/cases.json"]:
         group = 6
     else:
@@ -2719,6 +2917,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--smoke-manifest", required=True, type=Path)
     parser.add_argument("--report-plan", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--require-all-executed", action="store_true")
     return parser.parse_args()
 
 
@@ -2756,23 +2955,76 @@ def main() -> int:
             release_tag=release_tag,
             git_sha=git_sha,
         )
+        execution_cases = collect_case_executions(
+            release_root=arguments.release_root,
+            release_tag=release_tag,
+            git_sha=git_sha,
+        )
+        executed_case_ids = frozenset(case["case_id"] for case in execution_cases)
         declaration_cases, declaration_coverage = materialize_declaration_cases(
             release_root=arguments.release_root,
             report_plan=report_plan,
             release_tag=release_tag,
             git_sha=git_sha,
+            executed_case_ids=executed_case_ids,
         )
-        coverage = {
-            **registration_coverage,
-            **smoke_coverage,
-            **declaration_coverage,
-        }
+        if getattr(arguments, "require_all_executed", False) and declaration_cases:
+            raise ValueError(
+                "--require-all-executed rejects remaining execution_declaration cases"
+            )
+        schema_version = 2 if execution_cases else 1
+        if schema_version == 1:
+            coverage = {
+                **registration_coverage,
+                **smoke_coverage,
+                **declaration_coverage,
+            }
+        else:
+            negative_expected = sum(
+                category == "negative"
+                for category in DECLARATION_CATEGORY_BY_CASE_ID.values()
+            )
+            load_expected = sum(
+                category == "load"
+                for category in DECLARATION_CATEGORY_BY_CASE_ID.values()
+            )
+            coverage = {
+                **registration_coverage,
+                **smoke_coverage,
+                "negative_cases": {
+                    "expected": negative_expected,
+                    "observed": sum(
+                        case["case_id"] in DECLARATION_CATEGORY_BY_CASE_ID
+                        and DECLARATION_CATEGORY_BY_CASE_ID[case["case_id"]]
+                        == "negative"
+                        for case in declaration_cases + execution_cases
+                    ),
+                    "passed": sum(
+                        case["case_kind"] == "negative_execution"
+                        and case["status"] == "通过"
+                        for case in execution_cases
+                    ),
+                },
+                "load_cases": {
+                    "expected": load_expected,
+                    "observed": sum(
+                        case["case_id"] in DECLARATION_CATEGORY_BY_CASE_ID
+                        and DECLARATION_CATEGORY_BY_CASE_ID[case["case_id"]] == "load"
+                        for case in declaration_cases + execution_cases
+                    ),
+                    "passed": sum(
+                        case["case_kind"] == "load_execution"
+                        and case["status"] == "通过"
+                        for case in execution_cases
+                    ),
+                },
+            }
         cases = sorted(
-            registration_cases + smoke_cases + declaration_cases,
+            registration_cases + smoke_cases + execution_cases + declaration_cases,
             key=_case_sort_key,
         )
         envelope = {
-            "schema_version": 1,
+            "schema_version": schema_version,
             "release_tag": release_tag,
             "git_sha": git_sha,
             "plan_sha256": hashlib.sha256(plan_bytes).hexdigest(),

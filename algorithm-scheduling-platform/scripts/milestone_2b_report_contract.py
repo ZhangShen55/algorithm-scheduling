@@ -4,10 +4,12 @@ import json
 import math
 import re
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import TypedDict, cast
 
 SCHEMA_VERSION = 1
+EXECUTION_SCHEMA_VERSION = 2
 STATUSES = ("通过", "失败", "未执行及原因")
 COVERAGE_KEYS = (
     "registration_full",
@@ -39,6 +41,16 @@ COVERAGE_PARTIAL_OBSERVED_KEYS = frozenset({"smoke_gpu_trigger"})
 DECLARATION_COVERAGE_KEYS = frozenset(
     {"negative_declarations", "load_declarations"}
 )
+EXECUTION_COVERAGE_KEYS = (
+    *COVERAGE_KEYS[:-2],
+    "negative_cases",
+    "load_cases",
+)
+EXECUTION_COVERAGE_EXPECTED = {
+    **{key: COVERAGE_EXPECTED[key] for key in COVERAGE_KEYS[:-2]},
+    "negative_cases": COVERAGE_EXPECTED["negative_declarations"],
+    "load_cases": COVERAGE_EXPECTED["load_declarations"],
+}
 FIXED_CASE_KIND_COVERAGE = {
     "registration_full": "registration_full",
     "registration_profile": "registration_profiles",
@@ -56,6 +68,40 @@ CASE_KINDS = frozenset(
         "execution_declaration",
     }
 )
+EXECUTION_CASE_KIND_BY_CATEGORY = {
+    "negative": "negative_execution",
+    "load": "load_execution",
+}
+EXECUTION_CASE_KINDS = frozenset(EXECUTION_CASE_KIND_BY_CATEGORY.values())
+EXECUTION_RECORD_FIELDS = frozenset(
+    {
+        "schema_version",
+        "evidence_type",
+        "case_id",
+        "status",
+        "started_at",
+        "finished_at",
+        "target",
+        "command",
+        "reason",
+        "mock",
+        "release_tag",
+        "git_sha",
+        "evidence",
+    }
+)
+RAW_EXECUTION_EVIDENCE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "evidence_type",
+        "case_id",
+        "release_tag",
+        "git_sha",
+        "recorded_at",
+        "payload",
+    }
+)
+SCHEMA2_CASE_KINDS = CASE_KINDS | EXECUTION_CASE_KINDS
 CASE_FIELDS = (
     "case_id",
     "source_case_id",
@@ -305,6 +351,17 @@ def _require_schema_version(value: object, context: str) -> None:
         raise ValueError(f"{context} must equal {SCHEMA_VERSION}")
 
 
+def _require_cases_schema_version(value: object, context: str) -> int:
+    if type(value) is not int or value not in {
+        SCHEMA_VERSION,
+        EXECUTION_SCHEMA_VERSION,
+    }:
+        raise ValueError(
+            f"{context} must equal {SCHEMA_VERSION} or {EXECUTION_SCHEMA_VERSION}"
+        )
+    return value
+
+
 def _require_positive_int(value: object, context: str) -> int:
     if type(value) is not int or value <= 0:
         raise ValueError(f"{context} must be a positive integer")
@@ -451,6 +508,7 @@ def expand_declaration_cases(plan: object) -> list[DeclarationCase]:
 
 def _validate_execution_declaration(
     *,
+    schema_version: int,
     strings: dict[str, str],
     evidence: list[str],
     mock: object,
@@ -459,10 +517,12 @@ def _validate_execution_declaration(
     case_id = strings["case_id"]
     source_case_id = strings["source_case_id"]
     case_kind = strings["case_kind"]
-    declaration_like = (
-        case_kind == "execution_declaration"
-        or case_id in DECLARATION_CATEGORY_BY_CASE_ID
-        or source_case_id in DECLARATION_CATEGORY_BY_CASE_ID
+    declaration_like = case_kind == "execution_declaration" or (
+        schema_version == SCHEMA_VERSION
+        and (
+            case_id in DECLARATION_CATEGORY_BY_CASE_ID
+            or source_case_id in DECLARATION_CATEGORY_BY_CASE_ID
+        )
     )
     if not declaration_like:
         return
@@ -494,6 +554,118 @@ def _validate_execution_declaration(
         raise ValueError(f"{context}.evidence must equal {expected_evidence}")
     if mock is not False:
         raise ValueError(f"{context}.mock must be false for execution_declaration")
+
+
+def _validate_execution_case(
+    *,
+    strings: dict[str, str],
+    evidence: list[str],
+    mock: object,
+    context: str,
+) -> str:
+    case_id = strings["case_id"]
+    if case_id != strings["source_case_id"]:
+        raise ValueError(
+            f"{context}.case_id and {context}.source_case_id must be identical "
+            "for an execution record"
+        )
+    category = DECLARATION_CATEGORY_BY_CASE_ID.get(case_id)
+    if category is None:
+        raise ValueError(f"{context}.case_id is not a report plan case ID")
+    expected_kind = EXECUTION_CASE_KIND_BY_CATEGORY[category]
+    if strings["case_kind"] != expected_kind:
+        raise ValueError(f"{context}.case_kind must equal {expected_kind}")
+    if strings["status"] not in {"通过", "失败"}:
+        raise ValueError(f"{context}.status must equal 通过 or 失败")
+    if mock is not False:
+        raise ValueError(f"{context}.mock must be false for {expected_kind}")
+    for field in ("target", "command", "reason"):
+        if strings[field] == DECLARATION_PLACEHOLDER:
+            raise ValueError(f"{context}.{field} must record the real execution")
+    timestamps: dict[str, datetime] = {}
+    for field in ("started_at", "finished_at"):
+        value = strings[field]
+        if value == DECLARATION_PLACEHOLDER:
+            raise ValueError(f"{context}.{field} must record the real execution time")
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError(
+                f"{context}.{field} must be an ISO-8601 timestamp"
+            ) from exc
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError(f"{context}.{field} must include a timezone offset")
+        timestamps[field] = parsed
+    if timestamps["finished_at"] < timestamps["started_at"]:
+        raise ValueError(f"{context}.finished_at must not precede started_at")
+    if not evidence:
+        raise ValueError(f"{context}.evidence must contain raw execution evidence")
+    prefix = f"{category}/evidence/{case_id}/"
+    for index, relative_path in enumerate(evidence):
+        path = Path(relative_path)
+        if (
+            path.is_absolute()
+            or ".." in path.parts
+            or relative_path in {"", "."}
+            or not relative_path.startswith(prefix)
+            or path.suffix != ".json"
+        ):
+            raise ValueError(
+                f"{context}.evidence[{index}] must be JSON evidence below {prefix}"
+            )
+    if len(evidence) != len(set(evidence)):
+        raise ValueError(f"{context}.evidence must contain unique paths")
+    return category
+
+
+def validate_raw_execution_evidence(
+    payload: Mapping[str, object],
+    context: str,
+    *,
+    expected_case_id: str,
+) -> None:
+    actual_fields = set(payload)
+    if actual_fields != RAW_EXECUTION_EVIDENCE_FIELDS:
+        raise ValueError(
+            f"{context} raw execution evidence fields invalid: "
+            f"missing={sorted(RAW_EXECUTION_EVIDENCE_FIELDS - actual_fields)}, "
+            f"unknown={sorted(actual_fields - RAW_EXECUTION_EVIDENCE_FIELDS)}"
+        )
+    if type(payload["schema_version"]) is not int or payload["schema_version"] != 2:
+        raise ValueError(f"{context} raw execution evidence schema_version must equal 2")
+    if payload["evidence_type"] != "case_evidence":
+        raise ValueError(
+            f"{context} raw execution evidence evidence_type must equal case_evidence"
+        )
+    case_id = _require_string(payload["case_id"], f"{context}.case_id")
+    if case_id != expected_case_id:
+        raise ValueError(
+            f"{context} raw execution evidence case_id must equal {expected_case_id}"
+        )
+    _require_string(payload["release_tag"], f"{context}.release_tag")
+    git_sha = _require_string(payload["git_sha"], f"{context}.git_sha")
+    if _GIT_SHA_PATTERN.fullmatch(git_sha) is None:
+        raise ValueError(f"{context} raw execution evidence git_sha is invalid")
+    recorded_at = _require_string(payload["recorded_at"], f"{context}.recorded_at")
+    try:
+        timestamp = datetime.fromisoformat(recorded_at)
+    except ValueError as exc:
+        raise ValueError(
+            f"{context} raw execution evidence recorded_at must be ISO-8601"
+        ) from exc
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise ValueError(
+            f"{context} raw execution evidence recorded_at must include a timezone offset"
+        )
+    raw_payload = payload["payload"]
+    if type(raw_payload) is not dict or not raw_payload:
+        raise ValueError(
+            f"{context} raw execution evidence payload must be a non-empty object"
+        )
+    if any(type(key) is not str for key in raw_payload):
+        raise ValueError(
+            f"{context} raw execution evidence payload contains a non-string field name"
+        )
 
 
 def _status_coverage(cases: list[_CoverageCase], expected: int) -> Coverage:
@@ -717,9 +889,11 @@ def _recompute_real_case_coverage(
 
 
 def _require_recomputed_coverage(
-    reported: dict[str, object], recomputed: dict[str, Coverage]
+    reported: dict[str, object],
+    recomputed: dict[str, Coverage],
+    coverage_keys: tuple[str, ...],
 ) -> None:
-    for coverage_key in COVERAGE_KEYS:
+    for coverage_key in coverage_keys:
         item = cast(dict[str, object], reported[coverage_key])
         expected_item = recomputed[coverage_key]
         expected_values = (
@@ -741,7 +915,9 @@ def validate_cases_envelope(document: object) -> None:
         ("schema_version", "release_tag", "git_sha", "plan_sha256", "coverage", "cases"),
         "cases envelope",
     )
-    _require_schema_version(envelope["schema_version"], "schema_version")
+    schema_version = _require_cases_schema_version(
+        envelope["schema_version"], "schema_version"
+    )
     release_tag = _require_string(envelope["release_tag"], "release_tag")
     git_sha = _require_string(envelope["git_sha"], "git_sha")
     if _GIT_SHA_PATTERN.fullmatch(git_sha) is None:
@@ -750,13 +926,23 @@ def validate_cases_envelope(document: object) -> None:
     if _PLAN_SHA256_PATTERN.fullmatch(plan_sha256) is None:
         raise ValueError("plan_sha256 must be 64 lowercase hexadecimal characters")
 
-    coverage = _require_exact_object(envelope["coverage"], COVERAGE_KEYS, "coverage")
-    for key in COVERAGE_KEYS:
+    coverage_keys = (
+        COVERAGE_KEYS
+        if schema_version == SCHEMA_VERSION
+        else EXECUTION_COVERAGE_KEYS
+    )
+    coverage_expected = (
+        COVERAGE_EXPECTED
+        if schema_version == SCHEMA_VERSION
+        else EXECUTION_COVERAGE_EXPECTED
+    )
+    coverage = _require_exact_object(envelope["coverage"], coverage_keys, "coverage")
+    for key in coverage_keys:
         item = _require_exact_object(coverage[key], COVERAGE_FIELDS, f"coverage.{key}")
         expected = _require_nonnegative_int(
             item["expected"], f"coverage.{key}.expected"
         )
-        authority_expected = COVERAGE_EXPECTED[key]
+        authority_expected = coverage_expected[key]
         if expected != authority_expected:
             raise ValueError(
                 f"coverage.{key}.expected must equal {authority_expected}"
@@ -771,13 +957,17 @@ def validate_cases_envelope(document: object) -> None:
             )
         if key not in COVERAGE_PARTIAL_OBSERVED_KEYS and observed != expected:
             raise ValueError(f"coverage.{key}.observed must equal {expected}")
-        if key in DECLARATION_COVERAGE_KEYS and passed != 0:
+        if schema_version == SCHEMA_VERSION and key in DECLARATION_COVERAGE_KEYS and passed != 0:
             raise ValueError(f"coverage.{key}.passed must equal 0")
 
     seen_case_ids: set[str] = set()
     declaration_case_ids: set[str] = set()
+    execution_case_ids: set[str] = set()
+    allowed_case_kinds = (
+        CASE_KINDS if schema_version == SCHEMA_VERSION else SCHEMA2_CASE_KINDS
+    )
     cases_by_kind: dict[str, list[_CoverageCase]] = {
-        case_kind: [] for case_kind in CASE_KINDS
+        case_kind: [] for case_kind in allowed_case_kinds
     }
     for index, raw_case in enumerate(_require_list(envelope["cases"], "cases")):
         context = f"cases[{index}]"
@@ -789,7 +979,7 @@ def validate_cases_envelope(document: object) -> None:
             if field != "run_id"
         }
         case_kind = strings["case_kind"]
-        if case_kind not in CASE_KINDS:
+        if case_kind not in allowed_case_kinds:
             raise ValueError(f"{context}.case_kind is unknown: {case_kind}")
         raw_run_id = case["run_id"]
         if case_kind == "smoke_full":
@@ -837,6 +1027,7 @@ def validate_cases_envelope(document: object) -> None:
             raise ValueError(f"{context}.mock must be a boolean")
         mock = raw_mock
         _validate_execution_declaration(
+            schema_version=schema_version,
             strings=strings,
             evidence=evidence,
             mock=mock,
@@ -844,6 +1035,14 @@ def validate_cases_envelope(document: object) -> None:
         )
         if case_kind == "execution_declaration":
             declaration_case_ids.add(case_id)
+        elif case_kind in EXECUTION_CASE_KINDS:
+            _validate_execution_case(
+                strings=strings,
+                evidence=evidence,
+                mock=mock,
+                context=context,
+            )
+            execution_case_ids.add(case_id)
         if canonical_smoke_operator is not None:
             if mock is not False:
                 raise ValueError(f"{context}.mock must be false for full Smoke")
@@ -871,26 +1070,66 @@ def validate_cases_envelope(document: object) -> None:
             }
         )
 
-    expected_declaration_ids = set(DECLARATION_CATEGORY_BY_CASE_ID)
-    if declaration_case_ids != expected_declaration_ids:
-        raise ValueError(
-            "execution declaration authority mismatch: "
-            f"missing={sorted(expected_declaration_ids - declaration_case_ids)}, "
-            f"unknown={sorted(declaration_case_ids - expected_declaration_ids)}"
+    expected_case_ids = set(DECLARATION_CATEGORY_BY_CASE_ID)
+    represented_case_ids = declaration_case_ids | execution_case_ids
+    if represented_case_ids != expected_case_ids:
+        authority = (
+            "execution declaration"
+            if schema_version == SCHEMA_VERSION
+            else "execution case"
         )
+        raise ValueError(
+            f"{authority} authority mismatch: "
+            f"missing={sorted(expected_case_ids - represented_case_ids)}, "
+            f"unknown={sorted(represented_case_ids - expected_case_ids)}"
+        )
+    overlap = declaration_case_ids & execution_case_ids
+    if overlap:
+        raise ValueError(
+            "execution declarations and records must not overlap: "
+            f"{sorted(overlap)}"
+        )
+    if schema_version == SCHEMA_VERSION and execution_case_ids:
+        raise ValueError("schema_version 1 does not accept execution records")
 
     recomputed = _recompute_real_case_coverage(cases_by_kind)
-    recomputed["negative_declarations"] = {
-        "expected": COVERAGE_EXPECTED["negative_declarations"],
-        "observed": sum(
-            case_id.startswith(tuple(prefix for prefix, _, _ in EXPECTED_RANGES["negative"]))
-            for case_id in declaration_case_ids
-        ),
-        "passed": 0,
-    }
-    recomputed["load_declarations"] = {
-        "expected": COVERAGE_EXPECTED["load_declarations"],
-        "observed": sum(case_id.startswith("LOAD-") for case_id in declaration_case_ids),
-        "passed": 0,
-    }
-    _require_recomputed_coverage(coverage, recomputed)
+    if schema_version == SCHEMA_VERSION:
+        recomputed["negative_declarations"] = {
+            "expected": COVERAGE_EXPECTED["negative_declarations"],
+            "observed": sum(
+                DECLARATION_CATEGORY_BY_CASE_ID[case_id] == "negative"
+                for case_id in declaration_case_ids
+            ),
+            "passed": 0,
+        }
+        recomputed["load_declarations"] = {
+            "expected": COVERAGE_EXPECTED["load_declarations"],
+            "observed": sum(
+                DECLARATION_CATEGORY_BY_CASE_ID[case_id] == "load"
+                for case_id in declaration_case_ids
+            ),
+            "passed": 0,
+        }
+    else:
+        execution_cases = [
+            case
+            for kind in EXECUTION_CASE_KINDS
+            for case in cases_by_kind[kind]
+        ]
+        for category in ("negative", "load"):
+            category_ids = {
+                case_id
+                for case_id in represented_case_ids
+                if DECLARATION_CATEGORY_BY_CASE_ID[case_id] == category
+            }
+            recomputed[f"{category}_cases"] = {
+                "expected": EXECUTION_COVERAGE_EXPECTED[f"{category}_cases"],
+                "observed": len(category_ids),
+                "passed": sum(
+                    case["mock"] is False
+                    and case["status"] == "通过"
+                    and DECLARATION_CATEGORY_BY_CASE_ID[case["case_id"]] == category
+                    for case in execution_cases
+                ),
+            }
+    _require_recomputed_coverage(coverage, recomputed, coverage_keys)

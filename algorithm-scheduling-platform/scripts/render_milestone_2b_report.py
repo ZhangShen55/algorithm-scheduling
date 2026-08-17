@@ -25,6 +25,7 @@ if TYPE_CHECKING:
         overall_status,
         strict_json_loads,
         validate_cases_envelope,
+        validate_raw_execution_evidence,
     )
 else:
     _contract = importlib.import_module(
@@ -35,6 +36,7 @@ else:
     overall_status = _contract.overall_status
     strict_json_loads = _contract.strict_json_loads
     validate_cases_envelope = _contract.validate_cases_envelope
+    validate_raw_execution_evidence = _contract.validate_raw_execution_evidence
 
 STATUSES = ("通过", "失败", "未执行及原因")
 REPORT_SCHEMA_VERSION = 2
@@ -53,7 +55,10 @@ CASE_EVIDENCE_TYPES = {
     "smoke_gpu_trigger": "operator_smoke",
     "smoke_cpu_instance": "operator_smoke",
     "execution_declaration": "execution_declaration",
+    "negative_execution": "negative_case_evidence",
+    "load_execution": "load_case_evidence",
 }
+EXECUTION_CASE_KINDS = frozenset({"negative_execution", "load_execution"})
 EVIDENCE_STATUS = {
     "operator_smoke": {"PASS": "通过", "失败": "失败", "未执行及原因": "未执行及原因"},
     "operator_registration": {"通过": "通过", "失败": "失败"},
@@ -255,6 +260,18 @@ def _release_directory_descriptor(
 
 
 def _classify_evidence(relative_path: PurePosixPath, payload: dict[str, Any]) -> str:
+    if (
+        len(relative_path.parts) >= 4
+        and relative_path.parts[0] in {"negative", "load"}
+        and relative_path.parts[1] == "evidence"
+        and relative_path.suffix == ".json"
+    ):
+        validate_raw_execution_evidence(
+            payload,
+            relative_path.as_posix(),
+            expected_case_id=relative_path.parts[2],
+        )
+        return f"{relative_path.parts[0]}_case_evidence"
     explicit = payload.get("evidence_type")
     if explicit is not None:
         if type(explicit) is not str or explicit not in EXPLICIT_EVIDENCE_TYPES:
@@ -974,6 +991,7 @@ def _validate_declaration_evidence(
     *,
     release_tag: str,
     git_sha: str,
+    expected_case_ids: set[str],
 ) -> None:
     payload = snapshot.payload
     context = snapshot.relative_path
@@ -999,19 +1017,59 @@ def _validate_declaration_evidence(
     reason = _require_string(payload.get("reason"), f"{context}.reason")
     if reason != case.get("reason"):
         raise ValueError(f"{context}.reason 与用例不匹配")
-    source_case_id = _require_string(case.get("source_case_id"), "case.source_case_id")
     batch = _require_list(payload.get("cases"), f"{context}.cases")
-    source_found = False
+    batch_case_ids: list[str] = []
     for index, raw_item in enumerate(batch):
         item = _require_object(raw_item, f"{context}.cases[{index}]")
         item_case_id = _require_string(item.get("case_id"), f"{context}.cases[{index}].case_id")
         item_status = _require_string(item.get("status"), f"{context}.cases[{index}].status")
         if item_status != "NOT_EXECUTED":
             raise ValueError(f"{context}.cases[{index}] 只能声明未执行")
-        if item_case_id == source_case_id:
-            source_found = True
-    if not source_found:
-        raise ValueError(f"{context} batch 不包含 source_case_id {source_case_id}")
+        batch_case_ids.append(item_case_id)
+    if len(batch_case_ids) != len(set(batch_case_ids)):
+        raise ValueError(f"{context}.cases 包含重复 case_id")
+    actual_case_ids = set(batch_case_ids)
+    if actual_case_ids != expected_case_ids:
+        raise ValueError(
+            f"{context}.cases 与 source/envelope 声明 ID 不一致: "
+            f"missing={sorted(expected_case_ids - actual_case_ids)}, "
+            f"unknown={sorted(actual_case_ids - expected_case_ids)}"
+        )
+
+
+def _validate_execution_evidence(
+    case: Mapping[str, Any],
+    snapshot: EvidenceSnapshot,
+    *,
+    release_tag: str,
+    git_sha: str,
+) -> None:
+    case_id = _require_string(case.get("case_id"), "execution.case_id")
+    case_kind = _require_string(case.get("case_kind"), f"{case_id}.case_kind")
+    category = {
+        "negative_execution": "negative",
+        "load_execution": "load",
+    }.get(case_kind)
+    if category is None:
+        raise ValueError(f"{case_id}.case_kind 不是执行证据用例")
+    expected_prefix = f"{category}/evidence/{case_id}/"
+    if (
+        not snapshot.relative_path.startswith(expected_prefix)
+        or not snapshot.relative_path.endswith(".json")
+    ):
+        raise ValueError(f"{snapshot.relative_path} 不属于用例 {case_id} 的原始证据")
+    if snapshot.type != f"{category}_case_evidence":
+        raise ValueError(f"{snapshot.relative_path} 执行证据类型与类别不匹配")
+    validate_raw_execution_evidence(
+        snapshot.payload,
+        snapshot.relative_path,
+        expected_case_id=case_id,
+    )
+    if (
+        snapshot.payload.get("release_tag") != release_tag
+        or snapshot.payload.get("git_sha") != git_sha
+    ):
+        raise ValueError(f"{snapshot.relative_path} 的 release/SHA 不匹配")
 
 
 def _validate_case_basics(case: Mapping[str, Any]) -> None:
@@ -1045,23 +1103,27 @@ def _collect_evidence_snapshots(
                 _require_list(case.get("evidence"), f"{case_id}.evidence")
             )
         ]
-        if len(paths) != 1:
+        case_kind = _require_string(case.get("case_kind"), f"{case_id}.case_kind")
+        if case_kind in EXECUTION_CASE_KINDS:
+            if not paths:
+                raise ValueError(f"{case_id}.evidence 必须包含原始执行证据")
+        elif len(paths) != 1:
             raise ValueError(f"{case_id}.evidence 必须恰好包含一个规范路径")
-        safe_relative(paths[0])
-        owners.setdefault(paths[0], []).append(case)
+        for path in paths:
+            safe_relative(path)
+            owners.setdefault(path, []).append(case)
     for relative_path, path_owners in owners.items():
         if len(path_owners) > 1 and any(
             owner.get("case_kind") != "execution_declaration" for owner in path_owners
         ):
             raise ValueError(f"同一执行证据路径不得支持两个用例: {relative_path}")
-    snapshots = {
-        relative_path: read_evidence_snapshot(
+    snapshots: dict[str, EvidenceSnapshot] = {}
+    for relative_path in sorted(owners):
+        snapshots[relative_path] = _snapshot_release_json(
             release_root,
             relative_path,
             expected_root_identity=expected_root_identity,
         )
-        for relative_path in sorted(owners)
-    }
     return snapshots
 
 
@@ -1084,6 +1146,20 @@ def validate_release_envelope(
         _require_object(raw_case, f"cases[{index}]")
         for index, raw_case in enumerate(_require_list(envelope.get("cases"), "cases"))
     ]
+    declaration_ids_by_path: dict[str, set[str]] = {
+        "negative/cases.json": set(),
+        "load/cases.json": set(),
+    }
+    for case in cases:
+        if case.get("case_kind") != "execution_declaration":
+            continue
+        path = _require_string(
+            _require_list(case.get("evidence"), f"{case['case_id']}.evidence")[0],
+            f"{case['case_id']}.evidence[0]",
+        )
+        declaration_ids_by_path[path].add(
+            _require_string(case.get("source_case_id"), f"{case['case_id']}.source_case_id")
+        )
     snapshots = _collect_evidence_snapshots(
         release_root,
         cases,
@@ -1095,13 +1171,34 @@ def validate_release_envelope(
     runtime_by_target: dict[str, EvidenceSnapshot] = {}
     runtime_pids_by_target: dict[str, set[int]] = {}
     for case in cases:
+        case_kind = _require_string(case.get("case_kind"), f"{case['case_id']}.case_kind")
+        case_paths = [
+            _require_string(path, f"{case['case_id']}.evidence[{index}]")
+            for index, path in enumerate(
+                _require_list(case["evidence"], f"{case['case_id']}.evidence")
+            )
+        ]
+        expected_type = CASE_EVIDENCE_TYPES.get(case_kind)
+        if case_kind in EXECUTION_CASE_KINDS:
+            for path in case_paths:
+                snapshot = snapshots[path]
+                if snapshot.type != expected_type:
+                    raise ValueError(
+                        f"{snapshot.relative_path} 证据类型 {snapshot.type} "
+                        f"与 {case_kind} 不匹配"
+                    )
+                _validate_execution_evidence(
+                    case,
+                    snapshot,
+                    release_tag=release_tag,
+                    git_sha=git_sha,
+                )
+            continue
         path = _require_string(
-            _require_list(case["evidence"], f"{case['case_id']}.evidence")[0],
+            case_paths[0],
             f"{case['case_id']}.evidence[0]",
         )
         snapshot = snapshots[path]
-        case_kind = _require_string(case.get("case_kind"), f"{case['case_id']}.case_kind")
-        expected_type = CASE_EVIDENCE_TYPES.get(case_kind)
         if snapshot.type != expected_type:
             raise ValueError(
                 f"{snapshot.relative_path} 证据类型 {snapshot.type} 与 {case_kind} 不匹配"
@@ -1138,6 +1235,7 @@ def validate_release_envelope(
                 snapshot,
                 release_tag=release_tag,
                 git_sha=git_sha,
+                expected_case_ids=declaration_ids_by_path[path],
             )
     for case in cases:
         if case.get("case_kind") != "gpu_stopped":
@@ -1805,6 +1903,7 @@ def render(
     }
     document = {
         "schema_version": REPORT_SCHEMA_VERSION,
+        "cases_schema_version": envelope["schema_version"],
         "release_tag": release_tag,
         "git_sha": git_sha,
         "plan_sha256": envelope["plan_sha256"],
@@ -1827,6 +1926,7 @@ def render(
         "",
         f"- Release：`{release_tag}`",
         f"- Git SHA：`{git_sha}`",
+        f"- Cases schema：`{envelope['schema_version']}`",
         "",
         "## 真实验证",
         "",

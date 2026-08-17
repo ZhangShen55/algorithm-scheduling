@@ -499,6 +499,53 @@ class ReleaseTree:
         self.write_full_smoke(full_statuses)
         self.write_all_instance_smoke()
 
+    def write_case_execution(
+        self,
+        case_id: str,
+        *,
+        status: str = "通过",
+        evidence: list[str] | None = None,
+        write_raw_evidence: bool = True,
+    ) -> None:
+        category = "load" if case_id.startswith("LOAD-") else "negative"
+        evidence_paths = (
+            evidence
+            if evidence is not None
+            else [f"{category}/evidence/{case_id}/result.json"]
+        )
+        if write_raw_evidence:
+            for relative_path in evidence_paths:
+                self._write_json(
+                    relative_path,
+                    {
+                        "schema_version": 2,
+                        "evidence_type": "case_evidence",
+                        "case_id": case_id,
+                        "release_tag": self.release_tag,
+                        "git_sha": self.git_sha,
+                        "recorded_at": "2026-08-18T10:00:01+08:00",
+                        "payload": {"artifact": relative_path},
+                    },
+                )
+        self._write_json(
+            f"{category}/executions/{case_id}.json",
+            {
+                "schema_version": 2,
+                "evidence_type": f"{category}_case",
+                "case_id": case_id,
+                "status": status,
+                "started_at": "2026-08-18T10:00:00+08:00",
+                "finished_at": "2026-08-18T10:00:01+08:00",
+                "target": DECLARATION_TARGET,
+                "command": f"run_milestone_2b_case_batch.py --case {case_id}",
+                "reason": "受控场景产生预期结果",
+                "mock": False,
+                "release_tag": self.release_tag,
+                "git_sha": self.git_sha,
+                "evidence": evidence_paths,
+            },
+        )
+
     def collect_smoke(self) -> tuple[list[CaseRecord], dict[str, Coverage]]:
         aggregate = _aggregate_module()
         contract = _contract_module()
@@ -530,24 +577,30 @@ class ReleaseTree:
         )
 
     def run_aggregator(
-        self, output: Path | None = None
+        self,
+        output: Path | None = None,
+        *,
+        require_all_executed: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         selected_output = output or self.root / "summary" / "cases.json"
+        command = [
+            sys.executable,
+            str(AGGREGATE_PATH),
+            "--release-root",
+            str(self.root),
+            "--operator-compose",
+            str(self.compose_path),
+            "--smoke-manifest",
+            str(SMOKE_MANIFEST_PATH),
+            "--report-plan",
+            str(self.report_plan_path),
+            "--output",
+            str(selected_output),
+        ]
+        if require_all_executed:
+            command.append("--require-all-executed")
         return subprocess.run(
-            [
-                sys.executable,
-                str(AGGREGATE_PATH),
-                "--release-root",
-                str(self.root),
-                "--operator-compose",
-                str(self.compose_path),
-                "--smoke-manifest",
-                str(SMOKE_MANIFEST_PATH),
-                "--report-plan",
-                str(self.report_plan_path),
-                "--output",
-                str(selected_output),
-            ],
+            command,
             cwd=PLATFORM_ROOT,
             text=True,
             capture_output=True,
@@ -643,7 +696,9 @@ def test_task6_renderer_accepts_headerless_gpu_v1_and_publishes_unexecuted_concl
     report_bytes = (release_tree.root / "summary/report.json").read_bytes()
     markdown = (release_tree.root / "summary/report.md").read_text(encoding="utf-8")
     report = json.loads(report_bytes)
+    assert envelope["schema_version"] == 1
     assert report["schema_version"] == 2
+    assert report["cases_schema_version"] == 1
     assert report["overall_status"] == "未执行及原因"
     assert report["coverage"] == envelope["coverage"]
     assert report["cases_input"] == {
@@ -1250,6 +1305,7 @@ def test_task6_renderer_declaration_requires_exact_canonical_path() -> None:
             snapshot,
             release_tag=RELEASE_TAG,
             git_sha=GIT_SHA,
+            expected_case_ids={"DEP-001"},
         )
 
 
@@ -2104,7 +2160,7 @@ def test_cases_envelope_rejects_top_level_field_drift(action: str) -> None:
         contract.validate_cases_envelope(envelope)
 
 
-@pytest.mark.parametrize("schema_version", (True, 0, 2, "1"))
+@pytest.mark.parametrize("schema_version", (True, 0, 3, "1"))
 def test_cases_envelope_rejects_wrong_schema_version(schema_version: object) -> None:
     contract = _contract_module()
     envelope = _valid_envelope()
@@ -4640,6 +4696,521 @@ def test_declarations_materialize_exact_batches_and_never_pass(
         },
         "load_declarations": {"expected": 26, "observed": 26, "passed": 0},
     }
+
+
+def test_schema2_execution_replaces_same_id_declaration(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    release_tree.write_case_execution("DEP-001")
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 0, completed.stderr
+    envelope = release_tree.read_json("summary/cases.json")
+    assert envelope["schema_version"] == 2
+    assert envelope["coverage"]["negative_cases"] == {
+        "expected": 217,
+        "observed": 217,
+        "passed": 1,
+    }
+    assert envelope["coverage"]["load_cases"] == {
+        "expected": 26,
+        "observed": 26,
+        "passed": 0,
+    }
+    matching = [case for case in envelope["cases"] if case["case_id"] == "DEP-001"]
+    assert len(matching) == 1
+    assert matching[0]["case_kind"] == "negative_execution"
+    assert matching[0]["evidence"] == [
+        "negative/evidence/DEP-001/result.json"
+    ]
+    assert not any(
+        case["case_id"] == "DEP-001"
+        and case["case_kind"] == "execution_declaration"
+        for case in envelope["cases"]
+    )
+    declaration = release_tree.read_json("negative/cases.json")
+    assert "DEP-001" not in {case["case_id"] for case in declaration["cases"]}
+
+
+def test_schema2_load_execution_uses_load_kind_and_coverage(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    release_tree.write_case_execution("LOAD-001")
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 0, completed.stderr
+    envelope = release_tree.read_json("summary/cases.json")
+    execution = next(
+        case for case in envelope["cases"] if case["case_id"] == "LOAD-001"
+    )
+    assert execution["case_kind"] == "load_execution"
+    assert envelope["coverage"]["load_cases"]["passed"] == 1
+    assert envelope["coverage"]["negative_cases"]["passed"] == 0
+
+
+def test_schema2_execution_rejects_missing_raw_evidence(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    release_tree.write_case_execution("DEP-001", write_raw_evidence=False)
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 1
+    assert "evidence" in completed.stderr.lower()
+    assert not (release_tree.root / "summary/cases.json").exists()
+
+
+def test_require_all_executed_rejects_any_remaining_declaration(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    release_tree.write_case_execution("DEP-001")
+
+    completed = release_tree.run_aggregator(require_all_executed=True)
+
+    assert completed.returncode == 1
+    assert "execution_declaration" in completed.stderr
+    assert not (release_tree.root / "summary/cases.json").exists()
+
+
+@pytest.mark.parametrize("status", ("通过", "失败"))
+def test_execution_requires_raw_evidence(
+    release_tree: ReleaseTree,
+    status: str,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    release_tree.write_case_execution("DEP-001", status=status, evidence=[])
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 1
+    assert "evidence" in completed.stderr.lower()
+    assert not (release_tree.root / "summary/cases.json").exists()
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    (
+        ["../other-release/evidence.json"],
+        ["load/evidence/DEP-001/result.json"],
+        ["negative/executions/DEP-001.json"],
+        ["negative/cases.json"],
+    ),
+)
+def test_execution_rejects_cross_release_or_non_raw_evidence_paths(
+    release_tree: ReleaseTree,
+    evidence: list[str],
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    release_tree.write_case_execution(
+        "DEP-001", evidence=evidence, write_raw_evidence=False
+    )
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 1
+    assert "evidence" in completed.stderr.lower()
+    assert not (release_tree.root / "summary/cases.json").exists()
+
+
+def test_execution_rejects_symlink_raw_evidence(release_tree: ReleaseTree) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    release_tree.write_case_execution("DEP-001", write_raw_evidence=False)
+    evidence = release_tree.root / "negative/evidence/DEP-001/result.json"
+    evidence.parent.mkdir(parents=True)
+    outside = release_tree.root.parent / "outside-evidence.json"
+    outside.write_text(
+        json.dumps(
+            {"release_tag": release_tree.release_tag, "git_sha": release_tree.git_sha}
+        ),
+        encoding="utf-8",
+    )
+    evidence.symlink_to(outside)
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 1
+    assert "symlink" in completed.stderr.lower()
+    assert not (release_tree.root / "summary/cases.json").exists()
+
+
+def test_execution_rejects_symlink_executions_directory(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    release_tree.write_case_execution("DEP-001")
+    executions = release_tree.root / "negative/executions"
+    outside = release_tree.root.parent / "outside-executions"
+    executions.rename(outside)
+    executions.symlink_to(outside, target_is_directory=True)
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 1
+    assert "real directory" in completed.stderr.lower()
+    assert not (release_tree.root / "summary/cases.json").exists()
+
+
+@pytest.mark.parametrize("source", ("execution", "raw_evidence"))
+@pytest.mark.parametrize("field", ("release_tag", "git_sha"))
+def test_execution_rejects_release_identity_mismatch(
+    release_tree: ReleaseTree,
+    source: str,
+    field: str,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    release_tree.write_case_execution("DEP-001")
+    relative = (
+        "negative/executions/DEP-001.json"
+        if source == "execution"
+        else "negative/evidence/DEP-001/result.json"
+    )
+    document = release_tree.read_json(relative)
+    document[field] = "wrong-release" if field == "release_tag" else "b" * 40
+    release_tree.replace_json(relative, document)
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 1
+    assert "release_tag/git_sha" in completed.stderr
+    assert not (release_tree.root / "summary/cases.json").exists()
+
+
+def test_execution_rejects_duplicate_record_for_same_id(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    release_tree.write_case_execution("DEP-001")
+    duplicate = release_tree.read_json("negative/executions/DEP-001.json")
+    release_tree.replace_json("negative/executions/zzz.json", duplicate)
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 1
+    assert "duplicate execution record case_id" in completed.stderr
+    assert not (release_tree.root / "summary/cases.json").exists()
+
+
+def test_execution_rejects_declaration_timestamp_placeholder(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    release_tree.write_case_execution("DEP-001")
+    execution = release_tree.read_json("negative/executions/DEP-001.json")
+    execution["started_at"] = DECLARATION_PLACEHOLDER
+    release_tree.replace_json("negative/executions/DEP-001.json", execution)
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 1
+    assert "started_at" in completed.stderr
+    assert not (release_tree.root / "summary/cases.json").exists()
+
+
+def test_schema2_failed_execution_renders_raw_evidence_and_overall_failure(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    release_tree.write_case_execution("DEP-001", status="失败")
+    aggregated = release_tree.run_aggregator()
+    assert aggregated.returncode == 0, aggregated.stderr
+    envelope = release_tree.read_json("summary/cases.json")
+    evidence_paths = {
+        path for case in envelope["cases"] for path in case["evidence"]
+    }
+    for relative_path in evidence_paths:
+        (release_tree.root / relative_path).chmod(0o600)
+    (release_tree.root / "summary/cases.json").chmod(0o600)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 3, completed.stderr
+    report = release_tree.read_json("summary/report.json")
+    assert report["overall_status"] == "失败"
+    assert report["cases_schema_version"] == 2
+    assert report["evidence_index"][
+        "negative/evidence/DEP-001/result.json"
+    ]["type"] == "negative_case_evidence"
+
+
+def test_schema2_renderer_validates_every_raw_execution_evidence(
+    release_tree: ReleaseTree,
+) -> None:
+    evidence = [
+        "negative/evidence/DEP-001/request.json",
+        "negative/evidence/DEP-001/response.json",
+    ]
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    release_tree.write_case_execution("DEP-001", status="失败", evidence=evidence)
+    aggregated = release_tree.run_aggregator()
+    assert aggregated.returncode == 0, aggregated.stderr
+    envelope = release_tree.read_json("summary/cases.json")
+    for path in {path for case in envelope["cases"] for path in case["evidence"]}:
+        (release_tree.root / path).chmod(0o600)
+    (release_tree.root / "summary/cases.json").chmod(0o600)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 3, completed.stderr
+    report = release_tree.read_json("summary/report.json")
+    assert set(evidence).issubset(report["evidence_index"])
+
+
+def _non_raw_execution_evidence_payload(
+    release_tree: ReleaseTree,
+    *,
+    case_id: str,
+    payload_kind: str,
+) -> dict[str, Any]:
+    category = "load" if case_id.startswith("LOAD-") else "negative"
+    if payload_kind == "execution_record":
+        return release_tree.read_json(f"{category}/executions/{case_id}.json")
+    if payload_kind == "disguised_execution_record":
+        payload = release_tree.read_json(f"{category}/executions/{case_id}.json")
+        payload["evidence_type"] = "case_evidence"
+        return payload
+    if payload_kind == "missing_evidence_type":
+        return {
+            "schema_version": 2,
+            "release_tag": release_tree.release_tag,
+            "git_sha": release_tree.git_sha,
+        }
+    assert payload_kind in {
+        "execution_declaration",
+        "disguised_execution_declaration",
+    }
+    payload = {
+        "schema_version": 1,
+        "evidence_type": "execution_declaration",
+        "category": category,
+        "status": "NOT_EXECUTED",
+        "mock": False,
+        "release_tag": release_tree.release_tag,
+        "git_sha": release_tree.git_sha,
+        "reason": _contract_module().DECLARATION_REASON,
+        "cases": [],
+    }
+    if payload_kind == "disguised_execution_declaration":
+        payload["evidence_type"] = "case_evidence"
+    return payload
+
+
+@pytest.mark.parametrize("case_id", ("DEP-001", "LOAD-001"))
+@pytest.mark.parametrize(
+    "payload_kind",
+    (
+        "execution_record",
+        "disguised_execution_record",
+        "missing_evidence_type",
+        "execution_declaration",
+        "disguised_execution_declaration",
+    ),
+)
+def test_aggregator_rejects_non_raw_execution_evidence_payload(
+    release_tree: ReleaseTree,
+    case_id: str,
+    payload_kind: str,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    release_tree.write_case_execution(case_id)
+    category = "load" if case_id.startswith("LOAD-") else "negative"
+    release_tree.replace_json(
+        f"{category}/evidence/{case_id}/result.json",
+        _non_raw_execution_evidence_payload(
+            release_tree,
+            case_id=case_id,
+            payload_kind=payload_kind,
+        ),
+    )
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 1
+    assert "raw execution evidence" in completed.stderr.lower()
+    assert not (release_tree.root / "summary/cases.json").exists()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "schema_version",
+        "case_id",
+        "recorded_at",
+        "empty_payload",
+        "unknown_field",
+    ),
+)
+def test_aggregator_rejects_invalid_raw_execution_evidence_envelope(
+    release_tree: ReleaseTree,
+    mutation: str,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    release_tree.write_case_execution("DEP-001")
+    relative_path = "negative/evidence/DEP-001/result.json"
+    evidence = release_tree.read_json(relative_path)
+    if mutation == "schema_version":
+        evidence["schema_version"] = 1
+    elif mutation == "case_id":
+        evidence["case_id"] = "DEP-002"
+    elif mutation == "recorded_at":
+        evidence["recorded_at"] = "2026-08-18T10:00:01"
+    elif mutation == "empty_payload":
+        evidence["payload"] = {}
+    else:
+        evidence["unknown"] = "not allowed"
+    release_tree.replace_json(relative_path, evidence)
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 1
+    assert "raw execution evidence" in completed.stderr.lower()
+    assert not (release_tree.root / "summary/cases.json").exists()
+
+
+@pytest.mark.parametrize("case_id", ("DEP-001", "LOAD-001"))
+@pytest.mark.parametrize(
+    "payload_kind",
+    (
+        "execution_record",
+        "disguised_execution_record",
+        "missing_evidence_type",
+        "execution_declaration",
+        "disguised_execution_declaration",
+    ),
+)
+def test_schema2_renderer_rejects_non_raw_execution_evidence_payload(
+    release_tree: ReleaseTree,
+    case_id: str,
+    payload_kind: str,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    release_tree.write_case_execution(case_id)
+    aggregated = release_tree.run_aggregator()
+    assert aggregated.returncode == 0, aggregated.stderr
+    envelope = release_tree.read_json("summary/cases.json")
+    for path in {path for case in envelope["cases"] for path in case["evidence"]}:
+        (release_tree.root / path).chmod(0o600)
+    (release_tree.root / "summary/cases.json").chmod(0o600)
+    category = "load" if case_id.startswith("LOAD-") else "negative"
+    evidence_path = f"{category}/evidence/{case_id}/result.json"
+    release_tree.replace_json(
+        evidence_path,
+        _non_raw_execution_evidence_payload(
+            release_tree,
+            case_id=case_id,
+            payload_kind=payload_kind,
+        ),
+    )
+    (release_tree.root / evidence_path).chmod(0o600)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 1
+    _assert_renderer_published_nothing(release_tree)
+
+
+def test_schema2_renderer_rejects_executed_id_in_declaration_batch(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    release_tree.write_case_execution("DEP-001")
+    aggregated = release_tree.run_aggregator()
+    assert aggregated.returncode == 0, aggregated.stderr
+    envelope = release_tree.read_json("summary/cases.json")
+    for path in {path for case in envelope["cases"] for path in case["evidence"]}:
+        (release_tree.root / path).chmod(0o600)
+    (release_tree.root / "summary/cases.json").chmod(0o600)
+    declaration = release_tree.read_json("negative/cases.json")
+    declaration["cases"].append(
+        {"case_id": "DEP-001", "status": "NOT_EXECUTED"}
+    )
+    release_tree.replace_json("negative/cases.json", declaration)
+    (release_tree.root / "negative/cases.json").chmod(0o600)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 1
+    _assert_renderer_published_nothing(release_tree)
+
+
+def test_schema2_renderer_rejects_duplicate_id_in_declaration_batch(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    release_tree.write_case_execution("DEP-001")
+    aggregated = release_tree.run_aggregator()
+    assert aggregated.returncode == 0, aggregated.stderr
+    envelope = release_tree.read_json("summary/cases.json")
+    for path in {path for case in envelope["cases"] for path in case["evidence"]}:
+        (release_tree.root / path).chmod(0o600)
+    (release_tree.root / "summary/cases.json").chmod(0o600)
+    declaration = release_tree.read_json("negative/cases.json")
+    declaration["cases"].append(dict(declaration["cases"][0]))
+    release_tree.replace_json("negative/cases.json", declaration)
+    (release_tree.root / "negative/cases.json").chmod(0o600)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert envelope["schema_version"] == 2
+    assert completed.returncode == 1
+    _assert_renderer_published_nothing(release_tree)
+
+
+@pytest.mark.parametrize("tamper", ("release_sha", "symlink"))
+def test_schema2_renderer_rejects_tampered_raw_execution_evidence(
+    release_tree: ReleaseTree,
+    tamper: str,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    release_tree.write_case_execution("DEP-001")
+    aggregated = release_tree.run_aggregator()
+    assert aggregated.returncode == 0, aggregated.stderr
+    envelope = release_tree.read_json("summary/cases.json")
+    for path in {path for case in envelope["cases"] for path in case["evidence"]}:
+        (release_tree.root / path).chmod(0o600)
+    cases_path = release_tree.root / "summary/cases.json"
+    cases_path.chmod(0o600)
+    evidence_path = release_tree.root / "negative/evidence/DEP-001/result.json"
+    if tamper == "release_sha":
+        evidence = release_tree.read_json("negative/evidence/DEP-001/result.json")
+        evidence["git_sha"] = "b" * 40
+        release_tree.replace_json("negative/evidence/DEP-001/result.json", evidence)
+        evidence_path.chmod(0o600)
+    else:
+        authority = evidence_path.with_name("authority.json")
+        evidence_path.rename(authority)
+        authority.chmod(0o600)
+        evidence_path.symlink_to(authority.name)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 1
+    assert not (release_tree.root / "summary/report.json").exists()
+    assert not (release_tree.root / "summary/report.md").exists()
 
 
 def test_existing_declaration_changed_to_pass_is_rejected(
