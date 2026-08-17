@@ -1,0 +1,245 @@
+schema_version: 1
+cases:
+  - {case_id: DEP-001, category: negative, phase: deployment, title: "x86_64 服务器误用 ARM 镜像", expected: "预检或构建失败，不能启动到业务探针", runner: deployment.dep_001, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: DEP-002, category: negative, phase: deployment, title: "镜像缺少源 commit label", expected: "发布预检失败", runner: deployment.dep_002, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: DEP-003, category: negative, phase: deployment, title: "镜像标签不是小写或不符合 v1.0_YYMMDD", expected: "构建脚本拒绝", runner: deployment.dep_003, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: DEP-004, category: negative, phase: deployment, title: "同一 instance_id 被两个容器使用", expected: "第二个实例不得同时进入可路由状态", runner: deployment.dep_004, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: DEP-005, category: negative, phase: deployment, title: "两个实例占用同一宿主机端口", expected: "Compose 启动失败且指出冲突实例", runner: deployment.dep_005, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: DEP-006, category: negative, phase: deployment, title: "VBas 容器仍监听旧 8881", expected: "健康检查失败，不能注册为可用实例", runner: deployment.dep_006, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: DEP-007, category: negative, phase: deployment, title: "算子以两个 Uvicorn worker 启动", expected: "部署预检失败", runner: deployment.dep_007, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: DEP-008, category: negative, phase: deployment, title: "text_analysis 默认两个 worker 未被覆盖", expected: "部署预检失败", runner: deployment.dep_008, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: DEP-009, category: negative, phase: deployment, title: "Compose 只设置 NVIDIA_VISIBLE_DEVICES 而没有 GPU reservation", expected: "GPU 预检失败", runner: deployment.dep_009, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: DEP-010, category: negative, phase: deployment, title: "算子镜像缺少注册客户端 wheel", expected: "镜像导入测试失败", runner: deployment.dep_010, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: DEP-011, category: negative, phase: deployment, title: "wheel 版本不是 0.1.0", expected: "镜像构建或依赖检查失败", runner: deployment.dep_011, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: DEP-012, category: negative, phase: deployment, title: "模型目录不存在", expected: "对应镜像构建或 readiness 失败", runner: deployment.dep_012, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: DEP-013, category: negative, phase: deployment, title: "模型文件数量或清单哈希与传输前不一致", expected: "模型校验失败，不进入构建", runner: deployment.dep_013, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: DEP-014, category: negative, phase: deployment, title: "config.toml 未挂载或路径错误", expected: "服务启动失败并给出配置路径原因", runner: deployment.dep_014, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: DEP-015, category: negative, phase: deployment, title: "/data/course 不可写", expected: "平台部署预检失败", runner: deployment.dep_015, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: DEP-016, category: negative, phase: deployment, title: "/data/result 不可写", expected: "平台部署预检失败", runner: deployment.dep_016, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: DEP-017, category: negative, phase: deployment, title: "根分区可用空间低于 100 GiB", expected: "停止构建、传模和下载", runner: deployment.dep_017, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: DEP-018, category: negative, phase: deployment, title: "服务器已有同名 algorithm-* 容器", expected: "停止并要求人工确认，不覆盖未知容器", runner: deployment.dep_018, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: DEP-019, category: negative, phase: deployment, title: "现有业务容器快照不完整", expected: "不允许暂停现有业务容器", runner: deployment.dep_019, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: DEP-020, category: negative, phase: deployment, title: "Deploy Key 无法读取固定提交", expected: "不使用不明来源代码继续部署", runner: deployment.dep_020, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: GPU-001, category: negative, phase: deployment, title: "CUDA 容器看不到任何 GPU", expected: "停止 GPU 算子部署", runner: gpu.gpu_001, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: GPU-002, category: negative, phase: deployment, title: "GPU0 Profile 容器能看到三张卡", expected: "绑定失败，不允许启动算子", runner: gpu.gpu_002, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: GPU-003, category: negative, phase: deployment, title: "GPU1 实例实际绑定物理 GPU0", expected: "GPU 标签和 PID 对账失败", runner: gpu.gpu_003, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: GPU-004, category: negative, phase: deployment, title: "容器内 torch.cuda.device_count()!=1", expected: "readiness 失败", runner: gpu.gpu_004, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: GPU-005, category: negative, phase: deployment, title: "配置要求 GPU 但框架报告 CUDA 不可用", expected: "启动 fail-fast，不回退 CPU", runner: gpu.gpu_005, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: GPU-006, category: negative, phase: deployment, title: "模型参数或 Paddle 设备仍在 CPU", expected: "readiness 或真实推理验收失败", runner: gpu.gpu_006, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: GPU-007, category: negative, phase: deployment, title: "真实推理时 nvidia-smi 无对应 PID", expected: "不得认定 GPU 推理通过", runner: gpu.gpu_007, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: GPU-008, category: negative, phase: deployment, title: "nvidia-smi Process name 仍显示 python", expected: "进程命名验收失败", runner: gpu.gpu_008, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: GPU-009, category: negative, phase: deployment, title: "Process name 与算子名不一致", expected: "进程命名验收失败", runner: gpu.gpu_009, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: GPU-010, category: negative, phase: deployment, title: "asr_offline 名称出现在错误 GPU index", expected: "物理卡绑定验收失败", runner: gpu.gpu_010, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: GPU-011, category: negative, phase: deployment, title: "容器停止后 CUDA PID 仍存在", expected: "清理失败，暂停后续验证", runner: gpu.gpu_011, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: GPU-012, category: negative, phase: deployment, title: "模型启动时 GPU OOM", expected: "保留日志和显存证据，不回退 CPU", runner: gpu.gpu_012, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: GPU-013, category: negative, phase: deployment, title: "六个模型可启动但并发推理 OOM", expected: "记录峰值并暂停拓扑确认", runner: gpu.gpu_013, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: GPU-014, category: negative, phase: deployment, title: "GPU 温度、功耗或错误状态异常", expected: "停止升压并记录硬件状态", runner: gpu.gpu_014, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: GPU-015, category: negative, phase: deployment, title: "GPU2 3090 行为与 4090 D 不一致", expected: "单独记录兼容性，不以其他卡结果代替", runner: gpu.gpu_015, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: GPU-016, category: negative, phase: deployment, title: "GPU 进程 PID 无法映射回容器", expected: "GPU 证据不完整，验收失败", runner: gpu.gpu_016, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: GPU-017, category: negative, phase: deployment, title: "GPU 配置写成 cuda:1 但容器只暴露一张卡", expected: "服务应失败，不静默改设备", runner: gpu.gpu_017, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: GPU-018, category: negative, phase: deployment, title: "control 注册 GPU 标签与实际物理卡不同", expected: "实例不可进入验收结果", runner: gpu.gpu_018, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: GPU-019, category: negative, phase: deployment, title: "一个 GPU 容器意外加载两份模型进程", expected: "判为 worker 或启动方式违规", runner: gpu.gpu_019, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: GPU-020, category: negative, phase: deployment, title: "GPU 实例执行 CPU 高负载但 GPU 利用率始终为零", expected: "调查并判定未证明 GPU 推理", runner: gpu.gpu_020, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: REG-001, category: negative, phase: deployment, title: "只注册但尚未首次心跳", expected: "实例不可路由", runner: registry.reg_001, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: REG-002, category: negative, phase: deployment, title: "心跳 model_ready=false", expected: "实例不可获得新租约", runner: registry.reg_002, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: REG-003, category: negative, phase: deployment, title: "心跳超过 TTL", expected: "实例自动离线", runner: registry.reg_003, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: REG-004, category: negative, phase: deployment, title: "心跳 inflight 为负数", expected: "control 拒绝请求", runner: registry.reg_004, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: REG-005, category: negative, phase: deployment, title: "注册容量为 0", expected: "control 拒绝注册", runner: registry.reg_005, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: REG-006, category: negative, phase: deployment, title: "注册未知 operator_code", expected: "control 拒绝注册", runner: registry.reg_006, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: REG-007, category: negative, phase: deployment, title: "注册能力与算子编码不匹配", expected: "部署契约检查失败", runner: registry.reg_007, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: REG-008, category: negative, phase: deployment, title: "service URL 不是 HTTP 或 HTTPS", expected: "control 拒绝注册", runner: registry.reg_008, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: REG-009, category: negative, phase: deployment, title: "service URL 指向错误容器", expected: "实例健康或真实调用失败，不算可用", runner: registry.reg_009, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: REG-010, category: negative, phase: deployment, title: "租约达到声明容量", expected: "后续请求不得超发给该实例", runner: registry.reg_010, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: REG-011, category: negative, phase: deployment, title: "释放不存在的租约", expected: "返回明确错误，不影响其他租约", runner: registry.reg_011, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: REG-012, category: negative, phase: deployment, title: "续约不存在或已过期租约", expected: "返回明确错误，不重建租约", runner: registry.reg_012, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: REG-013, category: negative, phase: deployment, title: "实例进入 DRAINING", expected: "拒绝新租约，已有请求允许结束", runner: registry.reg_013, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: REG-014, category: negative, phase: deployment, title: "DRAINING 实例重启", expected: "不得未经控制恢复为可路由状态", runner: registry.reg_014, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: REG-015, category: negative, phase: deployment, title: "实例注销时仍有租约", expected: "租约按规则失效且留下审计事实", runner: registry.reg_015, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: REG-016, category: negative, phase: deployment, title: "同能力三个实例中一个离线", expected: "请求只分发给剩余实例", runner: registry.reg_016, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: REG-017, category: negative, phase: deployment, title: "同能力全部实例离线", expected: "离线节点进入状态 30，在线返回容量错误", runner: registry.reg_017, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: REG-018, category: negative, phase: deployment, title: "control-service 暂时不可用", expected: "算子继续运行但注册和心跳重试，不能伪报成功", runner: registry.reg_018, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: REG-019, category: negative, phase: deployment, title: "心跳上报 inflight 与租约数持续矛盾", expected: "运维证据标记异常", runner: registry.reg_019, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: REG-020, category: negative, phase: deployment, title: "租约 TTL 小于真实长任务且无续约", expected: "验证不会发生并发容量超卖", runner: registry.reg_020, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: INF-001, category: negative, phase: deployment, title: "PostgreSQL 未启动", expected: "control 和 orchestrator readiness 失败", runner: infrastructure.inf_001, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: INF-002, category: negative, phase: deployment, title: "PostgreSQL 账号或密码错误", expected: "readiness 显示中文依赖原因", runner: infrastructure.inf_002, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: INF-003, category: negative, phase: deployment, title: "数据库迁移缺失", expected: "readiness 失败，不接受课程任务", runner: infrastructure.inf_003, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: INF-004, category: negative, phase: deployment, title: "Redis 未启动", expected: "control readiness 失败且不能发租约", runner: infrastructure.inf_004, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: INF-005, category: negative, phase: deployment, title: "Redis 重启导致临时注册态消失", expected: "算子重新注册和心跳后恢复", runner: infrastructure.inf_005, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: INF-006, category: negative, phase: deployment, title: "Kafka 未启动", expected: "orchestrator readiness 失败", runner: infrastructure.inf_006, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: INF-007, category: negative, phase: deployment, title: "Kafka Topic 缺失且禁止自动创建", expected: "启动校验失败", runner: infrastructure.inf_007, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: INF-008, category: negative, phase: deployment, title: "Kafka 消息重复投递", expected: "DAG 和节点保持幂等", runner: infrastructure.inf_008, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: INF-009, category: negative, phase: deployment, title: "消费处理失败", expected: "不提交 offset，恢复后重投", runner: infrastructure.inf_009, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: INF-010, category: negative, phase: deployment, title: "Publisher 发送失败", expected: "Outbox 保持待发布并累计尝试次数", runner: infrastructure.inf_010, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: INF-011, category: negative, phase: deployment, title: "Publisher 发布成功但标记前退出", expected: "允许重复事件但不重复 DAG", runner: infrastructure.inf_011, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: INF-012, category: negative, phase: deployment, title: "Consumer 提交 offset 前退出", expected: "重启后幂等重放", runner: infrastructure.inf_012, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: INF-013, category: negative, phase: deployment, title: "MongoDB 未启动", expected: "FaceRec readiness 或人物管理失败，不影响离线非人脸泳道", runner: infrastructure.inf_013, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: INF-014, category: negative, phase: deployment, title: "MongoDB 认证失败", expected: "返回明确依赖错误，不创建空人物记录", runner: infrastructure.inf_014, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: INF-015, category: negative, phase: deployment, title: "MongoDB 中 embedding 缺失或维度错误", expected: "识别跳过或拒绝坏记录并记录原因", runner: infrastructure.inf_015, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: INF-016, category: negative, phase: deployment, title: "Kafka 消息包含媒体字节或 Base64", expected: "契约拒绝消息", runner: infrastructure.inf_016, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: JOB-001, category: negative, phase: offline, title: "缺少 task_id", expected: "业务校验失败", runner: offline.job_001, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: JOB-002, category: negative, phase: offline, title: "空 task_types", expected: "业务校验失败", runner: offline.job_002, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: JOB-003, category: negative, phase: offline, title: "未知任务类型", expected: "业务校验失败", runner: offline.job_003, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: JOB-004, category: negative, phase: offline, title: "PPT 缺少 slides_video_path", expected: "仅 PPT 类型校验失败", runner: offline.job_004, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: JOB-005, category: negative, phase: offline, title: "ASR 缺少 teacher_video_path", expected: "仅 ASR 类型校验失败", runner: offline.job_005, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: JOB-006, category: negative, phase: offline, title: "教师行为缺少 teacher_video_path", expected: "仅教师行为校验失败", runner: offline.job_006, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: JOB-007, category: negative, phase: offline, title: "学生行为缺少 student_video_path", expected: "仅学生行为校验失败", runner: offline.job_007, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: JOB-008, category: negative, phase: offline, title: "学生行为缺少或传入负数 student_count", expected: "业务校验失败", runner: offline.job_008, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: JOB-009, category: negative, phase: offline, title: "PPT-only 请求携带无效 T 或 S 字段", expected: "忽略未选任务字段，不因无关字段失败", runner: offline.job_009, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: JOB-010, category: negative, phase: offline, title: "重复提交相同 task_id 和 task_type", expected: "返回已有事实，不重复执行", runner: offline.job_010, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: JOB-011, category: negative, phase: offline, title: "同一 task_id 后续新增另一 task type", expected: "只增加新任务类型", runner: offline.job_011, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: JOB-012, category: negative, phase: offline, title: "已完成任务再次请求", expected: "直接返回已保存结果", runner: offline.job_012, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: JOB-013, category: negative, phase: offline, title: "同一提交 ASR 加教师行为", expected: "同 submission 的 T 下载只发生一次", runner: offline.job_013, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: JOB-014, category: negative, phase: offline, title: "后续新提交再次请求教师视频", expected: "按设计重新下载，不复用旧临时视频", runner: offline.job_014, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: JOB-015, category: negative, phase: offline, title: "asr_options 包含未知字段", expected: "业务校验失败", runner: offline.job_015, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: JOB-016, category: negative, phase: offline, title: "wordTimestamps=true", expected: "按真实算子契约处理并记录 effective_params", runner: offline.job_016, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: JOB-017, category: negative, phase: offline, title: "NORMAL 已运行后提交 URGENT", expected: "不抢占运行节点", runner: offline.job_017, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: JOB-018, category: negative, phase: offline, title: "NORMAL 等待时 URGENT 到达", expected: "URGENT 先领取", runner: offline.job_018, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: JOB-019, category: negative, phase: offline, title: "节点状态被非法逆向推进", expected: "Repository 拒绝状态转换", runner: offline.job_019, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: JOB-020, category: negative, phase: offline, title: "查询不存在的 task_id", expected: "返回稳定的未找到业务响应", runner: offline.job_020, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: FILE-001, category: negative, phase: offline, title: "视频 URL 返回 404", expected: "节点失败并保留中文原因", runner: offline.file_001, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: FILE-002, category: negative, phase: offline, title: "视频 URL 连接超时", expected: "有界失败，不无限占用 worker", runner: offline.file_002, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: FILE-003, category: negative, phase: offline, title: "视频响应超过大小上限", expected: "停止下载并删除 .part", runner: offline.file_003, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: FILE-004, category: negative, phase: offline, title: "服务端中途断流", expected: "不发布残缺终态文件", runner: offline.file_004, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: FILE-005, category: negative, phase: offline, title: "URL 返回 HTML 而非视频", expected: "媒体探测失败", runner: offline.file_005, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: FILE-006, category: negative, phase: offline, title: "视频无音轨", expected: "ASR 音频提取失败但视觉可独立执行", runner: offline.file_006, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: FILE-007, category: negative, phase: offline, title: "视频无法解码或时长为零", expected: "对应节点失败", runner: offline.file_007, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: FILE-008, category: negative, phase: offline, title: "task_id 包含 ../", expected: "路径校验拒绝", runner: offline.file_008, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: FILE-009, category: negative, phase: offline, title: "task_id 为 . 或 ..", expected: "路径校验拒绝", runner: offline.file_009, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: FILE-010, category: negative, phase: offline, title: "结果路径包含祖先符号链接", expected: "manifest 或证据校验拒绝", runner: offline.file_010, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: FILE-011, category: negative, phase: offline, title: "临时文件与最终文件同名但未原子替换", expected: "不允许标记节点完成", runner: offline.file_011, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: FILE-012, category: negative, phase: offline, title: "终态清理误指向 /data/result", expected: "清理保护必须阻止", runner: offline.file_012, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: FILE-013, category: negative, phase: offline, title: "删除其他任务目录", expected: "清理保护必须阻止", runner: offline.file_013, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: FILE-014, category: negative, phase: offline, title: "任务运行中触发清理", expected: "不删除仍被占用的文件", runner: offline.file_014, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: FILE-015, category: negative, phase: offline, title: "清理失败", expected: "任务结果保持终态并记录清理错误", runner: offline.file_015, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: FILE-016, category: negative, phase: offline, title: "/data/result 磁盘写满", expected: "结果节点不得伪报完成", runner: offline.file_016, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: PPT-001, category: negative, phase: offline, title: "PPT 算子返回非 50 受理状态", expected: "节点不进入异步等待", runner: offline.ppt_001, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: PPT-002, category: negative, phase: offline, title: "受理响应 task ID 不一致", expected: "拒绝响应并释放租约", runner: offline.ppt_002, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: PPT-003, category: negative, phase: offline, title: "终态回调 node ID 不存在", expected: "拒绝且不影响其他节点", runner: offline.ppt_003, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: PPT-004, category: negative, phase: offline, title: "回调 task 或 operator task 身份不一致", expected: "拒绝回调", runner: offline.ppt_004, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: PPT-005, category: negative, phase: offline, title: "重复终态回调", expected: "幂等返回，不重复释放 OCR", runner: offline.ppt_005, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: PPT-006, category: negative, phase: offline, title: "回调丢失但 manifest 完整", expected: "对账恢复节点终态", runner: offline.ppt_006, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: PPT-007, category: negative, phase: offline, title: "manifest 缺失", expected: "保持运行或超时失败，不能完成", runner: offline.ppt_007, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: PPT-008, category: negative, phase: offline, title: "manifest JSON 损坏", expected: "校验失败", runner: offline.ppt_008, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: PPT-009, category: negative, phase: offline, title: "manifest count 与 images 数量不一致", expected: "校验失败", runner: offline.ppt_009, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: PPT-010, category: negative, phase: offline, title: "manifest 图片路径越过任务目录", expected: "校验失败", runner: offline.ppt_010, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: PPT-011, category: negative, phase: offline, title: "manifest 动态区间开始大于结束", expected: "校验失败", runner: offline.ppt_011, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: PPT-012, category: negative, phase: offline, title: "黑屏启动帧被保存为切片", expected: "B 级人工复核标记明显误检", runner: offline.ppt_012, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: PPT-013, category: negative, phase: offline, title: "疑似视频或滚动区间产生大量切片", expected: "B 级人工复核标记明显误检", runner: offline.ppt_013, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: PPT-014, category: negative, phase: offline, title: "稳定 PPT 页漏切", expected: "B 级人工复核标记明显漏检", runner: offline.ppt_014, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: PPT-015, category: negative, phase: offline, title: "PPT 切片为 0 张", expected: "允许有解释的空结果或失败，禁止伪造图片", runner: offline.ppt_015, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: OCR-001, category: negative, phase: offline, title: "图片文件不存在", expected: "对应 ppt_image_id 记录失败", runner: offline.ocr_001, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: OCR-002, category: negative, phase: offline, title: "图片损坏或不是图片", expected: "对应子项失败，不污染其他图片结果", runner: offline.ocr_002, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: OCR-003, category: negative, phase: offline, title: "OCR 返回非 JSON 或 schema 错误", expected: "对应子项失败", runner: offline.ocr_003, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: OCR-004, category: negative, phase: offline, title: "部分 PPT 图片 OCR 失败", expected: "保存成功项和失败进度，节点结果不丢失", runner: offline.ocr_004, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: OCR-005, category: negative, phase: offline, title: "OCR 重复返回同一 ppt_image_id", expected: "幂等覆盖或拒绝，不产生重复结果", runner: offline.ocr_005, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: KEY-001, category: negative, phase: offline, title: "OCR 文本为空", expected: "关键词返回空结果或明确原因，不调用无意义 LLM", runner: offline.key_001, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: KEY-002, category: negative, phase: offline, title: "LLM 不可达或超时", expected: "关键词节点失败或等待，不影响已保存 OCR", runner: offline.key_002, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: KEY-003, category: negative, phase: offline, title: "LLM 返回非法 JSON", expected: "关键词子项失败并记录原始错误摘要", runner: offline.key_003, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: KEY-004, category: negative, phase: offline, title: "部分关键词请求失败", expected: "保存成功项和失败进度", runner: offline.key_004, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: KEY-005, category: negative, phase: offline, title: "关键词与当前页明显无关", expected: "B 级人工复核标记明显误检", runner: offline.key_005, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: ASR-001, category: negative, phase: offline, title: "FFmpeg 不存在", expected: "启动或部署预检失败", runner: offline.asr_001, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: ASR-002, category: negative, phase: offline, title: "提取出的 WAV 不是 16kHz 单声道 16-bit PCM", expected: "校验失败，不调用 ASR", runner: offline.asr_002, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: ASR-003, category: negative, phase: offline, title: "WAV 文件为空", expected: "校验失败", runner: offline.asr_003, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: ASR-004, category: negative, phase: offline, title: "ASR HTTP 超时", expected: "节点有界失败并释放租约", runner: offline.asr_004, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: ASR-005, category: negative, phase: offline, title: "ASR v1.1.8 返回非成功业务码", expected: "不标记完成", runner: offline.asr_005, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: ASR-006, category: negative, phase: offline, title: "ASR 返回空 segments", expected: "保存有解释的空结果或失败，禁止伪造文本", runner: offline.asr_006, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: ASR-007, category: negative, phase: offline, title: "ASR 响应缺少必要嵌套字段", expected: "schema 校验失败", runner: offline.asr_007, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: ASR-008, category: negative, phase: offline, title: "showSpk=true 但说话人处理失败", expected: "按算子真实业务码处理并记录 effective_params", runner: offline.asr_008, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: ASR-009, category: negative, phase: offline, title: "showEmotion=true 但情绪字段缺失", expected: "响应契约验收失败", runner: offline.asr_009, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: ASR-010, category: negative, phase: offline, title: "ASR 长任务租约到期", expected: "必须续约或防止容量超卖", runner: offline.asr_010, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: ASR-011, category: negative, phase: offline, title: "相同节点消息重复执行", expected: "结果幂等，不重复持久化", runner: offline.asr_011, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: ASR-012, category: negative, phase: offline, title: "ASR 文本有明显整段漏识别", expected: "B 级人工复核标记明显漏检", runner: offline.asr_012, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: ASR-013, category: negative, phase: offline, title: "中英文混合内容错误严重", expected: "B 级人工复核单独记录", runner: offline.asr_013, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: ASR-014, category: negative, phase: offline, title: "课程脑图在 ASR 未完成前被领取", expected: "前置依赖必须阻止", runner: offline.asr_014, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: ASR-015, category: negative, phase: offline, title: "课程脑图 LLM 不可达", expected: "保留 ASR 完成结果，脑图节点失败或等待", runner: offline.asr_015, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: ASR-016, category: negative, phase: offline, title: "课程脑图返回非法 GenericResponse", expected: "schema 校验失败", runner: offline.asr_016, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: ASR-017, category: negative, phase: offline, title: "课程脑图主题与 ASR 内容明显无关", expected: "B 级人工复核标记明显误检", runner: offline.asr_017, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: ASR-018, category: negative, phase: offline, title: "effective_params 与 A 实际请求不一致", expected: "查询验收失败", runner: offline.asr_018, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-001, category: negative, phase: vision, title: "Kafka 视觉命令包含 Base64 或视频字节", expected: "契约拒绝", runner: vision.vis_001, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-002, category: negative, phase: vision, title: "视觉命令使用相对视频路径", expected: "契约拒绝", runner: vision.vis_002, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-003, category: negative, phase: vision, title: "教师命令误用学生 task type", expected: "契约拒绝", runner: vision.vis_003, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-004, category: negative, phase: vision, title: "学生命令缺少 student_count", expected: "契约拒绝", runner: vision.vis_004, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-005, category: negative, phase: vision, title: "VBas 全部实例无容量", expected: "视觉任务等待，不丢失进度", runner: vision.vis_005, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-006, category: negative, phase: vision, title: "一批帧中部分 VBas 请求失败", expected: "保存成功帧，失败帧可诊断", runner: vision.vis_006, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-007, category: negative, phase: vision, title: "同一帧被多轮细化重复请求", expected: "缓存应避免重复推理", runner: vision.vis_007, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-008, category: negative, phase: vision, title: "粗扫没有候选行为", expected: "返回空行为区间和明确原因", runner: vision.vis_008, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-009, category: negative, phase: vision, title: "有效帧不足", expected: "返回结构化不足原因，不伪造行为", runner: vision.vis_009, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-010, category: negative, phase: vision, title: "板书区间中断不超过 3 秒", expected: "合并为同一区间", runner: vision.vis_010, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-011, category: negative, phase: vision, title: "板书区间中断超过 3 秒", expected: "分成两个区间", runner: vision.vis_011, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-012, category: negative, phase: vision, title: "坐姿中断不超过 5 秒", expected: "合并为同一区间", runner: vision.vis_012, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-013, category: negative, phase: vision, title: "单帧突然非板书或非坐姿", expected: "按 gap 容忍，不立即切断区间", runner: vision.vis_013, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-014, category: negative, phase: vision, title: "细化点落到视频边界外", expected: "截断到合法时间范围", runner: vision.vis_014, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-015, category: negative, phase: vision, title: "19:50 有板书且 20:10 无板书", expected: "继续 5 秒、2 秒和 1 秒细化边界", runner: vision.vis_015, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-016, category: negative, phase: vision, title: "教师姿态同时出现站和坐", expected: "按 VBas 冲突策略输出唯一姿态并留标识", runner: vision.vis_016, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-017, category: negative, phase: vision, title: "教师没有可识别主体", expected: "返回无有效教师结果，不伪造行为", runner: vision.vis_017, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-018, category: negative, phase: vision, title: "没有 front_points", expected: "使用一次生成并稳定持久化的前排兜底值", runner: vision.vis_018, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-019, category: negative, phase: vision, title: "没有 back_point", expected: "使用一次生成并稳定持久化的后排兜底值", runner: vision.vis_019, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-020, category: negative, phase: vision, title: "重复查询兜底结果", expected: "数值保持稳定，不重新随机生成", runner: vision.vis_020, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-021, category: negative, phase: vision, title: "只提供 front 不提供 back", expected: "front 使用真实区域，back 单独兜底", runner: vision.vis_021, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-022, category: negative, phase: vision, title: "区域点越界、自交或格式错误", expected: "明确拒绝或忽略该区域并记录原因", runner: vision.vis_022, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-023, category: negative, phase: vision, title: "识别人数大于 student_count", expected: "保留识别事实，到课率按批准规则处理", runner: vision.vis_023, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-024, category: negative, phase: vision, title: "精选证据超过数量上限", expected: "按分类和总量限制保留", runner: vision.vis_024, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-025, category: negative, phase: vision, title: "证据图片与行为时间不一致", expected: "B 级人工复核标记明显误检", runner: vision.vis_025, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-026, category: negative, phase: vision, title: "重复视觉完成事件", expected: "orchestrator 幂等完成节点", runner: vision.vis_026, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-027, category: negative, phase: vision, title: "进度事件晚于完成事件到达", expected: "不允许终态回退到运行中", runner: vision.vis_027, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: VIS-028, category: negative, phase: vision, title: "vision service 重启", expected: "已接收任务可恢复且不重复最终结果", runner: vision.vis_028, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: ONL-001, category: negative, phase: online, title: "Base64 字符串为空", expected: "网关业务校验失败，不申请租约", runner: online.onl_001, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: ONL-002, category: negative, phase: online, title: "Base64 非法字符或损坏", expected: "网关业务校验失败", runner: online.onl_002, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: ONL-003, category: negative, phase: online, title: "解码后图片超过大小上限", expected: "网关拒绝请求", runner: online.onl_003, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: ONL-004, category: negative, phase: online, title: "请求体超过总大小上限", expected: "网关拒绝请求", runner: online.onl_004, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: ONL-005, category: negative, phase: online, title: "VBas 缺少或未知 stream_type", expected: "网关业务校验失败", runner: online.onl_005, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: ONL-006, category: negative, phase: online, title: "VBas ImageList 为空", expected: "网关业务校验失败", runner: online.onl_006, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: ONL-007, category: negative, phase: online, title: "单请求包含多图", expected: "请求整体路由到一个实例，不跨实例拆分", runner: online.onl_007, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: ONL-008, category: negative, phase: online, title: "在线 VBas 无实例容量", expected: "返回定义的容量业务错误", runner: online.onl_008, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: ONL-009, category: negative, phase: online, title: "VBas 返回非 JSON", expected: "网关返回调用失败", runner: online.onl_009, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: ONL-010, category: negative, phase: online, title: "ScreenDet 缺少 image", expected: "网关业务校验失败", runner: online.onl_010, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: ONL-011, category: negative, phase: online, title: "ScreenDet detect_all 部分模块失败", expected: "保留算子合同中的模块结果，不由网关伪造成功", runner: online.onl_011, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: ONL-012, category: negative, phase: online, title: "在线请求进入 Kafka", expected: "验收失败", runner: online.onl_012, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: ONL-013, category: negative, phase: online, title: "完整请求被拆到多个实例", expected: "验收失败", runner: online.onl_013, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: ONL-014, category: negative, phase: online, title: "实时 ASR 无容量", expected: "WebSocket 返回容量错误并以 1013 关闭", runner: online.onl_014, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: ONL-015, category: negative, phase: online, title: "实时 ASR 上游连接失败", expected: "客户端连接有界关闭，不泄漏租约", runner: online.onl_015, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: ONL-016, category: negative, phase: online, title: "WebSocket 会话中途实例下线", expected: "当前会话明确断开，不悄悄切实例造成语境丢失", runner: online.onl_016, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: ONL-017, category: negative, phase: online, title: "同一 WebSocket 会话请求跨实例", expected: "粘性验收失败", runner: online.onl_017, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: ONL-018, category: negative, phase: online, title: "客户端异常断开", expected: "上游连接和长租约及时释放", runner: online.onl_018, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: ONL-019, category: negative, phase: online, title: "发送非 16kHz 或非单声道 PCM", expected: "按 ASR 合同失败，不伪造字幕", runner: online.onl_019, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: ONL-020, category: negative, phase: online, title: "在线 ASR 结果被写入离线课程结果", expected: "验收失败", runner: online.onl_020, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: FACE-001, category: negative, phase: online, title: "识别请求缺少 photo", expected: "网关业务校验失败", runner: online.face_001, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: FACE-002, category: negative, phase: online, title: "图片中无人脸", expected: "返回算子定义的无匹配结果", runner: online.face_002, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: FACE-003, category: negative, phase: online, title: "图片中多个人脸", expected: "保持既有响应合同，不由网关丢弃结果", runner: online.face_003, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: FACE-004, category: negative, phase: online, title: "人脸尺寸低于最小阈值", expected: "返回明确失败或无匹配", runner: online.face_004, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: FACE-005, category: negative, phase: online, title: "人物入库图片无人脸", expected: "不创建空 embedding 记录", runner: online.face_005, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: FACE-006, category: negative, phase: online, title: "同一人物重复入库", expected: "按既有业务合同更新或拒绝，不产生脏重复", runner: online.face_006, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: FACE-007, category: negative, phase: online, title: "embedding 为空", expected: "人物入库失败", runner: online.face_007, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: FACE-008, category: negative, phase: online, title: "save_person_photo=false", expected: "embedding 有效、photo_path 为空且磁盘无原图", runner: online.face_008, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: FACE-009, category: negative, phase: online, title: "删除不存在人物", expected: "返回稳定业务结果，不影响其他人物", runner: online.face_009, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: FACE-010, category: negative, phase: online, title: "MongoDB 暂不可用时入库", expected: "不返回虚假成功", runner: online.face_010, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: FACE-011, category: negative, phase: online, title: "人物管理路由尚未在网关实现", expected: "对应 2B-Online 任务不得标记完成", runner: online.face_011, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: FACE-012, category: negative, phase: online, title: "A 绕过网关直连 MongoDB", expected: "架构验收失败", runner: online.face_012, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: FACE-013, category: negative, phase: online, title: "三个 FaceRec 实例读取不同人物库", expected: "一致性验收失败", runner: online.face_013, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: FACE-014, category: negative, phase: online, title: "同图入库后无法被任一实例识别", expected: "多实例业务验收失败", runner: online.face_014, timeout_seconds: 180, safety: canonical_runtime}
+  - {case_id: LOAD-001, category: load, phase: final, title: "单请求失败", expected: "不进入并发升级", runner: load.load_001, timeout_seconds: 3600, safety: canonical_runtime}
+  - {case_id: LOAD-002, category: load, phase: final, title: "3 并发出现 OOM", expected: "停止升压并记录瓶颈", runner: load.load_002, timeout_seconds: 3600, safety: canonical_runtime}
+  - {case_id: LOAD-003, category: load, phase: final, title: "10 并发错误率持续升高", expected: "停止升压", runner: load.load_003, timeout_seconds: 3600, safety: canonical_runtime}
+  - {case_id: LOAD-004, category: load, phase: final, title: "30 并发 Kafka Lag 持续不回落", expected: "停止升压", runner: load.load_004, timeout_seconds: 3600, safety: canonical_runtime}
+  - {case_id: LOAD-005, category: load, phase: final, title: "未到 100 并发已达到稳定上限", expected: "记录实际上限，不强行达到 100", runner: load.load_005, timeout_seconds: 3600, safety: canonical_runtime}
+  - {case_id: LOAD-006, category: load, phase: final, title: "在线图片压测与离线长任务混用同一吞吐指标", expected: "报告验收失败", runner: load.load_006, timeout_seconds: 3600, safety: canonical_runtime}
+  - {case_id: LOAD-007, category: load, phase: final, title: "请求只落到一个实例", expected: "三实例路由证据失败", runner: load.load_007, timeout_seconds: 3600, safety: canonical_runtime}
+  - {case_id: LOAD-008, category: load, phase: final, title: "容量统计低于实际并发", expected: "检查租约泄漏或超卖", runner: load.load_008, timeout_seconds: 3600, safety: canonical_runtime}
+  - {case_id: LOAD-009, category: load, phase: final, title: "请求完成后 inflight 不下降", expected: "判为容量泄漏", runner: load.load_009, timeout_seconds: 3600, safety: canonical_runtime}
+  - {case_id: LOAD-010, category: load, phase: deployment, title: "实例被 SIGTERM", expected: "停止接新任务并按优雅关闭规则退出", runner: load.load_010, timeout_seconds: 3600, safety: canonical_runtime}
+  - {case_id: LOAD-011, category: load, phase: deployment, title: "实例被 SIGKILL", expected: "TTL 后离线，未完成任务不得伪报完成", runner: load.load_011, timeout_seconds: 3600, safety: canonical_runtime}
+  - {case_id: LOAD-012, category: load, phase: deployment, title: "orchestrator 重启", expected: "Kafka offset 和数据库状态恢复", runner: load.load_012, timeout_seconds: 3600, safety: canonical_runtime}
+  - {case_id: LOAD-013, category: load, phase: deployment, title: "control 重启", expected: "PostgreSQL 事实保留，算子重新心跳恢复", runner: load.load_013, timeout_seconds: 3600, safety: canonical_runtime}
+  - {case_id: LOAD-014, category: load, phase: deployment, title: "Kafka 重启", expected: "Producer 和 Consumer 重连且消息不丢失", runner: load.load_014, timeout_seconds: 3600, safety: canonical_runtime}
+  - {case_id: LOAD-015, category: load, phase: deployment, title: "Redis 重启", expected: "实时租约不伪造恢复，实例重新注册", runner: load.load_015, timeout_seconds: 3600, safety: canonical_runtime}
+  - {case_id: LOAD-016, category: load, phase: deployment, title: "PostgreSQL 重启", expected: "服务 readiness 恢复后继续处理持久化任务", runner: load.load_016, timeout_seconds: 3600, safety: canonical_runtime}
+  - {case_id: LOAD-017, category: load, phase: deployment, title: "报告只记录注册响应而未记录真实租约", expected: "证据不合格", runner: load.load_017, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: LOAD-018, category: load, phase: deployment, title: "报告只记录健康检查而未真实推理", expected: "证据不合格", runner: load.load_018, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: LOAD-019, category: load, phase: deployment, title: "测试代码直接调用 Repository 完成节点", expected: "Harness 必须失败", runner: load.load_019, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: LOAD-020, category: load, phase: deployment, title: "反例未执行却标记通过", expected: "Harness 或复审失败", runner: load.load_020, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: LOAD-021, category: load, phase: deployment, title: "B 级抽样结果无证据路径", expected: "业务验收不合格", runner: load.load_021, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: LOAD-022, category: load, phase: deployment, title: "mock student_count 被写成真实标注", expected: "报告验收失败", runner: load.load_022, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: LOAD-023, category: load, phase: deployment, title: "测试结束未恢复原运行容器", expected: "交接失败", runner: load.load_023, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: LOAD-024, category: load, phase: deployment, title: "测试临时 Topic、Group、Redis Key 或数据库残留", expected: "清理验收失败", runner: load.load_024, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: LOAD-025, category: load, phase: deployment, title: "测试进程或 CUDA PID 残留", expected: "清理验收失败", runner: load.load_025, timeout_seconds: 300, safety: isolated_mutation}
+  - {case_id: LOAD-026, category: load, phase: deployment, title: "测试删除 /data/result", expected: "严重清理错误，立即停止", runner: load.load_026, timeout_seconds: 300, safety: isolated_mutation}
