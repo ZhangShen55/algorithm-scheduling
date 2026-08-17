@@ -562,6 +562,7 @@ def _recompute_real_case_coverage(
 
     running_by_target = {case["target"]: case for case in running_cases}
     stopped_by_target = {case["target"]: case for case in stopped_cases}
+    stopped_passed = 0
     for target, running in running_by_target.items():
         stopped = stopped_by_target[target]
         if stopped["run_id"] != running["run_id"]:
@@ -574,6 +575,18 @@ def _recompute_real_case_coverage(
                 "gpu_stopped status 通过 requires gpu_running status 通过 for target "
                 f"{target}"
             )
+        if (
+            running["mock"] is False
+            and stopped["mock"] is False
+            and running["status"] == "通过"
+            and stopped["status"] == "通过"
+        ):
+            stopped_passed += 1
+    recomputed["gpu_stopped"] = {
+        "expected": COVERAGE_EXPECTED["gpu_stopped"],
+        "observed": len(stopped_cases),
+        "passed": stopped_passed,
+    }
 
     recovery_cases = cases_by_kind["registration_recovery"]
     recovery_targets = {case["target"] for case in recovery_cases}

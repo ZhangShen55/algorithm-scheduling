@@ -1378,7 +1378,36 @@ def test_cases_envelope_mock_pass_is_observed_but_never_passed(
 
     envelope["coverage"][coverage_key]["passed"] -= 1
     if case_kind == "gpu_running":
+        envelope["coverage"]["gpu_stopped"]["passed"] -= 1
         envelope["coverage"]["smoke_gpu_trigger"]["passed"] -= 1
+    contract.validate_cases_envelope(envelope)
+
+
+@pytest.mark.parametrize("mock_case_kind", ("gpu_running", "gpu_stopped"))
+def test_cases_envelope_gpu_stopped_pass_requires_real_pair(
+    mock_case_kind: str,
+) -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    running = next(
+        case for case in envelope["cases"] if case["case_kind"] == "gpu_running"
+    )
+    stopped = next(
+        case
+        for case in envelope["cases"]
+        if case["case_kind"] == "gpu_stopped"
+        and case["target"] == running["target"]
+    )
+    mock_case = running if mock_case_kind == "gpu_running" else stopped
+    mock_case["mock"] = True
+    if mock_case_kind == "gpu_running":
+        envelope["coverage"]["gpu_running"]["passed"] -= 1
+        envelope["coverage"]["smoke_gpu_trigger"]["passed"] -= 1
+
+    with pytest.raises(ValueError, match=r"coverage\.gpu_stopped\.passed"):
+        contract.validate_cases_envelope(envelope)
+
+    envelope["coverage"]["gpu_stopped"]["passed"] -= 1
     contract.validate_cases_envelope(envelope)
 
 
@@ -1399,6 +1428,7 @@ def test_cases_envelope_linked_gpu_smoke_pass_requires_real_running_case() -> No
     assert running["status"] == linked["status"] == "通过"
     running["mock"] = True
     envelope["coverage"]["gpu_running"]["passed"] -= 1
+    envelope["coverage"]["gpu_stopped"]["passed"] -= 1
 
     with pytest.raises(ValueError, match=r"coverage\.smoke_gpu_trigger\.passed"):
         contract.validate_cases_envelope(envelope)
