@@ -3694,6 +3694,99 @@ def test_ppt_pre_submit_failure_after_success_does_not_duplicate_previous_attemp
     assert evidence["summary"]["attempts"][0]["task_id"] == submitted[0]["task_id"]
 
 
+def test_ppt_request_build_failure_after_success_is_not_recorded_as_submitted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    submitted: list[dict[str, Any]] = []
+    handler = _smoke_handler(tmp_path)
+    real_build_request = httpx.Client.build_request
+    build_count = 0
+
+    def fail_second_request_build(
+        client: httpx.Client,
+        method: str,
+        url: httpx.URL | str,
+        **kwargs: Any,
+    ) -> httpx.Request:
+        nonlocal build_count
+        build_count += 1
+        if build_count == 2:
+            raise RuntimeError("injected request build failure")
+        return real_build_request(client, method, url, **kwargs)
+
+    def inspect(path: str, headers: Any, body: bytes) -> tuple[int, Any]:
+        if path == "/LocalVideoPPTSliceTasks/v1.0.0":
+            submitted.append(json.loads(body))
+        return handler(path, headers, body)
+
+    with _Server({}, inspect) as http_url:
+        monkeypatch.setattr(
+            SMOKE_MODULE,
+            "parse_args",
+            lambda: _ppt_main_args(tmp_path, http_url, manifest, repeat=2),
+        )
+        monkeypatch.setattr(httpx.Client, "build_request", fail_second_request_build)
+        completed = SMOKE_MODULE.main()
+
+    assert completed == 1
+    assert build_count == 2
+    assert len(submitted) == 1
+    evidence = json.loads((_release(tmp_path) / "smoke/ppt_slice.json").read_text())
+    assert "injected request build failure" in evidence["reason"]
+    assert evidence["summary"]["attempt_count"] == 1
+    assert len(evidence["summary"]["attempts"]) == 1
+    assert evidence["summary"]["attempts"][0]["task_id"] == submitted[0]["task_id"]
+
+
+def test_ppt_send_failure_after_success_is_recorded_as_submitted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _fixture_manifest(tmp_path)
+    submitted: list[dict[str, Any]] = []
+    sent: list[dict[str, Any]] = []
+    handler = _smoke_handler(tmp_path)
+    real_send = httpx.Client.send
+
+    def fail_second_send(
+        client: httpx.Client,
+        request: httpx.Request,
+        *args: Any,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        if len(sent) == 2:
+            raise httpx.ConnectError("injected send failure", request=request)
+        return real_send(client, request, *args, **kwargs)
+
+    def inspect(path: str, headers: Any, body: bytes) -> tuple[int, Any]:
+        if path == "/LocalVideoPPTSliceTasks/v1.0.0":
+            submitted.append(json.loads(body))
+        return handler(path, headers, body)
+
+    with _Server({}, inspect) as http_url:
+        monkeypatch.setattr(
+            SMOKE_MODULE,
+            "parse_args",
+            lambda: _ppt_main_args(tmp_path, http_url, manifest, repeat=2),
+        )
+        monkeypatch.setattr(httpx.Client, "send", fail_second_send)
+        completed = SMOKE_MODULE.main()
+
+    assert completed == 1
+    assert len(submitted) == 1
+    assert len(sent) == 2
+    evidence = json.loads((_release(tmp_path) / "smoke/ppt_slice.json").read_text())
+    assert "injected send failure" in evidence["reason"]
+    attempts = evidence["summary"]["attempts"]
+    assert evidence["summary"]["attempt_count"] == 2
+    assert [attempt["task_id"] for attempt in attempts] == [request["task_id"] for request in sent]
+    assert len({attempt["task_id"] for attempt in attempts}) == 2
+    assert attempts[1]["status"] == "失败"
+
+
 def test_ppt_success_evidence_write_failure_does_not_create_a_failed_attempt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

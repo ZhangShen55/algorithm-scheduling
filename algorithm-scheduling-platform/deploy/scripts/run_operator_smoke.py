@@ -912,8 +912,8 @@ def smoke_ppt(
         advertise_base_url=callback_advertise_base_url,
     ) as callback:
         with activity_window(activity):
-            mark_submitted(task_id, operator_task_id)
-            accepted_response = http.post(
+            request = http.build_request(
+                "POST",
                 endpoint.rstrip("/") + "/LocalVideoPPTSliceTasks/v1.0.0",
                 json={
                     "video_path": str(fixtures["ppt_video"]),
@@ -923,6 +923,8 @@ def smoke_ppt(
                     "threshold": 0.98,
                 },
             )
+            mark_submitted(task_id, operator_task_id)
+            accepted_response = http.send(request)
         accepted = require_http(
             accepted_response,
             "PPT Slice",
