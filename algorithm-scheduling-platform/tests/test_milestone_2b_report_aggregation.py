@@ -431,6 +431,18 @@ def _validate_gpu_pair(
     aggregate.validate_gpu_pair(instance, running, stopped, release_tree.git_sha)
 
 
+def _producer_partial_activity(
+    *,
+    instance_id: str = "asr-offline-gpu0",
+    operator_code: str = "asr_offline",
+) -> dict[str, Any]:
+    return {
+        "protocol": "inherited-fd-v1",
+        "operator_code": operator_code,
+        "instance_id": instance_id,
+    }
+
+
 def _plan_document() -> dict[str, Any]:
     assert PLAN_PATH.is_file(), f"权威 report plan 不存在: {PLAN_PATH}"
     loaded = json.loads(PLAN_PATH.read_text(encoding="utf-8"))
@@ -1620,6 +1632,115 @@ def test_stopped_pass_requires_matching_running_identity_and_no_pids(
         _set_nested(stopped, path, value)
 
     with pytest.raises(ValueError, match=message):
+        _validate_gpu_pair(release_tree, running, stopped)
+
+
+def test_running_fail_accepts_producer_activity_without_run_id_and_is_observed(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    instance_id = "asr-offline-gpu0"
+    running_relative = f"gpu-instances/{instance_id}.json"
+    stopped_relative = f"recovery/{instance_id}-stopped.json"
+    running = release_tree.read_json(running_relative)
+    stopped = release_tree.read_json(stopped_relative)
+
+    running["status"] = "FAIL"
+    running["reason"] = "activity protocol failed before run_id"
+    running["activity"] = _producer_partial_activity()
+    for field in ("release_sha", "container", "gpu", "synchronous_samples"):
+        running.pop(field)
+    stopped["status"] = "FAIL"
+    stopped["reason"] = "prior running evidence did not pass"
+    for field in (
+        "release_sha",
+        "container",
+        "gpu",
+        "prior_cuda_pids",
+        "remaining_cuda_pids",
+    ):
+        stopped.pop(field)
+
+    _validate_gpu_pair(release_tree, running, stopped)
+    release_tree.replace_json(running_relative, running)
+    release_tree.replace_json(stopped_relative, stopped)
+
+    cases, coverage = release_tree.collect_registration_gpu()
+
+    gpu_cases = {
+        case["case_id"]: case
+        for case in cases
+        if case["case_id"]
+        in {f"GPU-RUN-{instance_id}", f"GPU-STOP-{instance_id}"}
+    }
+    assert gpu_cases[f"GPU-RUN-{instance_id}"]["status"] == "失败"
+    assert gpu_cases[f"GPU-RUN-{instance_id}"]["run_id"] == f"gpu-{instance_id}"
+    assert gpu_cases[f"GPU-STOP-{instance_id}"]["status"] == "失败"
+    assert gpu_cases[f"GPU-STOP-{instance_id}"]["run_id"] == f"gpu-{instance_id}"
+    assert coverage["gpu_running"] == {
+        "expected": 18,
+        "observed": 18,
+        "passed": 17,
+    }
+    assert coverage["gpu_stopped"] == {
+        "expected": 18,
+        "observed": 18,
+        "passed": 17,
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("instance_id", "ocr-gpu0"),
+        ("operator_code", "ocr"),
+    ),
+)
+def test_running_fail_partial_activity_rejects_identity_drift(
+    release_tree: ReleaseTree,
+    field: str,
+    value: str,
+) -> None:
+    release_tree.write_all_gpu_pairs()
+    running = release_tree.read_json("gpu-instances/asr-offline-gpu0.json")
+    stopped = release_tree.read_json("recovery/asr-offline-gpu0-stopped.json")
+    running["status"] = "FAIL"
+    running["reason"] = "activity protocol failed"
+    running["activity"] = _producer_partial_activity()
+    running["activity"][field] = value
+    stopped["status"] = "FAIL"
+    stopped["reason"] = "stopped check failed"
+
+    with pytest.raises(ValueError, match=field):
+        _validate_gpu_pair(release_tree, running, stopped)
+
+
+@pytest.mark.parametrize("run_id", ("", [], "run\x00id"))
+def test_running_fail_partial_activity_rejects_invalid_present_run_id(
+    release_tree: ReleaseTree,
+    run_id: object,
+) -> None:
+    release_tree.write_all_gpu_pairs()
+    running = release_tree.read_json("gpu-instances/asr-offline-gpu0.json")
+    stopped = release_tree.read_json("recovery/asr-offline-gpu0-stopped.json")
+    running["status"] = "FAIL"
+    running["reason"] = "activity protocol failed"
+    running["activity"] = _producer_partial_activity()
+    running["activity"]["run_id"] = run_id
+    stopped["status"] = "FAIL"
+    stopped["reason"] = "stopped check failed"
+
+    with pytest.raises(ValueError, match="run_id"):
+        _validate_gpu_pair(release_tree, running, stopped)
+
+
+def test_running_pass_requires_activity_run_id(release_tree: ReleaseTree) -> None:
+    release_tree.write_all_gpu_pairs()
+    running = release_tree.read_json("gpu-instances/asr-offline-gpu0.json")
+    stopped = release_tree.read_json("recovery/asr-offline-gpu0-stopped.json")
+    running["activity"].pop("run_id")
+
+    with pytest.raises(ValueError, match="run_id"):
         _validate_gpu_pair(release_tree, running, stopped)
 
 

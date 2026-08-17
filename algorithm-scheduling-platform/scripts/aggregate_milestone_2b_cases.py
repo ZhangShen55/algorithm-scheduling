@@ -547,12 +547,16 @@ def _activity_run_id(
     value: object,
     instance: OperatorInstance,
     context: str,
-) -> str:
+    *,
+    require_run_id: bool,
+) -> str | None:
     activity = _require_object(value, context)
     if activity.get("instance_id") != instance.instance_id:
         raise ValueError(f"{context}.instance_id does not match inventory")
     if activity.get("operator_code") != instance.operator_code:
         raise ValueError(f"{context}.operator_code does not match inventory")
+    if "run_id" not in activity and not require_run_id:
+        return None
     return _require_string(activity.get("run_id"), f"{context}.run_id")
 
 
@@ -683,7 +687,12 @@ def validate_gpu_pair(
         if "gpu" in payload:
             _validate_gpu_identity(payload["gpu"], instance, f"{context}.gpu")
         if "activity" in payload:
-            _activity_run_id(payload["activity"], instance, f"{context}.activity")
+            _activity_run_id(
+                payload["activity"],
+                instance,
+                f"{context}.activity",
+                require_run_id=label == "running" and status_value == "PASS",
+            )
         if "synchronous_samples" in payload:
             _sample_host_pids(
                 payload["synchronous_samples"],
@@ -708,7 +717,10 @@ def validate_gpu_pair(
             running.get("gpu"), instance, f"{instance.instance_id}.running.gpu"
         )
         _activity_run_id(
-            running.get("activity"), instance, f"{instance.instance_id}.running.activity"
+            running.get("activity"),
+            instance,
+            f"{instance.instance_id}.running.activity",
+            require_run_id=True,
         )
         samples = _require_list(
             running.get("synchronous_samples"),
@@ -925,13 +937,17 @@ def collect_registration_gpu_cases(
         running_statuses.append(running_status)
         stopped_statuses.append(stopped_status)
         activity = running.get("activity")
-        run_id = (
+        activity_run_id = (
             _activity_run_id(
-                activity, instance, f"{instance.instance_id}.running.activity"
+                activity,
+                instance,
+                f"{instance.instance_id}.running.activity",
+                require_run_id=running["status"] == "PASS",
             )
             if activity is not None
-            else f"gpu-{instance.instance_id}"
+            else None
         )
+        run_id = activity_run_id or f"gpu-{instance.instance_id}"
         running_timestamp = _require_string(
             running.get("timestamp"), f"{instance.instance_id}.running.timestamp"
         )
