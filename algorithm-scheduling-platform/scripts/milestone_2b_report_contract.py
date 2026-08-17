@@ -397,10 +397,10 @@ def validate_cases_envelope(document: object) -> None:
             if field != "run_id"
         }
         raw_run_id = case["run_id"]
-        if type(raw_run_id) is str and raw_run_id == "":
-            if strings["case_kind"] != "smoke_full":
+        if strings["case_kind"] == "smoke_full":
+            if type(raw_run_id) is not str or raw_run_id != "":
                 raise ValueError(
-                    f"{context}.run_id may be empty only for canonical full Smoke cases"
+                    f"{context}.run_id must be empty for canonical full Smoke cases"
                 )
             source_case_id = strings["source_case_id"]
             canonical_smoke_operator = SMOKE_FULL_OPERATOR_BY_SOURCE_CASE_ID.get(

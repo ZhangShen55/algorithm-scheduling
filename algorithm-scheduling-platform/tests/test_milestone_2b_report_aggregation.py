@@ -2627,6 +2627,15 @@ def test_cases_envelope_allows_empty_run_id_only_for_full_smoke() -> None:
     contract.validate_cases_envelope(_canonical_full_smoke_envelope())
 
 
+def test_cases_envelope_rejects_nonempty_full_smoke_run_id() -> None:
+    contract = _contract_module()
+    envelope = _canonical_full_smoke_envelope()
+    envelope["cases"][0]["run_id"] = "registration"
+
+    with pytest.raises(ValueError, match="run_id"):
+        contract.validate_cases_envelope(envelope)
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     (
