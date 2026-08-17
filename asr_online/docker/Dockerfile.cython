@@ -46,7 +46,7 @@ RUN pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} && \
       -r /tmp/requirements.txt
 
 # ModelScope pipeline imports these at runtime, but its package metadata does not install them.
-RUN pip install --no-cache-dir setuptools==69.5.1 addict==2.4.0 datasets==2.18.0 pyarrow==15.0.2 pandas==2.2.2 Pillow torchaudio==2.6.0 sortedcontainers==2.4.0
+RUN pip install --no-cache-dir --only-binary=:all: setuptools==69.5.1 addict==2.4.0 datasets==2.18.0 pyarrow==15.0.2 pandas==2.2.2 Pillow==11.3.0 torchaudio==2.6.0 sortedcontainers==2.4.0
 
 # datasets imports soundfile during modelscope import; soundfile needs libsndfile.so.
 RUN conda install -n asr -y libsndfile && conda clean -afy

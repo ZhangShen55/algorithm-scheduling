@@ -75,7 +75,7 @@ class PackagingSecurityTests(unittest.TestCase):
         dockerfile = Path("docker/Dockerfile.cython").read_text(encoding="utf-8")
 
         self.assertIn(
-            "pip install --no-cache-dir setuptools==69.5.1 addict==2.4.0 datasets==2.18.0 pyarrow==15.0.2 pandas==2.2.2 Pillow torchaudio==2.6.0 sortedcontainers==2.4.0",
+            "pip install --no-cache-dir --only-binary=:all: setuptools==69.5.1 addict==2.4.0 datasets==2.18.0 pyarrow==15.0.2 pandas==2.2.2 Pillow==11.3.0 torchaudio==2.6.0 sortedcontainers==2.4.0",
             dockerfile,
         )
         self.assertIn('"setuptools==69.5.1"', dockerfile)
@@ -109,12 +109,23 @@ class PackagingSecurityTests(unittest.TestCase):
         dockerfile = Path("docker/Dockerfile").read_text(encoding="utf-8")
 
         self.assertIn(
-            "pip install --no-cache-dir setuptools==69.5.1 addict==2.4.0 "
-            "datasets==2.18.0 pyarrow==15.0.2 pandas==2.2.2 Pillow "
+            "pip install --no-cache-dir --only-binary=:all: setuptools==69.5.1 addict==2.4.0 "
+            "datasets==2.18.0 pyarrow==15.0.2 pandas==2.2.2 Pillow==11.3.0 "
             "torchaudio==2.6.0 sortedcontainers==2.4.0",
             dockerfile,
         )
         self.assertIn("conda install -n asr -y libsndfile", dockerfile)
+
+    def test_modelscope_dependency_closure_requires_binary_pillow_wheel(self):
+        for path in (Path("docker/Dockerfile"), Path("docker/Dockerfile.cython")):
+            with self.subTest(dockerfile=path.name):
+                dockerfile = path.read_text(encoding="utf-8")
+
+                self.assertIn("Pillow==11.3.0", dockerfile)
+                self.assertIn(
+                    "pip install --no-cache-dir --only-binary=:all:",
+                    dockerfile,
+                )
 
     def test_release_requirements_pin_modelscope_once(self):
         requirements = Path("requirements.txt").read_text(encoding="utf-8").splitlines()

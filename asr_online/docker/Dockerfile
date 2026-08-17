@@ -43,7 +43,7 @@ RUN pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} && \
     pip install --no-cache-dir --retries 10 --timeout 60 --prefer-binary \
       -r /tmp/requirements.txt
 # ModelScope 的部分运行依赖没有完整声明在包元数据中，显式冻结已验证的闭包。
-RUN pip install --no-cache-dir setuptools==69.5.1 addict==2.4.0 datasets==2.18.0 pyarrow==15.0.2 pandas==2.2.2 Pillow torchaudio==2.6.0 sortedcontainers==2.4.0
+RUN pip install --no-cache-dir --only-binary=:all: setuptools==69.5.1 addict==2.4.0 datasets==2.18.0 pyarrow==15.0.2 pandas==2.2.2 Pillow==11.3.0 torchaudio==2.6.0 sortedcontainers==2.4.0
 RUN conda install -n asr -y libsndfile && conda clean -afy
 COPY docker/verify_torch_runtime.py /tmp/verify_torch_runtime.py
 RUN python /tmp/verify_torch_runtime.py && \
