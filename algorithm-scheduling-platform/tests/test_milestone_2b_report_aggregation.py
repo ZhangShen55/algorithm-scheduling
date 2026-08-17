@@ -112,6 +112,10 @@ def _aggregate_module() -> ModuleType:
     return importlib.import_module("scripts.aggregate_milestone_2b_cases")
 
 
+def _renderer_module() -> ModuleType:
+    return importlib.import_module("scripts.render_milestone_2b_report")
+
+
 class ReleaseTree:
     def __init__(self, tmp_path: Path) -> None:
         self.release_tag = RELEASE_TAG
@@ -621,6 +625,7 @@ def test_task6_renderer_accepts_headerless_gpu_v1_and_publishes_unexecuted_concl
     release_tree: ReleaseTree,
 ) -> None:
     envelope = _prepare_renderer_release(release_tree)
+    cases_bytes = (release_tree.root / "summary/cases.json").read_bytes()
     marker = "renderer-must-not-copy-sensitive-evidence"
     smoke_path = release_tree.root / "smoke/ocr.json"
     smoke = release_tree.read_json("smoke/ocr.json")
@@ -637,6 +642,10 @@ def test_task6_renderer_accepts_headerless_gpu_v1_and_publishes_unexecuted_concl
     assert report["schema_version"] == 2
     assert report["overall_status"] == "未执行及原因"
     assert report["coverage"] == envelope["coverage"]
+    assert report["cases_input"] == {
+        "bytes": len(cases_bytes),
+        "sha256": hashlib.sha256(cases_bytes).hexdigest(),
+    }
     evidence_index = report["evidence_index"]
     assert len(evidence_index) == 94
     assert list(evidence_index) == sorted(evidence_index)
@@ -658,6 +667,7 @@ def test_task6_renderer_accepts_headerless_gpu_v1_and_publishes_unexecuted_concl
     )
     assert evidence_index["negative/cases.json"]["type"] == "execution_declaration"
     assert evidence_index["load/cases.json"]["type"] == "execution_declaration"
+    assert "summary/cases.json" not in evidence_index
     assert marker.encode() not in report_bytes
     assert marker not in markdown
     assert any(
@@ -824,6 +834,253 @@ def test_task6_renderer_evidence_byte_change_conflicts_with_write_once_report(
     assert "拒绝覆盖" in second.stderr or "不同报告" in second.stderr
     assert report_json.read_bytes() == original_json
     assert report_markdown.read_bytes() == original_markdown
+
+
+def test_task6_renderer_cases_byte_change_conflicts_with_write_once_report(
+    release_tree: ReleaseTree,
+) -> None:
+    _prepare_renderer_release(release_tree)
+    first = _run_task6_renderer(release_tree)
+    assert first.returncode == 3, first.stderr
+    report_json = release_tree.root / "summary/report.json"
+    report_markdown = release_tree.root / "summary/report.md"
+    original_json = report_json.read_bytes()
+    original_markdown = report_markdown.read_bytes()
+    cases_path = release_tree.root / "summary/cases.json"
+    cases_path.write_bytes(cases_path.read_bytes() + b" \n")
+    cases_path.chmod(0o600)
+
+    second = _run_task6_renderer(release_tree)
+
+    assert second.returncode == 1
+    assert "拒绝覆盖" in second.stderr or "不同报告" in second.stderr
+    assert report_json.read_bytes() == original_json
+    assert report_markdown.read_bytes() == original_markdown
+
+
+def test_task6_renderer_rejects_release_root_rebind_after_render(
+    release_tree: ReleaseTree,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    renderer = _renderer_module()
+    _prepare_renderer_release(release_tree)
+    summary = release_tree.root / "summary"
+    displaced_root = release_tree.root.with_name(f"{release_tree.root.name}.displaced")
+    original_render = renderer.render
+
+    def render_then_rebind(*args: Any, **kwargs: Any) -> tuple[dict[str, Any], str]:
+        rendered = original_render(*args, **kwargs)
+        release_tree.root.rename(displaced_root)
+        summary.mkdir(parents=True, mode=0o700)
+        return rendered
+
+    monkeypatch.setattr(
+        renderer,
+        "parse_args",
+        lambda: renderer.argparse.Namespace(
+            input=summary / "cases.json",
+            release_root=release_tree.root,
+            output_json=summary / "report.json",
+            output_markdown=summary / "report.md",
+        ),
+    )
+    monkeypatch.setattr(renderer, "render", render_then_rebind)
+
+    assert renderer.main() == 1
+    for root in (displaced_root, release_tree.root):
+        root_summary = root / "summary"
+        assert not (root_summary / "report.json").exists()
+        assert not (root_summary / "report.md").exists()
+        assert not (root_summary / ".report-transaction.journal").exists()
+        assert not list(root_summary.glob(".report.json.*"))
+        assert not list(root_summary.glob(".report.md.*"))
+        assert not list(root_summary.glob(".report-transaction.journal.*"))
+
+
+@pytest.mark.parametrize(
+    ("side", "field", "value"),
+    (
+        ("runtime", "timestamp", ""),
+        ("runtime", "commands", []),
+        ("runtime", "commands", ["docker inspect", ""]),
+        ("recovery", "timestamp", ""),
+        ("recovery", "commands", []),
+        ("recovery", "commands", ["docker inspect", ""]),
+    ),
+)
+def test_task6_renderer_requires_gpu_common_v1_fields(
+    release_tree: ReleaseTree,
+    side: str,
+    field: str,
+    value: object,
+) -> None:
+    _prepare_renderer_release(release_tree)
+    relative_path = (
+        "gpu-instances/asr-offline-gpu0.json"
+        if side == "runtime"
+        else "recovery/asr-offline-gpu0-stopped.json"
+    )
+    payload = release_tree.read_json(relative_path)
+    payload[field] = value
+    release_tree.replace_json(relative_path, payload)
+    (release_tree.root / relative_path).chmod(0o600)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 1
+    assert field in completed.stderr
+    _assert_renderer_published_nothing(release_tree)
+
+
+def test_task6_renderer_recovery_fail_remaining_pids_must_belong_to_runtime(
+    release_tree: ReleaseTree,
+) -> None:
+    envelope = _prepare_renderer_release(release_tree)
+    instance_id = "asr-offline-gpu0"
+    stopped_relative = f"recovery/{instance_id}-stopped.json"
+    stopped = release_tree.read_json(stopped_relative)
+    stopped["status"] = "FAIL"
+    stopped["reason"] = "CUDA process remained after stop"
+    stopped.pop("prior_cuda_pids")
+    stopped["remaining_cuda_pids"] = [99_999]
+    release_tree.replace_json(stopped_relative, stopped)
+    (release_tree.root / stopped_relative).chmod(0o600)
+    stopped_case = next(
+        case
+        for case in envelope["cases"]
+        if case["case_kind"] == "gpu_stopped" and case["target"] == instance_id
+    )
+    stopped_case["status"] = "失败"
+    stopped_case["reason"] = "CUDA process remained after stop"
+    envelope["coverage"]["gpu_stopped"]["passed"] -= 1
+    _write_renderer_envelope(release_tree, envelope)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 1
+    assert "remaining_cuda_pids" in completed.stderr
+    _assert_renderer_published_nothing(release_tree)
+
+
+@pytest.mark.parametrize(
+    ("source_kind", "claimed_kind"),
+    (
+        ("smoke_gpu_trigger", "smoke_cpu_instance"),
+        ("smoke_cpu_instance", "smoke_gpu_trigger"),
+    ),
+)
+def test_task6_renderer_rejects_instance_smoke_compose_profile_drift(
+    release_tree: ReleaseTree,
+    source_kind: str,
+    claimed_kind: str,
+) -> None:
+    renderer = _renderer_module()
+    envelope = _prepare_renderer_release(release_tree)
+    case = copy.deepcopy(
+        next(item for item in envelope["cases"] if item["case_kind"] == source_kind)
+    )
+    case["case_kind"] = claimed_kind
+    relative_path = case["evidence"][0]
+    root_identity = renderer.release_root_identity(release_tree.root)
+    snapshot = renderer.read_evidence_snapshot(
+        release_tree.root,
+        relative_path,
+        expected_root_identity=root_identity,
+    )
+    smoke_by_source, smoke_by_operator = renderer._load_smoke_authority(PLATFORM_ROOT)
+    authorities = renderer._load_operator_authority(
+        PLATFORM_ROOT, smoke_by_operator
+    )
+
+    with pytest.raises(ValueError, match="CPU|GPU|Compose"):
+        renderer._validate_smoke_evidence(
+            case,
+            snapshot,
+            release_tag=release_tree.release_tag,
+            git_sha=release_tree.git_sha,
+            authorities=authorities,
+            smoke_by_source=smoke_by_source,
+        )
+
+
+def test_task6_renderer_declaration_requires_exact_canonical_path() -> None:
+    renderer = _renderer_module()
+    case = _valid_case("DEP-001")
+    payload = {
+        "schema_version": 1,
+        "evidence_type": "execution_declaration",
+        "category": "negative",
+        "status": "NOT_EXECUTED",
+        "mock": False,
+        "release_tag": RELEASE_TAG,
+        "git_sha": GIT_SHA,
+        "reason": REASON,
+        "cases": [{"case_id": "DEP-001", "status": "NOT_EXECUTED"}],
+    }
+    snapshot = renderer.EvidenceSnapshot(
+        relative_path="negative/copied.json",
+        type="execution_declaration",
+        size=1,
+        sha256="0" * 64,
+        content=b"{}",
+        payload=payload,
+    )
+
+    with pytest.raises(ValueError, match="negative/cases.json|规范"):
+        renderer._validate_declaration_evidence(
+            case,
+            snapshot,
+            release_tag=RELEASE_TAG,
+            git_sha=GIT_SHA,
+        )
+
+
+def test_task6_renderer_publishes_partial_failed_gpu_without_linked_smoke(
+    release_tree: ReleaseTree,
+) -> None:
+    envelope = _prepare_renderer_release(release_tree)
+    instance_id = "asr-offline-gpu0"
+    running_case = next(
+        case
+        for case in envelope["cases"]
+        if case["case_kind"] == "gpu_running" and case["target"] == instance_id
+    )
+    stopped_case = next(
+        case
+        for case in envelope["cases"]
+        if case["case_kind"] == "gpu_stopped" and case["target"] == instance_id
+    )
+    linked_smoke = next(
+        case
+        for case in envelope["cases"]
+        if case["case_kind"] == "smoke_gpu_trigger"
+        and (case["target"], case["run_id"])
+        == (instance_id, running_case["run_id"])
+    )
+    linked_evidence = linked_smoke["evidence"][0]
+    for case in (running_case, stopped_case):
+        case["status"] = "失败"
+        case["reason"] = "injected GPU failure"
+    envelope["cases"].remove(linked_smoke)
+    envelope["coverage"]["gpu_running"]["passed"] -= 1
+    envelope["coverage"]["gpu_stopped"]["passed"] -= 1
+    envelope["coverage"]["smoke_gpu_trigger"]["observed"] -= 1
+    envelope["coverage"]["smoke_gpu_trigger"]["passed"] -= 1
+    for relative_path in running_case["evidence"] + stopped_case["evidence"]:
+        payload = release_tree.read_json(relative_path)
+        payload["status"] = "FAIL"
+        payload["reason"] = "injected GPU failure"
+        release_tree.replace_json(relative_path, payload)
+        (release_tree.root / relative_path).chmod(0o600)
+    _write_renderer_envelope(release_tree, envelope)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 3, completed.stderr
+    report = release_tree.read_json("summary/report.json")
+    assert report["overall_status"] == "失败"
+    assert linked_evidence not in report["evidence_index"]
+    assert len(report["evidence_index"]) < 94
 
 
 @pytest.mark.parametrize("noncanonical", ("input", "json-output", "markdown-output"))
@@ -1116,13 +1373,13 @@ def _valid_observed_cases() -> list[dict[str, Any]]:
         cases.extend(
             (
                 _valid_observed_case(
-                    case_id=f"GPU-RUN-{index:02d}",
+                    case_id=f"GPU-RUN-{target}",
                     case_kind="gpu_running",
                     run_id=run_id,
                     target=target,
                 ),
                 _valid_observed_case(
-                    case_id=f"GPU-STOP-{index:02d}",
+                    case_id=f"GPU-STOP-{target}",
                     case_kind="gpu_stopped",
                     run_id=run_id,
                     target=target,
@@ -2098,6 +2355,28 @@ def test_cases_envelope_rejects_gpu_stopped_run_different_from_running() -> None
     stopped["run_id"] = "different-stop-run"
 
     with pytest.raises(ValueError, match=r"gpu_(?:running|stopped).*run_id|run_id.*gpu"):
+        contract.validate_cases_envelope(envelope)
+
+
+@pytest.mark.parametrize(
+    ("case_kind", "field"),
+    (
+        ("gpu_running", "case_id"),
+        ("gpu_running", "source_case_id"),
+        ("gpu_stopped", "case_id"),
+        ("gpu_stopped", "source_case_id"),
+    ),
+)
+def test_cases_envelope_rejects_gpu_case_identity_drift(
+    case_kind: str,
+    field: str,
+) -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    case = next(item for item in envelope["cases"] if item["case_kind"] == case_kind)
+    case[field] = f"{case[field]}-impostor"
+
+    with pytest.raises(ValueError, match=rf"{case_kind}.*{field}|{field}.*{case_kind}"):
         contract.validate_cases_envelope(envelope)
 
 

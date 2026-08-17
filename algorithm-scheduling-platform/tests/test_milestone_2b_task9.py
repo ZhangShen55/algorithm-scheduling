@@ -566,9 +566,21 @@ def test_renderer_render_emits_schema_v2_and_escapes_markdown_cells() -> None:
         },
     }
 
-    document, markdown = render_report(envelope, [case], [], "失败")
+    cases_snapshot = RENDERER_MODULE.EvidenceSnapshot(
+        relative_path="summary/cases.json",
+        type="cases_envelope",
+        size=123,
+        sha256="c" * 64,
+        content=b"{}",
+        payload=envelope,
+    )
+
+    document, markdown = render_report(
+        envelope, [case], [], "失败", cases_snapshot
+    )
 
     assert document["schema_version"] == 2
+    assert document["cases_input"] == {"bytes": 123, "sha256": "c" * 64}
     assert document["overall_status"] == "失败"
     assert "验收结论" in markdown
     assert "<script>" not in markdown and "<img" not in markdown

@@ -467,6 +467,15 @@ def _require_schema_v1(payload: Mapping[str, Any], context: str) -> None:
         raise ValueError(f"{context}.schema_version 必须是 1")
 
 
+def _validate_gpu_common_v1(payload: Mapping[str, Any], context: str) -> None:
+    _require_string(payload.get("timestamp"), f"{context}.timestamp")
+    commands = _require_list(payload.get("commands"), f"{context}.commands")
+    if not commands:
+        raise ValueError(f"{context}.commands 不能为空")
+    for index, command in enumerate(commands):
+        _require_string(command, f"{context}.commands[{index}]")
+
+
 def _mapped_evidence_status(snapshot: EvidenceSnapshot) -> str:
     if snapshot.type == "execution_declaration":
         return "未执行及原因"
@@ -518,6 +527,14 @@ def _validate_smoke_evidence(
         instance = authorities.get(target)
         if instance is None:
             raise ValueError(f"{context}.target 不是 Compose 算子实例")
+        if case_kind == "smoke_cpu_instance":
+            if instance.physical_gpu is not None:
+                raise ValueError(f"{context}.target 必须是 Compose CPU 实例")
+        elif case_kind == "smoke_gpu_trigger":
+            if instance.physical_gpu is None:
+                raise ValueError(f"{context}.target 必须是 Compose GPU 实例")
+        else:
+            raise ValueError(f"{context} 不是受支持的实例 Smoke 用例")
         expected_operator = instance.operator_code
         if expected_operator != smoke.operator_code:
             raise ValueError(f"{context}.operator_code 与 Compose 算子实例不匹配")
@@ -807,6 +824,7 @@ def _validate_gpu_runtime(
     payload = snapshot.payload
     context = snapshot.relative_path
     _require_schema_v1(payload, context)
+    _validate_gpu_common_v1(payload, context)
     target = _require_string(case.get("target"), "GPU runtime case.target")
     authority = authorities.get(target)
     if authority is None or authority.physical_gpu is None:
@@ -878,6 +896,7 @@ def _validate_gpu_recovery(
     running = runtime.payload
     context = snapshot.relative_path
     _require_schema_v1(payload, context)
+    _validate_gpu_common_v1(payload, context)
     target = _require_string(case.get("target"), "GPU recovery case.target")
     authority = authorities.get(target)
     if authority is None or authority.physical_gpu is None:
@@ -917,10 +936,8 @@ def _validate_gpu_recovery(
         raise ValueError(f"{context}.gpu 与对应 runtime 不匹配")
     if prior_pids is not None and prior_pids != sorted(runtime_pids):
         raise ValueError(f"{context}.prior_cuda_pids 与对应 runtime 不匹配")
-    if remaining_pids is not None and prior_pids is not None and not set(
-        remaining_pids
-    ).issubset(prior_pids):
-        raise ValueError(f"{context}.remaining_cuda_pids 不属于 prior PID")
+    if remaining_pids is not None and not set(remaining_pids).issubset(runtime_pids):
+        raise ValueError(f"{context}.remaining_cuda_pids 不属于对应 runtime PID")
     if status == "通过":
         if _mapped_evidence_status(runtime) != "通过":
             raise ValueError(f"{context} 通过要求对应 runtime 通过")
@@ -950,7 +967,12 @@ def _validate_declaration_evidence(
         raise ValueError(f"{context} 声明用例只能是未执行及原因")
     if payload.get("mock") is not False:
         raise ValueError(f"{context}.mock 必须是 false")
-    expected_category = PurePosixPath(snapshot.relative_path).parts[0]
+    expected_category = {
+        "negative/cases.json": "negative",
+        "load/cases.json": "load",
+    }.get(snapshot.relative_path)
+    if expected_category is None:
+        raise ValueError(f"{context} 不是规范声明证据路径")
     if payload.get("category") != expected_category:
         raise ValueError(f"{context}.category 与规范路径不匹配")
     if payload.get("status") != "NOT_EXECUTED":
@@ -1314,6 +1336,7 @@ def render(
     cases: Sequence[Mapping[str, Any]],
     evidence_snapshots: Sequence[EvidenceSnapshot],
     conclusion: str,
+    cases_snapshot: EvidenceSnapshot,
 ) -> tuple[dict[str, Any], str]:
     release_tag = _require_string(envelope.get("release_tag"), "release_tag")
     git_sha = _require_string(envelope.get("git_sha"), "git_sha")
@@ -1335,6 +1358,10 @@ def render(
         "release_tag": release_tag,
         "git_sha": git_sha,
         "plan_sha256": envelope["plan_sha256"],
+        "cases_input": {
+            "bytes": cases_snapshot.size,
+            "sha256": cases_snapshot.sha256,
+        },
         "overall_status": conclusion,
         "coverage": envelope["coverage"],
         "counts": counts,
@@ -1419,25 +1446,29 @@ def main() -> int:
             cases,
             evidence_snapshots,
             conclusion,
+            cases_snapshot,
         )
+        outputs = (
+            (
+                args.output_json,
+                (
+                    json.dumps(
+                        document,
+                        allow_nan=False,
+                        ensure_ascii=False,
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n"
+                ).encode("utf-8"),
+            ),
+            (args.output_markdown, markdown.encode("utf-8")),
+        )
+        if release_root_identity(args.release_root) != root_identity:
+            raise ValueError("release root 与最终 root 锚点不一致")
         publish_report_transaction(
             args.release_root,
-            (
-                (
-                    args.output_json,
-                    (
-                        json.dumps(
-                            document,
-                            allow_nan=False,
-                            ensure_ascii=False,
-                            indent=2,
-                            sort_keys=True,
-                        )
-                        + "\n"
-                    ).encode("utf-8"),
-                ),
-                (args.output_markdown, markdown.encode("utf-8")),
-            ),
+            outputs,
         )
         return 0 if conclusion == "通过" else 3
     except (OSError, ValueError, json.JSONDecodeError, TypeError) as exc:

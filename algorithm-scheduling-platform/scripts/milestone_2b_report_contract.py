@@ -175,6 +175,7 @@ class DeclarationCase(TypedDict):
 
 class _CoverageCase(TypedDict):
     case_id: str
+    source_case_id: str
     target: str
     run_id: str
     status: str
@@ -593,6 +594,15 @@ def _recompute_real_case_coverage(
     stopped_passed = 0
     for target, running in running_by_target.items():
         stopped = stopped_by_target[target]
+        for case_kind, case, expected_case_id in (
+            ("gpu_running", running, f"GPU-RUN-{target}"),
+            ("gpu_stopped", stopped, f"GPU-STOP-{target}"),
+        ):
+            for field in ("case_id", "source_case_id"):
+                if case[field] != expected_case_id:
+                    raise ValueError(
+                        f"{case_kind}[{target}].{field} must equal {expected_case_id}"
+                    )
         if stopped["run_id"] != running["run_id"]:
             raise ValueError(
                 "gpu_stopped.run_id must equal gpu_running.run_id for target "
@@ -853,6 +863,7 @@ def validate_cases_envelope(document: object) -> None:
         cases_by_kind[case_kind].append(
             {
                 "case_id": strings["case_id"],
+                "source_case_id": strings["source_case_id"],
                 "target": strings["target"],
                 "run_id": strings["run_id"],
                 "status": strings["status"],
