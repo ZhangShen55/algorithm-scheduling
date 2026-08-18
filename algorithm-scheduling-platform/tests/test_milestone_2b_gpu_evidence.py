@@ -516,6 +516,34 @@ def test_verifier_records_container_runtime_separately_from_driver_cuda(
     assert compatibility["driver_cuda_version"] == "12.8"
 
 
+def test_verifier_ignores_unavailable_telemetry_on_another_gpu(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    gpu_runtime["env"]["FAKE_GPU_TELEMETRY"] = (
+        "0, GPU-A, 55, 90, 120, 350, 50, Not Active\n"
+        "1, GPU-B, 56, 89, 130, 350, 40, Not Active\n"
+        "2, GPU-C, 54, [N/A], 80, 350, 20, Not Active"
+    )
+
+    completed = _run(gpu_runtime)
+
+    assert completed.returncode == 0, completed.stderr
+    assert _report(gpu_runtime)["hardware"]["temperature_limit_c"] == 90.0
+
+
+def test_gpu_telemetry_preserves_unavailable_temperature_limit_as_null(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    gpu_runtime["env"]["FAKE_GPU_TELEMETRY"] = (
+        "0, GPU-A, 55, [N/A], 120, 350, 50, Not Active"
+    )
+
+    completed = _run(gpu_runtime)
+
+    assert completed.returncode == 0, completed.stderr
+    assert _report(gpu_runtime)["hardware"]["temperature_limit_c"] is None
+
+
 def test_verifier_attributes_sm_to_target_pid_when_another_gpu_process_is_busy(
     gpu_runtime: dict[str, Any],
 ) -> None:

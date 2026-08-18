@@ -426,9 +426,8 @@ def _hardware_validator(
     samples = running.get("synchronous_samples")
     if not isinstance(samples, list) or not samples:
         raise ValueError("GPU hardware synchronous sample evidence is missing")
-    numeric_fields = (
+    required_numeric_fields = (
         "temperature_c",
-        "temperature_limit_c",
         "power_watts",
         "power_limit_watts",
     )
@@ -440,14 +439,27 @@ def _hardware_validator(
         if any(
             not isinstance(measurement.get(field), (int, float))
             or isinstance(measurement.get(field), bool)
-            for field in numeric_fields
+            for field in required_numeric_fields
+        ) or (
+            measurement.get("temperature_limit_c") is not None
+            and (
+                not isinstance(
+                    measurement.get("temperature_limit_c"), (int, float)
+                )
+                or isinstance(measurement.get("temperature_limit_c"), bool)
+            )
         ) or not isinstance(measurement.get("hardware_slowdown"), bool):
             raise ValueError("GPU hardware synchronous sample is invalid")
         sample_hardware.append(measurement)
+    temperature_limits = [
+        item["temperature_limit_c"]
+        for item in sample_hardware
+        if item["temperature_limit_c"] is not None
+    ]
     expected = {
         "temperature_c": max(item["temperature_c"] for item in sample_hardware),
-        "temperature_limit_c": min(
-            item["temperature_limit_c"] for item in sample_hardware
+        "temperature_limit_c": (
+            min(temperature_limits) if temperature_limits else None
         ),
         "power_watts": max(item["power_watts"] for item in sample_hardware),
         "power_limit_watts": min(
@@ -462,11 +474,20 @@ def _hardware_validator(
     if any(
         not isinstance(hardware.get(field), (int, float))
         or isinstance(hardware.get(field), bool)
-        for field in numeric_fields
+        for field in required_numeric_fields
+    ) or (
+        hardware.get("temperature_limit_c") is not None
+        and (
+            not isinstance(hardware.get("temperature_limit_c"), (int, float))
+            or isinstance(hardware.get("temperature_limit_c"), bool)
+        )
     ) or not isinstance(hardware.get("hardware_slowdown"), bool):
         raise ValueError("GPU hardware state has invalid measurements")
     if (
-        hardware["temperature_c"] >= hardware["temperature_limit_c"]
+        (
+            hardware["temperature_limit_c"] is not None
+            and hardware["temperature_c"] >= hardware["temperature_limit_c"]
+        )
         or hardware["power_watts"] >= hardware["power_limit_watts"]
         or hardware["hardware_slowdown"]
     ):

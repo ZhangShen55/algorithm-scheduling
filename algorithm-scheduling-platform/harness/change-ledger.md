@@ -1,5 +1,27 @@
 # Change Ledger
 
+## 2026-08-19 - 8A.3 GPU 温度上限不可用值语义修正
+
+- 现场现象：`fd079383f507a5d7d16cd20209874deeab1cfd79` 已完成八算子与四平台镜像构建、
+  四平台健康、三组 GPU profile 和 CPU profile 注册；18 个 GPU 实例进入真实请求、停止、重启与
+  注册恢复流程后，running 证据均在 `nvidia-smi GPU telemetry 数值字段格式异常` 处失败。
+  FaceRec 与 ASR、OCR、VBas 的失败点相同，因此不是 FaceRec x86 镜像、模型、Python 或宿主
+  Conda 环境问题。
+- 根因证据：服务器原始查询中 GPU2 的 `temperature.gpu.tlimit` 返回 `[N/A]`，GPU0/GPU1 返回
+  数值。验证器在筛选目标 GPU 前先把三张卡全部字段执行 `float()`，导致验证 GPU0/GPU1 时也被
+  GPU2 的缺失值误伤；验证 GPU2 时又无法忠实表达厂商未提供的温度上限。
+- 修正：先按物理索引和 UUID 唯一选择目标卡，再解析目标 telemetry；仅将 NVIDIA 明确不可用的
+  `temperature.gpu.tlimit` 保存为 JSON `null`。实际温度、功耗/功耗上限、全局 GPU 利用率与
+  hardware slowdown 继续强制取真实值。GPU case runner 对 `null` 温限跳过无法成立的温限比较，
+  仍校验同步样本摘要、功耗边界和 slowdown 状态。
+- TDD 证据：新增“非目标 GPU 的 `[N/A]` 不影响目标卡”和“目标卡温限缺失保留为 `null`”两条
+  采集器回归，以及 canonical hardware validator 的缺失温限回归；三条测试均先在旧实现按现场
+  原因失败，最小修正后转绿。GPU 采集器完整测试 `85 passed`，相关 GPU/stage45/维护锁测试
+  `54 passed`；最终提交前仍需执行完整静态和回归门禁。
+- 完成边界：`fd07938` 是失败 release，保持只读。修正必须进入新 Git SHA/新不可变 release，
+  并同时出现 `CODEX_STAGE45_COMPLETE failures=0` 与
+  `CODEX_8A3_TERMINAL stage45_failures=0 deployment_status=0`，才允许勾选 `8A.3`。
+
 ## 2026-08-19 - 8A.3 GeForce `pmon` 不可用指标语义修正
 
 - 现场现象：`b8431c0fd4b135db1a8cc34ae4b9cae48e7e0655` 已完成八算子和四平台镜像构建、

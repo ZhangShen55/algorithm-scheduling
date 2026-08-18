@@ -248,6 +248,12 @@ def _gpu_rows() -> list[dict[str, Any]]:
     return rows
 
 
+def _optional_temperature_limit(value: str) -> float | None:
+    if value in {"-", "N/A", "[N/A]"}:
+        return None
+    return float(value)
+
+
 def _gpu_telemetry(physical_gpu: int, gpu_uuid: str) -> dict[str, Any]:
     completed = _run(
         [
@@ -265,11 +271,16 @@ def _gpu_telemetry(physical_gpu: int, gpu_uuid: str) -> dict[str, Any]:
             raise VerificationError("nvidia-smi GPU telemetry 字段格式异常")
         try:
             index = int(values[0])
+        except ValueError as error:
+            raise VerificationError("nvidia-smi GPU telemetry 数值字段格式异常") from error
+        if index != physical_gpu or values[1] != gpu_uuid:
+            continue
+        try:
             row = {
                 "physical_index": index,
                 "physical_uuid": values[1],
                 "temperature_c": float(values[2]),
-                "temperature_limit_c": float(values[3]),
+                "temperature_limit_c": _optional_temperature_limit(values[3]),
                 "power_watts": float(values[4]),
                 "power_limit_watts": float(values[5]),
                 "gpu_utilization_percent": float(values[6]),
@@ -280,8 +291,7 @@ def _gpu_telemetry(physical_gpu: int, gpu_uuid: str) -> dict[str, Any]:
         if slowdown not in {"Active", "Not Active"}:
             raise VerificationError("nvidia-smi hardware slowdown 字段格式异常")
         row["hardware_slowdown"] = slowdown == "Active"
-        if index == physical_gpu and values[1] == gpu_uuid:
-            matching.append(row)
+        matching.append(row)
     if len(matching) != 1:
         raise VerificationError("nvidia-smi GPU telemetry 未唯一匹配目标 GPU")
     return matching[0]
@@ -1167,6 +1177,11 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
     final_inspect = _inspect(arguments.container)
     if final_inspect.get("Id") != container_id:
         raise VerificationError("容器在验证期间发生重启或替换")
+    temperature_limits = [
+        sample["hardware"]["temperature_limit_c"]
+        for sample in samples
+        if sample["hardware"]["temperature_limit_c"] is not None
+    ]
     report.update(
         {
             "release_sha": inspect.get("Config", {}).get("Labels", {}).get(
@@ -1194,8 +1209,8 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
                 "temperature_c": max(
                     sample["hardware"]["temperature_c"] for sample in samples
                 ),
-                "temperature_limit_c": min(
-                    sample["hardware"]["temperature_limit_c"] for sample in samples
+                "temperature_limit_c": (
+                    min(temperature_limits) if temperature_limits else None
                 ),
                 "power_watts": max(
                     sample["hardware"]["power_watts"] for sample in samples
