@@ -621,6 +621,7 @@ async def test_timeout_terminates_then_kills_the_process_group(
         (1.0, float("inf")),
         (1.0, True),
         (1.0, type("DerivedFloat", (float,), {})(0.1)),
+        (1.0, 30.1),
     ),
 )
 async def test_run_command_rejects_nonfinite_or_nonbase_timing_values_before_spawn(
@@ -807,6 +808,83 @@ async def test_timeout_reaps_inherited_pipe_child_after_parent_exits(
         assert not _process_exists(child_pid)
     finally:
         if child_pid > 0 and _process_exists(child_pid):
+            os.kill(child_pid, signal.SIGKILL)
+
+
+@pytest.mark.asyncio
+async def test_success_reaps_same_group_child_that_closed_standard_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts.milestone_2b_case_runners import process
+    from scripts.milestone_2b_case_runners.base import CaseContext
+    from scripts.milestone_2b_case_runners.process import (
+        CommandSpec,
+        ProcessGroupProbeAction,
+        run_command,
+    )
+    from scripts.milestone_2b_case_runners.safety import _case_execution_scope
+
+    marker = tmp_path / "detached-child.ready"
+    monkeypatch.setattr(
+        process,
+        "_PROCESS_GROUP_PROBE_SOURCE",
+        f"""
+import json
+import os
+import pathlib
+import subprocess
+import sys
+import time
+
+child_source = r'''
+import os
+import pathlib
+import time
+
+os.closerange(0, 3)
+pathlib.Path({str(marker)!r}).write_text("ready", encoding="utf-8")
+time.sleep(60)
+'''
+child = subprocess.Popen([sys.executable, "-c", child_source], close_fds=True)
+marker = pathlib.Path({str(marker)!r})
+while not marker.exists():
+    time.sleep(0.01)
+print(json.dumps({{"parent": os.getpid(), "child": child.pid}}), flush=True)
+""",
+    )
+    context = CaseContext(_release_root(tmp_path), "run-1", "local")
+    process_group_id = -1
+    child_pid = -1
+    try:
+        async with _case_execution_scope(context, "isolated_mutation", None):
+            result = await run_command(
+                context=context,
+                command=CommandSpec(
+                    action=ProcessGroupProbeAction(
+                        spawn_child=True,
+                        parent_exits=True,
+                        ignore_sigterm=False,
+                    )
+                ),
+                timeout_seconds=1,
+                terminate_grace_seconds=0.1,
+            )
+
+        pids = json.loads(result.stdout)
+        process_group_id = pids["parent"]
+        child_pid = pids["child"]
+        assert result.returncode == 0
+        with pytest.raises(ProcessLookupError):
+            os.killpg(process_group_id, 0)
+        assert not _process_exists(child_pid)
+    finally:
+        if process_group_id > 0:
+            try:
+                os.killpg(process_group_id, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        elif child_pid > 0 and _process_exists(child_pid):
             os.kill(child_pid, signal.SIGKILL)
 
 
@@ -1678,6 +1756,219 @@ async def test_cleanup_failure_is_recorded_and_timed_out_process_is_reaped(
     assert result.exit_code != 0
 
 
+class _DelayedProcessGroupCleanupRunner:
+    def __init__(self, marker: Path, process_group_ids: list[int]) -> None:
+        self.marker = marker
+        self.process_group_ids = process_group_ids
+        self.command_task: object | None = None
+        self.cleanup_called = False
+        self.cleanup_group_alive: bool | None = None
+
+    async def run(self, context: object, case: object) -> object:
+        import asyncio
+
+        from scripts.milestone_2b_case_runners.process import (
+            CommandSpec,
+            ProcessGroupProbeAction,
+            run_command,
+        )
+
+        self.command_task = asyncio.create_task(
+            run_command(
+                context=context,  # type: ignore[arg-type]
+                command=CommandSpec(
+                    action=ProcessGroupProbeAction(
+                        spawn_child=True,
+                        parent_exits=False,
+                        ignore_sigterm=False,
+                    )
+                ),
+                timeout_seconds=60,
+                terminate_grace_seconds=2,
+            )
+        )
+        deadline = asyncio.get_running_loop().time() + 2
+        while not self.marker.exists():
+            if asyncio.get_running_loop().time() >= deadline:
+                raise AssertionError("delayed child did not create marker")
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(60)
+        raise AssertionError("runner timeout did not cancel delayed child")
+
+    async def cleanup(self, context: object, case: object) -> None:
+        del context, case
+        self.cleanup_called = True
+        process_group_id = self.process_group_ids[0]
+        try:
+            os.killpg(process_group_id, 0)
+        except ProcessLookupError:
+            self.cleanup_group_alive = False
+        else:
+            self.cleanup_group_alive = True
+        self.marker.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_waits_for_delayed_command_process_group_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    from scripts.milestone_2b_case_runners import process as process_module
+    from scripts.run_milestone_2b_case_batch import run_case_batch
+
+    marker = tmp_path / "delayed-command-marker"
+    monkeypatch.setenv("M2B_DELAYED_COMMAND_MARKER", str(marker))
+    monkeypatch.setattr(
+        process_module,
+        "_PROCESS_GROUP_PROBE_SOURCE",
+        """
+import os
+import pathlib
+import signal
+import subprocess
+import sys
+import time
+
+marker = pathlib.Path(os.environ["M2B_DELAYED_COMMAND_MARKER"])
+child_source = r'''\
+import os
+import pathlib
+import signal
+import time
+
+marker = pathlib.Path(os.environ["M2B_DELAYED_COMMAND_MARKER"])
+def stop(_signum, _frame):
+    time.sleep(0.75)
+    marker.write_text("recreated", encoding="utf-8")
+    raise SystemExit(0)
+signal.signal(signal.SIGTERM, stop)
+marker.write_text("running", encoding="utf-8")
+while True:
+    time.sleep(1)
+'''
+child = subprocess.Popen(
+    [sys.executable, "-c", child_source],
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+)
+print(child.pid, flush=True)
+time.sleep(60)
+""",
+    )
+    original_create_subprocess_exec = asyncio.create_subprocess_exec
+    process_group_ids: list[int] = []
+
+    async def capture_process_group(*args: object, **kwargs: object) -> object:
+        process = await original_create_subprocess_exec(*args, **kwargs)  # type: ignore[arg-type]
+        process_group_ids.append(process.pid)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", capture_process_group)
+    runner = _DelayedProcessGroupCleanupRunner(marker, process_group_ids)
+
+    result = await run_case_batch(
+        cases=(_case("DEP-011", safety="isolated_mutation", timeout_seconds=1),),  # type: ignore[arg-type]
+        release_root=_release_root(tmp_path),
+        runners={"testing.run": runner},  # type: ignore[dict-item]
+        concurrency=1,
+        run_id="run-1",
+        target="local",
+        require_cleanup=True,
+    )
+    await asyncio.sleep(0.5)
+
+    assert result.exit_code != 0
+    assert runner.cleanup_called is True
+    assert runner.cleanup_group_alive is False
+    assert marker.exists() is False
+    assert runner.command_task is not None
+    assert runner.command_task.done()  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_is_skipped_when_command_termination_is_unconfirmed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    from scripts.milestone_2b_case_runners import process as process_module
+    from scripts.milestone_2b_case_runners import safety
+    from scripts.milestone_2b_case_runners.process import (
+        CommandResult,
+        CommandSpec,
+        OutputProbeAction,
+        run_command,
+    )
+    from scripts.run_milestone_2b_case_batch import run_case_batch
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def cancellation_resistant_argv(**kwargs: object) -> CommandResult:
+        argv = kwargs["argv"]
+        started.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            await release.wait()
+        return CommandResult(
+            argv=argv,  # type: ignore[arg-type]
+            returncode=0,
+            stdout=b"",
+            stderr=b"",
+            stdout_truncated=False,
+            stderr_truncated=False,
+        )
+
+    monkeypatch.setattr(process_module, "_run_argv", cancellation_resistant_argv)
+    monkeypatch.setattr(process_module, "POST_KILL_DRAIN_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(process_module, "COMPLETION_CANCEL_GRACE_SECONDS", 0.01)
+    monkeypatch.setattr(safety, "COMMAND_TASK_TERMINATION_MARGIN_SECONDS", 0.01)
+
+    class Runner(_PublishingRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.command_task: asyncio.Task[object] | None = None
+            self.cleanup_called = False
+
+        async def run(self, context: object, case: object) -> object:
+            self.command_task = asyncio.create_task(
+                run_command(
+                    context=context,  # type: ignore[arg-type]
+                    command=CommandSpec(action=OutputProbeAction(0, 0)),
+                    timeout_seconds=60,
+                    terminate_grace_seconds=0.01,
+                )
+            )
+            await started.wait()
+            return await super().run(context, case)
+
+        async def cleanup(self, context: object, case: object) -> None:
+            del context, case
+            self.cleanup_called = True
+
+    runner = Runner()
+    result = await run_case_batch(
+        cases=(_case("DEP-011", safety="isolated_mutation"),),  # type: ignore[arg-type]
+        release_root=_release_root(tmp_path),
+        runners={"testing.run": runner},  # type: ignore[dict-item]
+        concurrency=1,
+        run_id="run-1",
+        target="local",
+        require_cleanup=True,
+    )
+    release.set()
+    assert runner.command_task is not None
+    await runner.command_task
+
+    assert result.exit_code != 0
+    assert runner.cleanup_called is False
+
+
 class _CancellationResistantRunner(_PublishingRunner):
     def __init__(self) -> None:
         super().__init__()
@@ -2119,7 +2410,7 @@ class Runner:
                 )
             ),
             timeout_seconds=60,
-            terminate_grace_seconds=30,
+            terminate_grace_seconds=2.5,
         )
 
 runner = Runner()
@@ -2128,16 +2419,62 @@ raise SystemExit(batch.main(sys.argv[1:]))
 """
 
 
+def test_supervisor_deadline_includes_maximum_command_termination_budget() -> None:
+    from scripts import run_milestone_2b_case_batch as batch
+    from scripts.milestone_2b_case_runners import process
+
+    termination_budget = getattr(
+        process,
+        "maximum_command_termination_budget_seconds",
+        None,
+    )
+
+    assert callable(termination_budget)
+    case = _case("DEP-013", timeout_seconds=1)
+    assert batch._supervisor_deadline_seconds(
+        (case,),  # type: ignore[arg-type]
+        require_cleanup=False,
+    ) == pytest.approx(
+        case.timeout_seconds
+        + batch.CASE_TASK_CANCEL_GRACE_SECONDS
+        + termination_budget()
+        + batch.SUPERVISOR_FIXED_GRACE_SECONDS
+    )
+    assert batch._supervisor_deadline_seconds(
+        (case,),  # type: ignore[arg-type]
+        require_cleanup=True,
+    ) == pytest.approx(
+        case.timeout_seconds
+        + batch.CASE_TASK_CANCEL_GRACE_SECONDS
+        + termination_budget()
+        + min(case.timeout_seconds, 30)
+        + batch.CASE_TASK_CANCEL_GRACE_SECONDS
+        + termination_budget()
+        + batch.SUPERVISOR_FIXED_GRACE_SECONDS
+    )
+
+
 def test_cli_supervisor_kills_detached_controlled_command_group(
     tmp_path: Path,
 ) -> None:
     import subprocess
     import sys
 
+    from scripts import run_milestone_2b_case_batch as batch
+
     catalog = _catalog_with_case_timeout(tmp_path, "DEP-013", 1)
     release_root = _release_root(tmp_path)
     parent_pid_file = tmp_path / "command-parent.pid"
     child_pid_file = tmp_path / "command-child.pid"
+    supervisor_timeout = (
+        batch._supervisor_deadline_seconds(
+            (_case("DEP-013", timeout_seconds=1),),  # type: ignore[arg-type]
+            require_cleanup=False,
+        )
+        + batch.SUPERVISOR_SIGNAL_GRACE_SECONDS
+        + batch.SUPERVISOR_FIXED_GRACE_SECONDS
+        + 1
+    )
     completed = subprocess.run(
         (
             sys.executable,
@@ -2157,7 +2494,7 @@ def test_cli_supervisor_kills_detached_controlled_command_group(
         cwd=Path(__file__).parents[1],
         text=True,
         capture_output=True,
-        timeout=6,
+        timeout=supervisor_timeout,
         check=False,
     )
 

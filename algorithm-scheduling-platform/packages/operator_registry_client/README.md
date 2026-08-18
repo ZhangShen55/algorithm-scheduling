@@ -38,6 +38,8 @@ from packages.operator_registry_client import install_operator_runtime
   `declared_capacity`；平台只路由 `ONLINE + model_ready=true` 的实例。
 - `POST /ops/drain`：把本地状态切换为 `DRAINING`，拒绝新任务，存量任务可继续完成。
 
-推荐使用 `create_operator_ops_router` 直接挂载统一路由。服务启动后调用 `register()` 并运行
-周期 `heartbeat()`；关闭前先调用 `drain()`，等待本地 `inflight=0` 后再 `unregister()`。
-注册客户端不改变现有模型推理接口、请求和响应。
+推荐使用 `create_operator_ops_router` 直接挂载统一路由。启用主动注册时必须同时配置
+`PLATFORM_CONTROL_SERVICE_URL`、`PLATFORM_OPERATOR_REGISTRY_TOKEN`、实例 ID 和服务 URL。
+服务启动后调用 `register()` 并运行周期 `heartbeat()`；正常进程关闭直接注销，不持久化
+`DRAINING`。只有运维排空才显式调用 `drain()`，等待本地 `inflight=0` 后再注销；该排空意图
+会跨实例重启保留。注册客户端不改变现有模型推理接口、请求和响应。

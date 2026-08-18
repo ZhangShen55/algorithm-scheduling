@@ -35,6 +35,25 @@ def test_all_operator_entrypoints_install_the_shared_registry_runtime() -> None:
     assert "inflight_provider=task_manager.get_task_count" in ppt_source
 
 
+def test_shared_registry_wheel_defines_stable_read_only_metadata_route() -> None:
+    runtime_source = (
+        WORKSPACE_ROOT
+        / "algorithm-scheduling-platform/packages/operator_registry_client/runtime.py"
+    ).read_text(encoding="utf-8")
+    ops_source = (
+        WORKSPACE_ROOT
+        / "algorithm-scheduling-platform/packages/operator_registry_client/ops.py"
+    ).read_text(encoding="utf-8")
+
+    assert '@app.get("/ops/metadata"' in runtime_source
+    assert "class OperatorOpsMetadata(BaseModel):" in ops_source
+    assert "instance_id: str" in ops_source
+    assert "operator_code: str" in ops_source
+    assert "capabilities: list[str]" in ops_source
+    assert "model_version: str | None" in ops_source
+    assert "api_version: str | None" in ops_source
+
+
 def test_asr_images_run_one_registered_uvicorn_endpoint_without_internal_nginx() -> None:
     expected_ports = {"asr_offline": 8083, "asr_online": 8084}
 
@@ -240,6 +259,9 @@ def test_operator_compose_declares_restart_health_mounts_and_instance_identity()
         assert environment["PLATFORM_REGISTRATION_ENABLED"] == "true"
         assert environment["PLATFORM_CONTROL_SERVICE_URL"] == (
             "http://control-service:18100"
+        )
+        assert environment["PLATFORM_OPERATOR_REGISTRY_TOKEN"] == (
+            "${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}"
         )
         assert environment["PLATFORM_INSTANCE_ID"] == name
         assert int(environment["PLATFORM_DECLARED_CAPACITY"]) > 0

@@ -100,7 +100,7 @@ class OperatorAuditRepository:
             ).scalar_one_or_none()
 
             if inserted is None:
-                connection.execute(
+                desired_state = connection.execute(
                     text(
                         """
                         UPDATE operator_instances
@@ -111,15 +111,16 @@ class OperatorAuditRepository:
                             api_version = :api_version,
                             declared_capacity = :declared_capacity,
                             labels = CAST(:labels AS jsonb),
-                            desired_state = :desired_state,
                             last_registered_at = now(),
                             unregistered_at = NULL,
                             updated_at = now()
                         WHERE instance_id = :instance_id
+                        RETURNING desired_state
                         """
                     ),
                     parameters,
-                )
+                ).scalar_one()
+                declaration["desired_state"] = str(desired_state)
 
             self._append_event(
                 connection,
@@ -127,6 +128,22 @@ class OperatorAuditRepository:
                 event_type="REGISTERED" if inserted is not None else "REREGISTERED",
                 event_payload=declaration,
             )
+
+    def get_desired_lifecycle(self, instance_id: str) -> OperatorLifecycle:
+        with self._engine.connect() as connection:
+            desired_state = connection.execute(
+                text(
+                    """
+                    SELECT desired_state
+                    FROM operator_instances
+                    WHERE instance_id = :instance_id
+                    """
+                ),
+                {"instance_id": instance_id},
+            ).scalar_one_or_none()
+        if desired_state is None:
+            raise OperatorInstanceNotFoundError(instance_id)
+        return OperatorLifecycle(str(desired_state))
 
     def record_heartbeat_summary(
         self,
@@ -251,8 +268,7 @@ class OperatorAuditRepository:
                 text(
                     """
                     UPDATE operator_instances
-                    SET desired_state = 'OFFLINE',
-                        unregistered_at = now(),
+                    SET unregistered_at = now(),
                         updated_at = now()
                     WHERE instance_id = :instance_id
                     """
@@ -266,6 +282,7 @@ class OperatorAuditRepository:
                 event_payload={
                     "previous_lifecycle": snapshot["desired_state"],
                     "lifecycle": OperatorLifecycle.OFFLINE.value,
+                    "desired_lifecycle": snapshot["desired_state"],
                     "source": source,
                 },
             )

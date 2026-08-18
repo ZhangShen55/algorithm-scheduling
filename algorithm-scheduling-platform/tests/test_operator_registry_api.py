@@ -16,11 +16,15 @@ from packages.platform_common.operator_registry import (
     OperatorInstanceNotFoundError,
 )
 
+REGISTRY_TOKEN = "registry-test-token"
+REGISTRY_HEADERS = {"X-Operator-Registry-Token": REGISTRY_TOKEN}
+
 
 class FakeOperatorRegistry:
     def __init__(self) -> None:
         self.instances: dict[str, OperatorInstance] = {}
         self.no_capacity = False
+        self.missing_release = False
 
     def register(self, instance: OperatorInstance) -> OperatorInstance:
         self.instances[instance.instance_id] = instance
@@ -57,7 +61,8 @@ class FakeOperatorRegistry:
         )
 
     def release(self, lease_id: str) -> None:
-        return None
+        if self.missing_release:
+            raise CapacityLeaseNotFoundError(lease_id)
 
     def renew(self, lease_id: str, ttl_seconds: int) -> CapacityLease:
         if lease_id != "lease-001":
@@ -116,7 +121,14 @@ class UnavailableOperatorRegistry:
 
 def test_operator_registration_and_listing_use_real_http_status(tmp_path: Path) -> None:
     registry = FakeOperatorRegistry()
-    settings = PlatformSettings(course_root=tmp_path / "course", result_root=tmp_path / "result")
+    settings = PlatformSettings(
+        course_root=tmp_path / "course",
+        result_root=tmp_path / "result",
+        operator_registry_token=REGISTRY_TOKEN,
+        trusted_operator_service_urls={
+            "vbas-gpu0": "http://127.0.0.1:19001",
+        },
+    )
     app = create_control_app(operator_registry=registry, settings=settings)
     registration = {
         "instance_id": "vbas-gpu0",
@@ -130,13 +142,173 @@ def test_operator_registration_and_listing_use_real_http_status(tmp_path: Path) 
     }
 
     with TestClient(app) as client:
-        registered = client.post("/api/operator-instances/register", json=registration)
+        registered = client.post(
+            "/api/operator-instances/register",
+            json=registration,
+            headers=REGISTRY_HEADERS,
+        )
         listed = client.get("/api/operator-instances")
 
     assert registered.status_code == 201
     assert registered.json()["instance_id"] == "vbas-gpu0"
     assert listed.status_code == 200
     assert listed.json()[0]["operator_code"] == "vbas"
+
+
+@pytest.mark.parametrize("token", [None, "wrong-token"])
+def test_operator_registration_requires_management_token(
+    tmp_path: Path,
+    token: str | None,
+) -> None:
+    registry = FakeOperatorRegistry()
+    settings = PlatformSettings(
+        course_root=tmp_path / "course",
+        result_root=tmp_path / "result",
+        operator_registry_token=REGISTRY_TOKEN,
+        trusted_operator_service_urls={
+            "vbas-gpu0": "http://vbas-gpu0:8981",
+        },
+    )
+    app = create_control_app(operator_registry=registry, settings=settings)
+    headers = {} if token is None else {"X-Operator-Registry-Token": token}
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/operator-instances/register",
+            headers=headers,
+            json={
+                "instance_id": "vbas-gpu0",
+                "operator_code": "vbas",
+                "capabilities": ["teacher_behavior"],
+                "service_url": "http://vbas-gpu0:8981",
+                "declared_capacity": 1,
+            },
+        )
+
+    assert response.status_code == 401
+    assert registry.instances == {}
+
+
+def test_operator_heartbeat_requires_management_token(tmp_path: Path) -> None:
+    registry = FakeOperatorRegistry()
+    registry.instances["vbas-gpu0"] = OperatorInstance(
+        instance_id="vbas-gpu0",
+        operator_code="vbas",  # type: ignore[arg-type]
+        capabilities=["teacher_behavior"],
+        service_url="http://vbas-gpu0:8981",
+        declared_capacity=1,
+    )
+    settings = PlatformSettings(
+        course_root=tmp_path / "course",
+        result_root=tmp_path / "result",
+        operator_registry_token=REGISTRY_TOKEN,
+        trusted_operator_service_urls={
+            "vbas-gpu0": "http://vbas-gpu0:8981",
+        },
+    )
+    app = create_control_app(operator_registry=registry, settings=settings)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/operator-instances/heartbeat",
+            json={"instance_id": "vbas-gpu0", "inflight": 0, "model_ready": True},
+        )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "service_url",
+    [
+        "http://127.0.0.1:19001",
+        "http://169.254.169.254:80",
+        "http://unconfigured-operator:8981",
+    ],
+)
+def test_registration_rejects_service_url_outside_exact_instance_authority(
+    tmp_path: Path,
+    service_url: str,
+) -> None:
+    registry = FakeOperatorRegistry()
+    settings = PlatformSettings(
+        course_root=tmp_path / "course",
+        result_root=tmp_path / "result",
+        operator_registry_token=REGISTRY_TOKEN,
+        trusted_operator_service_urls={
+            "vbas-gpu0": "http://vbas-gpu0:8981",
+        },
+    )
+    app = create_control_app(operator_registry=registry, settings=settings)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/operator-instances/register",
+            headers=REGISTRY_HEADERS,
+            json={
+                "instance_id": "vbas-gpu0",
+                "operator_code": "vbas",
+                "capabilities": ["teacher_behavior"],
+                "service_url": service_url,
+                "declared_capacity": 1,
+            },
+        )
+
+    assert response.status_code == 403
+    assert registry.instances == {}
+
+
+@pytest.mark.parametrize(
+    "trusted_url",
+    ["http://vbas-gpu0:8981", "http://127.0.0.1:19001"],
+)
+def test_registration_accepts_exact_configured_docker_or_local_origin(
+    tmp_path: Path,
+    trusted_url: str,
+) -> None:
+    registry = FakeOperatorRegistry()
+    settings = PlatformSettings(
+        course_root=tmp_path / "course",
+        result_root=tmp_path / "result",
+        operator_registry_token=REGISTRY_TOKEN,
+        trusted_operator_service_urls={"vbas-gpu0": trusted_url},
+    )
+    app = create_control_app(operator_registry=registry, settings=settings)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/operator-instances/register",
+            headers=REGISTRY_HEADERS,
+            json={
+                "instance_id": "vbas-gpu0",
+                "operator_code": "vbas",
+                "capabilities": ["teacher_behavior"],
+                "service_url": trusted_url,
+                "declared_capacity": 1,
+            },
+        )
+
+    assert response.status_code == 201
+
+
+def test_release_missing_lease_returns_explicit_not_found(tmp_path: Path) -> None:
+    registry = FakeOperatorRegistry()
+    registry.missing_release = True
+    settings = PlatformSettings(
+        course_root=tmp_path / "course",
+        result_root=tmp_path / "result",
+    )
+    app = create_control_app(operator_registry=registry, settings=settings)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/internal/operator-instances/release",
+            json={"lease_id": "missing-lease"},
+        )
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "detail": "算子容量租约不存在或已过期: missing-lease"
+    }
 
 
 def test_legacy_operator_code_is_rejected(tmp_path: Path) -> None:
@@ -147,6 +319,7 @@ def test_legacy_operator_code_is_rejected(tmp_path: Path) -> None:
     with TestClient(app) as client:
         response = client.post(
             "/api/operator-instances/register",
+            headers=REGISTRY_HEADERS,
             json={
                 "instance_id": "legacy-instance",
                 "operator_code": "tias",
@@ -162,12 +335,17 @@ def test_legacy_operator_code_is_rejected(tmp_path: Path) -> None:
 
 def test_unknown_heartbeat_returns_http_404(tmp_path: Path) -> None:
     registry = FakeOperatorRegistry()
-    settings = PlatformSettings(course_root=tmp_path / "course", result_root=tmp_path / "result")
+    settings = PlatformSettings(
+        course_root=tmp_path / "course",
+        result_root=tmp_path / "result",
+        operator_registry_token=REGISTRY_TOKEN,
+    )
     app = create_control_app(operator_registry=registry, settings=settings)
 
     with TestClient(app) as client:
         response = client.post(
             "/api/operator-instances/heartbeat",
+            headers=REGISTRY_HEADERS,
             json={"instance_id": "missing", "inflight": 0, "model_ready": True},
         )
 
@@ -271,14 +449,32 @@ def test_operator_routes_return_http_503_when_registry_is_unavailable(
     path: str,
     payload: dict[str, Any] | None,
 ) -> None:
-    settings = PlatformSettings(course_root=tmp_path / "course", result_root=tmp_path / "result")
+    settings = PlatformSettings(
+        course_root=tmp_path / "course",
+        result_root=tmp_path / "result",
+        operator_registry_token=REGISTRY_TOKEN,
+        trusted_operator_service_urls={
+            "vbas-gpu0": "http://127.0.0.1:19001",
+        },
+    )
     app = create_control_app(
         operator_registry=UnavailableOperatorRegistry(),
         settings=settings,
     )
 
     with TestClient(app, raise_server_exceptions=False) as client:
-        response = client.request(method, path, json=payload)
+        headers = (
+            REGISTRY_HEADERS
+            if path in {
+                "/api/operator-instances/register",
+                "/api/operator-instances/heartbeat",
+                "/api/operator-instances/unregister",
+                "/api/operator-instances/lifecycle",
+                "/ops/operator-instances/vbas-gpu0/drain",
+            }
+            else None
+        )
+        response = client.request(method, path, json=payload, headers=headers)
 
     assert response.status_code == 503
     assert "暂不可用" in response.json()["detail"]

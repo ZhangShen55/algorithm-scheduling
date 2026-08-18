@@ -13,6 +13,14 @@ class OperatorOpsStatus(BaseModel):
     declared_capacity: int = Field(gt=0)
 
 
+class OperatorOpsMetadata(BaseModel):
+    instance_id: str
+    operator_code: str
+    capabilities: list[str]
+    model_version: str | None
+    api_version: str | None
+
+
 def create_operator_ops_router(
     *,
     status_provider: Callable[[], OperatorOpsStatus],

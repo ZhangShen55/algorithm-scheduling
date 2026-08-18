@@ -26,6 +26,8 @@ TEST_REDIS_URL = os.getenv(
     "redis://127.0.0.1:6379/14",
 )
 REDIS_PREFIX = f"milestone1-control-test:{uuid4().hex[:8]}:"
+REGISTRY_TOKEN = "integration-registry-token"
+REGISTRY_HEADERS = {"X-Operator-Registry-Token": REGISTRY_TOKEN}
 MISSING_TABLE_SCHEMA = "milestone1_readiness_missing_table_test"
 MISSING_COMMENT_SCHEMA = "milestone1_readiness_missing_comment_test"
 MISSING_COLUMN_SCHEMA = "milestone1_readiness_missing_column_test"
@@ -87,6 +89,11 @@ def _control_settings(
             "default_lease_ttl_seconds": 30,
             "max_lease_ttl_seconds": 120,
             "heartbeat_audit_interval_seconds": 60,
+            "management_token": REGISTRY_TOKEN,
+            "trusted_service_urls": {
+                "vbas-http-gpu0": "http://127.0.0.1:19001",
+                "vbas-audit-readiness-gpu0": "http://127.0.0.1:19002",
+            },
         },
         readiness={"dependency_timeout_seconds": 2.0},
     )
@@ -590,12 +597,25 @@ def test_outbox_failure_rolls_back_course_and_task_type_facts(
 
 def test_real_readiness_registry_drain_capacity_and_audit_are_consistent(
     control_client: tuple[TestClient, Engine, Redis],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, engine, redis_client = control_client
+
+    class AlwaysHealthyOperatorChecker:
+        def check(self, instance: object) -> bool:
+            del instance
+            return True
+
+    monkeypatch.setattr(
+        client.app.state.operator_registry,
+        "_health_checker",
+        AlwaysHealthyOperatorChecker(),
+    )
     health = client.get("/health")
     readiness = client.get("/ops/readiness")
     registration = client.post(
         "/api/operator-instances/register",
+        headers=REGISTRY_HEADERS,
         json={
             "instance_id": "vbas-http-gpu0",
             "operator_code": "vbas",
@@ -609,13 +629,17 @@ def test_real_readiness_registry_drain_capacity_and_audit_are_consistent(
     )
     heartbeat = client.post(
         "/api/operator-instances/heartbeat",
+        headers=REGISTRY_HEADERS,
         json={"instance_id": "vbas-http-gpu0", "inflight": 0, "model_ready": True},
     )
     lease = client.post(
         "/internal/operator-instances/lease",
         json={"capability": "teacher_behavior", "ttl_seconds": 30},
     )
-    drain = client.post("/ops/operator-instances/vbas-http-gpu0/drain")
+    drain = client.post(
+        "/ops/operator-instances/vbas-http-gpu0/drain",
+        headers=REGISTRY_HEADERS,
+    )
     released = client.post(
         "/internal/operator-instances/release",
         json={"lease_id": lease.json().get("lease_id", "missing")},
@@ -672,6 +696,7 @@ def test_heartbeat_audit_failure_is_visible_until_same_instance_recovers(
     instance_id = "vbas-audit-readiness-gpu0"
     registration = client.post(
         "/api/operator-instances/register",
+        headers=REGISTRY_HEADERS,
         json={
             "instance_id": instance_id,
             "operator_code": "vbas",
@@ -706,6 +731,7 @@ def test_heartbeat_audit_failure_is_visible_until_same_instance_recovers(
     try:
         heartbeat = client.post(
             "/api/operator-instances/heartbeat",
+            headers=REGISTRY_HEADERS,
             json={"instance_id": instance_id, "inflight": 0, "model_ready": True},
         )
         degraded = client.get("/ops/readiness")
@@ -728,6 +754,7 @@ def test_heartbeat_audit_failure_is_visible_until_same_instance_recovers(
 
     recovered_heartbeat = client.post(
         "/api/operator-instances/heartbeat",
+        headers=REGISTRY_HEADERS,
         json={"instance_id": instance_id, "inflight": 0, "model_ready": True},
     )
     recovered = client.get("/ops/readiness")

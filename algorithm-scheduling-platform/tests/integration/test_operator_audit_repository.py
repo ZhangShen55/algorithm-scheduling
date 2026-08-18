@@ -4,22 +4,33 @@ import importlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 import pytest
+from redis import Redis
+from redis.exceptions import RedisError
 from sqlalchemy import Engine, text
 
 from packages.platform_common.operator_registry import (
     CapacityLease,
+    CapacityUnavailableError,
     OperatorCode,
     OperatorInstance,
     OperatorInstanceNotFoundError,
     OperatorLifecycle,
 )
+from packages.platform_common.redis_operator_registry import RedisOperatorRegistry
 
 pytestmark = pytest.mark.integration
 
 if TYPE_CHECKING:
     from conftest import Milestone1Postgres
+
+
+class AlwaysHealthy:
+    def check(self, instance: OperatorInstance) -> bool:
+        del instance
+        return True
 
 
 def _load_audit_types() -> tuple[type[Any], type[Any]]:
@@ -43,6 +54,86 @@ def _assert_test_database(engine: Engine) -> None:
     assert database_name.endswith("_test"), (
         "PostgreSQL 集成测试拒绝操作非 _test 数据库: " f"{database_name!r}"
     )
+
+
+def _cleanup_redis_prefix(client: Redis, prefix: str) -> None:
+    keys = list(client.scan_iter(match=f"{prefix}*", count=100))
+    if keys:
+        client.delete(*keys)
+
+
+def test_draining_desired_state_survives_unregister_and_real_redis_loss(
+    milestone1_postgres: Milestone1Postgres,
+) -> None:
+    repository_type, registry_type = _load_audit_types()
+    engine = milestone1_postgres.engine
+    _assert_test_database(engine)
+    suffix = uuid4().hex
+    prefix = f"m2b:integration:reg-014:{suffix}:"
+    instance = replace(_instance(), instance_id=f"vbas-reg-014-{suffix}")
+    first_client = Redis.from_url(
+        "redis://127.0.0.1:6379/15", decode_responses=True
+    )
+    try:
+        first_client.ping()
+    except RedisError as exc:
+        first_client.close()
+        pytest.skip(f"Redis 集成测试环境不可用: {exc}")
+    _cleanup_redis_prefix(first_client, prefix)
+    try:
+        first_repository = repository_type(engine)
+        first = registry_type(
+            RedisOperatorRegistry(first_client, key_prefix=prefix),
+            first_repository,
+            heartbeat_audit_interval_seconds=60,
+            health_checker=AlwaysHealthy(),
+        )
+        first.register(instance)
+        first.heartbeat(instance.instance_id, inflight=0, model_ready=True)
+        first.set_lifecycle(instance.instance_id, OperatorLifecycle.DRAINING)
+        first.unregister(instance.instance_id)
+        _cleanup_redis_prefix(first_client, prefix)
+    finally:
+        first_client.close()
+
+    second_client = Redis.from_url(
+        "redis://127.0.0.1:6379/15", decode_responses=True
+    )
+    try:
+        second_client.ping()
+        second_repository = repository_type(engine)
+        restarted = registry_type(
+            RedisOperatorRegistry(second_client, key_prefix=prefix),
+            second_repository,
+            heartbeat_audit_interval_seconds=60,
+            health_checker=AlwaysHealthy(),
+        )
+        restarted.register(instance)
+        heartbeat = restarted.heartbeat(
+            instance.instance_id,
+            inflight=0,
+            model_ready=True,
+        )
+        persisted_repository = repository_type(engine)
+        assert first_repository is not second_repository
+        assert second_repository is not persisted_repository
+        assert (
+            persisted_repository.get_desired_lifecycle(instance.instance_id)
+            is OperatorLifecycle.DRAINING
+        )
+        assert heartbeat.lifecycle is OperatorLifecycle.DRAINING
+        with pytest.raises(CapacityUnavailableError):
+            restarted.lease("teacher_behavior", 30)
+
+        restarted.set_lifecycle(instance.instance_id, OperatorLifecycle.ONLINE)
+        assert (
+            restarted.lease("teacher_behavior", 30).instance_id
+            == instance.instance_id
+        )
+    finally:
+        _cleanup_redis_prefix(second_client, prefix)
+        second_client.close()
+
 
 @pytest.fixture
 def clean_audit_database(milestone1_postgres: Milestone1Postgres) -> Engine:
@@ -215,6 +306,45 @@ def test_lifecycle_unregistration_are_idempotent_and_history_is_newest_first(
     assert snapshot.unregistered_at is not None
 
 
+def test_draining_desired_state_survives_unregistration_and_reregistration(
+    clean_audit_database: Engine,
+) -> None:
+    repository_type, _ = _load_audit_types()
+    repository = repository_type(clean_audit_database)
+    instance = _instance()
+
+    repository.record_registration(instance)
+    repository.record_lifecycle(
+        instance.instance_id,
+        OperatorLifecycle.DRAINING,
+        source="ops",
+        reason="运维排空",
+    )
+    repository.record_unregistration(instance.instance_id, source="operator")
+
+    assert (
+        repository.get_desired_lifecycle(instance.instance_id)
+        is OperatorLifecycle.DRAINING
+    )
+
+    repository.record_registration(instance)
+
+    assert (
+        repository.get_desired_lifecycle(instance.instance_id)
+        is OperatorLifecycle.DRAINING
+    )
+    with clean_audit_database.connect() as connection:
+        snapshot = connection.execute(
+            text(
+                "SELECT desired_state, unregistered_at FROM operator_instances "
+                "WHERE instance_id = :instance_id"
+            ),
+            {"instance_id": instance.instance_id},
+        ).one()
+    assert snapshot.desired_state == "DRAINING"
+    assert snapshot.unregistered_at is None
+
+
 def test_event_insert_failure_rolls_back_snapshot_in_same_transaction(
     clean_audit_database: Engine,
 ) -> None:
@@ -292,6 +422,7 @@ def test_lease_hot_path_never_calls_postgresql_audit() -> None:
         RealtimeRegistry(),
         AuditMustNotBeCalled(),
         heartbeat_audit_interval_seconds=60,
+        health_checker=AlwaysHealthy(),
     )
 
     lease = registry.lease("teacher_behavior", 30)
@@ -347,6 +478,7 @@ def test_cross_store_failures_keep_routing_in_the_conservative_state() -> None:
         realtime,
         FailingAudit(),
         heartbeat_audit_interval_seconds=60,
+        health_checker=AlwaysHealthy(),
     )
 
     with pytest.raises(RuntimeError, match="postgres unavailable"):
@@ -363,7 +495,7 @@ def test_cross_store_failures_keep_routing_in_the_conservative_state() -> None:
         model_ready=True,
     )
     assert heartbeat.inflight == 1
-    assert realtime.heartbeat_calls == 1
+    assert realtime.heartbeat_calls == 2
 
     class RedisFailingRegistry(RealtimeRegistry):
         def register(self, instance: OperatorInstance) -> OperatorInstance:
@@ -376,11 +508,19 @@ def test_cross_store_failures_keep_routing_in_the_conservative_state() -> None:
         def record_registration(self, instance: OperatorInstance) -> None:
             self.registrations += 1
 
+        def get_desired_lifecycle(
+            self,
+            instance_id: str,
+        ) -> OperatorLifecycle:
+            del instance_id
+            return OperatorLifecycle.ONLINE
+
     recording_audit = RecordingAudit()
     redis_failing_registry = registry_type(
         RedisFailingRegistry(),
         recording_audit,
         heartbeat_audit_interval_seconds=60,
+        health_checker=AlwaysHealthy(),
     )
     with pytest.raises(RuntimeError, match="redis unavailable"):
         redis_failing_registry.register(_instance())
@@ -422,6 +562,7 @@ def test_unregister_retry_is_idempotent_after_redis_state_was_removed() -> None:
         realtime,
         audit,
         heartbeat_audit_interval_seconds=60,
+        health_checker=AlwaysHealthy(),
     )
 
     registry.unregister("vbas-audit-gpu0")
@@ -461,6 +602,7 @@ def test_successful_heartbeat_only_clears_its_own_pending_audit_error() -> None:
         RealtimeRegistry(),
         SelectiveAudit(),
         heartbeat_audit_interval_seconds=60,
+        health_checker=AlwaysHealthy(),
     )
 
     registry.heartbeat("operator-a", inflight=1, model_ready=True)

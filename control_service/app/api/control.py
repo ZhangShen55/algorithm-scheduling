@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from secrets import compare_digest
 from typing import Any, Protocol, cast
 from urllib.parse import urlsplit
 
@@ -16,6 +17,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from packages.platform_common.application import create_service_app
 from packages.platform_common.config import PlatformSettings
 from packages.platform_common.operator_audit_repository import OperatorInstanceEvent
+from packages.platform_common.operator_operations import (
+    OperatorCapacitySnapshot,
+    OperatorOperationsRegistry,
+    build_operator_capacity_snapshot,
+)
 from packages.platform_common.operator_registry import (
     CapacityLease,
     CapacityLeaseNotFoundError,
@@ -35,6 +41,7 @@ from packages.platform_common.repository import (
 from packages.platform_contracts.responses import BusinessCode, BusinessResponse
 from packages.platform_contracts.status import Priority, TaskType, status_text
 
+from ..infrastructure.audited_operator_registry import canonical_operator_origin
 from ..infrastructure.runtime import ControlReadinessChecker, ControlRuntime
 
 
@@ -136,6 +143,30 @@ def _task_database_error() -> BusinessResponse[dict[str, Any]]:
 
 def _registry_unavailable() -> HTTPException:
     return HTTPException(status_code=503, detail="算子注册中心暂不可用")
+
+
+def _authorize_operator_management(request: Request, expected_token: str) -> None:
+    supplied_token = request.headers.get("X-Operator-Registry-Token", "")
+    if not compare_digest(supplied_token, expected_token):
+        raise HTTPException(status_code=401, detail="算子注册管理认证失败")
+
+
+def _authorize_operator_origin(
+    *,
+    instance_id: str,
+    service_url: str,
+    trusted_service_urls: dict[str, str],
+) -> None:
+    trusted_url = trusted_service_urls.get(instance_id)
+    try:
+        supplied_origin = canonical_operator_origin(service_url)
+        trusted_origin = (
+            None if trusted_url is None else canonical_operator_origin(trusted_url)
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="算子服务地址不在可信配置中") from exc
+    if trusted_origin is None or supplied_origin != trusted_origin:
+        raise HTTPException(status_code=403, detail="算子服务地址不在可信配置中")
 
 
 def _course_repository(request: Request) -> CourseTaskRepository:
@@ -421,6 +452,12 @@ def create_control_app(
         payload: OperatorRegistrationRequest,
         request: Request,
     ) -> OperatorInstance:
+        _authorize_operator_management(request, resolved.operator_registry_token)
+        _authorize_operator_origin(
+            instance_id=payload.instance_id,
+            service_url=payload.service_url,
+            trusted_service_urls=resolved.trusted_operator_service_urls,
+        )
         try:
             return _operator_registry(request).register(
                 OperatorInstance(
@@ -442,6 +479,7 @@ def create_control_app(
         payload: OperatorHeartbeatRequest,
         request: Request,
     ) -> OperatorInstance:
+        _authorize_operator_management(request, resolved.operator_registry_token)
         try:
             return _operator_registry(request).heartbeat(
                 payload.instance_id,
@@ -461,6 +499,7 @@ def create_control_app(
         payload: OperatorUnregisterRequest,
         request: Request,
     ) -> dict[str, str]:
+        _authorize_operator_management(request, resolved.operator_registry_token)
         try:
             _operator_registry(request).unregister(payload.instance_id)
         except OperatorInstanceNotFoundError as exc:
@@ -493,6 +532,7 @@ def create_control_app(
         payload: OperatorLifecycleRequest,
         request: Request,
     ) -> OperatorInstance:
+        _authorize_operator_management(request, resolved.operator_registry_token)
         try:
             return _operator_registry(request).set_lifecycle(
                 payload.instance_id,
@@ -531,6 +571,11 @@ def create_control_app(
     ) -> dict[str, str]:
         try:
             _operator_registry(request).release(payload.lease_id)
+        except CapacityLeaseNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail=f"算子容量租约不存在或已过期: {payload.lease_id}",
+            ) from exc
         except REGISTRY_INFRASTRUCTURE_ERRORS as exc:
             raise _registry_unavailable() from exc
         return {"lease_id": payload.lease_id, "status": "RELEASED"}
@@ -596,11 +641,22 @@ def create_control_app(
             )
         return instances
 
+    @app.get("/ops/operator-instances/snapshot")
+    def inspect_operator_capacity_snapshot(
+        request: Request,
+    ) -> list[OperatorCapacitySnapshot]:
+        try:
+            registry = cast(OperatorOperationsRegistry, _operator_registry(request))
+            return build_operator_capacity_snapshot(registry)
+        except REGISTRY_INFRASTRUCTURE_ERRORS as exc:
+            raise _registry_unavailable() from exc
+
     @app.post("/ops/operator-instances/{instance_id}/drain")
     def drain_operator_instance(
         instance_id: str,
         request: Request,
     ) -> OperatorInstance:
+        _authorize_operator_management(request, resolved.operator_registry_token)
         try:
             return _operator_registry(request).set_lifecycle(
                 instance_id,

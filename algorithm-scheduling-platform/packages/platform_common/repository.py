@@ -127,6 +127,16 @@ class OutboxRecord:
     claimed_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class OutboxStateRecord:
+    event_id: UUID
+    published_at: datetime | None
+    publish_attempts: int
+    last_error: str | None
+    claim_token: UUID | None
+    claimed_at: datetime | None
+
+
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
@@ -848,6 +858,30 @@ class CourseRepository:
                 )
                 for row in rows
             ]
+
+    def get_outbox_state(self, event_id: UUID) -> OutboxStateRecord:
+        with self._engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT event_id, published_at, publish_attempts, last_error,
+                           claim_token, claimed_at
+                    FROM outbox_events
+                    WHERE event_id = :event_id
+                    """
+                ),
+                {"event_id": event_id},
+            ).mappings().one_or_none()
+        if row is None:
+            raise RepositoryNotFoundError(f"Outbox 事件不存在: {event_id}")
+        return OutboxStateRecord(
+            event_id=row["event_id"],
+            published_at=row["published_at"],
+            publish_attempts=int(row["publish_attempts"]),
+            last_error=row["last_error"],
+            claim_token=row["claim_token"],
+            claimed_at=row["claimed_at"],
+        )
 
     @staticmethod
     def _release_dependents(connection: Connection, prerequisite_node_id: int) -> None:

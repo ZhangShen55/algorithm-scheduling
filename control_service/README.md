@@ -20,6 +20,15 @@ python -m uvicorn app.main:app \
 前缀的环境变量可覆盖 TOML，嵌套字段使用双下划线，例如
 `CONTROL_POSTGRES__DSN` 和 `CONTROL_SERVICE__PORT`。
 
+算子注册、心跳、生命周期和注销请求必须携带 `X-Operator-Registry-Token`。Control 使用
+`operator_registry.management_token` 校验令牌，并按
+`operator_registry.trusted_service_urls` 的 `instance_id -> HTTP origin` 精确映射校验注册地址；
+健康检查再次核对该映射，不访问算子请求自选的 URL。Compose 通过
+`OPERATOR_REGISTRY_TOKEN` 同时覆盖 Control 和全部算子；Canonical Compose 不提供
+默认值，必须由调用环境显式传入。`config.toml` 的开发令牌只用于直接本地
+调试，部署预检会拒绝它。localhost 部署可用
+`CONTROL_OPERATOR_REGISTRY__TRUSTED_SERVICE_URLS` 的 JSON 对象替换默认 Docker 映射。
+
 ## 数据库迁移
 
 启动 `control-service` 前，必须先按文件名顺序将

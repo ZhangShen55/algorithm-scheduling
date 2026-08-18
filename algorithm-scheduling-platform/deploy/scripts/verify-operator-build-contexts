@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path, PurePosixPath
 
+from deployment_contracts import validate_registry_wheel_dockerfile
+
 EXPECTED_MATRIX = (
     ("asr_offline", "docker/Dockerfile", "seacraft-asr-offline"),
     ("asr_online", "docker/Dockerfile", "seacraft-asr-online"),
@@ -432,8 +434,14 @@ def _read_matrix(path: Path) -> tuple[tuple[str, str, str], ...]:
 
 def main() -> int:
     arguments = sys.argv[1:]
-    if any(argument != "--verify-git-clean-included" for argument in arguments):
-        raise GateError("usage: verify-operator-build-contexts [--verify-git-clean-included]")
+    allowed_arguments = {"--verify-git-clean-included", "--verify-registry-wheel"}
+    if len(arguments) != len(set(arguments)) or any(
+        argument not in allowed_arguments for argument in arguments
+    ):
+        raise GateError(
+            "usage: verify-operator-build-contexts "
+            "[--verify-git-clean-included] [--verify-registry-wheel]"
+        )
     platform_root = Path(__file__).resolve().parents[2]
     workspace_root = platform_root.parent
     manifest = platform_root / "deploy/operator-images.tsv"
@@ -482,7 +490,15 @@ def main() -> int:
                 f"{', '.join(forbidden_reincludes)}"
             )
         _validate_context_files(context_name, context, patterns)
-        for instruction in _logical_lines(dockerfile.read_text(encoding="utf-8")):
+        dockerfile_source = dockerfile.read_text(encoding="utf-8")
+        if "--verify-registry-wheel" in arguments:
+            try:
+                validate_registry_wheel_dockerfile(
+                    dockerfile_source, f"{context_name}/{dockerfile_name}"
+                )
+            except ValueError as error:
+                raise GateError(str(error)) from error
+        for instruction in _logical_lines(dockerfile_source):
             _, from_stage, sources = _copy_sources(instruction)
             if from_stage:
                 continue

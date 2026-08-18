@@ -13,4 +13,6 @@ def to_platform_settings(settings: ControlSettings) -> PlatformSettings:
         trace_header=settings.service.trace_header,
         postgres_dsn=settings.postgres.dsn,
         redis_url=settings.redis.url,
+        operator_registry_token=settings.operator_registry.management_token,
+        trusted_operator_service_urls=settings.operator_registry.trusted_service_urls,
     )

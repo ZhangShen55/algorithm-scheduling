@@ -56,6 +56,11 @@ class OperatorRegistryConfig(BaseModel):
     default_lease_ttl_seconds: int = Field(default=60, gt=0)
     max_lease_ttl_seconds: int = Field(default=3600, gt=0)
     heartbeat_audit_interval_seconds: int = Field(default=60, gt=0)
+    management_token: str = Field(
+        default="local-development-registry-token",
+        min_length=16,
+    )
+    trusted_service_urls: dict[str, str] = Field(default_factory=dict)
 
 
 class FeatureConfig(BaseModel):

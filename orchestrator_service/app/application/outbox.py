@@ -27,6 +27,7 @@ class OutboxPublisherMetrics:
     claimed_total: int = 0
     published_total: int = 0
     failed_total: int = 0
+    last_error_type: str | None = None
 
 
 class OutboxPublisher:
@@ -75,6 +76,7 @@ class OutboxPublisher:
                 )
             except Exception as exc:
                 self.metrics.failed_total += 1
+                self.metrics.last_error_type = type(exc).__name__
                 if self._platform_metrics is not None:
                     self._platform_metrics.record_outbox_publish("failed")
                 await asyncio.to_thread(

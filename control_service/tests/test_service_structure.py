@@ -69,6 +69,20 @@ def test_control_entrypoint_uses_the_service_local_app_package() -> None:
     assert "/health" in app.openapi()["paths"]
 
 
+def test_default_control_config_authorizes_the_exact_operator_matrix() -> None:
+    from app.core.config import ControlSettings
+
+    settings = ControlSettings.load(SERVICE_ROOT / "config.toml")
+
+    assert len(settings.operator_registry.trusted_service_urls) == 24
+    assert settings.operator_registry.trusted_service_urls["vbas-gpu0"] == (
+        "http://vbas-gpu0:8981"
+    )
+    assert settings.operator_registry.trusted_service_urls["ppt-slice-cpu2"] == (
+        "http://ppt-slice-cpu2:9001"
+    )
+
+
 def test_control_service_rejects_multiple_uvicorn_workers(tmp_path: Path) -> None:
     from app.core.config import ControlSettings
 

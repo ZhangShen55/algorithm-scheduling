@@ -116,6 +116,9 @@ class FakeTopicManager:
         self.events.append("topics.ensure")
         return ()
 
+    async def validate_topics(self) -> None:
+        self.events.append("topics.validate")
+
 
 class FakeHttpClient:
     def __init__(self, events: list[str]) -> None:
@@ -260,6 +263,27 @@ def test_readiness_reports_kafka_dependency_failure(tmp_path: Path) -> None:
         assert kafka_check["ready"] is False
         assert "依赖检查失败" in kafka_check["detail"]
         assert "Kafka 依赖不可用" in kafka_check["detail"]
+
+
+def test_start_validates_required_topics_when_auto_creation_is_disabled(
+    tmp_path: Path,
+) -> None:
+    runtime, _, events = _runtime(tmp_path)
+    settings = _settings(tmp_path).model_copy(
+        update={
+            "kafka": _settings(tmp_path).kafka.model_copy(
+                update={"ensure_topics": False}
+            )
+        }
+    )
+    runtime.settings = settings
+    app = create_app(settings, runtime=runtime)
+
+    with TestClient(app):
+        pass
+
+    assert "topics.validate" in events
+    assert "topics.ensure" not in events
 
 
 @pytest.mark.asyncio

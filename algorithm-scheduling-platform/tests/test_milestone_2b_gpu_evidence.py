@@ -136,6 +136,7 @@ if len(args) >= 2 and args[0] == "exec" and args[1] in {{"asr-offline-gpu0", "{C
         "framework_gpu_available": True,
         "device_count": 1,
         "current_device": 0,
+        "container_cuda_runtime_version": "12.1",
     }})))
     raise SystemExit(int(os.environ.get("FAKE_PROBE_EXIT", "0")))
 raise SystemExit(64)
@@ -148,8 +149,27 @@ import os, pathlib, sys
 import time
 args = " ".join(sys.argv[1:])
 time.sleep(float(os.environ.get("FAKE_NVIDIA_SMI_DELAY", "0")))
+if "pmon" in args:
+    print("# gpu pid type sm mem enc dec command")
+    print("# Idx # C/G % % % % name")
+    print(os.environ.get(
+        "FAKE_PMON_ROWS",
+        "0 2000 C 30 10 0 0 asr_offline",
+    ))
+    raise SystemExit(0)
 if "--query-gpu=" in args:
-    print(os.environ.get("FAKE_GPU_ROWS", "0, GPU-A, 100"))
+    if "name,compute_cap,driver_version" in args:
+        print(os.environ.get(
+            "FAKE_GPU_IDENTITY",
+            "0, GPU-A, NVIDIA GeForce RTX 4090 D, 8.9, 570.172.08",
+        ))
+    elif "temperature.gpu" in args:
+        print(os.environ.get(
+            "FAKE_GPU_TELEMETRY",
+            "0, GPU-A, 55, 90, 120, 350, 50, Not Active",
+        ))
+    else:
+        print(os.environ.get("FAKE_GPU_ROWS", "0, GPU-A, 100"))
     raise SystemExit(0)
 if "--query-compute-apps=" in args:
     marker = pathlib.Path(os.environ["TRIGGER_MARKER"])
@@ -162,7 +182,20 @@ if "--query-compute-apps=" in args:
     if rows:
         print(rows)
     raise SystemExit(int(os.environ.get("FAKE_NVIDIA_PROCESS_EXIT", "0")))
+if not args:
+    print(os.environ.get(
+        "FAKE_NVIDIA_SMI_OVERVIEW",
+        "NVIDIA-SMI 570.172.08 Driver Version: 570.172.08 CUDA Version: 12.8",
+    ))
+    raise SystemExit(0)
 raise SystemExit(64)
+""",
+    )
+    _write_executable(
+        fake_bin / "ps",
+        f"""#!{sys.executable}
+import os
+print(os.environ.get("FAKE_CPU_ROWS", "2000 30.0"))
 """,
     )
     trigger = tmp_path / "trigger.py"
@@ -359,6 +392,7 @@ def test_verifier_records_synchronous_cuda_pid_and_exact_container_mapping(
     assert report["gpu"]["physical_uuid"] == "GPU-A"
     assert report["cuda_probe"]["device_count"] == 1
     assert report["cuda_probe"]["current_device"] == 0
+    assert report["cuda_probe"]["container_cuda_runtime_version"] == "12.1"
     assert report["container_gpu_inventory"] == [{"index": 0, "uuid": "GPU-A"}]
     assert report["framework_probe"]["framework"] == "torch"
     process = report["synchronous_samples"][0]["processes"][0]
@@ -370,6 +404,48 @@ def test_verifier_records_synchronous_cuda_pid_and_exact_container_mapping(
     assert process["mapping"]["cgroup_full_container_id"] is True
     assert report["memory_mib"]["before"] == 100
     assert report["memory_mib"]["during"] == 100
+    assert report["hardware"] == {
+        "temperature_c": 55.0,
+        "temperature_limit_c": 90.0,
+        "power_watts": 120.0,
+        "power_limit_watts": 350.0,
+        "hardware_slowdown": False,
+    }
+    assert report["utilization"] == {
+        "cpu_percent": 30.0,
+        "gpu_percent": 50.0,
+        "target_sm_percent": 30.0,
+    }
+    assert report["synchronous_samples"][0]["gpu_utilization_percent"] == 50.0
+    assert process["cpu_percent"] == 30.0
+    assert process["gpu_utilization"] == {
+        "sm_percent": 30.0,
+        "memory_percent": 10.0,
+        "encoder_percent": 0.0,
+        "decoder_percent": 0.0,
+    }
+    assert report["compatibility"] == {
+        "gpu": {
+            "physical_index": 0,
+            "physical_uuid": "GPU-A",
+            "product_name": "NVIDIA GeForce RTX 4090 D",
+            "compute_capability": "8.9",
+            "driver_version": "570.172.08",
+            "driver_cuda_version": "12.8",
+            "container_cuda_runtime_version": "12.1",
+        },
+        "trigger": {
+            "instance_id": "asr-offline-gpu0",
+            "operator_code": "asr_offline",
+            "run_id": "gpu0-asr-run",
+        },
+        "result": {
+            "status": "PASS",
+            "real_trigger_completed": True,
+            "sample_count": len(report["synchronous_samples"]),
+            "target_sm_max_percent": 30.0,
+        },
+    }
     assert report["trigger"] == {"executable": Path(sys.executable).name, "argument_count": 1}
     assert report["activity"] == {
         "protocol": "inherited-fd-v1",
@@ -391,10 +467,69 @@ def test_verifier_records_synchronous_cuda_pid_and_exact_container_mapping(
         "docker top <container> -eo pid",
         "docker exec <container> <cuda-probe-argv>",
         "nvidia-smi --query-gpu=<fields> --format=csv,noheader,nounits",
+        "nvidia-smi <driver-cuda-overview>",
         "nvidia-smi --query-compute-apps=<fields> --format=csv,noheader,nounits",
+        "nvidia-smi pmon -i <physical-gpu> -c 1 -s u",
+        "ps -o pid=,%cpu= -p <mapped-pids>",
         "<trigger-executable> <redacted-arguments>",
     ]
     assert gpu_runtime["output"].stat().st_mode & 0o777 == 0o600
+
+
+def test_verifier_rejects_driver_cuda_without_container_runtime(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    gpu_runtime["env"]["FAKE_PROBE"] = json.dumps(
+        {
+            "framework_gpu_available": True,
+            "device_count": 1,
+            "current_device": 0,
+        }
+    )
+
+    completed = _run(gpu_runtime)
+
+    assert completed.returncode != 0
+    assert "container CUDA runtime" in _report(gpu_runtime)["reason"]
+
+
+def test_verifier_records_container_runtime_separately_from_driver_cuda(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    completed = _run(gpu_runtime)
+
+    assert completed.returncode == 0, completed.stderr
+    compatibility = _report(gpu_runtime)["compatibility"]["gpu"]
+    assert compatibility["container_cuda_runtime_version"] == "12.1"
+    assert compatibility["driver_cuda_version"] == "12.8"
+
+
+def test_verifier_attributes_sm_to_target_pid_when_another_gpu_process_is_busy(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    gpu_runtime["env"].update(
+        {
+            "FAKE_CPU_ROWS": "2000 95.0",
+            "FAKE_GPU_TELEMETRY": "0, GPU-A, 55, 90, 120, 350, 90, Not Active",
+            "FAKE_PMON_ROWS": (
+                "0 2000 C 0 0 0 0 asr_offline\n"
+                "0 3000 C 90 40 0 0 neighboring_process"
+            ),
+        }
+    )
+
+    completed = _run(gpu_runtime)
+
+    assert completed.returncode == 0, completed.stderr
+    report = _report(gpu_runtime)
+    process = report["synchronous_samples"][0]["processes"][0]
+    assert report["utilization"] == {
+        "cpu_percent": 95.0,
+        "gpu_percent": 90.0,
+        "target_sm_percent": 0.0,
+    }
+    assert process["host_pid"] == 2000
+    assert process["gpu_utilization"]["sm_percent"] == 0.0
 
 
 def test_sample_window_starts_after_first_valid_activity_start(
@@ -631,6 +766,7 @@ def test_verifier_accepts_exact_cgroup_v1_mapping(gpu_runtime: dict[str, Any]) -
                     "framework_gpu_available": True,
                     "device_count": 2,
                     "current_device": 0,
+                    "container_cuda_runtime_version": "12.1",
                 }
             },
             "device_count",
@@ -710,7 +846,12 @@ def test_non_torch_operator_uses_framework_specific_probe(
     inspect["Config"]["Env"][0] = "PLATFORM_INSTANCE_ID=asr-offline-gpu0"
     gpu_runtime["inspect_path"].write_text(json.dumps(inspect), encoding="utf-8")
     gpu_runtime["env"]["FAKE_PROBE"] = json.dumps(
-        {"framework_gpu_available": True, "device_count": 1, "current_device": 0}
+        {
+            "framework_gpu_available": True,
+            "device_count": 1,
+            "current_device": 0,
+            "container_cuda_runtime_version": "12.1",
+        }
     )
 
     completed = _run_with_process(gpu_runtime, process_name)

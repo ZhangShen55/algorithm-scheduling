@@ -559,6 +559,7 @@ def test_renderer_render_emits_schema_v2_and_escapes_markdown_cells() -> None:
         "mock": False,
     }
     envelope = {
+        "schema_version": 1,
         "release_tag": TAG,
         "git_sha": SHA,
         "plan_sha256": "b" * 64,
@@ -581,6 +582,7 @@ def test_renderer_render_emits_schema_v2_and_escapes_markdown_cells() -> None:
     )
 
     assert document["schema_version"] == 2
+    assert document["cases_schema_version"] == 1
     assert document["cases_input"] == {"bytes": 123, "sha256": "c" * 64}
     assert document["overall_status"] == "失败"
     assert "验收结论" in markdown
@@ -1152,7 +1154,11 @@ def test_release_variables_reject_invalid_platform_wait_timeout(timeout: str) ->
     release_variables = _extract_scenario_bash_blocks_before(
         "### 本次远端执行结果（2026-08-12）"
     )[0]
-    environment = {**os.environ, "PLATFORM_WAIT_TIMEOUT_SECONDS": timeout}
+    environment = {
+        **os.environ,
+        "OPERATOR_REGISTRY_TOKEN": "test-explicit-registry-token",
+        "PLATFORM_WAIT_TIMEOUT_SECONDS": timeout,
+    }
 
     completed = subprocess.run(
         ["bash", "-c", release_variables],
@@ -1260,6 +1266,7 @@ exit 0
         "FAILING_COMMAND": failing_command,
         "FAILURE_STATUS": "41",
         "REAL_PYTHON": str(PYTHON),
+        "OPERATOR_REGISTRY_TOKEN": "test-explicit-registry-token",
     }
     return project_root, environment
 

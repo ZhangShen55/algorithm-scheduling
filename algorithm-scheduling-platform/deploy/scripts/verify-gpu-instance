@@ -120,6 +120,7 @@ def _atomic_write_once(path: Path, payload: dict[str, Any]) -> None:
     temporary = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
     descriptor: int | None = None
     linked = False
+    committed = False
     try:
         descriptor = os.open(
             temporary,
@@ -139,6 +140,7 @@ def _atomic_write_once(path: Path, payload: dict[str, Any]) -> None:
         except FileExistsError as error:
             raise VerificationError(f"输出文件已存在，禁止并发覆盖：{path}") from error
         linked = True
+        temporary.unlink()
         directory_fd = os.open(
             path.parent,
             os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
@@ -147,22 +149,39 @@ def _atomic_write_once(path: Path, payload: dict[str, Any]) -> None:
             os.fsync(directory_fd)
         finally:
             os.close(directory_fd)
+        committed = True
     finally:
         if descriptor is not None:
             os.close(descriptor)
+        cleanup_error: OSError | None = None
+        if linked and not committed:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                cleanup_error = error
         try:
             temporary.unlink()
         except FileNotFoundError:
             pass
-        if linked:
+        except OSError as error:
+            if cleanup_error is None:
+                cleanup_error = error
+        if linked and not committed:
             directory_fd = os.open(
                 path.parent,
                 os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW,
             )
             try:
                 os.fsync(directory_fd)
+            except OSError as error:
+                if cleanup_error is None:
+                    cleanup_error = error
             finally:
                 os.close(directory_fd)
+        if cleanup_error is not None:
+            raise cleanup_error
 
 
 def _load_argv(path: Path | None, *, default: Sequence[str] | None = None) -> list[str]:
@@ -227,6 +246,94 @@ def _gpu_rows() -> list[dict[str, Any]]:
     if not rows or len({row["index"] for row in rows}) != len(rows):
         raise VerificationError("nvidia-smi GPU 索引为空或重复")
     return rows
+
+
+def _gpu_telemetry(physical_gpu: int, gpu_uuid: str) -> dict[str, Any]:
+    completed = _run(
+        [
+            "nvidia-smi",
+            "--query-gpu=index,uuid,temperature.gpu,temperature.gpu.tlimit,"
+            "power.draw,power.limit,utilization.gpu,"
+            "clocks_event_reasons.hw_slowdown",
+            "--format=csv,noheader,nounits",
+        ]
+    )
+    matching: list[dict[str, Any]] = []
+    for raw in completed.stdout.splitlines():
+        values = [value.strip() for value in raw.split(",")]
+        if len(values) != 8:
+            raise VerificationError("nvidia-smi GPU telemetry 字段格式异常")
+        try:
+            index = int(values[0])
+            row = {
+                "physical_index": index,
+                "physical_uuid": values[1],
+                "temperature_c": float(values[2]),
+                "temperature_limit_c": float(values[3]),
+                "power_watts": float(values[4]),
+                "power_limit_watts": float(values[5]),
+                "gpu_utilization_percent": float(values[6]),
+            }
+        except ValueError as error:
+            raise VerificationError("nvidia-smi GPU telemetry 数值字段格式异常") from error
+        slowdown = values[7]
+        if slowdown not in {"Active", "Not Active"}:
+            raise VerificationError("nvidia-smi hardware slowdown 字段格式异常")
+        row["hardware_slowdown"] = slowdown == "Active"
+        if index == physical_gpu and values[1] == gpu_uuid:
+            matching.append(row)
+    if len(matching) != 1:
+        raise VerificationError("nvidia-smi GPU telemetry 未唯一匹配目标 GPU")
+    return matching[0]
+
+
+def _gpu_identity(physical_gpu: int, gpu_uuid: str) -> dict[str, Any]:
+    completed = _run(
+        [
+            "nvidia-smi",
+            "--query-gpu=index,uuid,name,compute_cap,driver_version",
+            "--format=csv,noheader,nounits",
+        ]
+    )
+    matching: list[dict[str, Any]] = []
+    for raw in completed.stdout.splitlines():
+        values = [value.strip() for value in raw.split(",")]
+        if len(values) != 5:
+            raise VerificationError("nvidia-smi GPU identity 字段格式异常")
+        try:
+            index = int(values[0])
+        except ValueError as error:
+            raise VerificationError("nvidia-smi GPU identity 索引格式异常") from error
+        row = {
+            "physical_index": index,
+            "physical_uuid": values[1],
+            "product_name": values[2],
+            "compute_capability": values[3],
+            "driver_version": values[4],
+        }
+        if any(
+            not isinstance(row[field], str) or not row[field]
+            for field in (
+                "physical_uuid",
+                "product_name",
+                "compute_capability",
+                "driver_version",
+            )
+        ):
+            raise VerificationError("nvidia-smi GPU identity 包含空字段")
+        if index == physical_gpu and values[1] == gpu_uuid:
+            matching.append(row)
+    if len(matching) != 1:
+        raise VerificationError("nvidia-smi GPU identity 未唯一匹配目标 GPU")
+    overview = _run(["nvidia-smi"])
+    cuda_version = re.search(
+        r"\bCUDA Version:\s*([0-9]+(?:\.[0-9]+)+)\b",
+        overview.stdout,
+    )
+    if cuda_version is None:
+        raise VerificationError("nvidia-smi 未报告驱动支持的 CUDA 版本")
+    matching[0]["driver_cuda_version"] = cuda_version.group(1)
+    return matching[0]
 
 
 def _container_gpu_rows(container: str) -> list[dict[str, Any]]:
@@ -299,6 +406,63 @@ def _process_rows(gpu_uuid: str) -> list[dict[str, Any]]:
     return [row for row in rows if row["gpu_uuid"] == gpu_uuid]
 
 
+def _process_gpu_utilization(physical_gpu: int) -> dict[int, dict[str, float]]:
+    completed = _run(
+        [
+            "nvidia-smi",
+            "pmon",
+            "-i",
+            str(physical_gpu),
+            "-c",
+            "1",
+            "-s",
+            "u",
+        ]
+    )
+    expected_header = ["gpu", "pid", "type", "sm", "mem", "enc", "dec"]
+    header: list[str] | None = None
+    rows: dict[int, dict[str, float]] = {}
+    for raw in completed.stdout.splitlines():
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            candidate = stripped.removeprefix("#").split()
+            if candidate[: len(expected_header)] == expected_header:
+                header = candidate
+            continue
+        if header is None:
+            raise VerificationError("nvidia-smi pmon 缺少可识别的字段头")
+        values = stripped.split(maxsplit=len(header) - 1)
+        if len(values) != len(header):
+            raise VerificationError("nvidia-smi pmon 字段格式异常")
+        # The deployment Python predates zip(strict=); length is checked above.
+        row = dict(zip(header, values))  # noqa: B905
+        if row["pid"] == "-":
+            continue
+        try:
+            gpu_index = int(row["gpu"])
+            pid = int(row["pid"])
+            metrics = {
+                "sm_percent": float(row["sm"]),
+                "memory_percent": float(row["mem"]),
+                "encoder_percent": float(row["enc"]),
+                "decoder_percent": float(row["dec"]),
+            }
+        except (KeyError, ValueError) as error:
+            raise VerificationError("nvidia-smi pmon 数值字段格式异常") from error
+        if gpu_index != physical_gpu:
+            raise VerificationError("nvidia-smi pmon 返回了非目标物理 GPU")
+        if pid in rows:
+            raise VerificationError("nvidia-smi pmon 返回了重复 PID")
+        if any(value < 0 or value > 100 or not math.isfinite(value) for value in metrics.values()):
+            raise VerificationError("nvidia-smi pmon 利用率超出有效范围")
+        rows[pid] = metrics
+    if header is None:
+        raise VerificationError("nvidia-smi pmon 缺少可识别的字段头")
+    return rows
+
+
 def _docker_top_pids(container: str) -> set[int]:
     completed = _run(["docker", "top", container, "-eo", "pid"])
     lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
@@ -308,6 +472,32 @@ def _docker_top_pids(container: str) -> set[int]:
         return {int(line.split()[0]) for line in lines[1:]}
     except (ValueError, IndexError) as error:
         raise VerificationError("docker top PID 数值异常") from error
+
+
+def _process_cpu_percent(pids: set[int]) -> dict[int, float]:
+    if not pids:
+        return {}
+    completed = _run(
+        [
+            "ps",
+            "-o",
+            "pid=,%cpu=",
+            "-p",
+            ",".join(str(pid) for pid in sorted(pids)),
+        ]
+    )
+    rows: dict[int, float] = {}
+    for raw in completed.stdout.splitlines():
+        values = raw.split()
+        if len(values) != 2:
+            raise VerificationError("ps CPU 字段格式异常")
+        try:
+            rows[int(values[0])] = float(values[1])
+        except ValueError as error:
+            raise VerificationError("ps CPU 数值字段格式异常") from error
+    if set(rows) != pids:
+        raise VerificationError("ps 未返回全部已映射 CUDA PID 的 CPU 采样")
+    return rows
 
 
 def _proc_root() -> Path:
@@ -350,7 +540,8 @@ def _framework_probe_argv(process_name: str) -> tuple[str, list[str]]:
             "import json,torch; ok=torch.cuda.is_available(); "
             "print(json.dumps({'framework_gpu_available':ok,"
             "'device_count':torch.cuda.device_count(),"
-            "'current_device':torch.cuda.current_device() if ok else None}))"
+            "'current_device':torch.cuda.current_device() if ok else None,"
+            "'container_cuda_runtime_version':torch.version.cuda}))"
         )
         return "torch", ["python", "-c", source]
     if process_name == "ocr":
@@ -360,14 +551,18 @@ def _framework_probe_argv(process_name: str) -> tuple[str, list[str]]:
             "print(json.dumps({'framework_gpu_available':ok,"
             "'device_count':paddle.device.cuda.device_count(),"
             "'current_device':int(dev.split(':',1)[1]) if dev.startswith('gpu:') "
-            "else None}))"
+            "else None,'container_cuda_runtime_version':paddle.version.cuda()}))"
         )
         return "paddle", ["python", "-c", source]
     if process_name == "facerec":
         source = (
-            "import fastdeploy,json; "
+            "import ctypes,ctypes.util,fastdeploy,json; "
+            "lib=ctypes.CDLL(ctypes.util.find_library('cudart') or 'libcudart.so'); "
+            "version=ctypes.c_int(); rc=lib.cudaRuntimeGetVersion(ctypes.byref(version)); "
+            "assert rc == 0; raw=version.value; runtime=f'{raw//1000}.{(raw%1000)//10}'; "
             "print(json.dumps({'framework_gpu_available':"
-            "fastdeploy.is_built_with_gpu()}))"
+            "fastdeploy.is_built_with_gpu(),"
+            "'container_cuda_runtime_version':runtime}))"
         )
         return "fastdeploy", ["python3", "-c", source]
     raise VerificationError(f"未为算子 {process_name} 定义受控 GPU 框架探针")
@@ -385,6 +580,12 @@ def _probe(
         raise VerificationError("容器内 CUDA probe 返回不是 JSON") from error
     if not isinstance(result, dict):
         raise VerificationError("容器内 CUDA probe 结果格式异常")
+    runtime_version = result.get("container_cuda_runtime_version")
+    if (
+        not isinstance(runtime_version, str)
+        or re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", runtime_version) is None
+    ):
+        raise VerificationError("容器内 container CUDA runtime 版本缺失或无效")
     result["framework"] = framework if probe_file is None else "custom"
     result["command"] = f"{Path(argv[0]).name} <redacted-probe-arguments>"
     return result
@@ -753,6 +954,7 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
     if len(matching_gpu) != 1:
         raise VerificationError("物理 GPU 索引未在 nvidia-smi 中唯一匹配")
     gpu = matching_gpu[0]
+    gpu_identity = _gpu_identity(arguments.physical_gpu, gpu["uuid"])
     inspect = _inspect(arguments.container)
     environment, probe, container_inventory = _check_running_contract(
         arguments, inspect, gpu, gpu_rows
@@ -821,6 +1023,7 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
             if current_inspect.get("Id") != container_id:
                 raise VerificationError("容器在同步采样期间发生重启或替换")
             current_top = _docker_top_pids(arguments.container)
+            sampling_started_while_active = activity.active is not None
             mapped: list[dict[str, Any]] = []
             for row in _process_rows(gpu["uuid"]):
                 if row["process_name"] != arguments.process_name:
@@ -832,20 +1035,48 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
                     continue
                 mapped.append(_map_process(row, container_id, current_top))
             if mapped:
+                process_gpu = _process_gpu_utilization(arguments.physical_gpu)
+                process_cpu = _process_cpu_percent(
+                    {row["host_pid"] for row in mapped}
+                )
+                for row in mapped:
+                    if row["host_pid"] not in process_gpu:
+                        raise VerificationError(
+                            f"nvidia-smi pmon 未返回已映射目标 PID {row['host_pid']}"
+                        )
+                    row["cpu_percent"] = process_cpu[row["host_pid"]]
+                    row["gpu_utilization"] = process_gpu[row["host_pid"]]
                 memory = next(
                     row["memory_mib"]
                     for row in _gpu_rows()
                     if row["index"] == arguments.physical_gpu
                 )
-                activity.drain(activity_read_fd)
-                if trigger.poll() is None and activity.active is not None:
+                telemetry = _gpu_telemetry(
+                    arguments.physical_gpu,
+                    gpu["uuid"],
+                )
+                if sampling_started_while_active:
                     activity.add_sample(
                         {
                             "timestamp": datetime.now(timezone.utc).isoformat(),  # noqa: UP017
                             "gpu_memory_mib": memory,
+                            "gpu_utilization_percent": telemetry[
+                                "gpu_utilization_percent"
+                            ],
+                            "hardware": {
+                                field: telemetry[field]
+                                for field in (
+                                    "temperature_c",
+                                    "temperature_limit_c",
+                                    "power_watts",
+                                    "power_limit_watts",
+                                    "hardware_slowdown",
+                                )
+                            },
                             "processes": mapped,
                         }
                     )
+                activity.drain(activity_read_fd)
             time.sleep(arguments.sample_interval)
         activity.drain(activity_read_fd)
         return_code = trigger.wait(timeout=0)
@@ -888,6 +1119,38 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
                 "before": gpu["memory_mib"],
                 "during": max(sample["gpu_memory_mib"] for sample in samples),
             },
+            "hardware": {
+                "temperature_c": max(
+                    sample["hardware"]["temperature_c"] for sample in samples
+                ),
+                "temperature_limit_c": min(
+                    sample["hardware"]["temperature_limit_c"] for sample in samples
+                ),
+                "power_watts": max(
+                    sample["hardware"]["power_watts"] for sample in samples
+                ),
+                "power_limit_watts": min(
+                    sample["hardware"]["power_limit_watts"] for sample in samples
+                ),
+                "hardware_slowdown": any(
+                    sample["hardware"]["hardware_slowdown"] for sample in samples
+                ),
+            },
+            "utilization": {
+                "cpu_percent": max(
+                    process["cpu_percent"]
+                    for sample in samples
+                    for process in sample["processes"]
+                ),
+                "gpu_percent": max(
+                    sample["gpu_utilization_percent"] for sample in samples
+                ),
+                "target_sm_percent": max(
+                    process["gpu_utilization"]["sm_percent"]
+                    for sample in samples
+                    for process in sample["processes"]
+                ),
+            },
             "baseline_processes": [
                 {
                     "host_pid": row["host_pid"],
@@ -898,6 +1161,28 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
             ],
             "activity": activity_metadata,
             "synchronous_samples": samples,
+            "compatibility": {
+                "gpu": {
+                    **gpu_identity,
+                    "container_cuda_runtime_version": probe[
+                        "container_cuda_runtime_version"
+                    ],
+                },
+                "trigger": {
+                    field: activity_metadata[field]
+                    for field in ("instance_id", "operator_code", "run_id")
+                },
+                "result": {
+                    "status": "PASS",
+                    "real_trigger_completed": True,
+                    "sample_count": len(samples),
+                    "target_sm_max_percent": max(
+                        process["gpu_utilization"]["sm_percent"]
+                        for sample in samples
+                        for process in sample["processes"]
+                    ),
+                },
+            },
         }
     )
 
@@ -1019,7 +1304,10 @@ def main() -> int:
             "docker top <container> -eo pid",
             "docker exec <container> <cuda-probe-argv>",
             "nvidia-smi --query-gpu=<fields> --format=csv,noheader,nounits",
+            "nvidia-smi <driver-cuda-overview>",
             "nvidia-smi --query-compute-apps=<fields> --format=csv,noheader,nounits",
+            "nvidia-smi pmon -i <physical-gpu> -c 1 -s u",
+            "ps -o pid=,%cpu= -p <mapped-pids>",
             "<trigger-executable> <redacted-arguments>",
         ],
     }
@@ -1054,6 +1342,7 @@ def main() -> int:
         report["reason"] = "GPU 实例、同步推理 PID 与精确容器归属证据一致"
         _atomic_write_once(output, report)
     except (OSError, VerificationError) as error:
+        report["status"] = "FAIL"
         report["reason"] = str(error)
         if output is not None and not output.exists() and not output.is_symlink():
             try:

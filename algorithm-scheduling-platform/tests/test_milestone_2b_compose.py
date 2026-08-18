@@ -5,6 +5,10 @@ import yaml  # type: ignore[import-untyped]
 
 PLATFORM_ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_PATH = PLATFORM_ROOT / "deploy/docker-compose.operators.yml"
+PLATFORM_COMPOSE_PATH = PLATFORM_ROOT / "deploy/docker-compose.platform.yml"
+REQUIRED_REGISTRY_TOKEN_EXPRESSION = (
+    "${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}"
+)
 
 GPU_OPERATORS = {
     "asr-offline": (8083, 18083, "asr_offline", "asr_offline.gpu.toml"),
@@ -63,6 +67,9 @@ def assert_operator_compose_matrix(compose: dict[str, Any]) -> None:
             assert service["image"].endswith(":v1.0_260812}")
             assert environment["PLATFORM_REGISTRATION_ENABLED"] == "true"
             assert environment["PLATFORM_CONTROL_SERVICE_URL"] == "http://control-service:18100"
+            assert environment["PLATFORM_OPERATOR_REGISTRY_TOKEN"] == (
+                REQUIRED_REGISTRY_TOKEN_EXPRESSION
+            )
             assert environment["PLATFORM_INSTANCE_ID"] == name
             assert environment["PLATFORM_SERVICE_URL"] == f"http://{name}:{container_port}"
             assert int(environment["PLATFORM_DECLARED_CAPACITY"]) > 0
@@ -119,6 +126,9 @@ def assert_operator_compose_matrix(compose: dict[str, Any]) -> None:
             assert service["image"].endswith(":v1.0_260812}")
             assert environment["PLATFORM_REGISTRATION_ENABLED"] == "true"
             assert environment["PLATFORM_CONTROL_SERVICE_URL"] == "http://control-service:18100"
+            assert environment["PLATFORM_OPERATOR_REGISTRY_TOKEN"] == (
+                REQUIRED_REGISTRY_TOKEN_EXPRESSION
+            )
             assert environment["PLATFORM_INSTANCE_ID"] == name
             assert environment["PLATFORM_SERVICE_URL"] == f"http://{name}:{container_port}"
             assert int(environment["PLATFORM_DECLARED_CAPACITY"]) > 0
@@ -152,6 +162,16 @@ def _config_target(operator: str) -> str:
 
 def test_compose_declares_exact_three_gpu_and_three_cpu_operator_matrix() -> None:
     assert_operator_compose_matrix(load_operator_compose())
+
+
+def test_platform_compose_requires_explicit_operator_registry_token() -> None:
+    compose = yaml.safe_load(PLATFORM_COMPOSE_PATH.read_text(encoding="utf-8"))
+
+    control_environment = compose["services"]["control-service"]["environment"]
+
+    assert control_environment["CONTROL_OPERATOR_REGISTRY__MANAGEMENT_TOKEN"] == (
+        REQUIRED_REGISTRY_TOKEN_EXPRESSION
+    )
 
 
 def test_facerec_healthcheck_uses_the_interpreter_available_in_its_image() -> None:

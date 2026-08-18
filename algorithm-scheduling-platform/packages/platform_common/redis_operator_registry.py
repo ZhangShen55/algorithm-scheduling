@@ -19,6 +19,11 @@ from packages.platform_common.operator_registry import (
 
 _REGISTER_SCRIPT = """
 local previous_capabilities = redis.call('HGET', KEYS[1], 'capabilities')
+local existing_lifecycle = redis.call('HGET', KEYS[1], 'lifecycle')
+local registration_lifecycle = ARGV[11]
+if existing_lifecycle == 'DRAINING' then
+    registration_lifecycle = existing_lifecycle
+end
 if previous_capabilities then
     for _, capability in ipairs(cjson.decode(previous_capabilities)) do
         redis.call('SREM', ARGV[1] .. capability, ARGV[2])
@@ -39,7 +44,7 @@ redis.call('HSET', KEYS[1],
     'api_version', ARGV[8],
     'declared_capacity', ARGV[9],
     'labels', ARGV[10],
-    'lifecycle', ARGV[11],
+    'lifecycle', registration_lifecycle,
     'inflight', ARGV[12],
     'model_ready', ARGV[13],
     'last_heartbeat_at', ARGV[14])
@@ -166,6 +171,14 @@ redis.call('ZADD', leases_key, expires_at, ARGV[3])
 redis.call('HSET', KEYS[1], 'expires_at', expires_at)
 redis.call('PEXPIRE', KEYS[1], ARGV[1])
 return {instance_id, capability, service_url, expires_at}
+"""
+
+
+_ACTIVE_LEASE_COUNT_SCRIPT = """
+local redis_time = redis.call('TIME')
+local now_ms = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2]) / 1000)
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now_ms)
+return redis.call('ZCARD', KEYS[1])
 """
 
 
@@ -320,12 +333,24 @@ class RedisOperatorRegistry:
         )
 
     def release(self, lease_id: str) -> None:
-        self._client.eval(
+        released = self._client.eval(
             _RELEASE_SCRIPT,
             1,
             f"{self._prefix}lease:{lease_id}",
             f"{self._prefix}leases:",
             lease_id,
+        )
+        if not released:
+            raise CapacityLeaseNotFoundError(lease_id)
+
+    def active_lease_count(self, instance_id: str) -> int:
+        return cast(
+            int,
+            self._client.eval(
+                _ACTIVE_LEASE_COUNT_SCRIPT,
+                1,
+                f"{self._prefix}leases:{instance_id}",
+            ),
         )
 
     def renew(self, lease_id: str, ttl_seconds: int) -> CapacityLease:

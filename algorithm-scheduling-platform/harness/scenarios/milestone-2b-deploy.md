@@ -46,7 +46,8 @@ attestation、24 实例同时 ONLINE、18 个 GPU 实例活动、真实媒体全
 
 ## 发布变量和报告目录
 
-以下命令在 `algorithm-scheduling-platform` 目录执行。`EXPECTED_GIT_SHA` 必须是
+以下命令在 `algorithm-scheduling-platform` 目录执行。`OPERATOR_REGISTRY_TOKEN`
+必须由调用环境显式传入，不使用 `.env` 或仓库内默认值。`EXPECTED_GIT_SHA` 必须是
 工作树当前 HEAD 的完整 40 位 SHA；模型源必须位于 Git 工作树外、目录权限 `0700`。
 从本节发布变量开始到阶段 6 结束，全部 Bash 代码块必须复制到同一 Bash 会话中按文档
 顺序连续执行，不得为每个阶段另开 shell；这样变量、trap、函数和 strict mode 才能持续生效。
@@ -54,6 +55,7 @@ attestation、24 实例同时 ONLINE、18 个 GPU 实例活动、真实媒体全
 ```bash
 set -euo pipefail
 
+export OPERATOR_REGISTRY_TOKEN="${OPERATOR_REGISTRY_TOKEN:?must be set explicitly}"
 RELEASE_TAG=v1.0_260812
 EXPECTED_GIT_SHA="$(git -C .. rev-parse HEAD)"
 MODEL_ASSET_SOURCE=/root/workspace/.algorithm-scheduling-assets/v1.0_260812
@@ -185,8 +187,8 @@ clean clone 不携带项目 Python 环境。完成 release 目录初始化后、
 `python3` 创建项目根 `.venv`，并只安装 `pyproject.toml` 的基础依赖。不得把“不使用
 `.env` 配置文件”误解为“不需要 `.venv` Python 环境”。
 
-版本证据先写入当前 release `preflight/` 下的同目录临时文件；只有 Python 和三个
-Harness 依赖均可导入并成功取得版本后，才原子发布正式 JSON。任何一步失败都由 strict
+版本证据先写入当前 release `preflight/` 下的同目录临时文件；只有 Python 和
+四个 Harness 依赖均可导入并成功取得版本后，才原子发布正式 JSON。任何一步失败都由 strict
 mode 中止后续 preflight、profile 和 Smoke：
 
 ```bash
@@ -203,6 +205,7 @@ from importlib import metadata
 import json
 import sys
 
+import aiokafka
 import httpx
 import websockets
 import yaml
@@ -211,6 +214,7 @@ evidence = {
     "python_executable": sys.executable,
     "python_version": sys.version.split()[0],
     "dependencies": {
+        "aiokafka": metadata.version("aiokafka"),
         "httpx": metadata.version("httpx"),
         "PyYAML": metadata.version("PyYAML"),
         "websockets": metadata.version("websockets"),
@@ -229,7 +233,8 @@ export DEPLOY_PYTHON="$PWD/.venv/bin/python"
 
 `$PWD` 在本场景中是 `algorithm-scheduling-platform` 的绝对路径，因此导出的
 `DEPLOY_PYTHON` 是项目 `.venv` 的绝对解释器路径。后续 wrapper 不得回退到缺少
-`httpx`、PyYAML 或 `websockets` 的系统 Python；证据 JSON 与本次 release/SHA 一一对应。
+`httpx`、PyYAML、`websockets` 或 `aiokafka` 的系统 Python；证据 JSON 与本次
+release/SHA 一一对应。
 
 `model-assets.manifest.json` 只归档到 Git 外的受限目录；报告只记录模型根、文件
 数和总字节数，不记录逐文件哈希或密钥元数据。ASR Offline、ASR Online、OCR、VBas、

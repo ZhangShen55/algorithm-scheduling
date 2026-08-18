@@ -214,3 +214,20 @@ async def test_topic_manager_treats_concurrent_topic_creation_as_idempotent() ->
 
     assert created == ("algorithm.course.commands",)
     assert admin.closed is True
+
+
+@pytest.mark.asyncio
+async def test_topic_manager_rejects_missing_topics_without_creating_them() -> None:
+    admin = FakeAdmin(existing_topics={"algorithm.course.commands"})
+    manager = KafkaTopicManager(
+        bootstrap_servers=["127.0.0.1:9092"],
+        client_id="test-admin-validation",
+        admin_factory=lambda **_: admin,
+    )
+
+    with pytest.raises(RuntimeError, match="required Kafka topics are missing"):
+        await manager.validate_topics()
+
+    assert admin.created == []
+    assert admin.started is True
+    assert admin.closed is True

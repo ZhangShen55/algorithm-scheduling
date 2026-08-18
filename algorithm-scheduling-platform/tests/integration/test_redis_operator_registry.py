@@ -174,6 +174,24 @@ def test_draining_instance_keeps_visibility_but_rejects_new_leases(
     assert redis_registry.lease("teacher_behavior", 30).instance_id == "vbas-gpu0"
 
 
+def test_reregistering_draining_instance_does_not_restore_routing(
+    redis_registry: RedisOperatorRegistry,
+) -> None:
+    _register_ready(redis_registry, vbas_instance())
+    redis_registry.set_lifecycle("vbas-gpu0", OperatorLifecycle.DRAINING)
+
+    redis_registry.register(vbas_instance())
+    heartbeat = redis_registry.heartbeat(
+        "vbas-gpu0",
+        inflight=0,
+        model_ready=True,
+    )
+
+    assert heartbeat.lifecycle is OperatorLifecycle.DRAINING
+    with pytest.raises(CapacityUnavailableError):
+        redis_registry.lease("teacher_behavior", 30)
+
+
 def test_logically_expired_lease_cannot_be_renewed(
     redis_registry: RedisOperatorRegistry,
 ) -> None:

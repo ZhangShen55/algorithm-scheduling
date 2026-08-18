@@ -162,3 +162,15 @@ class KafkaTopicManager:
             return missing
         finally:
             await self._admin.close()
+
+    async def validate_topics(self) -> None:
+        await self._admin.start()
+        try:
+            existing = await self._admin.list_topics()
+            missing = tuple(topic for topic in self._topics if topic not in existing)
+            if missing:
+                raise RuntimeError(
+                    "required Kafka topics are missing: " + ", ".join(missing)
+                )
+        finally:
+            await self._admin.close()

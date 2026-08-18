@@ -5,10 +5,10 @@ from pathlib import Path
 
 import fastdeploy as fd
 import numpy as np
-from bson.binary import Binary
 
 from app.core import dlib_worker
 from app.core.config import settings
+from app.core.embedding_matching import filter_candidate_embeddings
 from app.core.logger import get_logger
 from app.core.runtime_device import configure_runtime_option
 
@@ -89,27 +89,9 @@ def find_best_match_embedding(
     在候选文档列表中寻找最大相似度
     返回: (最佳相似度, 最佳匹配文档)
     """
-    db_vecs = []
-    valid_docs = []
-
-    for d in candidate_docs:
-        e = d.get("embedding")
-        if e is None:
-            continue
-
-        # BSON Binary -> bytes -> numpy
-        if isinstance(e, Binary):
-            e = bytes(e)
-        vec = np.frombuffer(e, dtype=np.float32)
-
-        if vec.size != 512:
-            continue
-
-        # 归一化
-        n = np.linalg.norm(vec) + 1e-12
-        vec = vec / n
-        db_vecs.append(vec)
-        valid_docs.append(d)
+    db_vecs, valid_docs, rejections = filter_candidate_embeddings(candidate_docs)
+    for rejection in rejections:
+        logger.warning("[embedding] skip invalid candidate: %s", rejection)
 
     if not db_vecs:
         return 0.0, None
@@ -140,27 +122,9 @@ def find_top_matches(
 
     返回: List[(相似度, 文档)]，按相似度降序排列
     """
-    db_vecs = []
-    valid_docs = []
-
-    for d in candidate_docs:
-        e = d.get("embedding")
-        if e is None:
-            continue
-
-        # BSON Binary -> bytes -> numpy
-        if isinstance(e, Binary):
-            e = bytes(e)
-        vec = np.frombuffer(e, dtype=np.float32)
-
-        if vec.size != 512:
-            continue
-
-        # 归一化
-        n = np.linalg.norm(vec) + 1e-12
-        vec = vec / n
-        db_vecs.append(vec)
-        valid_docs.append(d)
+    db_vecs, valid_docs, rejections = filter_candidate_embeddings(candidate_docs)
+    for rejection in rejections:
+        logger.warning("[embedding] skip invalid candidate: %s", rejection)
 
     if not db_vecs:
         return []

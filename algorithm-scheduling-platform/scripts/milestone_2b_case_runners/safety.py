@@ -5,6 +5,7 @@ import contextvars
 import fcntl
 import os
 import stat
+import tempfile
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -19,6 +20,7 @@ from .base import CaseContext
 CaseSafety = Literal["read_only", "isolated_mutation", "canonical_runtime"]
 CommandOperation = Literal[
     "read",
+    "filesystem_mutation",
     "docker_mutation",
     "database_mutation",
     "redis_mutation",
@@ -30,6 +32,7 @@ ResourceKind = Literal[
     "kafka_group",
     "redis_prefix",
     "database",
+    "mongodb_database",
     "filesystem",
 ]
 RESOURCE_KINDS = frozenset(
@@ -39,10 +42,15 @@ RESOURCE_KINDS = frozenset(
         "kafka_group",
         "redis_prefix",
         "database",
+        "mongodb_database",
         "filesystem",
     }
 )
-COMMAND_TASK_CANCEL_GRACE_SECONDS = 0.5
+COMMAND_TASK_TERMINATION_MARGIN_SECONDS = 0.5
+
+
+class CommandTaskTerminationError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,7 +195,7 @@ class _ExecutionCapability:
 @dataclass(slots=True)
 class _CapabilityLease:
     active: bool = True
-    command_tasks: set[asyncio.Task[object]] = field(default_factory=set)
+    command_tasks: dict[asyncio.Task[object], float] = field(default_factory=dict)
 
 
 _ACTIVE_CAPABILITY: contextvars.ContextVar[_ExecutionCapability | None] = (
@@ -201,6 +209,7 @@ async def _case_execution_scope(
     safety: CaseSafety,
     maintenance_lock: MaintenanceLockGuard | None,
     authority_case: CaseDefinition | None = None,
+    termination_errors: list[CommandTaskTerminationError] | None = None,
 ) -> AsyncIterator[None]:
     if type(context) is not CaseContext:
         raise ValueError("case execution context type must be CaseContext")
@@ -248,19 +257,66 @@ async def _case_execution_scope(
         yield
     finally:
         lease.active = False
-        active_tasks = tuple(lease.command_tasks)
-        for task in active_tasks:
-            task.cancel()
+        active_tasks = tuple(lease.command_tasks.items())
+        cancellation_seen = False
+        termination_error: BaseException | None = None
         if active_tasks:
-            done, pending = await asyncio.wait(
-                active_tasks,
-                timeout=COMMAND_TASK_CANCEL_GRACE_SECONDS,
+            drain_task = asyncio.create_task(
+                _cancel_and_drain_command_tasks(active_tasks)
             )
-            for task in done:
-                _consume_command_task_result(task)
-            for task in pending:
-                task.add_done_callback(_consume_command_task_result)
+            while not drain_task.done():
+                try:
+                    await asyncio.shield(drain_task)
+                except asyncio.CancelledError:
+                    cancellation_seen = True
+                except BaseException:
+                    pass
+            try:
+                drain_task.result()
+            except BaseException as exc:
+                termination_error = exc
         _ACTIVE_CAPABILITY.reset(token)
+        if cancellation_seen:
+            raise asyncio.CancelledError from termination_error
+        if termination_error is not None:
+            if termination_errors is None:
+                raise termination_error
+            if isinstance(termination_error, CommandTaskTerminationError):
+                termination_errors.append(termination_error)
+            else:
+                termination_errors.append(
+                    CommandTaskTerminationError(str(termination_error))
+                )
+
+
+async def _cancel_and_drain_command_tasks(
+    tasks: tuple[tuple[asyncio.Task[object], float], ...],
+) -> None:
+    for task, _ in tasks:
+        task.cancel()
+    task_objects = tuple(task for task, _ in tasks)
+    done, pending = await asyncio.wait(
+        task_objects,
+        timeout=max(timeout_seconds for _, timeout_seconds in tasks),
+    )
+    unsafe_errors: list[str] = []
+    for task in done:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except CommandTaskTerminationError as exc:
+            unsafe_errors.append(str(exc) or type(exc).__name__)
+        except BaseException:
+            pass
+    for task in pending:
+        task.add_done_callback(_consume_command_task_result)
+    if pending:
+        unsafe_errors.append(
+            f"{len(pending)} authorized command task(s) remained active"
+        )
+    if unsafe_errors:
+        raise CommandTaskTerminationError("; ".join(unsafe_errors))
 
 
 def _consume_command_task_result(task: asyncio.Future[object]) -> None:
@@ -288,6 +344,7 @@ def validate_command_authority(
     context: CaseContext,
     operation: CommandOperation,
     resources: Sequence[ResourceSpec],
+    claimed_case_id: str | None = None,
 ) -> _ExecutionCapability:
     capability = _ACTIVE_CAPABILITY.get()
     if capability is None or capability.context is not context:
@@ -296,6 +353,12 @@ def validate_command_authority(
         raise ValueError("case execution capability is revoked")
     if not _context_matches_authority(context, capability.authority_context):
         raise ValueError("case execution context changed after capability binding")
+    if (
+        claimed_case_id is not None
+        and capability.authority_case_id is not None
+        and claimed_case_id != capability.authority_case_id
+    ):
+        raise ValueError("foundation action does not match the claimed case")
     if capability.safety == "read_only" and operation != "read":
         raise ValueError("read_only cases cannot execute mutation actions")
     if capability.safety == "canonical_runtime" and (
@@ -307,13 +370,18 @@ def validate_command_authority(
         raise ValueError("canonical_runtime requires a held maintenance lock")
     if capability.safety == "isolated_mutation" and operation != "read":
         for resource in resources:
-            _validate_isolated_resource(capability.authority_context, resource)
+            _validate_isolated_resource(
+                capability.authority_context,
+                resource,
+                case_id=capability.authority_case_id,
+            )
     return capability
 
 
 def register_command_task(
     capability: _ExecutionCapability,
     task: asyncio.Task[object],
+    termination_timeout_seconds: float,
 ) -> None:
     if (
         _ACTIVE_CAPABILITY.get() is not capability
@@ -321,14 +389,22 @@ def register_command_task(
     ):
         task.cancel()
         raise ValueError("case execution capability is revoked")
-    capability.lease.command_tasks.add(task)
+    if (
+        type(termination_timeout_seconds) not in {int, float}
+        or termination_timeout_seconds <= 0
+    ):
+        task.cancel()
+        raise ValueError("command task termination timeout must be positive")
+    capability.lease.command_tasks[task] = (
+        termination_timeout_seconds + COMMAND_TASK_TERMINATION_MARGIN_SECONDS
+    )
 
 
 def unregister_command_task(
     capability: _ExecutionCapability,
     task: asyncio.Task[object],
 ) -> None:
-    capability.lease.command_tasks.discard(task)
+    capability.lease.command_tasks.pop(task, None)
 
 
 def validate_case_evidence_authority(
@@ -373,26 +449,81 @@ def _context_matches_authority(
 
 
 def _validate_isolated_resource(
-    context: CaseContext, resource: ResourceSpec
+    context: CaseContext,
+    resource: ResourceSpec,
+    *,
+    case_id: str | None,
 ) -> None:
     run_id = context.run_id
+    case_name = case_id.lower() if case_id is not None else None
     valid = False
     if resource.kind == "container":
-        valid = resource.name.startswith(f"m2b-{len(run_id)}-{run_id}-")
+        prefix = f"m2b-{len(run_id)}-{run_id}-"
+        if case_name is not None:
+            prefix += f"{case_name}-"
+        valid = resource.name.startswith(prefix)
     elif resource.kind in {"kafka_topic", "kafka_group"}:
-        valid = resource.name.startswith(f"m2b.{run_id}.")
+        prefix = f"m2b.{run_id}."
+        if case_name is not None:
+            prefix += case_name
+        valid = resource.name.startswith(prefix)
     elif resource.kind == "redis_prefix":
-        valid = resource.name.startswith(f"m2b:{run_id}:")
-    elif resource.kind == "database":
+        prefix = f"m2b:{run_id}:"
+        if case_name is not None:
+            prefix += f"{case_name}:"
+        valid = resource.name.startswith(prefix)
+    elif resource.kind in {"database", "mongodb_database"}:
         database_prefix = (
             f"m2b_{len(run_id)}_{run_id.replace('-', '_')}_"
         )
-        valid = resource.name.startswith(database_prefix) and resource.name.endswith(
-            "_test"
+        if case_name is not None:
+            database_prefix += f"{case_name.replace('-', '_')}_"
+        expected_suffix = (
+            "_mongo_test" if resource.kind == "mongodb_database" else "_test"
         )
+        valid = (
+            resource.name.startswith(database_prefix)
+            and resource.name.endswith(expected_suffix)
+            and (
+                resource.kind == "mongodb_database"
+                or not resource.name.endswith("_mongo_test")
+            )
+        )
+    elif resource.kind == "filesystem":
+        path = Path(resource.name)
+        expected_prefix = f"m2b-{len(run_id)}-{run_id}-"
+        if case_name is not None:
+            expected_prefix += f"{case_name}-"
+        try:
+            temporary_root = Path(tempfile.gettempdir()).resolve(strict=True)
+            parent = path.parent.resolve(strict=True)
+        except OSError:
+            valid = False
+        else:
+            base_valid = bool(
+                path.is_absolute()
+                and ".." not in path.parts
+                and parent == temporary_root
+                and path.name.startswith(expected_prefix)
+            )
+            if path.name.endswith("-"):
+                valid = base_valid
+            else:
+                try:
+                    metadata = os.lstat(path)
+                except OSError:
+                    valid = False
+                else:
+                    valid = bool(
+                        base_valid
+                        and stat.S_ISDIR(metadata.st_mode)
+                        and metadata.st_uid == os.geteuid()
+                        and stat.S_IMODE(metadata.st_mode) == 0o700
+                    )
     if not valid:
+        namespace = "current case" if case_name is not None else "current run"
         raise ValueError(
-            f"isolated resource is outside current run namespace: {resource.name}"
+            f"isolated resource is outside {namespace} namespace: {resource.name}"
         )
 
 

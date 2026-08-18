@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +21,8 @@ class PlatformSettings(BaseSettings):
     kafka_bootstrap_servers: str = "127.0.0.1:9092"
     redis_url: str = "redis://127.0.0.1:6379/0"
     control_service_url: str = "http://127.0.0.1:18100"
+    operator_registry_token: str = "local-development-registry-token"
+    trusted_operator_service_urls: dict[str, str] = Field(default_factory=dict)
 
     course_root: Path = Path("/data/course")
     result_root: Path = Path("/data/result")

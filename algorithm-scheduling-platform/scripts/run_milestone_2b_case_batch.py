@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib
+import inspect
 import json
 import os
 import re
@@ -46,7 +47,11 @@ from scripts.milestone_2b_case_runners.evidence import (
     publish_framework_failure_evidence,
     release_identity,
 )
+from scripts.milestone_2b_case_runners.process import (
+    maximum_command_termination_budget_seconds,
+)
 from scripts.milestone_2b_case_runners.safety import (
+    CommandTaskTerminationError,
     MaintenanceLockGuard,
     _case_execution_scope,
 )
@@ -91,6 +96,7 @@ class BatchResult:
 @dataclass(frozen=True, slots=True)
 class _FunctionRunner:
     function: RunnerFunction
+    cleanup: CleanupFunction | None = None
 
     async def run(
         self, context: CaseContext, case: CaseDefinition
@@ -134,7 +140,13 @@ def resolve_runner(runner_name: str) -> CaseRunner:
     if callable(run_method):
         return cast(CaseRunner, candidate)
     if callable(candidate):
-        return _FunctionRunner(cast(RunnerFunction, candidate))
+        cleanup = getattr(candidate, "cleanup", None)
+        if cleanup is not None and not inspect.iscoroutinefunction(cleanup):
+            raise ValueError(f"runner cleanup is not async: {runner_name}")
+        return _FunctionRunner(
+            cast(RunnerFunction, candidate),
+            cast(CleanupFunction | None, cleanup),
+        )
     raise ValueError(f"runner target is not callable: {runner_name}")
 
 
@@ -471,11 +483,14 @@ async def _run_selected_case(
         failure_reasons: list[str] = []
         runner_context = CaseContext(release_root, run_id, target)
         runner_case = _copy_case_definition(authority_case)
+        command_termination_confirmed = True
+        command_termination_errors: list[CommandTaskTerminationError] = []
         async with _case_execution_scope(
             runner_context,
             authority_case.safety,
             maintenance_lock,
             authority_case,
+            command_termination_errors,
         ):
             try:
                 raw_outcome = await _await_with_hard_timeout(
@@ -490,10 +505,22 @@ async def _run_selected_case(
                 )
             except Exception as exc:
                 failure_reasons.append(f"runner failed: {_error_text(exc)}")
+        if command_termination_errors:
+            command_termination_confirmed = False
+            failure_reasons.append(
+                "runner command termination unconfirmed: "
+                + "; ".join(
+                    _error_text(error) for error in command_termination_errors
+                )
+            )
 
         cleanup = getattr(runner, "cleanup", None)
         if require_cleanup:
-            if not callable(cleanup):
+            if not command_termination_confirmed:
+                failure_reasons.append(
+                    "runner cleanup skipped because command termination is unconfirmed"
+                )
+            elif not callable(cleanup):
                 failure_reasons.append("required runner cleanup is not implemented")
             else:
                 cleanup_context = CaseContext(release_root, run_id, target)
@@ -724,11 +751,15 @@ def _supervisor_deadline_seconds(
     *,
     require_cleanup: bool,
 ) -> float:
+    command_termination_budget = maximum_command_termination_budget_seconds()
     case_seconds = sum(
         case.timeout_seconds
         + CASE_TASK_CANCEL_GRACE_SECONDS
+        + command_termination_budget
         + (
-            min(case.timeout_seconds, 30) + CASE_TASK_CANCEL_GRACE_SECONDS
+            min(case.timeout_seconds, 30)
+            + CASE_TASK_CANCEL_GRACE_SECONDS
+            + command_termination_budget
             if require_cleanup
             else 0
         )

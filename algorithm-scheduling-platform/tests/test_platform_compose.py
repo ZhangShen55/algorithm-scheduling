@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -56,6 +57,10 @@ def _render_compose(compose_path: Path) -> dict[str, object]:
             "json",
         ],
         cwd=PROJECT_ROOT,
+        env={
+            **os.environ,
+            "OPERATOR_REGISTRY_TOKEN": "test-explicit-registry-token",
+        },
         check=True,
         capture_output=True,
         text=True,

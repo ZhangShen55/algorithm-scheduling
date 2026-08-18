@@ -164,6 +164,8 @@ class OrchestratorRuntime:
         try:
             if self.settings.kafka.ensure_topics:
                 await self.resources.topic_manager.ensure_topics()
+            else:
+                await self.resources.topic_manager.validate_topics()
             await self.resources.producer.start()
             self._producer_started = True
             await self.resources.consumer.start()

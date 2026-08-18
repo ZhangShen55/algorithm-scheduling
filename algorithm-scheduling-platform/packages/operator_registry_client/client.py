@@ -21,6 +21,7 @@ class OperatorRegistryClientConfig:
     capabilities: list[str]
     service_url: str
     declared_capacity: int
+    management_token: str
     model_version: str | None = None
     api_version: str | None = None
     labels: dict[str, str] = field(default_factory=dict)
@@ -31,6 +32,8 @@ class OperatorRegistryClientConfig:
             raise ValueError("算子声明容量必须大于 0")
         if self.heartbeat_interval_seconds <= 0:
             raise ValueError("心跳间隔必须大于 0")
+        if not self.management_token.strip():
+            raise ValueError("算子注册管理令牌不能为空")
 
 
 class OperatorRegistryClient:
@@ -53,6 +56,7 @@ class OperatorRegistryClient:
     async def register(self) -> None:
         response = await self._http.post(
             f"{self._config.control_service_url}/api/operator-instances/register",
+            headers=self._management_headers,
             json={
                 "instance_id": self._config.instance_id,
                 "operator_code": self._config.operator_code,
@@ -70,6 +74,7 @@ class OperatorRegistryClient:
         runtime = self._status_provider()
         response = await self._http.post(
             f"{self._config.control_service_url}/api/operator-instances/heartbeat",
+            headers=self._management_headers,
             json={
                 "instance_id": self._config.instance_id,
                 "inflight": runtime.inflight,
@@ -81,6 +86,7 @@ class OperatorRegistryClient:
     async def drain(self) -> None:
         response = await self._http.post(
             f"{self._config.control_service_url}/api/operator-instances/lifecycle",
+            headers=self._management_headers,
             json={
                 "instance_id": self._config.instance_id,
                 "lifecycle": "DRAINING",
@@ -91,21 +97,31 @@ class OperatorRegistryClient:
     async def unregister(self) -> None:
         response = await self._http.post(
             f"{self._config.control_service_url}/api/operator-instances/unregister",
+            headers=self._management_headers,
             json={"instance_id": self._config.instance_id},
         )
         response.raise_for_status()
 
+    @property
+    def _management_headers(self) -> dict[str, str]:
+        return {"X-Operator-Registry-Token": self._config.management_token}
+
     async def start(self) -> None:
-        await self.register()
-        await self.heartbeat()
         self._stop_event.clear()
+        while True:
+            try:
+                await self.register()
+                await self.heartbeat()
+            except httpx.HTTPError:
+                await asyncio.sleep(self._config.heartbeat_interval_seconds)
+                continue
+            break
         self._heartbeat_task = asyncio.create_task(
             self._heartbeat_loop(),
             name=f"operator-heartbeat-{self._config.instance_id}",
         )
 
     async def stop(self) -> None:
-        await self.drain()
         self._stop_event.set()
         if self._heartbeat_task is not None:
             await self._heartbeat_task
@@ -126,6 +142,14 @@ class OperatorRegistryClient:
                 return
             try:
                 await self.heartbeat()
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 404:
+                    continue
+                try:
+                    await self.register()
+                    await self.heartbeat()
+                except httpx.HTTPError:
+                    continue
             except httpx.HTTPError:
                 continue
 

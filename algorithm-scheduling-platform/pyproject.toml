@@ -8,12 +8,14 @@ version = "0.1.0"
 description = "Single-machine algorithm scheduling platform for offline courses and online inference"
 requires-python = ">=3.11"
 dependencies = [
+  "aiokafka>=0.14,<0.15",
   "fastapi>=0.115,<1",
   "httpx>=0.28,<1",
   "pydantic>=2.10,<3",
   "pydantic-settings>=2.7,<3",
   "prometheus-client>=0.21,<1",
   "psycopg[binary]>=3.2,<4",
+  "pymongo>=4.10,<5",
   "PyYAML>=6.0,<7",
   "redis>=6.0,<7",
   "sqlalchemy>=2.0,<3",
@@ -22,11 +24,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-kafka = [
-  "aiokafka>=0.14,<0.15",
-]
 dev = [
-  "aiokafka>=0.14,<0.15",
   "mypy>=1.14,<2",
   "pytest>=8.3,<9",
   "pytest-asyncio>=0.25,<1",
@@ -62,3 +60,4 @@ select = ["E", "F", "I", "UP", "B"]
 python_version = "3.11"
 strict = true
 packages = ["packages"]
+exclude = ["^packages/operator_registry_client/build/"]

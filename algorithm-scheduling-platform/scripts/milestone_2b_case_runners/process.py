@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import os
 import signal
+import stat
 import sys
+import tempfile
 from dataclasses import dataclass
-from typing import Literal
+from pathlib import Path
+from typing import Literal, cast
 
-from .base import CaseContext
+from . import safety as safety_module
+from .base import RUN_ID_PATTERN, CaseContext
 from .safety import (
     CommandOperation,
+    CommandTaskTerminationError,
     ResourceKind,
     ResourceSpec,
     register_command_task,
@@ -26,6 +32,38 @@ MutationKind = Literal[
     "kafka_delete_topic",
     "kafka_delete_group",
 ]
+FoundationGroup = Literal[
+    "deployment",
+    "gpu",
+    "registry",
+    "infrastructure",
+]
+
+_FOUNDATION_CASE_RANGES = {
+    "deployment": ("DEP", 20),
+    "gpu": ("GPU", 20),
+    "registry": ("REG", 20),
+    "infrastructure": ("INF", 16),
+}
+_FOUNDATION_RESOURCE_KINDS = {
+    "deployment": frozenset({"filesystem"}),
+    "gpu": frozenset({"filesystem", "container"}),
+    "registry": frozenset({"filesystem", "redis_prefix", "database"}),
+    "infrastructure": frozenset(
+        {
+            "filesystem",
+            "database",
+            "mongodb_database",
+            "kafka_topic",
+            "kafka_group",
+            "redis_prefix",
+        }
+    ),
+}
+_REGISTRY_DATABASE_CASES = frozenset({"REG-014", "REG-015"})
+_WRITABLE_DEPLOYMENT_CASES = frozenset(
+    {"DEP-013", "DEP-015", "DEP-016", "DEP-019", "DEP-020"}
+)
 
 _MUTATION_AUTHORITY: dict[
     MutationKind, tuple[CommandOperation, ResourceKind]
@@ -45,6 +83,8 @@ MaterializedCommand = tuple[
 POST_KILL_DRAIN_TIMEOUT_SECONDS = 2.0
 COMPLETION_CANCEL_GRACE_SECONDS = 0.1
 SUPERVISOR_REGISTRATION_CLEANUP_GRACE_SECONDS = 0.1
+DEFAULT_COMMAND_TERMINATE_GRACE_SECONDS = 2.0
+MAX_COMMAND_TERMINATE_GRACE_SECONDS = 30.0
 _SUPERVISOR_PROCESS_FD: int | None = None
 
 
@@ -171,7 +211,139 @@ class ProcessGroupProbeAction:
             raise ValueError("process probe flags must be booleans")
 
 
-CommandAction = ReadAction | MutationAction | OutputProbeAction | ProcessGroupProbeAction
+@dataclass(frozen=True, slots=True)
+class FoundationCheckAction:
+    group: FoundationGroup
+    case_id: str
+    resources: tuple[ResourceSpec, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.group) is not str or self.group not in _FOUNDATION_CASE_RANGES:
+            raise ValueError("foundation checker group is not registered")
+        prefix, last = _FOUNDATION_CASE_RANGES[self.group]
+        if type(self.case_id) is not str or self.case_id not in {
+            f"{prefix}-{number:03d}" for number in range(1, last + 1)
+        }:
+            raise ValueError("foundation checker case does not match its group")
+        if type(self.resources) is not tuple or not self.resources:
+            raise ValueError("foundation checker resources must be a non-empty tuple")
+        if any(type(resource) is not ResourceSpec for resource in self.resources):
+            raise ValueError("foundation checker resources must use ResourceSpec")
+        if self.resources[0].kind != "filesystem":
+            raise ValueError("foundation checker first resource must be its input file")
+        allowed_kinds = _FOUNDATION_RESOURCE_KINDS[self.group]
+        if any(resource.kind not in allowed_kinds for resource in self.resources):
+            raise ValueError("foundation checker resource kind is not allowed")
+        mutable_resources = self.resources[1:]
+        if self.group != "deployment" and any(
+            resource.kind == "filesystem" for resource in mutable_resources
+        ):
+            raise ValueError("foundation checker accepts exactly one input file")
+        if self.group == "deployment":
+            expected_kinds = (
+                ("filesystem",)
+                if self.case_id in _WRITABLE_DEPLOYMENT_CASES
+                else ()
+            )
+            if tuple(resource.kind for resource in mutable_resources) != expected_kinds:
+                raise ValueError(
+                    "deployment checker resources do not match the fixed case contract"
+                )
+        if self.group == "gpu" and (
+            not mutable_resources
+            or any(resource.kind != "container" for resource in mutable_resources)
+        ):
+            raise ValueError("GPU checker requires an enumerated container resource")
+        if self.group == "registry":
+            expected_kinds = (
+                ("redis_prefix", "database")
+                if self.case_id in _REGISTRY_DATABASE_CASES
+                else ("redis_prefix",)
+            )
+            if tuple(resource.kind for resource in mutable_resources) != expected_kinds:
+                raise ValueError(
+                    "registry checker resources do not match the fixed case contract"
+                )
+        if self.group == "infrastructure" and not mutable_resources:
+            raise ValueError("infrastructure checker requires isolated resources")
+
+
+def foundation_cleanup_resources(
+    group: FoundationGroup, case_id: str, run_id: str
+) -> tuple[ResourceSpec, ...]:
+    if type(group) is not str or group not in _FOUNDATION_CASE_RANGES:
+        raise ValueError("foundation cleanup group is not registered")
+    prefix, last = _FOUNDATION_CASE_RANGES[group]
+    if type(case_id) is not str or case_id not in {
+        f"{prefix}-{number:03d}" for number in range(1, last + 1)
+    }:
+        raise ValueError("foundation cleanup case does not match its group")
+    if type(run_id) is not str or RUN_ID_PATTERN.fullmatch(run_id) is None:
+        raise ValueError("foundation cleanup run_id is invalid")
+    case_name = case_id.lower()
+    safe_run = run_id.replace("-", "_")
+    safe_case = case_name.replace("-", "_")
+    temporary_root = Path(tempfile.gettempdir()).resolve(strict=True)
+    resources = [
+        ResourceSpec(
+            "filesystem",
+            str(temporary_root / f"m2b-{len(run_id)}-{run_id}-{case_name}-"),
+        )
+    ]
+    if group == "registry":
+        resources.append(
+            ResourceSpec("redis_prefix", f"m2b:{run_id}:{case_name}:registry:")
+        )
+        if case_id in _REGISTRY_DATABASE_CASES:
+            resources.append(
+                ResourceSpec(
+                    "database",
+                    f"m2b_{len(run_id)}_{safe_run}_{safe_case}_test",
+                )
+            )
+    elif group == "infrastructure":
+        topic = f"m2b.{run_id}.{case_name}"
+        resources.extend(
+            (
+                ResourceSpec(
+                    "database",
+                    f"m2b_{len(run_id)}_{safe_run}_{safe_case}_test",
+                ),
+                ResourceSpec(
+                    "mongodb_database",
+                    f"m2b_{len(run_id)}_{safe_run}_{safe_case}_mongo_test",
+                ),
+                ResourceSpec("kafka_topic", topic),
+                ResourceSpec("kafka_group", topic),
+                ResourceSpec("redis_prefix", f"m2b:{run_id}:{case_name}:"),
+            )
+        )
+    return tuple(resources)
+
+
+@dataclass(frozen=True, slots=True)
+class FoundationCleanupAction:
+    group: FoundationGroup
+    case_id: str
+    run_id: str
+    resources: tuple[ResourceSpec, ...]
+
+    def __post_init__(self) -> None:
+        expected = foundation_cleanup_resources(self.group, self.case_id, self.run_id)
+        if type(self.resources) is not tuple or self.resources != expected:
+            raise ValueError("foundation cleanup resources do not match the exact case namespace")
+        if any(type(resource) is not ResourceSpec for resource in self.resources):
+            raise ValueError("foundation cleanup resources must use ResourceSpec")
+
+
+CommandAction = (
+    ReadAction
+    | MutationAction
+    | OutputProbeAction
+    | ProcessGroupProbeAction
+    | FoundationCheckAction
+    | FoundationCleanupAction
+)
 
 
 def _snapshot_resource(resource: ResourceSpec, action_label: str) -> ResourceSpec:
@@ -284,6 +456,94 @@ def _materialize_action(action: CommandAction) -> MaterializedCommand:
             ),
         )
 
+    if type(action) is FoundationCheckAction:
+        foundation_action = action
+        group = foundation_action.group
+        case_id = foundation_action.case_id
+        resources = foundation_action.resources
+        if (
+            type(group) is not str
+            or group not in _FOUNDATION_CASE_RANGES
+            or type(case_id) is not str
+        ):
+            raise ValueError("foundation checker identity is invalid")
+        prefix, last = _FOUNDATION_CASE_RANGES[group]
+        if case_id not in {
+            f"{prefix}-{number:03d}" for number in range(1, last + 1)
+        }:
+            raise ValueError("foundation checker case does not match its group")
+        if type(resources) is not tuple or not resources:
+            raise ValueError("foundation checker resources are invalid")
+        resource_snapshots = tuple(
+            _snapshot_resource(resource, "foundation checker")
+            for resource in resources
+        )
+        validated_action = FoundationCheckAction(
+            group=cast(FoundationGroup, group),
+            case_id=case_id,
+            resources=resource_snapshots,
+        )
+        input_resource = validated_action.resources[0]
+        mutable_resources = validated_action.resources[1:]
+        foundation_operation: CommandOperation
+        if group == "registry":
+            foundation_operation = (
+                "database_mutation"
+                if case_id in _REGISTRY_DATABASE_CASES
+                else "redis_mutation"
+            )
+        elif group == "infrastructure":
+            foundation_operation = "database_mutation"
+        elif group == "deployment" and case_id in _WRITABLE_DEPLOYMENT_CASES:
+            foundation_operation = "filesystem_mutation"
+        else:
+            foundation_operation = "read"
+        return (
+            foundation_operation,
+            mutable_resources,
+            (
+                sys.executable,
+                "-m",
+                f"scripts.milestone_2b_case_runners.{group}",
+                "--check",
+                case_id,
+                "--input",
+                input_resource.name,
+            ),
+        )
+
+    if type(action) is FoundationCleanupAction:
+        cleanup_action = action
+        group = cleanup_action.group
+        case_id = cleanup_action.case_id
+        run_id = cleanup_action.run_id
+        resources = cleanup_action.resources
+        resource_snapshots = tuple(
+            _snapshot_resource(resource, "foundation cleanup")
+            for resource in resources
+        )
+        validated_action = FoundationCleanupAction(
+            group=group,
+            case_id=case_id,
+            run_id=run_id,
+            resources=resource_snapshots,
+        )
+        return (
+            "filesystem_mutation",
+            validated_action.resources,
+            (
+                sys.executable,
+                "-m",
+                "scripts.milestone_2b_case_runners.cleanup",
+                "--group",
+                group,
+                "--case",
+                case_id,
+                "--run-id",
+                run_id,
+            ),
+        )
+
     raise ValueError("command action type is not registered")
 
 
@@ -298,6 +558,8 @@ class CommandSpec:
             MutationAction,
             OutputProbeAction,
             ProcessGroupProbeAction,
+            FoundationCheckAction,
+            FoundationCleanupAction,
         }:
             raise ValueError("command action type is not registered")
         if type(self.max_output_bytes) is not int or self.max_output_bytes <= 0:
@@ -325,7 +587,7 @@ class CaseCommandTimeout(TimeoutError):
         self.result = result
 
 
-class ProcessCleanupError(RuntimeError):
+class ProcessCleanupError(CommandTaskTerminationError):
     pass
 
 
@@ -344,12 +606,20 @@ def mutation_kind_for_resource(resource_kind: str) -> MutationKind:
 
 
 def validate_command_spec(*, context: CaseContext, command: CommandSpec) -> None:
-    operation, resources, _, _ = _materialize_command(command)
-    validate_command_authority(
+    operation, resources, argv, _ = _materialize_command(command)
+    claimed_case_id = _foundation_action_case_id(command.action)
+    capability = validate_command_authority(
         context=context,
         operation=operation,
         resources=resources,
+        claimed_case_id=claimed_case_id,
     )
+    _validate_foundation_claimed_case(
+        command=command,
+        claimed_case_id=capability.authority_case_id,
+    )
+    _validate_foundation_input(context=context, command=command, argv=argv)
+    _validate_foundation_cleanup(context=context, command=command, argv=argv)
 
 
 def _materialize_command(
@@ -369,18 +639,26 @@ async def run_command(
     context: CaseContext,
     command: CommandSpec,
     timeout_seconds: float,
-    terminate_grace_seconds: float = 2.0,
+    terminate_grace_seconds: float = DEFAULT_COMMAND_TERMINATE_GRACE_SECONDS,
 ) -> CommandResult:
     _require_positive_finite_seconds(timeout_seconds, "command timeout")
-    _require_positive_finite_seconds(
-        terminate_grace_seconds, "command termination grace"
+    termination_timeout_seconds = command_termination_timeout_seconds(
+        terminate_grace_seconds
     )
     operation, resources, argv, max_output_bytes = _materialize_command(command)
+    claimed_case_id = _foundation_action_case_id(command.action)
     capability = validate_command_authority(
         context=context,
         operation=operation,
         resources=resources,
+        claimed_case_id=claimed_case_id,
     )
+    _validate_foundation_claimed_case(
+        command=command,
+        claimed_case_id=capability.authority_case_id,
+    )
+    _validate_foundation_input(context=context, command=command, argv=argv)
+    _validate_foundation_cleanup(context=context, command=command, argv=argv)
     command_task = asyncio.create_task(
         _run_argv(
             argv=argv,
@@ -389,11 +667,200 @@ async def run_command(
             terminate_grace_seconds=terminate_grace_seconds,
         )
     )
-    register_command_task(capability, command_task)
+    register_command_task(
+        capability,
+        command_task,
+        termination_timeout_seconds,
+    )
     try:
         return await command_task
     finally:
         unregister_command_task(capability, command_task)
+
+
+def _validate_foundation_claimed_case(
+    *,
+    command: CommandSpec,
+    claimed_case_id: str | None,
+) -> None:
+    action = command.action
+    if type(action) not in {FoundationCheckAction, FoundationCleanupAction}:
+        return
+    foundation_action = cast(FoundationCheckAction | FoundationCleanupAction, action)
+    if claimed_case_id is not None and foundation_action.case_id != claimed_case_id:
+        raise ValueError("foundation action does not match the claimed case")
+
+
+def _foundation_action_case_id(action: CommandAction) -> str | None:
+    if type(action) not in {FoundationCheckAction, FoundationCleanupAction}:
+        return None
+    foundation_action = cast(FoundationCheckAction | FoundationCleanupAction, action)
+    return foundation_action.case_id
+
+
+def _validate_foundation_input(
+    *,
+    context: CaseContext,
+    command: CommandSpec,
+    argv: tuple[str, ...],
+) -> None:
+    if type(command.action) is not FoundationCheckAction:
+        return
+    if len(argv) != 7 or argv[1] != "-m" or argv[3] != "--check" or argv[5] != "--input":
+        raise ValueError("foundation checker command shape changed")
+    group = argv[2].removeprefix("scripts.milestone_2b_case_runners.")
+    case_id = argv[4]
+    input_path = Path(argv[6])
+    expected_prefix = (
+        f"m2b-{len(context.run_id)}-{context.run_id}-"
+        f"{case_id.lower()}-"
+    )
+    temporary_root = Path(tempfile.gettempdir()).resolve(strict=True)
+    if (
+        not input_path.is_absolute()
+        or ".." in input_path.parts
+        or input_path.name != "input.json"
+        or not input_path.parent.name.startswith(expected_prefix)
+    ):
+        raise ValueError("foundation checker input is outside current case temporary namespace")
+    try:
+        parent = input_path.parent.resolve(strict=True)
+        parent_metadata = os.lstat(input_path.parent)
+        input_metadata = os.lstat(input_path)
+    except OSError as exc:
+        raise ValueError("foundation checker input is not a real temporary file") from exc
+    if parent.parent != temporary_root or input_path.parent.is_symlink():
+        raise ValueError("foundation checker input is outside current case temporary namespace")
+    if (
+        not stat.S_ISDIR(parent_metadata.st_mode)
+        or parent_metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(parent_metadata.st_mode) != 0o700
+    ):
+        raise ValueError("foundation checker temporary directory is not private")
+    if (
+        not stat.S_ISREG(input_metadata.st_mode)
+        or input_metadata.st_uid != os.geteuid()
+        or input_metadata.st_nlink != 1
+        or stat.S_IMODE(input_metadata.st_mode) != 0o600
+    ):
+        raise ValueError("foundation checker input file metadata is unsafe")
+    _validate_foundation_document(
+        context=context,
+        action=command.action,
+        input_path=input_path,
+        input_metadata=input_metadata,
+    )
+    expected_module = f"scripts.milestone_2b_case_runners.{group}"
+    expected_group = _FOUNDATION_CASE_RANGES.get(group)
+    if argv[2] != expected_module or expected_group is None or not case_id.startswith(
+        f"{expected_group[0]}-"
+    ):
+        raise ValueError("foundation checker command identity changed")
+
+
+def _validate_foundation_document(
+    *,
+    context: CaseContext,
+    action: FoundationCheckAction,
+    input_path: Path,
+    input_metadata: os.stat_result,
+) -> None:
+    if input_metadata.st_size > 1024 * 1024:
+        raise ValueError("foundation input does not match the authorized action")
+    try:
+        document = json.loads(input_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("foundation input does not match the authorized action") from exc
+    if not isinstance(document, dict):
+        raise ValueError("foundation input does not match the authorized action")
+    identity = {
+        "case_id": action.case_id,
+        "run_id": context.run_id,
+        "target": context.target,
+    }
+    if any(document.get(field) != value for field, value in identity.items()):
+        raise ValueError("foundation input does not match the authorized action")
+
+    mutable_resources = action.resources[1:]
+    bindings: tuple[tuple[str, ResourceSpec], ...]
+    if action.group == "deployment":
+        if action.case_id in _WRITABLE_DEPLOYMENT_CASES:
+            if tuple(resource.kind for resource in mutable_resources) != (
+                "filesystem",
+            ):
+                raise ValueError(
+                    "foundation input does not match the authorized action"
+                )
+            bindings = (("scratch_directory", mutable_resources[0]),)
+        elif not mutable_resources:
+            bindings = ()
+        else:
+            raise ValueError("foundation input does not match the authorized action")
+    elif action.group == "gpu" and len(mutable_resources) == 1:
+        bindings = (("container", mutable_resources[0]),)
+    elif action.group == "registry" and tuple(
+        resource.kind for resource in mutable_resources
+    ) == (
+        ("redis_prefix", "database")
+        if action.case_id in _REGISTRY_DATABASE_CASES
+        else ("redis_prefix",)
+    ):
+        registry_fields = (
+            ("redis_prefix", "database")
+            if action.case_id in _REGISTRY_DATABASE_CASES
+            else ("redis_prefix",)
+        )
+        bindings = tuple(zip(registry_fields, mutable_resources, strict=True))
+    elif action.group == "infrastructure" and tuple(
+        resource.kind for resource in mutable_resources
+    ) == (
+        "database",
+        "mongodb_database",
+        "kafka_topic",
+        "kafka_group",
+        "redis_prefix",
+    ):
+        infrastructure_fields = (
+            "database",
+            "mongodb_database",
+            "kafka_topic",
+            "kafka_group",
+            "redis_prefix",
+        )
+        bindings = tuple(zip(infrastructure_fields, mutable_resources, strict=True))
+    else:
+        raise ValueError("foundation input does not match the authorized action")
+    if any(document.get(field) != resource.name for field, resource in bindings):
+        raise ValueError("foundation input does not match the authorized action")
+
+
+def _validate_foundation_cleanup(
+    *,
+    context: CaseContext,
+    command: CommandSpec,
+    argv: tuple[str, ...],
+) -> None:
+    if type(command.action) is not FoundationCleanupAction:
+        return
+    if (
+        len(argv) != 9
+        or argv[1:4]
+        != (
+            "-m",
+            "scripts.milestone_2b_case_runners.cleanup",
+            "--group",
+        )
+        or argv[5] != "--case"
+        or argv[7] != "--run-id"
+    ):
+        raise ValueError("foundation cleanup command shape changed")
+    if argv[8] != context.run_id:
+        raise ValueError("foundation cleanup run_id changed after capability binding")
+    expected = foundation_cleanup_resources(
+        cast(FoundationGroup, argv[4]), argv[6], argv[8]
+    )
+    if command.action.resources != expected:
+        raise ValueError("foundation cleanup resources changed after action validation")
 
 
 async def _run_argv(
@@ -424,6 +891,7 @@ async def _run_argv(
         _collect_command_output(process, max_output_bytes)
     )
     supervisor_registered = False
+    process_group_termination_confirmed = False
     try:
         try:
             _notify_process_supervisor("+", process.pid)
@@ -436,16 +904,28 @@ async def _run_argv(
             raise
         supervisor_registered = True
         try:
-            returncode, stdout_result, stderr_result = await asyncio.wait_for(
+            collected = await asyncio.wait_for(
                 asyncio.shield(completion_task),
                 timeout=timeout_seconds,
             )
+            if not await _wait_for_process_group_exit(
+                process.pid,
+                asyncio.get_running_loop().time(),
+            ):
+                collected = await _finish_process_group_termination(
+                    process,
+                    completion_task,
+                    terminate_grace_seconds,
+                )
+            process_group_termination_confirmed = True
+            returncode, stdout_result, stderr_result = collected
         except TimeoutError as exc:
             collected = await _finish_process_group_termination(
                 process,
                 completion_task,
                 terminate_grace_seconds,
             )
+            process_group_termination_confirmed = True
             raise CaseCommandTimeout(
                 f"command timed out after {timeout_seconds} seconds",
                 _command_result(argv, *collected),
@@ -456,14 +936,14 @@ async def _run_argv(
                 completion_task,
                 terminate_grace_seconds,
             )
+            process_group_termination_confirmed = True
             raise
     finally:
         if not completion_task.done():
             completion_task.cancel()
         if (
             supervisor_registered
-            and process.returncode is not None
-            and completion_task.done()
+            and process_group_termination_confirmed
         ):
             _notify_process_supervisor("-", process.pid)
     return _command_result(argv, returncode, stdout_result, stderr_result)
@@ -496,6 +976,30 @@ def _require_positive_finite_seconds(value: float, label: str) -> None:
         raise ValueError(f"{label} must be a plain finite number")
     if value <= 0 or (type(value) is float and not math.isfinite(value)):
         raise ValueError(f"{label} must be positive and finite")
+
+
+def command_termination_timeout_seconds(terminate_grace_seconds: float) -> float:
+    _require_positive_finite_seconds(
+        terminate_grace_seconds,
+        "command termination grace",
+    )
+    if terminate_grace_seconds > MAX_COMMAND_TERMINATE_GRACE_SECONDS:
+        raise ValueError(
+            "command termination grace must not exceed "
+            f"{MAX_COMMAND_TERMINATE_GRACE_SECONDS:g} seconds"
+        )
+    return (
+        terminate_grace_seconds
+        + POST_KILL_DRAIN_TIMEOUT_SECONDS
+        + COMPLETION_CANCEL_GRACE_SECONDS
+    )
+
+
+def maximum_command_termination_budget_seconds() -> float:
+    return (
+        command_termination_timeout_seconds(MAX_COMMAND_TERMINATE_GRACE_SECONDS)
+        + safety_module.COMMAND_TASK_TERMINATION_MARGIN_SECONDS
+    )
 
 
 def _command_result(
@@ -558,30 +1062,80 @@ async def _terminate_process_group(
     ],
     grace_seconds: float,
 ) -> tuple[int, tuple[bytes, bool], tuple[bytes, bool]]:
+    loop = asyncio.get_running_loop()
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
+    terminate_deadline = loop.time() + grace_seconds
+    collected: tuple[int, tuple[bytes, bool], tuple[bytes, bool]] | None = None
     try:
-        return await asyncio.wait_for(
-            asyncio.shield(completion_task),
-            timeout=grace_seconds,
+        collected = await _await_completion_before(
+            completion_task,
+            terminate_deadline,
         )
     except TimeoutError:
+        pass
+    if collected is not None and await _wait_for_process_group_exit(
+        process.pid, terminate_deadline
+    ):
+        return collected
+
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    kill_deadline = loop.time() + POST_KILL_DRAIN_TIMEOUT_SECONDS
+    if collected is None:
         try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        try:
-            return await asyncio.wait_for(
-                asyncio.shield(completion_task),
-                timeout=POST_KILL_DRAIN_TIMEOUT_SECONDS,
+            collected = await _await_completion_before(
+                completion_task,
+                kill_deadline,
             )
         except TimeoutError as exc:
             await _cancel_completion_task(completion_task)
             raise ProcessCleanupError(
                 "process output/reap did not finish after SIGKILL"
             ) from exc
+    if not await _wait_for_process_group_exit(process.pid, kill_deadline):
+        if not completion_task.done():
+            await _cancel_completion_task(completion_task)
+        raise ProcessCleanupError("process group remained after SIGKILL")
+    return collected
+
+
+async def _await_completion_before(
+    completion_task: asyncio.Task[
+        tuple[int, tuple[bytes, bool], tuple[bytes, bool]]
+    ],
+    deadline: float,
+) -> tuple[int, tuple[bytes, bool], tuple[bytes, bool]]:
+    remaining = deadline - asyncio.get_running_loop().time()
+    if remaining <= 0:
+        raise TimeoutError
+    return await asyncio.wait_for(
+        asyncio.shield(completion_task),
+        timeout=remaining,
+    )
+
+
+async def _wait_for_process_group_exit(
+    process_group_id: int,
+    deadline: float,
+) -> bool:
+    while True:
+        try:
+            os.killpg(process_group_id, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            # Darwin can transiently report EPERM after the last process exits
+            # but before the process group becomes unobservable as ESRCH.
+            pass
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return False
+        await asyncio.sleep(min(0.01, remaining))
 
 
 async def _cancel_completion_task(task: asyncio.Task[object]) -> None:

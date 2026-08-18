@@ -54,9 +54,9 @@ python3 -m venv "$PWD/.venv"
 `run-operator-smoke` 和 `verify-operator-registration` wrapper 的解释器选择顺序为
 `DEPLOY_PYTHON` -> 项目 `.venv/bin/python` -> `python3`。`preflight` 在项目 `.venv`
 存在时也优先使用它。回退解释器仍必须自身具备 Harness 依赖；wrapper
-只选择解释器，不会临时安装 `httpx`、PyYAML 或 `websockets`。因此系统
+只选择解释器，不会临时安装 `httpx`、PyYAML、`websockets` 或 `aiokafka`。因此系统
 `python3` 回退只用于已事先准备同等依赖的非 canonical 环境；服务器 clean clone
-必须遵循权威场景，在首次 preflight/Smoke 前创建 `.venv`，验证三个模块可
+必须遵循权威场景，在首次 preflight/Smoke 前创建 `.venv`，验证四个模块可
 导入，并将 Python/依赖版本原子记录到当前 release 的 `preflight/`
 证据中。完整可执行命令只以
 [`milestone-2b-deploy.md`](../harness/scenarios/milestone-2b-deploy.md) 为准。
@@ -414,14 +414,18 @@ The template uses these invariants:
 - `restart: unless-stopped` lets Docker recover a failed process.
 - `/data/course` and `/data/result` are shared host mounts.
 - each endpoint has a unique `PLATFORM_INSTANCE_ID` and `PLATFORM_SERVICE_URL`.
+- `OPERATOR_REGISTRY_TOKEN` is supplied to Control and every operator as the registry
+  management credential. Canonical Compose requires an explicit value, and host
+  preflight rejects both a missing value and `local-development-registry-token`.
 - `PLATFORM_GPU_ID` records the routing label; `NVIDIA_VISIBLE_DEVICES` constrains the
   container to the same GPU.
 - `/ops/health` checks process liveness after model startup.
 - ASR always uses one Uvicorn worker per container; more capacity means more containers.
 
-Override image tags, host data roots and optional capacity variables through the
-environment before running Compose. Do not reuse an `instance_id` for two live
-containers.
+Set `OPERATOR_REGISTRY_TOKEN` in the invoking environment before rendering either
+Compose file; this deployment does not use `.env`. Override image tags, host data
+roots and optional capacity variables through the environment before running Compose.
+Do not reuse an `instance_id` for two live containers.
 
 逐卡启动顺序必须在 canonical 场景从发布变量到阶段 6 的同一 Bash 会话中进行，不能
 跳过阶段 1/2 后单独复制阶段 3。下列 `start_operator_profile` 在阶段 3 定义；不得把它

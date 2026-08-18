@@ -685,9 +685,18 @@ async def _cleanup_kafka_resources(group_id: str, *topics: str) -> bool:
 @contextmanager
 def _services(
     postgres: MilestonePostgres,
-) -> Iterator[tuple[UvicornProcess, UvicornProcess, UvicornProcess, dict[str, Any]]]:
+) -> Iterator[
+    tuple[
+        UvicornProcess,
+        UvicornProcess,
+        dict[str, UvicornProcess],
+        dict[str, Any],
+    ]
+]:
     suffix = uuid4().hex
-    control_port, orchestrator_port, stub_port = (_free_port() for _ in range(3))
+    control_port, orchestrator_port, asr_stub_port, text_stub_port = (
+        _free_port() for _ in range(4)
+    )
     redis_prefix = f"milestone-2a:{suffix}:"
     topic = f"algorithm.test.milestone2a.runtime.{suffix}"
     visual_command_topic = f"{topic}.visual.commands"
@@ -700,6 +709,25 @@ def _services(
         "PLATFORM_COURSE_ROOT": course_root,
         "PLATFORM_RESULT_ROOT": result_root,
     }
+    registry_token = f"milestone-2a-registry-{suffix}"
+    operator_stubs = {
+        "asr_offline": {
+            "instance_id": f"asr_offline-{suffix[:8]}",
+            "operator_code": "asr_offline",
+            "capabilities": ["asr_offline"],
+            "service_url": f"http://127.0.0.1:{asr_stub_port}",
+            "model_version": "asr-offline-stub-v1",
+            "api_version": "v1",
+        },
+        "text_analysis": {
+            "instance_id": f"text_analysis-{suffix[:8]}",
+            "operator_code": "text_analysis",
+            "capabilities": ["text_analysis"],
+            "service_url": f"http://127.0.0.1:{text_stub_port}",
+            "model_version": "text-analysis-stub-v1",
+            "api_version": "v1",
+        },
+    }
     control = UvicornProcess(
         "control_service.app.main:app",
         control_port,
@@ -708,16 +736,36 @@ def _services(
             "CONTROL_REDIS__URL": "redis://127.0.0.1:6379/14",
             "CONTROL_REDIS__KEY_PREFIX": redis_prefix,
             "CONTROL_REDIS__HEARTBEAT_TTL_SECONDS": "30",
+            "CONTROL_OPERATOR_REGISTRY__MANAGEMENT_TOKEN": registry_token,
+            "CONTROL_OPERATOR_REGISTRY__TRUSTED_SERVICE_URLS": json.dumps(
+                {
+                    stub["instance_id"]: stub["service_url"]
+                    for stub in operator_stubs.values()
+                }
+            ),
             "CONTROL_SERVICE__ENVIRONMENT": "test",
             **storage_env,
         },
     )
-    stub = UvicornProcess(
-        "tests.stubs.operator_stub:app",
-        stub_port,
-        {"MILESTONE_2A_STUB_DELAY_SECONDS": "0.25", **storage_env},
-        cwd=PLATFORM_ROOT,
-    )
+    stubs = {
+        operator_code: UvicornProcess(
+            "tests.stubs.operator_stub:app",
+            asr_stub_port if operator_code == "asr_offline" else text_stub_port,
+            {
+                "MILESTONE_2A_STUB_DELAY_SECONDS": "0.25",
+                "MILESTONE_2A_STUB_INSTANCE_ID": stub_metadata["instance_id"],
+                "MILESTONE_2A_STUB_OPERATOR_CODE": stub_metadata["operator_code"],
+                "MILESTONE_2A_STUB_CAPABILITIES": json.dumps(
+                    stub_metadata["capabilities"]
+                ),
+                "MILESTONE_2A_STUB_MODEL_VERSION": stub_metadata["model_version"],
+                "MILESTONE_2A_STUB_API_VERSION": stub_metadata["api_version"],
+                **storage_env,
+            },
+            cwd=PLATFORM_ROOT,
+        )
+        for operator_code, stub_metadata in operator_stubs.items()
+    }
     orchestrator_env = {
         "ORCHESTRATOR_POSTGRES__DSN": postgres.dsn,
         "ORCHESTRATOR_KAFKA__BOOTSTRAP_SERVERS": json.dumps(BOOTSTRAP_SERVERS),
@@ -751,14 +799,16 @@ def _services(
         "group": group,
         "control_url": f"http://127.0.0.1:{control_port}",
         "orchestrator_url": f"http://127.0.0.1:{orchestrator_port}",
-        "stub_url": f"http://127.0.0.1:{stub_port}",
+        "operator_registry_token": registry_token,
+        "operator_stubs": operator_stubs,
     }
     logs: list[str] = []
     original_error: BaseException | None = None
     try:
         control.start()
-        stub.start()
-        yield control, orchestrator, stub, metadata
+        for stub in stubs.values():
+            stub.start()
+        yield control, orchestrator, stubs, metadata
     except BaseException as exc:
         original_error = exc
         raise
@@ -787,7 +837,10 @@ def _services(
         cleanup_errors = _run_cleanup_steps(
             (
                 ("orchestrator.stop", orchestrator.stop),
-                ("stub.stop", stub.stop),
+                *(
+                    (f"{operator_code}_stub.stop", stub.stop)
+                    for operator_code, stub in stubs.items()
+                ),
                 ("control.stop", control.stop),
                 ("redis", cleanup_redis),
                 ("kafka", cleanup_kafka),
@@ -796,7 +849,7 @@ def _services(
         )
         logs.extend(
             run.stop_log or ""
-            for service in (orchestrator, stub, control)
+            for service in (orchestrator, *stubs.values(), control)
             for run in service.runs
         )
         if any("Traceback" in output for output in logs):
@@ -810,7 +863,7 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
     milestone2a_postgres: StrictMilestone2APostgres,
 ) -> None:
     engine = create_engine(milestone2a_postgres.dsn)
-    with _services(milestone2a_postgres) as (control, orchestrator, stub, metadata):
+    with _services(milestone2a_postgres) as (control, orchestrator, stubs, metadata):
         control_url = metadata["control_url"]
         evidence: dict[str, Any] = {
             "infrastructure": _infrastructure_evidence(engine),
@@ -996,18 +1049,21 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
         assert counts == {"task_type_count": 2, "node_count": 4}
         evidence["idempotency_counts"] = counts
 
-        for operator_code, capability in (
-            ("asr_offline", "asr_offline"),
-            ("text_analysis", "text_analysis"),
-        ):
-            instance_id = f"{operator_code}-{metadata['suffix'][:8]}"
+        for operator_code, stub_metadata in metadata["operator_stubs"].items():
             registration = httpx.post(
                 f"{control_url}/api/operator-instances/register",
+                headers={
+                    "X-Operator-Registry-Token": metadata[
+                        "operator_registry_token"
+                    ]
+                },
                 json={
-                    "instance_id": instance_id,
+                    "instance_id": stub_metadata["instance_id"],
                     "operator_code": operator_code,
-                    "capabilities": [capability],
-                    "service_url": metadata["stub_url"],
+                    "capabilities": stub_metadata["capabilities"],
+                    "service_url": stub_metadata["service_url"],
+                    "model_version": stub_metadata["model_version"],
+                    "api_version": stub_metadata["api_version"],
                     "declared_capacity": 1,
                     "labels": {"test": "milestone-2a"},
                 },
@@ -1017,7 +1073,16 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
             assert registration.json()["lifecycle"] == "OFFLINE"
             heartbeat = httpx.post(
                 f"{control_url}/api/operator-instances/heartbeat",
-                json={"instance_id": instance_id, "inflight": 0, "model_ready": True},
+                headers={
+                    "X-Operator-Registry-Token": metadata[
+                        "operator_registry_token"
+                    ]
+                },
+                json={
+                    "instance_id": stub_metadata["instance_id"],
+                    "inflight": 0,
+                    "model_ready": True,
+                },
                 timeout=5,
             )
             heartbeat.raise_for_status()
@@ -1072,18 +1137,31 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
             (item["capability"], item["instance_id"])
             for item in selected_instances
         } == {
-            ("asr_offline", f"asr_offline-{metadata['suffix'][:8]}"),
-            ("text_analysis", f"text_analysis-{metadata['suffix'][:8]}"),
+            (
+                stub_metadata["capabilities"][0],
+                stub_metadata["instance_id"],
+            )
+            for stub_metadata in metadata["operator_stubs"].values()
         }
         assert all(item["lease_id"] for item in selected_instances)
         assert all(
-            item["service_url"] == metadata["stub_url"]
+            item["service_url"]
+            == metadata["operator_stubs"][item["capability"]]["service_url"]
             for item in selected_instances
         )
 
-        calls_response = httpx.get(f"{metadata['stub_url']}/ops/calls", timeout=5)
-        calls_response.raise_for_status()
-        calls = calls_response.json()
+        calls_by_operator: dict[str, list[dict[str, Any]]] = {}
+        for operator_code, stub_metadata in metadata["operator_stubs"].items():
+            calls_response = httpx.get(
+                f"{stub_metadata['service_url']}/ops/calls", timeout=5
+            )
+            calls_response.raise_for_status()
+            calls_by_operator[operator_code] = calls_response.json()
+        calls = [
+            call
+            for operator_calls in calls_by_operator.values()
+            for call in operator_calls
+        ]
         assert len(calls) == 4
         asr_calls = [call for call in calls if call["node_code"] == "ASR_TRANSCRIPTION"]
         assert [call["task_id"] for call in asr_calls] == [
@@ -1094,6 +1172,12 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
             "ASR_TRANSCRIPTION",
             "COURSE_OVERVIEW",
         }
+        assert {
+            call["node_code"] for call in calls_by_operator["asr_offline"]
+        } == {"ASR_TRANSCRIPTION"}
+        assert {
+            call["node_code"] for call in calls_by_operator["text_analysis"]
+        } == {"COURSE_OVERVIEW"}
         assert all(
             node["result"]["stub"] is True
             for payload in completed_payloads.values()
@@ -1131,7 +1215,10 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
         )
         evidence["service_probes"] = {
             "control_health": control.runs[0].health_response,
-            "stub_health": stub.runs[0].health_response,
+            "stub_health": {
+                operator_code: stub.runs[0].health_response
+                for operator_code, stub in stubs.items()
+            },
             "orchestrator_health": [
                 first_orchestrator_run.health_response,
                 second_orchestrator_run.health_response,
@@ -1143,7 +1230,11 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
     assert len(orchestrator.runs) == 2
     assert [run.sequence for run in orchestrator.runs] == [1, 2]
     assert len({run.pid for run in orchestrator.runs}) == 2
-    all_runs = [*control.runs, *orchestrator.runs, *stub.runs]
+    all_runs = [
+        *control.runs,
+        *orchestrator.runs,
+        *(run for stub in stubs.values() for run in stub.runs),
+    ]
     for run in all_runs:
         _assert_clean_uvicorn_run(run)
     evidence["orchestrator_processes"] = [

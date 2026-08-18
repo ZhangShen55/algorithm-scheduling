@@ -24,6 +24,7 @@ services:
       CONFIG_PATH: /config/config.toml
       CONTROL_POSTGRES__DSN: postgresql+psycopg://algorithm:algorithm@postgres:5432/algorithm
       CONTROL_REDIS__URL: redis://redis:6379/0
+      CONTROL_OPERATOR_REGISTRY__MANAGEMENT_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
     volumes:
       - ../../control_service/config.toml:/config/config.toml:ro
       - ${COURSE_ROOT:-/data/course}:/data/course

@@ -15,7 +15,7 @@ from packages.operator_registry_client.client import (
     OperatorRuntimeStatus,
 )
 from packages.operator_registry_client.lifecycle import OperatorLifecycle
-from packages.operator_registry_client.ops import OperatorOpsStatus
+from packages.operator_registry_client.ops import OperatorOpsMetadata, OperatorOpsStatus
 
 ModelReadyProvider = Callable[[], bool]
 InflightProvider = Callable[[], int]
@@ -125,8 +125,21 @@ def install_operator_runtime(
         model_ready_provider=model_ready_provider,
         inflight_provider=inflight_provider,
     )
+    instance_id = os.getenv(
+        "PLATFORM_INSTANCE_ID",
+        f"{operator_code}-{socket.gethostname()}-{default_port}",
+    )
+    model_version = os.getenv("PLATFORM_MODEL_VERSION") or None
+    api_version = os.getenv("PLATFORM_API_VERSION") or None
+    metadata = OperatorOpsMetadata(
+        instance_id=instance_id,
+        operator_code=operator_code,
+        capabilities=list(capabilities),
+        model_version=model_version,
+        api_version=api_version,
+    )
     app.add_middleware(OperatorAdmissionMiddleware, runtime=runtime)
-    _add_missing_ops_routes(app, runtime)
+    _add_missing_ops_routes(app, runtime, metadata)
 
     enabled = (
         _env_bool("PLATFORM_REGISTRATION_ENABLED", default=False)
@@ -137,10 +150,9 @@ def install_operator_runtime(
         control_service_url = os.getenv("PLATFORM_CONTROL_SERVICE_URL", "").strip()
         if not control_service_url:
             raise ValueError("启用算子注册时必须配置 PLATFORM_CONTROL_SERVICE_URL")
-        instance_id = os.getenv(
-            "PLATFORM_INSTANCE_ID",
-            f"{operator_code}-{socket.gethostname()}-{default_port}",
-        )
+        management_token = os.getenv("PLATFORM_OPERATOR_REGISTRY_TOKEN", "").strip()
+        if not management_token:
+            raise ValueError("启用算子注册时必须配置 PLATFORM_OPERATOR_REGISTRY_TOKEN")
         service_url = os.getenv(
             "PLATFORM_SERVICE_URL",
             f"http://127.0.0.1:{default_port}",
@@ -153,8 +165,9 @@ def install_operator_runtime(
                 capabilities=capabilities,
                 service_url=service_url,
                 declared_capacity=configured_capacity,
-                model_version=os.getenv("PLATFORM_MODEL_VERSION") or None,
-                api_version=os.getenv("PLATFORM_API_VERSION") or None,
+                management_token=management_token,
+                model_version=model_version,
+                api_version=api_version,
                 labels=_env_labels(),
                 heartbeat_interval_seconds=float(
                     os.getenv("PLATFORM_HEARTBEAT_INTERVAL_SECONDS", "5")
@@ -171,7 +184,11 @@ def install_operator_runtime(
     return runtime
 
 
-def _add_missing_ops_routes(app: FastAPI, runtime: OperatorRuntime) -> None:
+def _add_missing_ops_routes(
+    app: FastAPI,
+    runtime: OperatorRuntime,
+    metadata: OperatorOpsMetadata,
+) -> None:
     existing = {
         path
         for route in app.routes
@@ -182,6 +199,12 @@ def _add_missing_ops_routes(app: FastAPI, runtime: OperatorRuntime) -> None:
         @app.get("/ops/health", tags=["operator-ops"])
         async def operator_health() -> dict[str, str]:
             return {"status": "alive"}
+
+    if "/ops/metadata" not in existing:
+
+        @app.get("/ops/metadata", tags=["operator-ops"])
+        async def operator_metadata() -> OperatorOpsMetadata:
+            return metadata
 
     if "/ops/status" not in existing:
 

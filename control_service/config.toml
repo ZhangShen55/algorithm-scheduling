@@ -47,6 +47,35 @@ default_lease_ttl_seconds = 60
 max_lease_ttl_seconds = 3600
 # 将心跳摘要写入审计记录的最小间隔秒数。
 heartbeat_audit_interval_seconds = 60
+# 仅供直接本地调试的开发令牌；Canonical Compose 必须通过环境变量覆盖且预检会拒绝此值。
+management_token = "local-development-registry-token"
+
+[operator_registry.trusted_service_urls]
+# 每个实例只允许注册为其部署配置中的精确 HTTP origin，禁止请求自选探测目标。
+asr-offline-gpu0 = "http://asr-offline-gpu0:8083"
+asr-offline-gpu1 = "http://asr-offline-gpu1:8083"
+asr-offline-gpu2 = "http://asr-offline-gpu2:8083"
+asr-online-gpu0 = "http://asr-online-gpu0:8084"
+asr-online-gpu1 = "http://asr-online-gpu1:8084"
+asr-online-gpu2 = "http://asr-online-gpu2:8084"
+ocr-gpu0 = "http://ocr-gpu0:8866"
+ocr-gpu1 = "http://ocr-gpu1:8866"
+ocr-gpu2 = "http://ocr-gpu2:8866"
+vbas-gpu0 = "http://vbas-gpu0:8981"
+vbas-gpu1 = "http://vbas-gpu1:8981"
+vbas-gpu2 = "http://vbas-gpu2:8981"
+facerec-gpu0 = "http://facerec-gpu0:8000"
+facerec-gpu1 = "http://facerec-gpu1:8000"
+facerec-gpu2 = "http://facerec-gpu2:8000"
+screen-det-gpu0 = "http://screen-det-gpu0:8880"
+screen-det-gpu1 = "http://screen-det-gpu1:8880"
+screen-det-gpu2 = "http://screen-det-gpu2:8880"
+ppt-slice-cpu0 = "http://ppt-slice-cpu0:9001"
+ppt-slice-cpu1 = "http://ppt-slice-cpu1:9001"
+ppt-slice-cpu2 = "http://ppt-slice-cpu2:9001"
+text-analysis-cpu0 = "http://text-analysis-cpu0:8000"
+text-analysis-cpu1 = "http://text-analysis-cpu1:8000"
+text-analysis-cpu2 = "http://text-analysis-cpu2:8000"
 
 [features]
 # 本次交付允许 A 服务提交的离线任务类型；动态可用性仍由算子注册状态决定。

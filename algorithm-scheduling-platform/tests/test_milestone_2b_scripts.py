@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import io
 import json
@@ -544,6 +545,7 @@ def _base_environment(fake_bin: Path, **overrides: str) -> dict[str, str]:
             "GIT_SHA": "a" * 40,
             "GIT_STATUS": "",
             "EXPECTED_GIT_SHA": "a" * 40,
+            "OPERATOR_REGISTRY_TOKEN": "test-explicit-registry-token",
             "SS_OUTPUT": "",
             "DOCKER_PS_IDS": "",
             "DOCKER_INSPECT_FIXTURES": "{}",
@@ -879,6 +881,80 @@ def test_gpu_framework_default_probe_interpreter_contract(
     assert argv[:2] == [expected_interpreter, "-c"]
 
 
+def test_gpu_evidence_atomic_write_removes_final_link_when_directory_fsync_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    namespace = runpy.run_path(str(SCRIPTS / "verify-gpu-instance"))
+    output = tmp_path / "gpu-evidence.json"
+    real_fsync = os.fsync
+    directory_fsync_failed = False
+
+    def fail_first_directory_fsync(descriptor: int) -> None:
+        nonlocal directory_fsync_failed
+        if not directory_fsync_failed and output.exists() and os.path.isdir(descriptor):
+            directory_fsync_failed = True
+            raise OSError("injected directory fsync failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", fail_first_directory_fsync)
+
+    with pytest.raises(OSError, match="injected directory fsync failure"):
+        namespace["_atomic_write_once"](output, {"status": "PASS"})
+
+    assert directory_fsync_failed is True
+    assert not output.exists()
+    assert not output.is_symlink()
+
+
+def test_gpu_evidence_main_resets_pass_before_writing_late_failure_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    namespace = runpy.run_path(str(SCRIPTS / "verify-gpu-instance"))
+    release_sha = "a" * 40
+    output = tmp_path / "releases" / "test" / release_sha / "gpu-instances" / "gpu.json"
+    output.parent.mkdir(parents=True)
+    arguments = argparse.Namespace(
+        container="asr-offline-gpu0",
+        instance_id="asr-offline-gpu0",
+        physical_gpu=0,
+        process_name="asr_offline",
+        output=output,
+        trigger_file=None,
+        probe_file=None,
+        sample_window=1.0,
+        sample_interval=0.1,
+        trigger_timeout=10.0,
+        assert_stopped=False,
+        evidence=None,
+        stop_timeout=1.0,
+        command_timeout=1.0,
+    )
+    writes: list[dict[str, Any]] = []
+
+    def verify_running(
+        _arguments: argparse.Namespace,
+        report: dict[str, Any],
+    ) -> None:
+        report["release_sha"] = release_sha
+
+    def fail_then_write(path: Path, payload: dict[str, Any]) -> None:
+        writes.append(dict(payload))
+        if len(writes) == 1:
+            raise OSError("injected late publication failure")
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    main_globals = namespace["main"].__globals__
+    monkeypatch.setitem(main_globals, "_parse_args", lambda: arguments)
+    monkeypatch.setitem(main_globals, "_verify_running", verify_running)
+    monkeypatch.setitem(main_globals, "_atomic_write_once", fail_then_write)
+
+    assert namespace["main"]() == 2
+    assert [write["status"] for write in writes] == ["PASS", "FAIL"]
+    assert json.loads(output.read_text(encoding="utf-8"))["status"] == "FAIL"
+
+
 def _wait_for_path(path: Path, process: subprocess.Popen[str]) -> None:
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
@@ -1085,6 +1161,34 @@ def test_preflight_accepts_exactly_three_container_visible_gpus(
         "--query-gpu=index,uuid",
         "--format=csv,noheader,nounits",
     ] in _commands(environment)
+
+
+def test_preflight_rejects_missing_operator_registry_token_before_docker(
+    fake_bin: Path,
+) -> None:
+    environment = _base_environment(fake_bin)
+    environment.pop("OPERATOR_REGISTRY_TOKEN")
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode != 0
+    assert "OPERATOR_REGISTRY_TOKEN is required" in completed.stderr
+    assert _commands(environment) == []
+
+
+def test_preflight_rejects_known_development_registry_token_before_docker(
+    fake_bin: Path,
+) -> None:
+    environment = _base_environment(
+        fake_bin,
+        OPERATOR_REGISTRY_TOKEN="local-development-registry-token",
+    )
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode != 0
+    assert "development registry token is forbidden" in completed.stderr
+    assert _commands(environment) == []
 
 
 def test_preflight_explicit_host_stage_matches_the_default(
@@ -1857,6 +1961,14 @@ def test_preflight_fails_closed_when_the_host_socket_parser_exits_nonzero(
     scripts.mkdir(parents=True)
     shutil.copy2(SCRIPTS / "preflight", scripts / "preflight")
     shutil.copy2(SCRIPTS / "preflight_checks.py", scripts / "preflight_checks.py")
+    shutil.copy2(
+        SCRIPTS / "deployment_contracts.py",
+        scripts / "deployment_contracts.py",
+    )
+    shutil.copy2(
+        PLATFORM_ROOT / "deploy/docker-compose.operators.yml",
+        project_root / "deploy/docker-compose.operators.yml",
+    )
     parser_called = tmp_path / "host-sockets.called"
     venv_bin = project_root / ".venv/bin"
     venv_bin.mkdir(parents=True)

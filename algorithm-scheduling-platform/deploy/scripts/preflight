@@ -4,6 +4,7 @@ set -euo pipefail
 platform_root="$(cd "$(dirname "$0")/../.." && pwd)"
 deploy_root="${platform_root}/deploy"
 preflight_checks="${deploy_root}/scripts/preflight_checks.py"
+deployment_contracts="${deploy_root}/scripts/deployment_contracts.py"
 if [[ -x "${platform_root}/.venv/bin/python" ]]; then
   preflight_python="${platform_root}/.venv/bin/python"
 else
@@ -23,16 +24,26 @@ normalize_git_sha() {
 }
 
 run_host() {
+operator_registry_token="${OPERATOR_REGISTRY_TOKEN:-}"
+[[ -n "$operator_registry_token" ]] || fail "OPERATOR_REGISTRY_TOKEN is required"
+[[ "$operator_registry_token" != "local-development-registry-token" ]] || fail \
+  "development registry token is forbidden for canonical deployment"
+
 min_root_free_gib="${MIN_ROOT_FREE_GIB:-100}"
 [[ "$min_root_free_gib" =~ ^[0-9]+$ ]] || fail "MIN_ROOT_FREE_GIB must be a non-negative integer"
 root_available_kib="$(df -Pk / | awk 'NR == 2 {print $4}')"
 [[ "$root_available_kib" =~ ^[0-9]+$ ]] || fail "cannot determine root disk free space"
+"$preflight_python" "$deployment_contracts" root-disk \
+  --available-kib "$root_available_kib" --minimum-gib "$min_root_free_gib" || exit 1
 minimum_kib=$((min_root_free_gib * 1024 * 1024))
 (( root_available_kib >= minimum_kib )) || fail \
   "root disk has ${root_available_kib} KiB free; ${min_root_free_gib} GiB required"
 printf 'preflight: OK: root disk free space\n'
 
-[[ "$(uname -m)" == "x86_64" ]] || fail "server architecture must be x86_64"
+host_architecture="$(uname -m)"
+"$preflight_python" "$deployment_contracts" architecture \
+  --host "$host_architecture" || exit 1
+[[ "$host_architecture" == "x86_64" ]] || fail "server architecture must be x86_64"
 printf 'preflight: OK: x86_64 architecture\n'
 
 command -v docker >/dev/null 2>&1 || fail "docker command is unavailable"
@@ -50,6 +61,8 @@ printf 'preflight: OK: NVIDIA runtime exposes exactly 3 GPUs\n'
 
 course_root="${COURSE_ROOT:-/data/course}"
 result_root="${RESULT_ROOT:-/data/result}"
+"$preflight_python" "$deployment_contracts" writable-directory \
+  "$course_root" "$result_root" || exit 1
 for required_directory in "$course_root" "$result_root"; do
   [[ -d "$required_directory" ]] || fail "required directory is missing: ${required_directory}"
   python3 - "$required_directory" <<'PY' || fail \
@@ -87,6 +100,8 @@ if ! operator_compose_json="$(docker compose --project-directory "$deploy_root" 
   -f "$operator_compose" --profile '*' config --format json)"; then
   fail "operator Compose rendering failed"
 fi
+"$preflight_python" "$deployment_contracts" operator-compose-yaml \
+  "$operator_compose" || exit 1
 if ! required_ports="$("$preflight_python" "$preflight_checks" host-compose \
   --course-root "$course_root" --result-root "$result_root" \
   <(printf '%s' "$platform_compose_json") \
@@ -94,6 +109,23 @@ if ! required_ports="$("$preflight_python" "$preflight_checks" host-compose \
   exit 1
 fi
 printf 'preflight: OK: authoritative Compose definitions\n'
+
+if ! all_container_ids="$(docker ps -aq)"; then
+  fail "existing container enumeration failed"
+fi
+if [[ -n "$all_container_ids" ]]; then
+  read -r -a all_container_array <<<"$(printf '%s\n' "$all_container_ids" | tr '\n' ' ')"
+  if ! all_container_inspection="$(docker inspect "${all_container_array[@]}")"; then
+    fail "existing container inspection failed"
+  fi
+else
+  all_container_inspection='[]'
+fi
+"$preflight_python" "$deployment_contracts" existing-containers \
+  <(printf '%s' "$all_container_inspection") \
+  <(printf '%s' "$platform_compose_json") \
+  <(printf '%s' "$operator_compose_json") || exit 1
+printf 'preflight: OK: no unknown algorithm-prefixed containers\n'
 
 authorized_endpoints="${AUTHORIZED_OCCUPIED_ENDPOINTS:-}"
 read -r -a authorized_endpoint_array <<<"$authorized_endpoints"

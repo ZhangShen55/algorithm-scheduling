@@ -58,6 +58,7 @@ def _make_workspace(tmp_path: Path) -> Path:
     scripts.mkdir(parents=True)
     for name in (
         "build-images",
+        "deployment_contracts.py",
         "verify-operator-build-contexts",
         "verify-model-assets",
         "model_asset_transaction.py",
@@ -72,7 +73,11 @@ def _make_workspace(tmp_path: Path) -> Path:
         project = workspace / context
         (project / dockerfile).parent.mkdir(parents=True, exist_ok=True)
         (project / dockerfile).write_text(
-            "FROM scratch\nCOPY app/ /app/\n", encoding="utf-8"
+            "FROM scratch\n"
+            "COPY app/ /app/\n"
+            "COPY wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl "
+            "/tmp/client.whl\n",
+            encoding="utf-8",
         )
         (project / "app").mkdir()
         (project / "app/main.py").write_text("app = object()\n", encoding="utf-8")
@@ -114,6 +119,8 @@ exit 64
 import json, os, sys
 if sys.argv[1:2] and sys.argv[1].endswith("verify-operator-build-contexts"):
     os.execv({sys.executable!r}, [{sys.executable!r}, *sys.argv[1:]])
+if sys.argv[1:2] and sys.argv[1].endswith("deployment_contracts.py"):
+    os.execv({sys.executable!r}, [{sys.executable!r}, *sys.argv[1:]])
 if sys.argv[1:2] == ["-"]:
     target, payload = sys.argv[2:]
     tags = json.loads(payload)
@@ -141,6 +148,8 @@ if args[:2] == ["image", "inspect"]:
         print(os.environ.get("INSPECT_REPO_TAGS", json.dumps([*extra, image])))
     elif "revision" in format_value:
         print(os.environ.get("INSPECT_REVISION", os.environ["GIT_SHA"]))
+    elif "Architecture" in format_value:
+        print(os.environ.get("INSPECT_ARCHITECTURE", "amd64"))
     else:
         raise SystemExit(64)
     raise SystemExit(0)
@@ -284,7 +293,7 @@ def test_build_images_runs_from_arbitrary_cwd_and_verifies_every_image(
         expected_build.append(str(workspace / context))
         assert build == expected_build
     assert sum("--secret" in build for build in builds) == 1
-    assert sum(command[:3] == ["docker", "image", "inspect"] for command in commands) == 16
+    assert sum(command[:3] == ["docker", "image", "inspect"] for command in commands) == 24
     assert (fake_bin / "df-count").read_text(encoding="utf-8") == "9"
 
 

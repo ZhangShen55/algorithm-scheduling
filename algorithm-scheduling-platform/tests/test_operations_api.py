@@ -22,6 +22,9 @@ from packages.platform_common.repository import (
 )
 from packages.platform_contracts.status import NodeStatus, Priority, TaskType
 
+REGISTRY_TOKEN = "operations-registry-token"
+REGISTRY_HEADERS = {"X-Operator-Registry-Token": REGISTRY_TOKEN}
+
 
 class OperationsRepository:
     def __init__(self) -> None:
@@ -92,6 +95,7 @@ class OperationsRegistry:
             service_url="http://127.0.0.1:18082",
             declared_capacity=2,
             labels={"gpu": "0"},
+            inflight=2,
         )
 
     def register(self, instance: OperatorInstance) -> OperatorInstance:
@@ -112,6 +116,10 @@ class OperationsRegistry:
 
     def list_instances(self) -> list[OperatorInstance]:
         return [self.instance]
+
+    def active_lease_count(self, instance_id: str) -> int:
+        assert instance_id == self.instance.instance_id
+        return 0
 
     def set_lifecycle(
         self,
@@ -142,6 +150,7 @@ def _client(tmp_path: Path) -> TestClient:
     settings = PlatformSettings(
         course_root=tmp_path / "course",
         result_root=tmp_path / "result",
+        operator_registry_token=REGISTRY_TOKEN,
     )
     return TestClient(
         create_control_app(
@@ -167,14 +176,46 @@ def test_operations_course_inspection_uses_real_not_found_status(tmp_path: Path)
 def test_operations_lists_and_drains_operator_instance(tmp_path: Path) -> None:
     with _client(tmp_path) as client:
         listed = client.get("/ops/operator-instances")
-        drained = client.post("/ops/operator-instances/ocr-gpu0/drain")
-        missing = client.post("/ops/operator-instances/missing/drain")
+        unauthenticated = client.post("/ops/operator-instances/ocr-gpu0/drain")
+        wrong_token = client.post(
+            "/ops/operator-instances/ocr-gpu0/drain",
+            headers={"X-Operator-Registry-Token": "wrong-registry-token"},
+        )
+        drained = client.post(
+            "/ops/operator-instances/ocr-gpu0/drain",
+            headers=REGISTRY_HEADERS,
+        )
+        missing = client.post(
+            "/ops/operator-instances/missing/drain",
+            headers=REGISTRY_HEADERS,
+        )
 
     assert listed.status_code == 200
     assert listed.json()[0]["instance_id"] == "ocr-gpu0"
+    assert unauthenticated.status_code == 401
+    assert wrong_token.status_code == 401
     assert drained.status_code == 200
     assert drained.json()["lifecycle"] == "DRAINING"
     assert missing.status_code == 404
+
+
+def test_operations_operator_snapshot_exposes_capacity_mismatch(tmp_path: Path) -> None:
+    with _client(tmp_path) as client:
+        response = client.get("/ops/operator-instances/snapshot")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "instance_id": "ocr-gpu0",
+            "operator_code": "ocr",
+            "lifecycle": "ONLINE",
+            "model_ready": True,
+            "declared_capacity": 2,
+            "reported_inflight": 2,
+            "active_lease_count": 0,
+            "capacity_mismatch": True,
+        }
+    ]
 
 
 def test_operations_queue_snapshot_exposes_priority_capability_and_outbox(

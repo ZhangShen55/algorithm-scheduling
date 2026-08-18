@@ -37,7 +37,7 @@
 
 当前里程碑 2B 部署不使用 `.env`。用户已批准把部署模板、服务器登录合同和受控服务默认值提交到 Git；当前固定登录合同是 `root@192.168.29.11:22`，密码为 `kedacom_123`。该批准是明确例外，不表示模型解密密钥、Deploy Key/私钥、人脸原图、课程媒体、大型 fixture 或外部可信模型 manifest 可以进入 Git、Markdown、报告或镜像上下文。以后增加凭据时必须先判断是否属于已批准例外，不能笼统套用“所有敏感值只允许环境变量”或“所有密码都不得写入 Git”的旧规则。
 
-`.env` 与 `.venv` 含义不同：前者是本里程碑不使用的部署配置文件，后者是 Harness Python 运行环境。里程碑 2B 的 clean clone 必须先准备项目 `.venv`，从 `pyproject.toml` 安装基础依赖，验证 `httpx`、PyYAML 和 `websockets` 可导入，并在任何 preflight 或 Smoke 前把 Python/依赖版本原子写入当前 release 的 `preflight` 证据。
+`.env` 与 `.venv` 含义不同：前者是本里程碑不使用的部署配置文件，后者是 Harness Python 运行环境。里程碑 2B 的 clean clone 必须先准备项目 `.venv`，从 `pyproject.toml` 安装基础依赖，验证 `httpx`、PyYAML、`websockets` 和 `aiokafka` 可导入，并在任何 preflight 或 Smoke 前把 Python/依赖版本原子写入当前 release 的 `preflight` 证据。
 
 由于 lifespan 会启动后台循环，`orchestrator-service` 和 `vision-orchestrator-service` 必须使用一个 Uvicorn worker。初始部署中的 `control-service` 和 `online-gateway-service` 也使用一个 worker；取得基于消息代理的运行证据后，再通过增加容器进行扩容。
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from typing import Any
 
@@ -21,8 +22,27 @@ app = FastAPI(title="milestone-2a-operator-stub")
 
 
 @app.get("/health")
+@app.get("/ops/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/ops/metadata")
+async def metadata() -> dict[str, object]:
+    capabilities = json.loads(
+        os.environ.get("MILESTONE_2A_STUB_CAPABILITIES", "[]")
+    )
+    if not isinstance(capabilities, list) or not all(
+        isinstance(capability, str) for capability in capabilities
+    ):
+        raise RuntimeError("MILESTONE_2A_STUB_CAPABILITIES must be a JSON string list")
+    return {
+        "instance_id": os.environ.get("MILESTONE_2A_STUB_INSTANCE_ID"),
+        "operator_code": os.environ.get("MILESTONE_2A_STUB_OPERATOR_CODE"),
+        "capabilities": capabilities,
+        "model_version": os.environ.get("MILESTONE_2A_STUB_MODEL_VERSION"),
+        "api_version": os.environ.get("MILESTONE_2A_STUB_API_VERSION"),
+    }
 
 
 @app.post("/execute")

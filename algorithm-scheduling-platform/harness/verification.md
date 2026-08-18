@@ -5,6 +5,61 @@ platform root, use the explicit workspace import path below; this prevents a
 bare top-level `tests` package from another checkout from shadowing the
 platform tests:
 
+## 2026-08-18 8A.2 验证合同
+
+8A.2 只验证真实执行证据合同、安全有界 runner 和 DEP/GPU/REG/INF 基础执行器。
+执行正式批次时必须显式要求清理：
+
+```bash
+.venv/bin/python scripts/run_milestone_2b_case_batch.py \
+  --catalog deploy/milestone-2b-case-catalog.yaml \
+  --release-root "$RELEASE_ROOT" --phase deployment \
+  --require-cleanup --require-all-selected
+```
+
+本机验证命令和当前结果：
+
+```bash
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/test_milestone_2b_foundation_case_runners.py
+# 498 passed, 3 skipped；跳过项只要求本机不存在的显式令牌/Canonical FaceRec GPU 容器
+
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/integration/test_milestone_2b_infrastructure_case_runners.py \
+  tests/test_harness_consistency.py
+# 10 passed；包含真实隔离 PostgreSQL/Kafka 证据
+
+.venv/bin/python -m pytest -q tests/test_milestone_2b_case_runner.py
+# 96 passed
+
+.venv/bin/ruff check scripts/milestone_2b_case_runners \
+  tests/test_milestone_2b_foundation_case_runners.py
+# All checks passed
+
+MYPYPATH="$PWD/.." .venv/bin/python -m mypy --strict \
+  scripts/milestone_2b_case_runners/infrastructure.py \
+  scripts/milestone_2b_case_runners/process.py \
+  scripts/milestone_2b_case_runners/safety.py \
+  scripts/milestone_2b_case_runners/cleanup.py
+# Success: no issues found in 4 source files
+
+.venv/bin/python -m mypy
+# Success: no issues found in 26 source files
+
+OPERATOR_REGISTRY_TOKEN='verification-explicit-registry-token' \
+  docker compose -f deploy/docker-compose.platform.yml config --quiet
+OPERATOR_REGISTRY_TOKEN='verification-explicit-registry-token' \
+  docker compose -f deploy/docker-compose.operators.yml --profile '*' config --quiet
+```
+
+INF-001 使用真实但受控不可达的 PostgreSQL endpoint；INF-008~012 在本机使用隔离
+`_test` PostgreSQL 数据库和真实 Kafka topic/group。INF-014/015 的生产路径只通过
+Canonical FaceRec 容器执行，本机因缺少显式令牌和该 GPU 容器而跳过 3 个集成项；这不等于
+远程三卡验收，且生产 runner 在缺少前置条件时仍返回失败。`REG-017` 仍为
+`component-level`，证据必须保留
+`running_e2e_validated: false`。8A.2 不包含新 release 上的 FaceRec 三实例、18 个 GPU 实例、
+deployment phase 真实执行或业务泳道；这些从 8A.3 开始取证。
+
 ```bash
 PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q <test-paths>
 ```

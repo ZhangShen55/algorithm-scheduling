@@ -17,7 +17,10 @@ from packages.platform_common.redis_operator_registry import RedisOperatorRegist
 from packages.platform_common.repository import CourseRepository
 
 from ..core.config import ControlSettings
-from .audited_operator_registry import AuditedOperatorRegistry
+from .audited_operator_registry import (
+    AuditedOperatorRegistry,
+    HttpOperatorHealthChecker,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -511,6 +514,11 @@ class ControlRuntime:
                     self.audit_repository,
                     heartbeat_audit_interval_seconds=(
                         self.settings.operator_registry.heartbeat_audit_interval_seconds
+                    ),
+                    health_checker=HttpOperatorHealthChecker(
+                        trusted_service_urls=(
+                            self.settings.operator_registry.trusted_service_urls
+                        )
                     ),
                 )
             audit_error_getter: Callable[[], str | None] | None = None

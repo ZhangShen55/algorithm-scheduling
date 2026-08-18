@@ -12,6 +12,8 @@ check_root_disk() {
   local available_kib
   available_kib="$(df -Pk / | awk 'NR == 2 {print $4}')"
   [[ "$available_kib" =~ ^[0-9]+$ ]] || fail "cannot determine root disk free space"
+  "$deployment_contracts" root-disk \
+    --available-kib "$available_kib" --minimum-gib "$minimum_gib" || exit 1
   local minimum_kib=$((minimum_gib * 1024 * 1024))
   (( available_kib >= minimum_kib )) || fail \
     "root disk has ${available_kib} KiB free; ${minimum_gib} GiB required"
@@ -26,6 +28,10 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 platform_root="$(cd -- "${script_dir}/../.." && pwd -P)"
 workspace_root="$(cd -- "${platform_root}/.." && pwd -P)"
 matrix="${platform_root}/deploy/operator-images.tsv"
+deployment_contracts="${script_dir}/deployment_contracts.py"
+[[ -x "$deployment_contracts" ]] || fail \
+  "deployment contract validator is missing or not executable: ${deployment_contracts}"
+"$deployment_contracts" release-tag "$version_tag" || exit 1
 
 : "${EXPECTED_GIT_SHA:?EXPECTED_GIT_SHA is required and must match the release commit}"
 : "${MODEL_ASSET_SOURCE:?MODEL_ASSET_SOURCE is required and must be outside the Git workspace}"
@@ -39,7 +45,8 @@ git_sha="$(git -C "$workspace_root" rev-parse HEAD)"
 "${script_dir}/verify-model-assets" \
   --source "$MODEL_ASSET_SOURCE" \
   --workspace "$workspace_root"
-"${script_dir}/verify-operator-build-contexts" --verify-git-clean-included
+"${script_dir}/verify-operator-build-contexts" \
+  --verify-git-clean-included --verify-registry-wheel
 check_root_disk
 cd -- "$platform_root"
 python3 scripts/build_and_stage_operator_registry_wheel.py
@@ -93,6 +100,9 @@ PY
     --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image_ref")"
   [[ "$inspected_revision" == "$git_sha" ]] || fail \
     "image ${image_ref} revision label is ${inspected_revision}; expected ${git_sha}"
+  inspected_architecture="$(docker image inspect --format '{{.Architecture}}' "$image_ref")"
+  "$deployment_contracts" architecture \
+    --host x86_64 --image-architecture "$inspected_architecture" || exit 1
 done < "$matrix"
 
 printf 'build-images: PASS: eight images built and inspected at %s\n' "$git_sha"

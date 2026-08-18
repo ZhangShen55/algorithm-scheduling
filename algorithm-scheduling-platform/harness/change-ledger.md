@@ -1,5 +1,41 @@
 # Change Ledger
 
+## 2026-08-18 - 8A.2 真实执行证据与基础执行器闭环
+
+- 先前状态：243 条用例已有稳定目录和真实执行报告合同，但 case runner 的超时回收、
+  资源归属、部分注册/GPU/基础设施决定性事实和管理面鉴权尚未全部 fail closed。
+- 实现内容：实装安全有界的子进程组监督、超时 TERM/KILL 和后代清理、write-once
+  执行证据、按 run/case 隔离的清理合同，以及 DEP/GPU/REG/INF 76 条显式 checker。
+  INF-008~012 使用隔离 `_test` PostgreSQL、真实 Kafka topic/group、生产 Repository 和
+  adapter；REG-014 从 PostgreSQL 恢复持久 DRAINING；GPU-015 绑定容器内 CUDA runtime、
+  3090 身份和真实活动证据。
+- 信任边界：Canonical Compose 不再使用仓库已知的注册令牌，必须显式传入
+  `OPERATOR_REGISTRY_TOKEN`；host preflight 在 Docker 操作前拒绝缺失值和
+  `local-development-registry-token`。`/ops/operator-instances/{instance_id}/drain`
+  与其他生命周期写接口使用同一常量时间令牌鉴权。
+- 决定性事实修正：INF-001 使用保留但未监听的本机端口建立真实 SQLAlchemy engine，
+  分别通过生产 `ControlReadinessChecker` 和 `CourseRepository`/`OrchestratorRuntime`
+  观察 PostgreSQL 连接失败。INF-014/015 不再依赖宿主 Conda，而是通过 Canonical
+  Compose 唯一解析 `facerec-gpu0`，在容器中使用 scenario 隔离 MongoDB、错误凭据、
+  生产人物持久化、候选查询和识别接线；正确管理凭据只用于零写入复查和当前隔离库清理。
+  FaceRec 探针使用唯一显式结果帧，允许普通运行日志，但拒绝零帧、多帧、畸形 JSON、
+  非对象及 `NaN`/`Infinity`。PostgreSQL 与 MongoDB 资源类型和清理后端严格分离。
+- Clean-clone 合同：`aiokafka` 是正式 case runner 的基础依赖，已从 optional extra 移入
+  平台基础依赖；发布前的 Python 证据同时验证 `httpx`、PyYAML、`websockets` 和
+  `aiokafka`。八个算子继续使用独立构建的轻量注册客户端 wheel，不继承平台依赖。
+- 验证证据：Foundation runner `498 passed, 3 skipped`，case runner `96 passed`，
+  Harness consistency 与真实 PostgreSQL/Kafka 基础设施用例合计 `10 passed`；Ruff、
+  严格 Mypy（本轮 4 个 runner 文件及配置内 26 个公共包文件）、compileall 和
+  `git diff --check` 通过。3 个跳过项仅因本机没有显式注册令牌和 Canonical FaceRec
+  GPU 容器；生产 checker 在同样条件下仍 fail closed。规格符合性与代码质量复审最终
+  均为 `APPROVED`。
+- 执行要求：正式 case batch 必须使用 `--require-cleanup`，并保留失败证据。
+  `REG-017` 仍标记 `verification_scope=component-level` 和
+  `running_e2e_validated=false`，不冒充常驻服务 E2E。
+- 完成边界：本条只关闭 OpenSpec `8A.2`。未在远程三卡服务器的新不可变
+  release 上重跑 FaceRec 三实例、18 个 GPU 实例或 deployment phase；这些仍属于
+  `8A.3`。当前也没有完成 PPT/ASR/视觉/在线业务泳道或 243 条最终总验收。
+
 ## 2026-08-18 - 里程碑 2B 真实业务泳道与完整验收分期
 
 - 先前状态：三卡现场报告为 83 通过、6 失败、243 条“未执行及原因”；FaceRec 三实例因

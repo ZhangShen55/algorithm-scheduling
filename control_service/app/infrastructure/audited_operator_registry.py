@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from threading import Lock
-from typing import Protocol
+from typing import Protocol, cast
+from urllib.parse import urlsplit
+
+import httpx
 
 from packages.platform_common.operator_audit_repository import OperatorInstanceEvent
+from packages.platform_common.operator_operations import OperatorOperationsRegistry
 from packages.platform_common.operator_registry import (
     CapacityLease,
     OperatorInstance,
@@ -16,8 +21,97 @@ from packages.platform_common.operator_registry import (
 logger = logging.getLogger(__name__)
 
 
+def canonical_operator_origin(value: str) -> str:
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except (TypeError, ValueError) as exc:
+        raise ValueError("算子服务地址必须是显式端口的 HTTP/HTTPS origin") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.hostname is None
+        or port is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("算子服务地址必须是显式端口的 HTTP/HTTPS origin")
+    host = parsed.hostname.lower()
+    if ":" in host:
+        host = f"[{host}]"
+    return f"{parsed.scheme.lower()}://{host}:{port}"
+
+
+class OperatorHealthChecker(Protocol):
+    def check(self, instance: OperatorInstance) -> bool: ...
+
+
+class HttpOperatorHealthChecker:
+    def __init__(
+        self,
+        *,
+        timeout_seconds: float = 2.0,
+        trusted_service_urls: dict[str, str],
+        http_client: httpx.Client | None = None,
+    ) -> None:
+        if not 0 < timeout_seconds <= 10:
+            raise ValueError("算子健康检查超时必须大于 0 且不超过 10 秒")
+        self._timeout_seconds = timeout_seconds
+        self._trusted_service_urls = {
+            instance_id: canonical_operator_origin(service_url)
+            for instance_id, service_url in trusted_service_urls.items()
+        }
+        self._http_client = http_client
+
+    def check(self, instance: OperatorInstance) -> bool:
+        try:
+            base_url = self._trusted_service_urls.get(instance.instance_id)
+            if base_url is None or canonical_operator_origin(instance.service_url) != base_url:
+                return False
+            if self._http_client is None:
+                health = httpx.get(
+                    f"{base_url}/ops/health",
+                    timeout=self._timeout_seconds,
+                )
+            else:
+                health = self._http_client.get(
+                    f"{base_url}/ops/health",
+                    timeout=self._timeout_seconds,
+                )
+            if health.status_code != 200:
+                return False
+            if self._http_client is None:
+                metadata = httpx.get(
+                    f"{base_url}/ops/metadata",
+                    timeout=self._timeout_seconds,
+                )
+            else:
+                metadata = self._http_client.get(
+                    f"{base_url}/ops/metadata",
+                    timeout=self._timeout_seconds,
+                )
+            if metadata.status_code != 200:
+                return False
+            payload = metadata.json()
+        except (httpx.HTTPError, ValueError):
+            return False
+        operator_code = getattr(instance.operator_code, "value", instance.operator_code)
+        expected = {
+            "instance_id": instance.instance_id,
+            "operator_code": operator_code,
+            "capabilities": instance.capabilities,
+            "model_version": instance.model_version,
+            "api_version": instance.api_version,
+        }
+        return type(payload) is dict and payload == expected
+
+
 class OperatorAudit(Protocol):
     def record_registration(self, instance: OperatorInstance) -> None: ...
+
+    def get_desired_lifecycle(self, instance_id: str) -> OperatorLifecycle: ...
 
     def record_heartbeat_summary(
         self,
@@ -56,12 +150,14 @@ class AuditedOperatorRegistry:
         audit_repository: OperatorAudit,
         *,
         heartbeat_audit_interval_seconds: int,
+        health_checker: OperatorHealthChecker,
     ) -> None:
         if heartbeat_audit_interval_seconds <= 0:
             raise ValueError("心跳审计间隔必须大于 0")
         self._realtime = realtime_registry
         self._audit = audit_repository
         self._heartbeat_audit_interval_seconds = heartbeat_audit_interval_seconds
+        self._health_checker = health_checker
         self._audit_errors: dict[str, str] = {}
         self._audit_errors_lock = Lock()
 
@@ -77,8 +173,13 @@ class AuditedOperatorRegistry:
 
     def register(self, instance: OperatorInstance) -> OperatorInstance:
         # Persist routing intent before making an instance available to new work.
-        self._audit.record_registration(instance)
-        registered = self._realtime.register(instance)
+        registered_instance = replace(instance, model_ready=False)
+        self._audit.record_registration(registered_instance)
+        registered_instance = replace(
+            registered_instance,
+            lifecycle=self._audit.get_desired_lifecycle(instance.instance_id),
+        )
+        registered = self._realtime.register(registered_instance)
         self._clear_audit_error(instance.instance_id)
         return registered
 
@@ -92,13 +193,29 @@ class AuditedOperatorRegistry:
         instance = self._realtime.heartbeat(
             instance_id,
             inflight=inflight,
-            model_ready=model_ready,
+            model_ready=False,
         )
+        if model_ready:
+            try:
+                healthy = self._health_checker.check(instance)
+            except Exception:
+                healthy = False
+                logger.warning(
+                    "算子健康检查异常: instance_id=%s",
+                    instance_id,
+                    exc_info=True,
+                )
+            if healthy:
+                instance = self._realtime.heartbeat(
+                    instance_id,
+                    inflight=inflight,
+                    model_ready=True,
+                )
         try:
             self._audit.record_heartbeat_summary(
                 instance_id,
                 inflight=inflight,
-                model_ready=model_ready,
+                model_ready=instance.model_ready,
                 min_interval_seconds=self._heartbeat_audit_interval_seconds,
             )
         except Exception as exc:
@@ -132,6 +249,10 @@ class AuditedOperatorRegistry:
 
     def list_instances(self) -> list[OperatorInstance]:
         return self._realtime.list_instances()
+
+    def active_lease_count(self, instance_id: str) -> int:
+        realtime = cast(OperatorOperationsRegistry, self._realtime)
+        return realtime.active_lease_count(instance_id)
 
     def set_lifecycle(
         self,
