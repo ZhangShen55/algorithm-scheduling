@@ -160,8 +160,10 @@ import time
 args = " ".join(sys.argv[1:])
 time.sleep(float(os.environ.get("FAKE_NVIDIA_SMI_DELAY", "0")))
 if "pmon" in args:
-    print("# gpu pid type sm mem enc dec command")
-    print("# Idx # C/G % % % % name")
+    print(os.environ.get(
+        "FAKE_PMON_HEADER",
+        "# gpu pid type sm mem enc dec command\\n# Idx # C/G % % % % name",
+    ))
     print(os.environ.get(
         "FAKE_PMON_ROWS",
         "0 2000 C 30 10 0 0 asr_offline",
@@ -540,6 +542,34 @@ def test_verifier_attributes_sm_to_target_pid_when_another_gpu_process_is_busy(
     }
     assert process["host_pid"] == 2000
     assert process["gpu_utilization"]["sm_percent"] == 0.0
+
+
+def test_verifier_preserves_unavailable_pmon_metrics_as_null(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    gpu_runtime["env"].update(
+        {
+            "FAKE_PMON_HEADER": (
+                "# gpu pid type sm mem enc dec jpg ofa command\n"
+                "# Idx # C/G % % % % % % name"
+            ),
+            "FAKE_PMON_ROWS": "0 2000 C - - - - - - asr_offline",
+        }
+    )
+
+    completed = _run(gpu_runtime)
+
+    assert completed.returncode == 0, completed.stderr
+    report = _report(gpu_runtime)
+    process = report["synchronous_samples"][0]["processes"][0]
+    assert process["gpu_utilization"] == {
+        "sm_percent": None,
+        "memory_percent": None,
+        "encoder_percent": None,
+        "decoder_percent": None,
+    }
+    assert report["utilization"]["target_sm_percent"] is None
+    assert report["compatibility"]["result"]["target_sm_max_percent"] is None
 
 
 def test_sample_window_starts_after_first_valid_activity_start(

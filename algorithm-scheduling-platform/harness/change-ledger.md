@@ -1,5 +1,47 @@
 # Change Ledger
 
+## 2026-08-19 - 8A.3 GeForce `pmon` 不可用指标语义修正
+
+- 现场现象：`b8431c0fd4b135db1a8cc34ae4b9cae48e7e0655` 已完成八算子和四平台镜像构建、
+  基础设施/四平台健康、24 实例分 profile 注册，18 个 GPU 实例也都进入了真实
+  请求触发、CUDA PID 映射和停止/重启流程；但每个 running 证据都因
+  `nvidia-smi pmon 数值字段格式异常` 标记失败。FaceRec gpu0/gpu1/gpu2 与其他
+  15 个 GPU 实例的失败点完全相同，因此不是 FaceRec 镜像、模型、MongoDB 或宿主
+  Conda 环境问题。
+- 根因证据：目标服务器上的 RTX 4090 D/RTX 3090 属于 `pmon --help` 所说的
+  limited GeForce 支持范围。当前驱动输出头比旧夹具多 `jpg`/`ofa` 列，并把
+  暂时不可用的逐进程 `sm/mem/enc/dec` 返回为 `-`。验证器直接执行
+  `float("-")` 才是失败源头；它在触发请求、容器 CUDA PID 和显存已经成立后
+  才失败。
+- 修正：保留 NVIDIA 缺失值语义，将 `-` 写为 JSON `null`，不伪装为 `0%`；
+  可用的逐进程数值仍必须在 `0..100` 内。反例校验器只对“明确测得 SM 为 0 且
+  CPU 忙” fail closed；对不可用指标依然强制校验真实请求完成、框架 CUDA 探针、
+  compute-apps PID/进程名、Docker/cgroup PID 归属、显存和全局 GPU telemetry。
+- TDD 证据：新增一条精确复刻现场 `jpg/ofa + '-'` 输出的验证器回归，以及
+  FaceRec gpu2 不可用指标的 canonical checker 回归；两者均先在旧实现失败，最小
+  修正后相关测试 `83 passed` 与 `499 passed, 3 skipped`，Ruff、两个生产脚本的 strict
+  Mypy、compileall 和 `git diff --check` 通过。3 个跳过项仍只是本机缺少显式注册令牌与
+  Canonical FaceRec GPU 容器的既有条件。
+- 完成边界：`b8431c0` 是失败 release，保持只读。本修正必须进入新 Git SHA/新
+  不可变 release，并同时出现 `CODEX_STAGE45_COMPLETE failures=0` 与
+  `CODEX_8A3_TERMINAL stage45_failures=0 deployment_status=0`，才允许勾选 `8A.3`。
+
+## 2026-08-19 - 8A.3 GPU 恢复与 deployment 入口修正
+
+- 前一现场轮次：`d651dd73228189e686259c235da93cde7a946e5b` 已经让 18 个 GPU 实例的
+  真实请求、停止、CUDA PID 消失、重启和重新 `ONLINE` 都实际执行；PPT Slice/
+  Text Analysis 六个 CPU 实例及八算子 full Smoke 也没有产生新业务失败。
+- 根因 1：Linux 触发器后代只剩 zombie 时，`killpg(..., 0)` 仍认为进程组存在，
+  验证器因此把 18 个已回收的触发器统一误报为失败。修正后从 `/proc/<pid>/stat`
+  读取状态，只把非 `Z` 成员视为存活；Linux 容器回归明确取得
+  `killpg_reports_exists=true` 且 `live_members=false`。
+- 根因 2：deployment batch 以文件路径执行，导致 `ModuleNotFoundError: No module named
+  'scripts'`。入口已改为 `.venv/bin/python -m scripts.run_milestone_2b_case_batch`，并有专门
+  回归防止退回文件路径执行。
+- 证据与边界：修正分别在 `6dedca2` 和 `b8431c0` 提交，本地完整回归、Ruff、
+  strict Mypy、compileall 和 OpenSpec strict 均通过。这只关闭两个 Harness blocker，不代表
+  `8A.3` 远程终态已通过。
+
 ## 2026-08-19 - 8A.3 Canonical runner 标准输入截断修正
 
 - 现场现象：`a78c64b187d90d2f0cfd7ecb66c72453661ab652` 两次完成八算子镜像、四平台镜像和

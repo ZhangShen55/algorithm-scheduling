@@ -3004,6 +3004,49 @@ async def test_gpu_canonical_runner_validates_health_then_rejects_isolated_mutat
     } == before
 
 
+def test_gpu_utilization_validator_accepts_unavailable_process_metrics(
+    tmp_path: Path,
+) -> None:
+    gpu = importlib.import_module("scripts.milestone_2b_case_runners.gpu")
+    release_root = _release_root(tmp_path)
+    running_path, stopped_path, registration_path = _write_healthy_gpu_evidence(
+        release_root,
+        "facerec-gpu2",
+    )
+    running = json.loads(running_path.read_text(encoding="utf-8"))
+    stopped = json.loads(stopped_path.read_text(encoding="utf-8"))
+    registration = json.loads(registration_path.read_text(encoding="utf-8"))
+    process_metrics = running["synchronous_samples"][0]["processes"][0][
+        "gpu_utilization"
+    ]
+    for field in process_metrics:
+        process_metrics[field] = None
+    running["utilization"]["target_sm_percent"] = None
+    running["compatibility"]["result"]["target_sm_max_percent"] = None
+    instance = next(
+        item
+        for item in load_operator_inventory(
+            PLATFORM_ROOT / "deploy/docker-compose.operators.yml"
+        ).gpu_instances
+        if item.instance_id == "facerec-gpu2"
+    )
+
+    gpu._utilization_validator(
+        instance,
+        running,
+        stopped,
+        registration,
+        release_root.name,
+    )
+    gpu._compatibility_validator(
+        instance,
+        running,
+        stopped,
+        registration,
+        release_root.name,
+    )
+
+
 def test_gpu_015_mutates_canonical_gpu2_compatibility_identity() -> None:
     gpu = importlib.import_module("scripts.milestone_2b_case_runners.gpu")
 

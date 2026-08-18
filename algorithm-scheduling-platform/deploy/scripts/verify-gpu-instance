@@ -406,7 +406,15 @@ def _process_rows(gpu_uuid: str) -> list[dict[str, Any]]:
     return [row for row in rows if row["gpu_uuid"] == gpu_uuid]
 
 
-def _process_gpu_utilization(physical_gpu: int) -> dict[int, dict[str, float]]:
+def _pmon_metric(value: str) -> float | None:
+    if value == "-":
+        return None
+    return float(value)
+
+
+def _process_gpu_utilization(
+    physical_gpu: int,
+) -> dict[int, dict[str, float | None]]:
     completed = _run(
         [
             "nvidia-smi",
@@ -421,7 +429,7 @@ def _process_gpu_utilization(physical_gpu: int) -> dict[int, dict[str, float]]:
     )
     expected_header = ["gpu", "pid", "type", "sm", "mem", "enc", "dec"]
     header: list[str] | None = None
-    rows: dict[int, dict[str, float]] = {}
+    rows: dict[int, dict[str, float | None]] = {}
     for raw in completed.stdout.splitlines():
         stripped = raw.strip()
         if not stripped:
@@ -444,10 +452,10 @@ def _process_gpu_utilization(physical_gpu: int) -> dict[int, dict[str, float]]:
             gpu_index = int(row["gpu"])
             pid = int(row["pid"])
             metrics = {
-                "sm_percent": float(row["sm"]),
-                "memory_percent": float(row["mem"]),
-                "encoder_percent": float(row["enc"]),
-                "decoder_percent": float(row["dec"]),
+                "sm_percent": _pmon_metric(row["sm"]),
+                "memory_percent": _pmon_metric(row["mem"]),
+                "encoder_percent": _pmon_metric(row["enc"]),
+                "decoder_percent": _pmon_metric(row["dec"]),
             }
         except (KeyError, ValueError) as error:
             raise VerificationError("nvidia-smi pmon 数值字段格式异常") from error
@@ -455,12 +463,28 @@ def _process_gpu_utilization(physical_gpu: int) -> dict[int, dict[str, float]]:
             raise VerificationError("nvidia-smi pmon 返回了非目标物理 GPU")
         if pid in rows:
             raise VerificationError("nvidia-smi pmon 返回了重复 PID")
-        if any(value < 0 or value > 100 or not math.isfinite(value) for value in metrics.values()):
+        if any(
+            value < 0 or value > 100 or not math.isfinite(value)
+            for value in metrics.values()
+            if value is not None
+        ):
             raise VerificationError("nvidia-smi pmon 利用率超出有效范围")
         rows[pid] = metrics
     if header is None:
         raise VerificationError("nvidia-smi pmon 缺少可识别的字段头")
     return rows
+
+
+def _max_process_metric(
+    samples: list[dict[str, Any]], metric: str
+) -> float | None:
+    values = [
+        value
+        for sample in samples
+        for process in sample["processes"]
+        if (value := process["gpu_utilization"][metric]) is not None
+    ]
+    return max(values) if values else None
 
 
 def _docker_top_pids(container: str) -> set[int]:
@@ -1192,11 +1216,7 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
                 "gpu_percent": max(
                     sample["gpu_utilization_percent"] for sample in samples
                 ),
-                "target_sm_percent": max(
-                    process["gpu_utilization"]["sm_percent"]
-                    for sample in samples
-                    for process in sample["processes"]
-                ),
+                "target_sm_percent": _max_process_metric(samples, "sm_percent"),
             },
             "baseline_processes": [
                 {
@@ -1223,10 +1243,8 @@ def _verify_running(arguments: argparse.Namespace, report: dict[str, Any]) -> No
                     "status": "PASS",
                     "real_trigger_completed": True,
                     "sample_count": len(samples),
-                    "target_sm_max_percent": max(
-                        process["gpu_utilization"]["sm_percent"]
-                        for sample in samples
-                        for process in sample["processes"]
+                    "target_sm_max_percent": _max_process_metric(
+                        samples, "sm_percent"
                     ),
                 },
             },

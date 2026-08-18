@@ -558,18 +558,22 @@ def _utilization_validator(
                 "decoder_percent",
             }
             if set(process_gpu) != expected_process_fields or any(
-                not isinstance(process_gpu.get(field), (int, float))
-                or isinstance(process_gpu.get(field), bool)
-                or not 0 <= process_gpu[field] <= 100
+                process_gpu.get(field) is not None
+                and (
+                    not isinstance(process_gpu.get(field), (int, float))
+                    or isinstance(process_gpu.get(field), bool)
+                    or not 0 <= process_gpu[field] <= 100
+                )
                 for field in expected_process_fields
             ):
                 raise ValueError("GPU process utilization synchronous sample is invalid")
             sample_cpu.append(float(cpu_percent))
-            sample_target_sm.append(float(process_gpu["sm_percent"]))
+            if process_gpu["sm_percent"] is not None:
+                sample_target_sm.append(float(process_gpu["sm_percent"]))
     expected = {
         "cpu_percent": max(sample_cpu),
         "gpu_percent": max(sample_gpu),
-        "target_sm_percent": max(sample_target_sm),
+        "target_sm_percent": max(sample_target_sm) if sample_target_sm else None,
     }
     if utilization != expected:
         raise ValueError("GPU utilization summary does not match synchronous samples")
@@ -578,8 +582,13 @@ def _utilization_validator(
     if (
         not isinstance(cpu, (int, float))
         or isinstance(cpu, bool)
-        or not isinstance(target_sm, (int, float))
-        or isinstance(target_sm, bool)
+        or (
+            target_sm is not None
+            and (
+                not isinstance(target_sm, (int, float))
+                or isinstance(target_sm, bool)
+            )
+        )
     ):
         raise ValueError("GPU utilization measurements are invalid")
     if cpu > 80 and target_sm == 0:
@@ -667,11 +676,13 @@ def _compatibility_validator(
     if not isinstance(samples, list) or not samples or not isinstance(result, dict):
         raise ValueError("GPU2 independent compatibility result is missing")
     try:
-        target_sm_max = max(
+        target_sm_values = [
             process["gpu_utilization"]["sm_percent"]
             for sample in samples
             for process in sample["processes"]
-        )
+            if process["gpu_utilization"]["sm_percent"] is not None
+        ]
+        target_sm_max = max(target_sm_values) if target_sm_values else None
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError("GPU2 compatibility samples are invalid") from exc
     expected_result = {
