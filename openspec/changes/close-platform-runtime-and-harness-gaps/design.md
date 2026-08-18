@@ -131,6 +131,11 @@ Kafka 仍只在课程级边界使用，不把单帧循环拆到 Kafka。
 
 在现有 Redis registry 外增加审计 repository/decorator：注册、心跳摘要、desired lifecycle、unregister 和运维排空写入 PostgreSQL。Redis TTL 到期决定实时 OFFLINE；PostgreSQL 用于运维历史，不参与每次原子 lease 的热路径。注册只写声明并清理同 ID 旧心跳/租约，首次成功心跳后才允许路由；客户端启动必须等待该心跳，后续短暂 HTTP 故障按周期重试。现阶段同一 `instance_id` 只允许一个存活进程，世代令牌不在里程碑 1 范围内。
 
+重新注册不得覆盖 PostgreSQL 中持久化的 `DRAINING/OFFLINE` 运维意图。受控部署或
+stop/restart 验收在成功发布本轮容器账本后，必须按权威 Compose profile 或显式实例调用
+管理面生命周期接口恢复 `ONLINE`，然后再验证首次就绪心跳；不得通过清库、删 Redis key
+或让算子启动自动覆盖运维意图来绕过该步骤。
+
 ### 8. 平台和算子部署一起闭环
 
 新增四个平台服务 Compose，与基础设施/算子使用同一 network 和共享挂载。八个算子镜像必须安装版本化 `algorithm-scheduling-platform` wheel；构建验证直接在镜像内执行 `import packages.operator_registry_client`。

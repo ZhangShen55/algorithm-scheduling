@@ -737,6 +737,50 @@ def test_registration_entrypoint_is_executable() -> None:
     assert completed.returncode == 0, completed.stderr
 
 
+def test_operator_activation_explicitly_restores_selected_instance_online() -> None:
+    path = SCRIPTS / "activate-operator-instances"
+    assert path.is_file(), "部署 Harness 缺少显式恢复持久生命周期的入口"
+    assert os.access(path, os.X_OK)
+    requests: list[tuple[str, str | None, dict[str, Any]]] = []
+
+    def handler(path: str, headers: Any, body: bytes) -> tuple[int, Any]:
+        payload = json.loads(body)
+        requests.append(
+            (path, headers.get("X-Operator-Registry-Token"), payload)
+        )
+        return 200, {
+            "instance_id": payload["instance_id"],
+            "lifecycle": payload["lifecycle"],
+        }
+
+    with _Server({}, handler) as url:
+        completed = subprocess.run(
+            [
+                str(path),
+                "--control-url",
+                url,
+                "--management-token",
+                "test-token",
+                "--instance",
+                "facerec-gpu0",
+            ],
+            cwd=PLATFORM_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    assert completed.returncode == 0, completed.stderr
+    assert requests == [
+        (
+            "/api/operator-instances/lifecycle",
+            "test-token",
+            {"instance_id": "facerec-gpu0", "lifecycle": "ONLINE"},
+        )
+    ]
+    assert "facerec-gpu0" in completed.stdout
+
+
 def test_smoke_entrypoint_and_manifest_are_strict() -> None:
     path = SCRIPTS / "run-operator-smoke"
     assert path.is_file()
@@ -763,6 +807,7 @@ def test_smoke_entrypoint_and_manifest_are_strict() -> None:
 @pytest.mark.parametrize(
     ("entrypoint", "python_script"),
     (
+        ("activate-operator-instances", "activate_operator_instances.py"),
         ("verify-operator-registration", "verify_operator_registration.py"),
         ("run-operator-smoke", "run_operator_smoke.py"),
     ),
@@ -798,6 +843,7 @@ def test_deploy_entrypoint_falls_back_to_path_python3_without_project_venv(
 @pytest.mark.parametrize(
     ("entrypoint", "python_script"),
     (
+        ("activate-operator-instances", "activate_operator_instances.py"),
         ("verify-operator-registration", "verify_operator_registration.py"),
         ("run-operator-smoke", "run_operator_smoke.py"),
     ),
@@ -1028,6 +1074,8 @@ def test_canonical_scenario_uses_atomic_stop_only_operator_ledger() -> None:
         'grep -Fqx -- "$container_id" "$BASELINE_OPERATOR_IDS"',
         'docker stop "$container_id"',
         "start_operator_profile()",
+        "deploy/scripts/activate-operator-instances",
+        '--profile "$profile"',
         'local profile="$1" up_status=0',
         'up -d || up_status=$?',
         "if ! refresh_new_operator_ledger; then",
@@ -1047,6 +1095,13 @@ def test_canonical_scenario_uses_atomic_stop_only_operator_ledger() -> None:
 
     for profile in ("gpu0", "gpu1", "gpu2", "cpu"):
         assert f"start_operator_profile {profile}" in scenario
+
+    start_body = scenario.split("start_operator_profile()", 1)[1].split(
+        "if ((BASELINE_LEDGER_PRESENT", 1
+    )[0]
+    assert start_body.index("refresh_new_operator_ledger") < start_body.index(
+        "activate-operator-instances"
+    )
 
     assert '>"$BASELINE_OPERATOR_IDS"' not in scenario
     assert '>"$NEW_OPERATOR_IDS"' not in scenario
@@ -1436,6 +1491,13 @@ exit 0
 """,
     )
     _write_executable(
+        scripts / "activate-operator-instances",
+        """#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_DOCKER_STATE/activations.log"
+exit 0
+""",
+    )
+    _write_executable(
         scripts / "restore-existing-containers",
         """#!/usr/bin/env bash
 printf '%s\n' "restore" >>"$FAKE_DOCKER_STATE/cleanup-order.log"
@@ -1785,6 +1847,7 @@ except (BlockingIOError, OSError):
         "PREVIOUS_RELEASE_ROOT": "",
         "DEPLOY_PYTHON": str(PYTHON),
         "REAL_PYTHON": str(PYTHON),
+        "OPERATOR_REGISTRY_TOKEN": "test-token",
     }
     return project_root, release_root, environment, baseline_id, profiles
 

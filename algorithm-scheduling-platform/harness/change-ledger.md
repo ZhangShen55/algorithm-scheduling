@@ -1,5 +1,24 @@
 # Change Ledger
 
+## 2026-08-18 - 8A.3 持久生命周期恢复门禁修正
+
+- 现场失败：`c418234c337dfac4f3feaaa984127f206acbdbca` 的八镜像和四个平台服务构建成功，
+  GPU0 六容器健康且持续心跳；注册预检仍看到 ASR Offline/Online、FaceRec、VBas 和
+  ScreenDet 为 `OFFLINE`，因此 canonical 阶段 3 fail closed。该 release 的失败报告保持只读。
+- 根因证据：FaceRec `/ops/health`、`/ops/metadata`、心跳和 control 反向探测均为 HTTP 200，
+  `model_ready=true`；PostgreSQL `operator_instances.desired_state` 仍保存前次维护设置的
+  `DRAINING/OFFLINE`，重新注册按设计不覆盖持久运维意图。OCR 仍为 `ONLINE`，进一步排除
+  Docker GPU、模型初始化、注册令牌和全局网络故障。
+- 修正：新增 `activate-operator-instances`，只允许从权威 24 实例 Compose 选择一个 profile
+  或显式实例，通过鉴权 lifecycle API 恢复 `ONLINE`；canonical profile 启动必须先成功发布
+  new ledger，再激活所选实例。GPU stop/restart 取得停止证据后也必须显式激活当前实例。
+- 安全边界：激活器不接受任意实例 ID、不清理 PostgreSQL/Redis、不自动覆盖所有实例，
+  鉴权失败立即中止，未注册或短暂连接失败仅在有界截止时间内重试。Compose partial-up 或
+  ledger 刷新失败时不会执行激活。
+- 变更文件：激活器及入口、canonical 部署场景、部署 README、单机运维手册和 Task 9 回归。
+- 当前结论：本条关闭重跑前的生命周期门禁缺口，不代表 `8A.3` 已通过。修正必须进入新的
+  Git SHA 和不可变 release，并重新执行 FaceRec 三实例、18 个 GPU 实例和 deployment 用例。
+
 ## 2026-08-18 - 8A.3 已恢复前驱的跨 SHA 维护事务
 
 - 根因：`7efac20cf980ee64ea78fe297af6dfdfb2df5b28` 已成功执行 restore，canonical

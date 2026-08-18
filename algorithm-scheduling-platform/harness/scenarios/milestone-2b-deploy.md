@@ -683,6 +683,12 @@ start_operator_profile() {
     echo "profile $profile 的 docker compose up 返回 ${up_status}，可能已 partial-up；新增容器账本已安全刷新，现按原退出码中止。" >&2
     return "$up_status"
   fi
+  if ! deploy/scripts/activate-operator-instances \
+    --control-url http://127.0.0.1:18100 \
+    --profile "$profile" --timeout-seconds 300; then
+    echo "profile $profile 无法显式恢复 ONLINE；保留持久生命周期和新增容器账本并中止。" >&2
+    return 1
+  fi
   return 0
 }
 
@@ -884,8 +890,9 @@ deploy/scripts/verify-gpu-instance \
 一张目标卡、UUID 与宿主一致、`cuda:0`/框架设备证据、`nvidia-smi` 中目标算子
 进程名、宿主 CUDA PID、`docker top` 映射、完整 64 位 cgroup ID 和 NSpid。停止容器
 后必须立即用 `--assert-stopped --evidence <prior-json>` 将残留检查写入 `recovery/`，
-随后立即重启同一实例，等待它重新完成注册、首次心跳、`ONLINE`、`model_ready=true`，
-再验证下一个实例。示例的停止后半程为：
+随后立即重启同一实例。PostgreSQL 会保留此前的 `DRAINING/OFFLINE` 运维意图，因此必须
+通过 `activate-operator-instances --instance <当前实例>` 显式恢复 `ONLINE`，再等待它
+完成注册、首次心跳和 `model_ready=true`，然后验证下一个实例。示例的停止后半程为：
 
 ```bash
 docker stop "$container_id"
@@ -895,6 +902,9 @@ deploy/scripts/verify-gpu-instance \
   --evidence "$RELEASE_ROOT/gpu-instances/asr-offline-gpu0.json" \
   --output "$RELEASE_ROOT/recovery/asr-offline-gpu0-stopped.json"
 docker restart "$container_id"
+deploy/scripts/activate-operator-instances \
+  --control-url http://127.0.0.1:18100 \
+  --instance "$instance_id" --timeout-seconds 300
 deploy/scripts/verify-operator-registration \
   --control-url http://127.0.0.1:18100 \
   --release-tag "$RELEASE_TAG" --git-sha "$EXPECTED_GIT_SHA" \

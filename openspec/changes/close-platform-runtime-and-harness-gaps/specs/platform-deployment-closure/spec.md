@@ -42,6 +42,10 @@ Control-service SHALL 将注册、生命周期变化、心跳摘要和注销事�
 - **WHEN** Redis 状态丢失且算子重新注册
 - **THEN** 当前路由状态得到重建，此前的注册和生命周期事实仍可从 PostgreSQL 查询
 
+#### Scenario: 受控部署恢复持久生命周期
+- **WHEN** 权威 Compose 中的实例已经注册，但 PostgreSQL 仍保存此前维护产生的 `DRAINING` 或 `OFFLINE`
+- **THEN** 部署 Harness 在成功发布本轮容器账本后按 profile 或显式实例调用鉴权生命周期接口恢复 `ONLINE`，再验证首次就绪心跳；重新注册本身不覆盖运维意图
+
 ### Requirement: 调度表和字段具有中文数据库说明
 平台 SHALL 通过前向迁移为 10 张正式调度表和每个物理字段写入 PostgreSQL 中文注释。新增字段 SHALL 在新的迁移中同步增加注释，且数据库审计 SHALL NOT 自动删除或修改现有表和数据。
 

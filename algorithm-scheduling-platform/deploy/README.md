@@ -358,6 +358,9 @@ deploy/scripts/verify-gpu-instance \
   --evidence "deploy/reports/milestone-2b/releases/${RELEASE_TAG}/${RELEASE_GIT_SHA}/gpu-instances/asr-offline-gpu0.json" \
   --output "deploy/reports/milestone-2b/releases/${RELEASE_TAG}/${RELEASE_GIT_SHA}/recovery/asr-offline-gpu0-stopped.json"
 docker restart "$container_id"
+deploy/scripts/activate-operator-instances \
+  --control-url http://127.0.0.1:18100 \
+  --instance "$instance_id" --timeout-seconds 300
 deploy/scripts/verify-operator-registration \
   --control-url http://127.0.0.1:18100 \
   --release-tag "$RELEASE_TAG" --git-sha "$RELEASE_GIT_SHA" \
@@ -365,8 +368,9 @@ deploy/scripts/verify-operator-registration \
 ```
 
 每个 GPU 实例都必须执行同一顺序：真实推理采样、`docker stop`、立即
-`--assert-stopped`、`docker restart`，然后等待注册、首次心跳、`ONLINE` 和
-`model_ready=true`。只有实例恢复后才能验证下一个实例，最终必须让 24 个实例同时
+`--assert-stopped`、`docker restart`，再用 `activate-operator-instances --instance`
+显式恢复持久生命周期，然后等待注册、首次心跳、`ONLINE` 和 `model_ready=true`。
+只有实例恢复后才能验证下一个实例，最终必须让 24 个实例同时
 ONLINE。恢复后使用 `verify-operator-registration --instance <当前实例>` 生成独立
 write-once 报告，不要重复运行已生成报告的 profile preflight。不得为了收集停止证据而把容器留在停止状态。
 
@@ -501,6 +505,9 @@ current 快照和 new 差集都必须先写入 release `container-maintenance/` 
 都先基于 baseline 刷新原子 new ledger，再对 partial-up 返回原 Compose 退出码。
 如果 ledger refresh 本身失败，保留已发布 baseline/new ledger，禁止执行 cleanup；
 待 Docker 恢复后必须基于 baseline 重新刷新，不得用旧 new ledger 推断清理边界。
+Compose 成功且账本已发布后，`start_operator_profile` 通过
+`activate-operator-instances --profile` 显式恢复本轮所选实例的 `ONLINE`；不会依赖
+重新注册覆盖 PostgreSQL 中持久化的运维意图。
 验收结束只停止经 Compose project `algorithm-operators` 和 service 标签复核的本轮新增
 容器，不执行 `docker rm`；再用原 ledger 恢复 `ocr-v6-amd`。禁止 prune、`down -v`、
 删除任何卷或删除 `/data/result`。
