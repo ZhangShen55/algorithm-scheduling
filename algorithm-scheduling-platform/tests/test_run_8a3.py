@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
 from types import ModuleType
 
@@ -27,3 +28,27 @@ printf 'CODEX_RUNTIME_CONTINUED\\n'
 
     assert completed.returncode == 0
     assert completed.stdout.endswith("CODEX_RUNTIME_CONTINUED\n")
+
+
+def test_runtime_starts_case_batch_as_project_module() -> None:
+    runner = _load_runner()
+    captured: dict[str, str] = {}
+
+    def capture_runtime(
+        runtime: str, *, cwd: Path, capture_output: bool = False
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, capture_output
+        captured["runtime"] = runtime
+        return subprocess.CompletedProcess(["bash"], 0, "", "")
+
+    runner.execute_runtime = capture_runtime
+
+    assert runner.main() == 0
+    assert (
+        ".venv/bin/python -m scripts.run_milestone_2b_case_batch"
+        in captured["runtime"]
+    )
+    assert (
+        ".venv/bin/python scripts/run_milestone_2b_case_batch.py"
+        not in captured["runtime"]
+    )

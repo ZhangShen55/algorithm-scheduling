@@ -86,7 +86,7 @@ def main() -> int:
 set +e
 . deploy/scripts/milestone-2b-stage45.sh
 stage45_status="$STAGE45_FAILURES"
-.venv/bin/python scripts/run_milestone_2b_case_batch.py \
+.venv/bin/python -m scripts.run_milestone_2b_case_batch \
   --catalog deploy/milestone-2b-case-catalog.yaml \
   --release-root "$RELEASE_ROOT" \
   --phase deployment \
