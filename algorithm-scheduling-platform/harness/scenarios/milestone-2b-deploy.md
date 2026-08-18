@@ -119,6 +119,7 @@ acquire_operator_lifecycle_lock() {
     return 1
   fi
   lock_path="$release_tag_root/.operator-lifecycle.lock"
+  OPERATOR_LIFECYCLE_LOCK_PATH="$lock_path"
   coproc OPERATOR_LIFECYCLE_LOCK_HOLDER {
     "$DEPLOY_PYTHON" deploy/scripts/operator_lifecycle.py hold-lock \
       --release-tag-root "$release_tag_root" --lock-path "$lock_path"
@@ -143,6 +144,7 @@ acquire_operator_lifecycle_lock() {
 operator_lifecycle_lock_is_held() {
   [[ -n "${OPERATOR_LIFECYCLE_LOCK_PID:-}" && \
     -n "${OPERATOR_LIFECYCLE_LOCK_CONTROL_FD:-}" ]] && \
+    [[ -n "${OPERATOR_LIFECYCLE_LOCK_PATH:-}" ]] && \
     kill -0 "$OPERATOR_LIFECYCLE_LOCK_PID" 2>/dev/null
 }
 
@@ -159,6 +161,7 @@ release_operator_lifecycle_lock() {
   OPERATOR_LIFECYCLE_LOCK_PID=
   OPERATOR_LIFECYCLE_LOCK_CONTROL_FD=
   OPERATOR_LIFECYCLE_LOCK_READY_FD=
+  OPERATOR_LIFECYCLE_LOCK_PATH=
   return 0
 }
 
@@ -252,7 +255,11 @@ fresh release 创建新维护账本；同 SHA 已有本地 snapshot/paused 时�
 换 SHA 时从立即前驱读取直接账本或 provenance：A→B→C 中 C 的 provenance
 记录立即前驱 B，但 authority path 仍指向原 snapshot 所在的 A。已存在的
 provenance 必须为当前 UID 所有的非 symlink `0400` 普通文件，与本次
-`PREVIOUS_RELEASE_ROOT` 不一致时 fail closed，不得改绑。
+`PREVIOUS_RELEASE_ROOT` 不一致时 fail closed，不得改绑。如果立即前驱已经成功
+restore，canonical paused ledger 会被归档；resolver 只有在 snapshot 为 `0600`
+单链接、唯一 audit 为 `0400` 单链接、无残留 archive metadata、audit 全部为终态，
+并且 `ocr-v6-amd` 当前身份和恢复状态与 snapshot 一致时，才进入
+`fresh-after-restored-previous`，在当前 SHA 开启全新的维护事务。旧 release 保持只读。
 
 ```bash
 acquire_operator_lifecycle_lock
@@ -297,19 +304,27 @@ if [[ "$MAINTENANCE_ACTION" == "inherit" ]]; then
     --release-root "$RELEASE_ROOT" \
     --source-release-root "$MAINTENANCE_SOURCE_ROOT" \
     --snapshot "$SNAPSHOT" --paused "$PAUSED_LEDGER"
-elif [[ "$MAINTENANCE_ACTION" == "fresh" ]]; then
+elif [[ "$MAINTENANCE_ACTION" == "fresh" || \
+  "$MAINTENANCE_ACTION" == "fresh-after-restored-previous" ]]; then
   deploy/scripts/snapshot-existing-containers "$SNAPSHOT"
+  docker inspect ocr-v6-amd \
+    >"$RELEASE_ROOT/container-maintenance/ocr-v6-amd-before.json"
+  deploy/scripts/pause-existing-containers "$SNAPSHOT" ocr-v6-amd
+elif [[ "$MAINTENANCE_ACTION" == \
+  "resume-pause-after-restored-previous" ]]; then
   docker inspect ocr-v6-amd \
     >"$RELEASE_ROOT/container-maintenance/ocr-v6-amd-before.json"
   deploy/scripts/pause-existing-containers "$SNAPSHOT" ocr-v6-amd
 fi
 ```
 
-确认精确容器身份后，fresh 路径只暂停用户已允许的原 `ocr-v6-amd`；不要使用
+确认精确容器身份后，fresh 和 `fresh-after-restored-previous` 路径只暂停用户已允许
+的原 `ocr-v6-amd`。`resume-pause-after-restored-previous` 表示当前 release 已经安全发布
+predecessor marker 和 snapshot，只补做尚未完成的 pause，禁止再次生成 snapshot；不要使用
 空选择器或按宽泛名称匹配。权威暂停账本固定为 `$PAUSED_LEDGER`，必须保留到
 恢复完成。previous 路径只以不可替换方式写入权限 `0400` 的指针证据，不复制
-可变 paused ledger。fresh 路径强制以空 `AUTHORIZED_OCCUPIED_ENDPOINTS` 运行 host
-preflight；只有续跑才从权威 platform/operator Compose 渲染结果和按 service
+可变 paused ledger。只有无前驱的 fresh 路径强制以空 `AUTHORIZED_OCCUPIED_ENDPOINTS`
+运行 host preflight；续跑和 `fresh-after-restored-previous` 从权威 platform/operator Compose 渲染结果和按 service
 限定的运行容器中，经完整 ID、running、project/service 标签及端口映射校验后
 精确派生已占用的“监听地址+端口”端点。同端口的任何额外地址或地址族监听仍由
 preflight 逐条拒绝。预检失败时停止
@@ -995,6 +1010,23 @@ OFFLINE/DRAINING 路由、容量耗尽、HTTP 429/503、超时、错误输入、
 重启、Redis TTL 到期、磁盘不可写、容器停止后 CUDA PID 残留、重复请求和并发超限。
 压力报告必须记录并发、队列、成功/失败、p95/p99 和资源峰值；失败或未执行必须保留
 原因，不能以 health 代替推理。
+
+在停止本轮算子、恢复历史容器或聚合报告之前，必须实际执行 deployment 阶段目录中的
+全部用例。batch 自行生成当前运行的唯一 `run_id`，串行执行 canonical mutation，并要求
+每条已选择用例完成 cleanup；任一用例失败、缺失或 cleanup 失败都由 strict mode 中止，
+不得继续生成汇总冒充已执行：
+
+```bash
+.venv/bin/python scripts/run_milestone_2b_case_batch.py \
+  --catalog deploy/milestone-2b-case-catalog.yaml \
+  --release-root "$RELEASE_ROOT" \
+  --phase deployment \
+  --concurrency 1 \
+  --delegated-lock-holder-pid "$OPERATOR_LIFECYCLE_LOCK_PID" \
+  --delegated-lock-path "$OPERATOR_LIFECYCLE_LOCK_PATH" \
+  --require-cleanup \
+  --require-all-selected
+```
 
 canonical 2B 场景绝不对 platform/infrastructure 执行 `down` 或 `stop`。只停止
 `$NEW_OPERATOR_IDS` 中本轮新增的算子容器，不删除容器。清理前重新校验 baseline

@@ -1073,6 +1073,16 @@ def _extract_scenario_bash_block(heading: str) -> str:
     return match.group("script")
 
 
+def _extract_scenario_bash_blocks(heading: str) -> list[str]:
+    scenario = (
+        PLATFORM_ROOT / "harness/scenarios/milestone-2b-deploy.md"
+    ).read_text(encoding="utf-8")
+    section = scenario.split(heading, 1)[1].split("\n## ", 1)[0]
+    blocks = re.findall(r"```bash\n(.*?)\n```", section, re.DOTALL)
+    assert blocks, f"{heading} 后缺少 Bash 代码块"
+    return blocks
+
+
 def _extract_scenario_bash_blocks_before(heading: str) -> list[str]:
     scenario = (
         PLATFORM_ROOT / "harness/scenarios/milestone-2b-deploy.md"
@@ -1396,6 +1406,19 @@ def _prepare_fake_lifecycle(
     project_root = tmp_path / "project"
     scripts = project_root / "deploy/scripts"
     scripts.mkdir(parents=True)
+    fake_venv = project_root / ".venv/bin"
+    fake_venv.mkdir(parents=True)
+    _write_executable(
+        fake_venv / "python",
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "scripts/run_milestone_2b_case_batch.py" ]]; then
+  printf '%s\n' "case-batch" >>"$FAKE_DOCKER_STATE/cleanup-order.log"
+  exit 0
+fi
+exec "$REAL_PYTHON" "$@"
+""",
+    )
     shutil.copy2(SCRIPTS / "operator_lifecycle.py", scripts / "operator_lifecycle.py")
     _write_executable(
         scripts / "preflight",
@@ -1415,6 +1438,7 @@ exit 0
     _write_executable(
         scripts / "restore-existing-containers",
         """#!/usr/bin/env bash
+printf '%s\n' "restore" >>"$FAKE_DOCKER_STATE/cleanup-order.log"
 printf '%s\n' "$@" >"$FAKE_DOCKER_STATE/restore-arguments.log"
 exit 0
 """,
@@ -1448,12 +1472,23 @@ exit 0
         containers[container_id]["service"] for container_id in compose_container_ids
     )
     baseline_id = _container_id(999)
+    legacy_ocr_id = _container_id(998)
     ocr_metadata = next(
         metadata
         for metadata in containers.values()
         if metadata["service"] == "ocr-gpu0"
     )
     containers[baseline_id] = dict(ocr_metadata)
+    containers[legacy_ocr_id] = {
+        "project": "",
+        "service": "",
+        "name": "ocr-v6-amd",
+        "image_ref": "ocr:v6_amd",
+        "image_id": "sha256:legacy-ocr",
+        "published_ports": [8866],
+        "restart_policy": {"Name": "unless-stopped", "MaximumRetryCount": 0},
+        "mounts": [],
+    }
     replacements_on_up: dict[str, dict[str, str]] = {}
     replacement_index = 2000
     for profile in replace_profiles:
@@ -1601,13 +1636,34 @@ if args and args[0] == "inspect":
             records.append(
                 {
                     "Id": container_id,
-                    "State": {"Running": container_id in state["current"]},
+                    "Name": "/" + metadata.get("name", metadata["service"]),
+                    "Image": metadata.get("image_id", "sha256:fixture"),
+                    "State": {
+                        "Running": container_id in state["current"],
+                        "Status": (
+                            "running" if container_id in state["current"] else "exited"
+                        ),
+                    },
                     "Config": {
+                        "Image": metadata.get("image_ref", "fixture:latest"),
                         "Labels": {
                             "com.docker.compose.project": metadata["project"],
                             "com.docker.compose.service": metadata["service"],
                         }
                     },
+                    "HostConfig": {
+                        "PortBindings": {
+                            f"{port}/tcp": [
+                                {"HostIp": "127.0.0.1", "HostPort": str(port)}
+                            ]
+                            for port in metadata["published_ports"]
+                        },
+                        "RestartPolicy": metadata.get(
+                            "restart_policy",
+                            {"Name": "unless-stopped", "MaximumRetryCount": 0},
+                        ),
+                    },
+                    "Mounts": metadata.get("mounts", []),
                     "NetworkSettings": {
                         "Ports": metadata.get("inspect_ports") or {
                             f"{port}/tcp": [
@@ -1639,6 +1695,8 @@ if args and args[0] == "inspect":
     raise SystemExit(0)
 
 if args and args[0] == "stop":
+    with (state_dir / "cleanup-order.log").open("a", encoding="utf-8") as stream:
+        stream.write("stop:" + args[1] + "\\n")
     with (state_dir / "stops.log").open("a", encoding="utf-8") as stream:
         stream.write(args[1] + "\\n")
     raise SystemExit(0)
@@ -1726,6 +1784,7 @@ except (BlockingIOError, OSError):
         "PAUSED_LEDGER": str(tmp_path / "snapshot.json.paused.jsonl"),
         "PREVIOUS_RELEASE_ROOT": "",
         "DEPLOY_PYTHON": str(PYTHON),
+        "REAL_PYTHON": str(PYTHON),
     }
     return project_root, release_root, environment, baseline_id, profiles
 
@@ -1830,6 +1889,35 @@ def _maintenance_paths(release_root: Path) -> tuple[Path, Path, Path]:
     return snapshot, paused, provenance
 
 
+def _predecessor_marker_path(release_root: Path) -> Path:
+    return (
+        release_root
+        / "container-maintenance"
+        / "operator-maintenance-predecessor.json"
+    )
+
+
+def _write_predecessor_marker(
+    release_root: Path,
+    previous_root: Path,
+) -> Path:
+    marker = _predecessor_marker_path(release_root)
+    marker.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "predecessor_git_sha": previous_root.name,
+                "predecessor_release_root": str(previous_root),
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    marker.chmod(0o400)
+    return marker
+
+
 def _write_maintenance_ledgers(release_root: Path) -> tuple[Path, Path]:
     snapshot, paused, _ = _maintenance_paths(release_root)
     snapshot.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -1838,6 +1926,146 @@ def _write_maintenance_ledgers(release_root: Path) -> tuple[Path, Path]:
         '{"name":"ocr-v6-amd","was_running":true}\n', encoding="utf-8"
     )
     return snapshot, paused
+
+
+def _maintenance_snapshot_record(state: str) -> dict[str, Any]:
+    return {
+        "compose_project": "",
+        "container_id": _container_id(998),
+        "image_id": "sha256:legacy-ocr",
+        "image_ref": "ocr:v6_amd",
+        "labels": {
+            "com.docker.compose.project": "",
+            "com.docker.compose.service": "",
+        },
+        "mounts": [],
+        "name": "ocr-v6-amd",
+        "ports": {
+            "8866/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8866"}]
+        },
+        "restart_policy": {
+            "MaximumRetryCount": 0,
+            "Name": "unless-stopped",
+        },
+        "state": state,
+    }
+
+
+def _pause_entry(
+    binding: dict[str, Any],
+    *,
+    status: str,
+    policy_neutralized: bool,
+) -> dict[str, Any]:
+    return {
+        "binding": binding,
+        "container_id": binding["container_id"],
+        "name": binding["name"],
+        "policy_neutralized": policy_neutralized,
+        "snapshot_sha256": hashlib.sha256(
+            json.dumps(binding, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "status": status,
+        "version": 1,
+    }
+
+
+def _set_legacy_ocr_container_state(
+    environment: dict[str, str],
+    *,
+    running: bool,
+    restart_policy: dict[str, Any] | None = None,
+    image_ref: str | None = None,
+) -> None:
+    state_path = Path(environment["FAKE_DOCKER_STATE"]) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    container_id = _container_id(998)
+    if running and container_id not in state["current"]:
+        state["current"].append(container_id)
+    if not running and container_id in state["current"]:
+        state["current"].remove(container_id)
+    if restart_policy is not None:
+        state["containers"][container_id]["restart_policy"] = restart_policy
+    if image_ref is not None:
+        state["containers"][container_id]["image_ref"] = image_ref
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def _write_active_maintenance_transaction(
+    release_root: Path,
+    *,
+    status: str = "stopped",
+    empty: bool = False,
+) -> tuple[Path, Path]:
+    snapshot, paused, _ = _maintenance_paths(release_root)
+    snapshot.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    binding = _maintenance_snapshot_record("running")
+    snapshot.write_text(
+        json.dumps(binding, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    paused.write_text(
+        ""
+        if empty
+        else json.dumps(
+            _pause_entry(binding, status=status, policy_neutralized=True),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    snapshot.chmod(0o600)
+    paused.chmod(0o600)
+    return snapshot, paused
+
+
+def _directory_facts(directory: Path) -> dict[str, tuple[bytes, int, int]]:
+    return {
+        path.name: (
+            path.read_bytes(),
+            stat.S_IMODE(path.lstat().st_mode),
+            path.lstat().st_nlink,
+        )
+        for path in directory.iterdir()
+    }
+
+
+def _archive_completed_maintenance(
+    release_root: Path,
+    payload: str = "",
+    *,
+    terminal_status: str | None = None,
+) -> Path:
+    snapshot, paused, _ = _maintenance_paths(release_root)
+    snapshot.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    binding = _maintenance_snapshot_record(
+        "running" if terminal_status is not None else "exited"
+    )
+    if terminal_status is not None:
+        payload = (
+            json.dumps(
+                _pause_entry(
+                    binding,
+                    status=terminal_status,
+                    policy_neutralized=False,
+                ),
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
+    snapshot.write_text(
+        json.dumps(binding, sort_keys=True, separators=(",", ":"))
+        + "\n",
+        encoding="utf-8",
+    )
+    snapshot.chmod(0o600)
+    paused.unlink(missing_ok=True)
+    archive = paused.with_name(f"{paused.name}.audit.{'a' * 32}.jsonl")
+    archive.write_text(payload, encoding="utf-8")
+    archive.chmod(0o400)
+    return archive
 
 
 def _write_maintenance_provenance(
@@ -1873,7 +2101,14 @@ def _prepare_cross_sha_operator_ledger_chain(
     new_ids: list[str],
 ) -> tuple[Path, Path, Path, Path, Path]:
     authority_root = _release_root_for_sha(environment, "d" * 40)
-    authority_snapshot, authority_paused = _write_maintenance_ledgers(authority_root)
+    authority_snapshot, authority_paused = _write_active_maintenance_transaction(
+        authority_root
+    )
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+    )
     ledger_root = _release_root_for_sha(environment, "c" * 40)
     _write_operator_ledgers(ledger_root, baseline_ids, new_ids)
     ledger_provenance = _write_maintenance_provenance(
@@ -1914,6 +2149,68 @@ def _run_operator_ledger_resolver(
             str(previous_root),
         ],
         cwd=PLATFORM_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _run_maintenance_resolver(
+    environment: dict[str, str],
+    release_root: Path,
+    previous_root: Path | None,
+) -> subprocess.CompletedProcess[str]:
+    command = [
+        str(PYTHON),
+        str(SCRIPTS / "operator_lifecycle.py"),
+        "resolve-maintenance",
+        "--report-root",
+        environment["REPORT_ROOT"],
+        "--release-tag",
+        TAG,
+        "--release-root",
+        str(release_root),
+    ]
+    if previous_root is not None:
+        command.extend(("--previous-release-root", str(previous_root)))
+    return subprocess.run(
+        command,
+        cwd=PLATFORM_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _run_provenance_publisher(
+    environment: dict[str, str],
+    release_root: Path,
+    source_root: Path,
+    snapshot: Path,
+    paused: Path,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            str(PYTHON),
+            str(SCRIPTS / "operator_lifecycle.py"),
+            "publish-provenance",
+            "--report-root",
+            environment["REPORT_ROOT"],
+            "--release-tag",
+            TAG,
+            "--release-root",
+            str(release_root),
+            "--source-release-root",
+            str(source_root),
+            "--snapshot",
+            str(snapshot),
+            "--paused",
+            str(paused),
+        ],
+        cwd=PLATFORM_ROOT,
+        env=environment,
         text=True,
         capture_output=True,
         check=False,
@@ -1924,8 +2221,13 @@ def _prepare_deep_maintenance_state_chain(
     environment: dict[str, str], baseline_id: str
 ) -> tuple[Path, Path]:
     ledger_root = _release_root_for_sha(environment, "d" * 40)
-    authoritative_snapshot, authoritative_paused = _write_maintenance_ledgers(
+    authoritative_snapshot, authoritative_paused = _write_active_maintenance_transaction(
         ledger_root
+    )
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
     )
     _write_operator_ledgers(ledger_root, [baseline_id], [])
     intermediate_root = _release_root_for_sha(environment, "c" * 40)
@@ -2067,7 +2369,14 @@ def test_same_sha_full_phase_one_and_three_reuses_active_current_maintenance_led
     project_root, release_root, environment, baseline_id, _ = _prepare_fake_lifecycle(
         tmp_path
     )
-    current_snapshot, current_paused = _write_maintenance_ledgers(release_root)
+    current_snapshot, current_paused = _write_active_maintenance_transaction(
+        release_root
+    )
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+    )
     _write_operator_ledgers(release_root, [baseline_id], [])
 
     completed, state = _run_prepared_lifecycle(
@@ -2083,11 +2392,581 @@ def test_same_sha_full_phase_one_and_three_reuses_active_current_maintenance_led
         Path(environment["FAKE_DOCKER_STATE"]) / "authorized-endpoints.log"
     ).read_text(encoding="utf-8") == " ".join(expected_endpoints)
     assert not (Path(environment["FAKE_DOCKER_STATE"]) / "maintenance.log").exists()
-    assert current_snapshot.read_text(encoding="utf-8") == '{"name":"ocr-v6-amd"}\n'
-    assert "was_running" in current_paused.read_text(encoding="utf-8")
+    assert json.loads(current_snapshot.read_text(encoding="utf-8"))[
+        "name"
+    ] == "ocr-v6-amd"
+    assert json.loads(current_paused.read_text(encoding="utf-8"))[
+        "status"
+    ] == "stopped"
     assert _ledger_ids(release_root, "baseline-operator-container-ids.txt") == [
         baseline_id
     ]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("empty", "pending_stop", "audit", "metadata"),
+)
+def test_same_sha_direct_rejects_invalid_active_maintenance_without_marker(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    _, release_root, environment, _, _ = _prepare_fake_lifecycle(tmp_path)
+    _, paused = _write_active_maintenance_transaction(
+        release_root,
+        status="pending_stop" if mutation == "pending_stop" else "stopped",
+        empty=mutation == "empty",
+    )
+    if mutation == "audit":
+        archive = paused.with_name(f"{paused.name}.audit.{'e' * 32}.jsonl")
+        archive.write_text("", encoding="utf-8")
+        archive.chmod(0o400)
+    elif mutation == "metadata":
+        Path(f"{paused}.archive.json").write_text("{}\n", encoding="utf-8")
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+    )
+
+    completed = _run_maintenance_resolver(environment, release_root, None)
+
+    assert completed.returncode != 0
+    assert "active maintenance" in completed.stderr
+
+
+def test_new_sha_starts_new_maintenance_after_previous_restore_completed(
+    tmp_path: Path,
+) -> None:
+    project_root, release_root, environment, baseline_id, profiles = (
+        _prepare_fake_lifecycle(tmp_path, initial_profiles=("gpu0",))
+    )
+    previous_root = _previous_release_root(environment)
+    _write_operator_ledgers(previous_root, [baseline_id], sorted(profiles["gpu0"]))
+    _archive_completed_maintenance(previous_root)
+    environment["PREVIOUS_RELEASE_ROOT"] = str(previous_root)
+
+    completed, state = _run_prepared_lifecycle(
+        project_root, environment, _stage_one_and_three_initialization()
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    maintenance_log = (
+        Path(environment["FAKE_DOCKER_STATE"]) / "maintenance.log"
+    ).read_text(encoding="utf-8")
+    current_snapshot, current_paused, current_provenance = _maintenance_paths(
+        release_root
+    )
+    assert maintenance_log.splitlines() == [
+        f"snapshot-existing-containers:{current_snapshot}",
+        f"pause-existing-containers:{current_snapshot} ocr-v6-amd",
+    ]
+    expected_endpoints = sorted({
+        f"127.0.0.1:{port}"
+        for container_id in state["current"]
+        for port in state["containers"][container_id]["published_ports"]
+    })
+    assert (
+        Path(environment["FAKE_DOCKER_STATE"]) / "authorized-endpoints.log"
+    ).read_text(encoding="utf-8") == " ".join(expected_endpoints)
+    assert not current_snapshot.exists()
+    assert not current_paused.exists()
+    assert not current_provenance.exists()
+    assert _ledger_ids(release_root, "baseline-operator-container-ids.txt") == [
+        baseline_id
+    ]
+    assert _ledger_ids(release_root, "new-operator-container-ids.txt") == sorted(
+        profiles["gpu0"]
+    )
+
+
+def test_new_maintenance_transaction_atomically_binds_its_immediate_predecessor(
+    tmp_path: Path,
+) -> None:
+    _, release_root, environment, baseline_id, profiles = _prepare_fake_lifecycle(
+        tmp_path,
+        initial_profiles=("gpu0",),
+    )
+    previous_root = _previous_release_root(environment)
+    _write_operator_ledgers(previous_root, [baseline_id], sorted(profiles["gpu0"]))
+    _archive_completed_maintenance(previous_root)
+
+    completed = _run_maintenance_resolver(environment, release_root, previous_root)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.splitlines()[0] == "fresh-after-restored-previous"
+    marker = _predecessor_marker_path(release_root)
+    metadata = marker.lstat()
+    assert stat.S_ISREG(metadata.st_mode)
+    assert stat.S_IMODE(metadata.st_mode) == 0o400
+    assert metadata.st_uid == os.geteuid()
+    assert metadata.st_nlink == 1
+    assert json.loads(marker.read_text(encoding="utf-8")) == {
+        "predecessor_git_sha": previous_root.name,
+        "predecessor_release_root": str(previous_root),
+    }
+    assert not list(marker.parent.glob(".operator-maintenance-predecessor.*"))
+
+
+@pytest.mark.parametrize("terminal_status", ("restored", "not_stopped"))
+def test_new_maintenance_accepts_real_nonempty_completed_predecessor_audit(
+    tmp_path: Path,
+    terminal_status: str,
+) -> None:
+    _, release_root, environment, baseline_id, profiles = _prepare_fake_lifecycle(
+        tmp_path,
+        initial_profiles=("gpu0",),
+    )
+    previous_root = _previous_release_root(environment)
+    _write_operator_ledgers(previous_root, [baseline_id], sorted(profiles["gpu0"]))
+    _archive_completed_maintenance(
+        previous_root,
+        terminal_status=terminal_status,
+    )
+    _set_legacy_ocr_container_state(environment, running=True)
+
+    completed = _run_maintenance_resolver(environment, release_root, previous_root)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.splitlines()[0] == "fresh-after-restored-previous"
+
+
+def test_new_sha_resumes_pause_after_snapshot_interruption(
+    tmp_path: Path,
+) -> None:
+    _, release_root, environment, baseline_id, profiles = _prepare_fake_lifecycle(
+        tmp_path,
+        initial_profiles=("gpu0",),
+    )
+    previous_root = _previous_release_root(environment)
+    _write_operator_ledgers(previous_root, [baseline_id], sorted(profiles["gpu0"]))
+    _archive_completed_maintenance(previous_root, terminal_status="restored")
+    _set_legacy_ocr_container_state(environment, running=True)
+    marker = _write_predecessor_marker(release_root, previous_root)
+    snapshot, paused, _ = _maintenance_paths(release_root)
+    snapshot.write_text(
+        json.dumps(
+            _maintenance_snapshot_record("running"),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    snapshot.chmod(0o600)
+    previous_bytes = {
+        path: path.read_bytes()
+        for path in previous_root.joinpath("container-maintenance").iterdir()
+    }
+
+    completed = _run_maintenance_resolver(environment, release_root, previous_root)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.splitlines() == [
+        "resume-pause-after-restored-previous",
+        str(previous_root),
+        str(snapshot),
+        str(paused),
+    ]
+    assert marker.read_bytes()
+    assert not paused.exists()
+    assert previous_bytes == {
+        path: path.read_bytes()
+        for path in previous_root.joinpath("container-maintenance").iterdir()
+    }
+
+
+def test_new_sha_reuses_local_ledgers_after_pause_interruption(
+    tmp_path: Path,
+) -> None:
+    _, release_root, environment, baseline_id, profiles = _prepare_fake_lifecycle(
+        tmp_path,
+        initial_profiles=("gpu0",),
+    )
+    previous_root = _previous_release_root(environment)
+    _write_operator_ledgers(previous_root, [baseline_id], sorted(profiles["gpu0"]))
+    _archive_completed_maintenance(previous_root, terminal_status="restored")
+    marker = _write_predecessor_marker(release_root, previous_root)
+    snapshot, paused = _write_active_maintenance_transaction(release_root)
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+    )
+
+    completed = _run_maintenance_resolver(environment, release_root, previous_root)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.splitlines() == [
+        "reuse-local",
+        str(previous_root),
+        str(snapshot),
+        str(paused),
+    ]
+    assert marker.read_bytes()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "empty",
+        "pending_stop",
+        "restoring",
+        "restored",
+        "not_stopped",
+        "binding",
+        "hash",
+    ),
+)
+def test_reuse_local_rejects_incomplete_or_inconsistent_active_transaction(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    _, release_root, environment, baseline_id, profiles = _prepare_fake_lifecycle(
+        tmp_path,
+        initial_profiles=("gpu0",),
+    )
+    previous_root = _previous_release_root(environment)
+    _write_operator_ledgers(previous_root, [baseline_id], sorted(profiles["gpu0"]))
+    _archive_completed_maintenance(previous_root, terminal_status="restored")
+    _write_predecessor_marker(release_root, previous_root)
+    _, paused = _write_active_maintenance_transaction(
+        release_root,
+        status=(
+            mutation
+            if mutation
+            in {"pending_stop", "restoring", "restored", "not_stopped"}
+            else "stopped"
+        ),
+        empty=mutation == "empty",
+    )
+    if mutation in {"binding", "hash"}:
+        entry = json.loads(paused.read_text(encoding="utf-8"))
+        if mutation == "binding":
+            entry["binding"] = {**entry["binding"], "image_ref": "drifted:v1"}
+        else:
+            entry["snapshot_sha256"] = "0" * 64
+        paused.write_text(
+            json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        paused.chmod(0o600)
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+    )
+
+    completed = _run_maintenance_resolver(environment, release_root, previous_root)
+
+    assert completed.returncode != 0
+    assert "active maintenance" in completed.stderr
+
+
+@pytest.mark.parametrize("artifact", ("audit", "metadata"))
+def test_reuse_local_rejects_active_and_archive_artifact_mix(
+    tmp_path: Path,
+    artifact: str,
+) -> None:
+    _, release_root, environment, baseline_id, profiles = _prepare_fake_lifecycle(
+        tmp_path,
+        initial_profiles=("gpu0",),
+    )
+    previous_root = _previous_release_root(environment)
+    _write_operator_ledgers(previous_root, [baseline_id], sorted(profiles["gpu0"]))
+    _archive_completed_maintenance(previous_root, terminal_status="restored")
+    _write_predecessor_marker(release_root, previous_root)
+    _, paused = _write_active_maintenance_transaction(release_root)
+    if artifact == "audit":
+        archive = paused.with_name(f"{paused.name}.audit.{'f' * 32}.jsonl")
+        archive.write_text("", encoding="utf-8")
+        archive.chmod(0o400)
+    else:
+        Path(f"{paused}.archive.json").write_text("{}\n", encoding="utf-8")
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+    )
+
+    completed = _run_maintenance_resolver(environment, release_root, previous_root)
+
+    assert completed.returncode != 0
+    assert "active maintenance" in completed.stderr
+
+
+@pytest.mark.parametrize("phase", ("marker-only", "snapshot-only", "reuse-local"))
+@pytest.mark.parametrize("mutation", ("archive", "container"))
+def test_marker_resume_revalidates_completed_predecessor_without_mutating_it(
+    tmp_path: Path,
+    phase: str,
+    mutation: str,
+) -> None:
+    _, release_root, environment, baseline_id, profiles = _prepare_fake_lifecycle(
+        tmp_path,
+        initial_profiles=("gpu0",),
+    )
+    previous_root = _previous_release_root(environment)
+    _write_operator_ledgers(previous_root, [baseline_id], sorted(profiles["gpu0"]))
+    archive = _archive_completed_maintenance(
+        previous_root,
+        terminal_status="restored",
+    )
+    _set_legacy_ocr_container_state(environment, running=True)
+    _write_predecessor_marker(release_root, previous_root)
+    if phase == "snapshot-only":
+        snapshot, _, _ = _maintenance_paths(release_root)
+        snapshot.write_text(
+            json.dumps(
+                _maintenance_snapshot_record("running"),
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        snapshot.chmod(0o600)
+    elif phase == "reuse-local":
+        _write_active_maintenance_transaction(release_root)
+        _set_legacy_ocr_container_state(
+            environment,
+            running=False,
+            restart_policy={"Name": "no", "MaximumRetryCount": 0},
+        )
+    if mutation == "archive":
+        archive.chmod(0o600)
+        archive.write_text("{}\n", encoding="utf-8")
+        archive.chmod(0o400)
+    else:
+        _set_legacy_ocr_container_state(
+            environment,
+            running=phase != "reuse-local",
+            restart_policy=(
+                {"Name": "no", "MaximumRetryCount": 0}
+                if phase == "reuse-local"
+                else None
+            ),
+            image_ref="drifted:v1",
+        )
+    previous_directory = previous_root / "container-maintenance"
+    before = _directory_facts(previous_directory)
+    metadata = Path(f"{_maintenance_paths(previous_root)[1]}.archive.json")
+    assert not metadata.exists()
+
+    completed = _run_maintenance_resolver(environment, release_root, previous_root)
+
+    assert completed.returncode != 0
+    assert _directory_facts(previous_directory) == before
+    assert not metadata.exists()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("missing", "writable", "symlink", "hardlink", "mismatch"),
+)
+def test_new_sha_rejects_untrusted_predecessor_transaction_marker(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    _, release_root, environment, baseline_id, profiles = _prepare_fake_lifecycle(
+        tmp_path,
+        initial_profiles=("gpu0",),
+    )
+    previous_root = _previous_release_root(environment)
+    _write_operator_ledgers(previous_root, [baseline_id], sorted(profiles["gpu0"]))
+    _archive_completed_maintenance(previous_root)
+    _write_maintenance_ledgers(release_root)
+    marker = _predecessor_marker_path(release_root)
+    if mutation != "missing":
+        marker_previous = previous_root
+        if mutation == "mismatch":
+            marker_previous = _release_root_for_sha(environment, "c" * 40)
+            marker_previous.mkdir(parents=True)
+        _write_predecessor_marker(release_root, marker_previous)
+    if mutation == "writable":
+        marker.chmod(0o600)
+    elif mutation == "symlink":
+        content = marker.read_bytes()
+        marker.unlink()
+        target = marker.with_name("predecessor-target.json")
+        target.write_bytes(content)
+        target.chmod(0o400)
+        marker.symlink_to(target)
+    elif mutation == "hardlink":
+        os.link(marker, marker.with_name("predecessor-hardlink.json"))
+
+    completed = _run_maintenance_resolver(environment, release_root, previous_root)
+
+    assert completed.returncode != 0
+    assert "predecessor transaction marker" in completed.stderr
+
+
+def test_new_sha_recognizes_completed_authority_through_predecessor_provenance(
+    tmp_path: Path,
+) -> None:
+    _, release_root, environment, baseline_id, profiles = _prepare_fake_lifecycle(
+        tmp_path,
+        initial_profiles=("gpu0",),
+    )
+    authority_root = _release_root_for_sha(environment, "c" * 40)
+    archive = _archive_completed_maintenance(authority_root)
+    authority_snapshot, authority_paused, _ = _maintenance_paths(authority_root)
+    previous_root = _previous_release_root(environment)
+    _write_operator_ledgers(previous_root, [baseline_id], sorted(profiles["gpu0"]))
+    provenance = _write_maintenance_provenance(
+        previous_root,
+        source_release_root=authority_root,
+        authoritative_snapshot=authority_snapshot,
+        authoritative_paused=authority_paused,
+    )
+    old_bytes = {
+        authority_snapshot: authority_snapshot.read_bytes(),
+        archive: archive.read_bytes(),
+        provenance: provenance.read_bytes(),
+    }
+
+    completed = _run_maintenance_resolver(environment, release_root, previous_root)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.splitlines()[0] == "fresh-after-restored-previous"
+    assert json.loads(
+        _predecessor_marker_path(release_root).read_text(encoding="utf-8")
+    ) == {
+        "predecessor_git_sha": previous_root.name,
+        "predecessor_release_root": str(previous_root),
+    }
+    assert old_bytes == {path: path.read_bytes() for path in old_bytes}
+
+
+def test_publish_provenance_rejects_completed_authority(
+    tmp_path: Path,
+) -> None:
+    _, release_root, environment, _, _ = _prepare_fake_lifecycle(tmp_path)
+    source_root = _previous_release_root(environment)
+    _archive_completed_maintenance(source_root)
+    snapshot, paused, _ = _maintenance_paths(source_root)
+
+    completed = _run_provenance_publisher(
+        environment,
+        release_root,
+        source_root,
+        snapshot,
+        paused,
+    )
+
+    assert completed.returncode != 0
+    assert "completed maintenance authority" in completed.stderr
+    assert not _maintenance_paths(release_root)[2].exists()
+
+
+def test_publish_provenance_rejects_malformed_active_authority(
+    tmp_path: Path,
+) -> None:
+    _, release_root, environment, _, _ = _prepare_fake_lifecycle(tmp_path)
+    source_root = _previous_release_root(environment)
+    snapshot, paused = _write_active_maintenance_transaction(
+        source_root,
+        empty=True,
+    )
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+    )
+
+    completed = _run_provenance_publisher(
+        environment,
+        release_root,
+        source_root,
+        snapshot,
+        paused,
+    )
+
+    assert completed.returncode != 0
+    assert "active maintenance paused ledger" in completed.stderr
+    assert not _maintenance_paths(release_root)[2].exists()
+
+
+def test_reuse_provenance_revalidates_active_authority_container_binding(
+    tmp_path: Path,
+) -> None:
+    _, release_root, environment, _, _ = _prepare_fake_lifecycle(tmp_path)
+    source_root = _previous_release_root(environment)
+    snapshot, paused = _write_active_maintenance_transaction(source_root)
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+    )
+    published = _run_provenance_publisher(
+        environment,
+        release_root,
+        source_root,
+        snapshot,
+        paused,
+    )
+    assert published.returncode == 0, published.stderr
+    authority_directory = source_root / "container-maintenance"
+    authority_before = _directory_facts(authority_directory)
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+        image_ref="drifted:v1",
+    )
+
+    completed = _run_maintenance_resolver(environment, release_root, source_root)
+
+    assert completed.returncode != 0
+    assert "active maintenance container binding has drifted" in completed.stderr
+    assert _directory_facts(authority_directory) == authority_before
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("writable", "symlink", "hardlink", "multiple", "active", "metadata"),
+)
+def test_new_sha_rejects_untrusted_completed_maintenance_archive(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    project_root, _, environment, baseline_id, profiles = _prepare_fake_lifecycle(
+        tmp_path,
+        initial_profiles=("gpu0",),
+    )
+    previous_root = _previous_release_root(environment)
+    _write_operator_ledgers(previous_root, [baseline_id], sorted(profiles["gpu0"]))
+    archive = _archive_completed_maintenance(previous_root)
+    if mutation == "writable":
+        archive.chmod(0o600)
+    elif mutation == "symlink":
+        target = archive.with_name("archive-target")
+        target.write_text("", encoding="utf-8")
+        archive.unlink()
+        archive.symlink_to(target)
+    elif mutation == "hardlink":
+        os.link(archive, archive.with_name("archive-hardlink"))
+    elif mutation == "multiple":
+        second = archive.with_name(
+            f"{_maintenance_paths(previous_root)[1].name}.audit.{'b' * 32}.jsonl"
+        )
+        second.write_text("", encoding="utf-8")
+        second.chmod(0o400)
+    elif mutation == "active":
+        archive.chmod(0o600)
+        archive.write_text('{"status":"stopped"}\n', encoding="utf-8")
+        archive.chmod(0o400)
+    else:
+        metadata = Path(f"{_maintenance_paths(previous_root)[1]}.archive.json")
+        metadata.write_text("{}\n", encoding="utf-8")
+
+    environment["PREVIOUS_RELEASE_ROOT"] = str(previous_root)
+    completed, _ = _run_prepared_lifecycle(
+        project_root, environment, _stage_one_and_three_initialization()
+    )
+
+    assert completed.returncode != 0
+    assert not (Path(environment["FAKE_DOCKER_STATE"]) / "maintenance.log").exists()
 
 
 def test_third_sha_uses_previous_operator_ledgers_and_original_maintenance_authority(
@@ -2097,7 +2976,14 @@ def test_third_sha_uses_previous_operator_ledgers_and_original_maintenance_autho
         tmp_path
     )
     authority_root = _release_root_for_sha(environment, "c" * 40)
-    authority_snapshot, authority_paused = _write_maintenance_ledgers(authority_root)
+    authority_snapshot, authority_paused = _write_active_maintenance_transaction(
+        authority_root
+    )
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+    )
     previous_root = _previous_release_root(environment)
     _write_operator_ledgers(previous_root, [baseline_id], [])
     _write_maintenance_provenance(
@@ -2208,7 +3094,14 @@ def test_cross_sha_operator_ledger_resolution_preserves_current_minus_previous_g
 def test_operator_ledger_resolver_rejects_partial_ancestor(tmp_path: Path) -> None:
     _, _, environment, baseline_id, _ = _prepare_fake_lifecycle(tmp_path)
     authority_root = _release_root_for_sha(environment, "d" * 40)
-    authority_snapshot, authority_paused = _write_maintenance_ledgers(authority_root)
+    authority_snapshot, authority_paused = _write_active_maintenance_transaction(
+        authority_root
+    )
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+    )
     partial_root = _release_root_for_sha(environment, "c" * 40)
     partial_dir = partial_root / "container-maintenance"
     partial_dir.mkdir(parents=True)
@@ -2232,7 +3125,14 @@ def test_operator_ledger_resolver_rejects_partial_ancestor(tmp_path: Path) -> No
 def test_operator_ledger_resolver_rejects_provenance_cycle(tmp_path: Path) -> None:
     _, _, environment, _, _ = _prepare_fake_lifecycle(tmp_path)
     authority_root = _release_root_for_sha(environment, "d" * 40)
-    authority_snapshot, authority_paused = _write_maintenance_ledgers(authority_root)
+    authority_snapshot, authority_paused = _write_active_maintenance_transaction(
+        authority_root
+    )
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+    )
     first_root = _previous_release_root(environment)
     second_root = _release_root_for_sha(environment, "c" * 40)
     _write_maintenance_provenance(
@@ -2259,7 +3159,14 @@ def test_operator_ledger_resolver_rejects_chain_without_ledger_ancestor(
 ) -> None:
     _, _, environment, _, _ = _prepare_fake_lifecycle(tmp_path)
     authority_root = _release_root_for_sha(environment, "d" * 40)
-    authority_snapshot, authority_paused = _write_maintenance_ledgers(authority_root)
+    authority_snapshot, authority_paused = _write_active_maintenance_transaction(
+        authority_root
+    )
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+    )
     empty_root = _release_root_for_sha(environment, "c" * 40)
     (empty_root / "container-maintenance").mkdir(parents=True)
     immediate_root = _previous_release_root(environment)
@@ -2412,7 +3319,12 @@ def test_cross_sha_host_preflight_authorizes_only_running_compose_container_port
         include_baseline=False,
     )
     previous_root = _previous_release_root(environment)
-    _write_maintenance_ledgers(previous_root)
+    _write_active_maintenance_transaction(previous_root)
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+    )
     environment["PREVIOUS_RELEASE_ROOT"] = str(previous_root)
     state_path = Path(environment["FAKE_DOCKER_STATE"]) / "state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -2443,7 +3355,12 @@ def test_cross_sha_port_authority_scopes_shared_project_and_accepts_wildcard_dua
         include_baseline=False,
     )
     previous_root = _previous_release_root(environment)
-    _write_maintenance_ledgers(previous_root)
+    _write_active_maintenance_transaction(previous_root)
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+    )
     environment["PREVIOUS_RELEASE_ROOT"] = str(previous_root)
     environment["EXPECTED_AUTHORIZED_ENDPOINTS"] = "0.0.0.0:18100 [::]:18100"
     state_path = Path(environment["FAKE_DOCKER_STATE"]) / "state.json"
@@ -2503,7 +3420,12 @@ def test_cross_sha_host_preflight_rejects_non_authoritative_compose_container(
         include_baseline=False,
     )
     previous_root = _previous_release_root(environment)
-    _write_maintenance_ledgers(previous_root)
+    _write_active_maintenance_transaction(previous_root)
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+    )
     environment["PREVIOUS_RELEASE_ROOT"] = str(previous_root)
     state_path = Path(environment["FAKE_DOCKER_STATE"]) / "state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -2537,7 +3459,12 @@ def test_cross_sha_host_preflight_still_rejects_extra_occupied_required_port(
         include_baseline=False,
     )
     previous_root = _previous_release_root(environment)
-    _write_maintenance_ledgers(previous_root)
+    _write_active_maintenance_transaction(previous_root)
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+    )
     environment["PREVIOUS_RELEASE_ROOT"] = str(previous_root)
     environment["FAKE_UNAUTHORIZED_OCCUPIED_ENDPOINT"] = "127.0.0.2:18101"
     stage_one = _extract_scenario_bash_block(
@@ -2607,20 +3534,24 @@ def test_previous_active_pause_is_not_resnapshotted_and_restore_uses_authoritati
 ) -> None:
     project_root, release_root, environment, _, _ = _prepare_fake_lifecycle(tmp_path)
     previous_root = _previous_release_root(environment)
-    previous_ledger_dir = previous_root / "container-maintenance"
-    previous_ledger_dir.mkdir(parents=True, mode=0o700)
-    previous_snapshot = previous_ledger_dir / "existing-containers.jsonl"
-    previous_paused = previous_ledger_dir / "existing-containers.jsonl.paused.jsonl"
-    previous_snapshot.write_text('{"name":"ocr-v6-amd"}\n', encoding="utf-8")
-    active_pause = '{"name":"ocr-v6-amd","was_running":true}\n'
-    previous_paused.write_text(active_pause, encoding="utf-8")
+    previous_snapshot, previous_paused = _write_active_maintenance_transaction(
+        previous_root
+    )
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+    )
+    active_pause = previous_paused.read_bytes()
     environment["PREVIOUS_RELEASE_ROOT"] = str(previous_root)
     _write_operator_ledgers(release_root, [], [])
     stage_one = _extract_scenario_bash_block(
         "## 阶段 1：服务器预检、快照和暂停"
     )
-    cleanup = _extract_scenario_bash_block(
-        "## 阶段 6：反例、压力、恢复和报告渲染"
+    cleanup = "\n".join(
+        _extract_scenario_bash_blocks(
+            "## 阶段 6：反例、压力、恢复和报告渲染"
+        )[:2]
     )
     ledger_dir = release_root / "container-maintenance"
     cleanup_support = f"""
@@ -2639,12 +3570,15 @@ assert_not_in_baseline() {{ return 0; }}
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert previous_paused.read_text(encoding="utf-8") == active_pause
+    assert previous_paused.read_bytes() == active_pause
     assert not (Path(environment["FAKE_DOCKER_STATE"]) / "maintenance.log").exists()
     restore_arguments = (
         Path(environment["FAKE_DOCKER_STATE"]) / "restore-arguments.log"
     ).read_text(encoding="utf-8").splitlines()
     assert restore_arguments == [str(previous_snapshot), str(previous_paused)]
+    assert (
+        Path(environment["FAKE_DOCKER_STATE"]) / "cleanup-order.log"
+    ).read_text(encoding="utf-8").splitlines() == ["case-batch", "restore"]
     provenance = ledger_dir / "operator-maintenance-provenance.json"
     assert stat.S_IMODE(provenance.stat().st_mode) == 0o400
     assert json.loads(provenance.read_text(encoding="utf-8")) == {
@@ -2734,8 +3668,10 @@ def test_operator_cleanup_stops_exact_valid_new_set_without_removing_containers(
     tmp_path: Path,
 ) -> None:
     stage_three = _extract_scenario_bash_block("## 阶段 3：平台和逐卡算子拓扑")
-    cleanup = _extract_scenario_bash_block(
-        "## 阶段 6：反例、压力、恢复和报告渲染"
+    cleanup = "\n".join(
+        _extract_scenario_bash_blocks(
+            "## 阶段 6：反例、压力、恢复和报告渲染"
+        )[:2]
     )
 
     completed, release_root, state, baseline_id, profiles = _run_lifecycle_script(
@@ -2758,6 +3694,13 @@ def test_operator_cleanup_stops_exact_valid_new_set_without_removing_containers(
     assert set(state["current"]) == {baseline_id, *expected_new}
     calls = (tmp_path / "docker-state/calls.log").read_text(encoding="utf-8")
     assert '"rm"' not in calls
+    assert (tmp_path / "docker-state/cleanup-order.log").read_text(
+        encoding="utf-8"
+    ).splitlines() == [
+        "case-batch",
+        *(f"stop:{container_id}" for container_id in expected_new),
+        "restore",
+    ]
 
 
 def test_noncanonical_docs_do_not_offer_direct_operator_profile_up_commands() -> None:

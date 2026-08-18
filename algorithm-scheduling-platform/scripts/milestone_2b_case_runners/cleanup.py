@@ -127,6 +127,7 @@ async def cleanup_foundation_resources(
     resources = foundation_cleanup_resources(group, case_id, run_id)
     temporary = resources[0]
     errors: list[str] = []
+    preserve_temporary = False
     if group == "registry":
         await _capture_sync_cleanup(
             errors,
@@ -161,11 +162,65 @@ async def cleanup_foundation_resources(
             "redis",
             lambda: _cleanup_redis(redis),
         )
+    elif group == "load":
+        from .load import (
+            _cleanup_case_lease_receipts,
+            _cleanup_course_fact,
+            _cleanup_runtime_recovery_receipts,
+        )
+
+        if any(resource.kind == "container" for resource in resources):
+            def cleanup_runtime_recovery() -> None:
+                _cleanup_runtime_recovery_receipts(case_id, run_id)
+
+            recovery_error_count = len(errors)
+            await _capture_sync_cleanup(
+                errors,
+                "runtime_recovery",
+                cleanup_runtime_recovery,
+            )
+            preserve_temporary = len(errors) != recovery_error_count
+
+        database_resources = [
+            resource for resource in resources if resource.kind == "database"
+        ]
+        if database_resources:
+            database_scope = database_resources[0].name
+            expected_prefix = "algorithm:course-task:"
+            if not database_scope.startswith(expected_prefix):
+                errors.append("postgresql: load cleanup database scope is invalid")
+            else:
+                task_id = database_scope.removeprefix(expected_prefix)
+                await _capture_sync_cleanup(
+                    errors,
+                    "postgresql",
+                    lambda: _cleanup_course_fact(task_id),
+                )
+
+        if case_id == "LOAD-015":
+            def cleanup_load_lease_receipts() -> None:
+                _cleanup_case_lease_receipts(run_id)
+
+            lease_error_count = len(errors)
+            await _capture_sync_cleanup(
+                errors,
+                "redis",
+                cleanup_load_lease_receipts,
+            )
+            preserve_temporary = preserve_temporary or len(errors) != lease_error_count
     removed: list[str] = []
-    await _capture_sync_cleanup(
-        errors,
-        "temporary_files",
-        lambda: removed.extend(_cleanup_temporary_directories(temporary)),
+    if not preserve_temporary:
+        await _capture_sync_cleanup(
+            errors,
+            "temporary_files",
+            lambda: removed.extend(_cleanup_temporary_directories(temporary)),
+        )
+    prefix_path = Path(temporary.name)
+    temporary_root = Path(tempfile.gettempdir()).resolve(strict=True)
+    residual = sorted(
+        entry.name
+        for entry in temporary_root.iterdir()
+        if entry.name.startswith(prefix_path.name)
     )
     return {
         "case_id": case_id,
@@ -173,7 +228,7 @@ async def cleanup_foundation_resources(
         "run_id": run_id,
         "status": "failed" if errors else "clean",
         "removed_temp_directories": removed,
-        "residual_temp_directories": [],
+        "residual_temp_directories": residual,
         "errors": errors,
     }
 
@@ -183,7 +238,7 @@ def cleanup_main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--group",
         required=True,
-        choices=("deployment", "gpu", "registry", "infrastructure"),
+        choices=("deployment", "gpu", "registry", "infrastructure", "load"),
     )
     parser.add_argument("--case", required=True)
     parser.add_argument("--run-id", required=True)

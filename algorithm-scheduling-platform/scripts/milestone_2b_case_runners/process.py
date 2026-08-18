@@ -37,6 +37,7 @@ FoundationGroup = Literal[
     "gpu",
     "registry",
     "infrastructure",
+    "load",
 ]
 
 _FOUNDATION_CASE_RANGES = {
@@ -44,6 +45,7 @@ _FOUNDATION_CASE_RANGES = {
     "gpu": ("GPU", 20),
     "registry": ("REG", 20),
     "infrastructure": ("INF", 16),
+    "load": ("LOAD", 26),
 }
 _FOUNDATION_RESOURCE_KINDS = {
     "deployment": frozenset({"filesystem"}),
@@ -59,11 +61,28 @@ _FOUNDATION_RESOURCE_KINDS = {
             "redis_prefix",
         }
     ),
+    "load": frozenset({"filesystem", "container", "database", "redis_prefix"}),
 }
 _REGISTRY_DATABASE_CASES = frozenset({"REG-014", "REG-015"})
 _WRITABLE_DEPLOYMENT_CASES = frozenset(
     {"DEP-013", "DEP-015", "DEP-016", "DEP-019", "DEP-020"}
 )
+_LOAD_CASES = frozenset(f"LOAD-{number:03d}" for number in range(10, 27))
+_CANONICAL_LOAD_CASES = frozenset(
+    f"LOAD-{number:03d}" for number in range(10, 17)
+)
+_LOAD_COURSE_FACT_CASES = frozenset(
+    {"LOAD-011", "LOAD-012", "LOAD-013", "LOAD-014", "LOAD-016"}
+)
+_LOAD_RUNTIME_CONTAINERS: dict[str, tuple[str, ...]] = {
+    "LOAD-010": ("facerec-gpu0",),
+    "LOAD-011": ("asr-offline-gpu0", "asr-offline-gpu1", "asr-offline-gpu2"),
+    "LOAD-012": ("orchestrator-service",),
+    "LOAD-013": ("control-service",),
+    "LOAD-014": ("kafka",),
+    "LOAD-015": ("redis",),
+    "LOAD-016": ("postgres", "orchestrator-service"),
+}
 
 _MUTATION_AUTHORITY: dict[
     MutationKind, tuple[CommandOperation, ResourceKind]
@@ -86,6 +105,19 @@ SUPERVISOR_REGISTRATION_CLEANUP_GRACE_SECONDS = 0.1
 DEFAULT_COMMAND_TERMINATE_GRACE_SECONDS = 2.0
 MAX_COMMAND_TERMINATE_GRACE_SECONDS = 30.0
 _SUPERVISOR_PROCESS_FD: int | None = None
+
+
+def _load_checker_resource_kinds(case_id: str) -> tuple[ResourceKind, ...]:
+    container_names = _LOAD_RUNTIME_CONTAINERS.get(case_id)
+    if container_names is None:
+        return ("filesystem",)
+    kinds: list[ResourceKind] = ["container"] * len(container_names)
+    if case_id in _LOAD_COURSE_FACT_CASES:
+        kinds.append("database")
+    elif case_id == "LOAD-015":
+        kinds.extend(("redis_prefix", "filesystem"))
+    kinds.append("filesystem")
+    return tuple(kinds)
 
 
 def _configure_process_supervisor(descriptor: int | None) -> None:
@@ -221,9 +253,12 @@ class FoundationCheckAction:
         if type(self.group) is not str or self.group not in _FOUNDATION_CASE_RANGES:
             raise ValueError("foundation checker group is not registered")
         prefix, last = _FOUNDATION_CASE_RANGES[self.group]
-        if type(self.case_id) is not str or self.case_id not in {
-            f"{prefix}-{number:03d}" for number in range(1, last + 1)
-        }:
+        valid_case_ids = (
+            _LOAD_CASES
+            if self.group == "load"
+            else {f"{prefix}-{number:03d}" for number in range(1, last + 1)}
+        )
+        if type(self.case_id) is not str or self.case_id not in valid_case_ids:
             raise ValueError("foundation checker case does not match its group")
         if type(self.resources) is not tuple or not self.resources:
             raise ValueError("foundation checker resources must be a non-empty tuple")
@@ -235,7 +270,7 @@ class FoundationCheckAction:
         if any(resource.kind not in allowed_kinds for resource in self.resources):
             raise ValueError("foundation checker resource kind is not allowed")
         mutable_resources = self.resources[1:]
-        if self.group != "deployment" and any(
+        if self.group not in {"deployment", "load"} and any(
             resource.kind == "filesystem" for resource in mutable_resources
         ):
             raise ValueError("foundation checker accepts exactly one input file")
@@ -266,6 +301,12 @@ class FoundationCheckAction:
                 )
         if self.group == "infrastructure" and not mutable_resources:
             raise ValueError("infrastructure checker requires isolated resources")
+        if self.group == "load":
+            expected_kinds = _load_checker_resource_kinds(self.case_id)
+            if tuple(resource.kind for resource in mutable_resources) != expected_kinds:
+                raise ValueError(
+                    "load checker resources do not match the fixed case contract"
+                )
 
 
 def foundation_cleanup_resources(
@@ -274,9 +315,14 @@ def foundation_cleanup_resources(
     if type(group) is not str or group not in _FOUNDATION_CASE_RANGES:
         raise ValueError("foundation cleanup group is not registered")
     prefix, last = _FOUNDATION_CASE_RANGES[group]
-    if type(case_id) is not str or case_id not in {
-        f"{prefix}-{number:03d}" for number in range(1, last + 1)
-    }:
+    valid_case_ids = (
+        _LOAD_CASES
+        if group == "load"
+        else {f"{prefix}-{number:03d}" for number in range(1, last + 1)}
+    )
+    if type(case_id) is not str or case_id not in valid_case_ids:
+        if group == "load":
+            raise ValueError("load cleanup case is not registered")
         raise ValueError("foundation cleanup case does not match its group")
     if type(run_id) is not str or RUN_ID_PATTERN.fullmatch(run_id) is None:
         raise ValueError("foundation cleanup run_id is invalid")
@@ -317,6 +363,18 @@ def foundation_cleanup_resources(
                 ResourceSpec("kafka_group", topic),
                 ResourceSpec("redis_prefix", f"m2b:{run_id}:{case_name}:"),
             )
+        )
+    elif group == "load":
+        if case_id in _LOAD_COURSE_FACT_CASES:
+            resources.append(
+                ResourceSpec(
+                    "database",
+                    f"algorithm:course-task:m2b-{run_id}-{case_name}",
+                )
+            )
+        resources.extend(
+            ResourceSpec("container", name)
+            for name in _LOAD_RUNTIME_CONTAINERS.get(case_id, ())
         )
     return tuple(resources)
 
@@ -468,9 +526,12 @@ def _materialize_action(action: CommandAction) -> MaterializedCommand:
         ):
             raise ValueError("foundation checker identity is invalid")
         prefix, last = _FOUNDATION_CASE_RANGES[group]
-        if case_id not in {
-            f"{prefix}-{number:03d}" for number in range(1, last + 1)
-        }:
+        valid_case_ids = (
+            _LOAD_CASES
+            if group == "load"
+            else {f"{prefix}-{number:03d}" for number in range(1, last + 1)}
+        )
+        if case_id not in valid_case_ids:
             raise ValueError("foundation checker case does not match its group")
         if type(resources) is not tuple or not resources:
             raise ValueError("foundation checker resources are invalid")
@@ -494,6 +555,12 @@ def _materialize_action(action: CommandAction) -> MaterializedCommand:
             )
         elif group == "infrastructure":
             foundation_operation = "database_mutation"
+        elif group == "load":
+            foundation_operation = (
+                "docker_mutation"
+                if case_id in _CANONICAL_LOAD_CASES
+                else "filesystem_mutation"
+            )
         elif group == "deployment" and case_id in _WRITABLE_DEPLOYMENT_CASES:
             foundation_operation = "filesystem_mutation"
         else:
@@ -828,6 +895,43 @@ def _validate_foundation_document(
             "redis_prefix",
         )
         bindings = tuple(zip(infrastructure_fields, mutable_resources, strict=True))
+    elif action.group == "load":
+        expected_kinds = _load_checker_resource_kinds(action.case_id)
+        if tuple(resource.kind for resource in mutable_resources) != expected_kinds:
+            raise ValueError("foundation input does not match the authorized action")
+        if action.case_id in _CANONICAL_LOAD_CASES and document.get(
+            "runtime_recovery_receipt_path"
+        ) != mutable_resources[-1].name:
+            raise ValueError("foundation input does not match the authorized action")
+        if action.case_id == "LOAD-011":
+            if document.get("containers") != [
+                resource.name for resource in mutable_resources[:3]
+            ] or document.get("database_scope") != mutable_resources[3].name:
+                raise ValueError("foundation input does not match the authorized action")
+            bindings = ()
+        elif action.case_id == "LOAD-016":
+            fields = (
+                "container",
+                "support_container",
+                "database_scope",
+            )
+            bindings = tuple(zip(fields, mutable_resources[:-1], strict=True))
+        else:
+            other_fields = (
+                ("container", "database_scope")
+                if action.case_id in _LOAD_COURSE_FACT_CASES
+                else ("container", "redis_scope", "lease_receipt_path")
+                if action.case_id == "LOAD-015"
+                else ("container",)
+                if action.case_id in _CANONICAL_LOAD_CASES
+                else ("scratch_directory",)
+            )
+            bound_resources = (
+                mutable_resources[:-1]
+                if action.case_id in _CANONICAL_LOAD_CASES
+                else mutable_resources
+            )
+            bindings = tuple(zip(other_fields, bound_resources, strict=True))
     else:
         raise ValueError("foundation input does not match the authorized action")
     if any(document.get(field) != resource.name for field, resource in bindings):

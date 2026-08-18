@@ -4,6 +4,8 @@ import json
 import os
 import signal
 import stat
+import subprocess
+import sys
 import time
 from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
@@ -1528,6 +1530,175 @@ class _LockCheckingRunner(_PublishingRunner):
         return await super().run(context, case)
 
 
+def _start_operator_lifecycle_lock_holder(
+    tmp_path: Path,
+    release_root: Path,
+) -> subprocess.Popen[str]:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    flock = fake_bin / "flock"
+    flock.write_text(
+        "#!/usr/bin/env python3\n"
+        "import fcntl, sys\n"
+        "fcntl.flock(int(sys.argv[2]), fcntl.LOCK_EX | fcntl.LOCK_NB)\n",
+        encoding="utf-8",
+    )
+    flock.chmod(0o755)
+    environment = dict(os.environ)
+    environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
+    lock_path = release_root.parent / ".operator-lifecycle.lock"
+    process = subprocess.Popen(
+        (
+            sys.executable,
+            "deploy/scripts/operator_lifecycle.py",
+            "hold-lock",
+            "--release-tag-root",
+            str(release_root.parent),
+            "--lock-path",
+            str(lock_path),
+        ),
+        cwd=Path(__file__).parents[1],
+        env=environment,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert process.stdout is not None
+    assert process.stdout.readline().strip() == "LOCKED"
+    return process
+
+
+def _stop_lock_holder(process: subprocess.Popen[str]) -> None:
+    if process.stdin is not None:
+        process.stdin.close()
+    process.wait(timeout=5)
+
+
+def test_delegated_lock_rejects_noncanonical_same_basename_holder(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from scripts.milestone_2b_case_runners import safety
+
+    release_root = _release_root(tmp_path)
+    lock_path = release_root.parent / ".operator-lifecycle.lock"
+    monkeypatch.setattr(
+        safety,
+        "_holder_command_tokens",
+        lambda holder_pid: (
+            sys.executable,
+            "/tmp/operator_lifecycle.py",
+            "hold-lock",
+            "--release-tag-root",
+            str(release_root.parent),
+            "--lock-path",
+            str(lock_path),
+        ),
+    )
+
+    assert not safety._holder_command_matches(123, release_root.parent, lock_path)
+
+
+def test_relative_holder_script_is_resolved_from_holder_process_cwd(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from scripts.milestone_2b_case_runners import safety
+
+    platform_root = Path(__file__).parents[1]
+    release_root = _release_root(tmp_path)
+    lock_path = release_root.parent / ".operator-lifecycle.lock"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        safety,
+        "_holder_command_tokens",
+        lambda holder_pid: (
+            sys.executable,
+            "deploy/scripts/operator_lifecycle.py",
+            "hold-lock",
+            "--release-tag-root",
+            str(release_root.parent),
+            "--lock-path",
+            str(lock_path),
+        ),
+    )
+    monkeypatch.setattr(
+        safety,
+        "_holder_working_directory",
+        lambda holder_pid: platform_root,
+        raising=False,
+    )
+
+    assert safety._holder_command_matches(123, release_root.parent, lock_path)
+
+
+@pytest.mark.asyncio
+async def test_batch_delegates_to_exact_live_operator_lifecycle_lock_holder(
+    tmp_path: Path,
+) -> None:
+    from scripts.milestone_2b_case_runners.safety import MaintenanceLockGuard
+    from scripts.run_milestone_2b_case_batch import run_case_batch
+
+    release_root = _release_root(tmp_path)
+    lock_path = release_root.parent / ".operator-lifecycle.lock"
+    holder = _start_operator_lifecycle_lock_holder(tmp_path, release_root)
+    try:
+        result = await run_case_batch(
+            cases=(_case("GPU-001", safety="canonical_runtime"),),  # type: ignore[arg-type]
+            release_root=release_root,
+            runners={"testing.run": _LockCheckingRunner()},  # type: ignore[dict-item]
+            concurrency=1,
+            run_id="run-1",
+            target="local",
+            delegated_lock_holder_pid=holder.pid,
+            delegated_lock_path=lock_path,
+        )
+
+        assert result.exit_code == 0
+        assert holder.poll() is None
+        with pytest.raises(ValueError, match="another|maintenance lock"):
+            with MaintenanceLockGuard(release_root):
+                pass
+    finally:
+        _stop_lock_holder(holder)
+
+
+class _KillingLockHolderRunner(_PublishingRunner):
+    def __init__(self, holder_pid: int) -> None:
+        super().__init__()
+        self._holder_pid = holder_pid
+
+    async def run(self, context: object, case: object) -> object:
+        outcome = await super().run(context, case)
+        os.kill(self._holder_pid, signal.SIGTERM)
+        os.waitpid(self._holder_pid, 0)
+        return outcome
+
+
+@pytest.mark.asyncio
+async def test_delegated_lock_fails_closed_if_holder_dies_before_batch_exit(
+    tmp_path: Path,
+) -> None:
+    from scripts.run_milestone_2b_case_batch import run_case_batch
+
+    release_root = _release_root(tmp_path)
+    lock_path = release_root.parent / ".operator-lifecycle.lock"
+    holder = _start_operator_lifecycle_lock_holder(tmp_path, release_root)
+
+    with pytest.raises(ValueError, match="delegated maintenance lock"):
+        await run_case_batch(
+            cases=(_case("GPU-001", safety="canonical_runtime"),),  # type: ignore[arg-type]
+            release_root=release_root,
+            runners={"testing.run": _KillingLockHolderRunner(holder.pid)},  # type: ignore[dict-item]
+            concurrency=1,
+            run_id="run-1",
+            target="local",
+            delegated_lock_holder_pid=holder.pid,
+            delegated_lock_path=lock_path,
+        )
+
+
 @pytest.mark.asyncio
 async def test_canonical_runner_holds_the_release_lock_for_its_execution(
     tmp_path: Path,
@@ -2620,6 +2791,160 @@ def test_supervisor_keeps_result_first_read_during_termination(
     assert "runner timeout" in execution["reason"]
 
 
+def test_supervisor_hard_deadline_runs_parent_canonical_recovery_after_reap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    from scripts import run_milestone_2b_case_batch as batch
+
+    class ForeverRunner:
+        async def run(self, context: object, case: object) -> object:
+            await asyncio.sleep(60)
+
+    recovered: list[dict[str, object]] = []
+    monkeypatch.setattr(batch, "resolve_runner", lambda _name: ForeverRunner())
+    monkeypatch.setattr(
+        batch,
+        "_supervisor_deadline_seconds",
+        lambda cases, *, require_cleanup: 0.0,
+    )
+    monkeypatch.setattr(
+        batch,
+        "_recover_parent_runtime_state",
+        lambda **kwargs: recovered.append(kwargs),
+        raising=False,
+    )
+
+    result = batch._supervise_case_batch(
+        cases=(
+            _case("LOAD-010", safety="canonical_runtime", timeout_seconds=1),
+        ),  # type: ignore[arg-type]
+        release_root=_release_root(tmp_path),
+        concurrency=1,
+        require_cleanup=False,
+        require_all_selected=False,
+        run_id="run-1",
+        target="local",
+    )
+
+    assert result.exit_code == 2
+    assert len(recovered) == 1
+    assert recovered[0]["run_id"] == "run-1"
+
+
+def test_supervisor_hard_deadline_reports_unexpected_parent_recovery_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    from scripts import run_milestone_2b_case_batch as batch
+
+    class ForeverRunner:
+        async def run(self, context: object, case: object) -> object:
+            await asyncio.sleep(60)
+
+    def fail_recovery(**kwargs: object) -> None:
+        raise LookupError("unexpected recovery failure")
+
+    monkeypatch.setattr(batch, "resolve_runner", lambda _name: ForeverRunner())
+    monkeypatch.setattr(
+        batch,
+        "_supervisor_deadline_seconds",
+        lambda cases, *, require_cleanup: 0.0,
+    )
+    monkeypatch.setattr(batch, "_recover_parent_runtime_state", fail_recovery)
+
+    result = batch._supervise_case_batch(
+        cases=(
+            _case("LOAD-010", safety="canonical_runtime", timeout_seconds=1),
+        ),  # type: ignore[arg-type]
+        release_root=_release_root(tmp_path),
+        concurrency=1,
+        require_cleanup=False,
+        require_all_selected=False,
+        run_id="run-1",
+        target="local",
+    )
+
+    assert result.exit_code == 2
+    assert result.error == (
+        "parent runtime recovery failed: unexpected recovery failure"
+    )
+
+
+def test_parent_runtime_recovery_reuses_delegated_lock_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import run_milestone_2b_case_batch as batch
+
+    release_root = _release_root(tmp_path)
+    lock_path = release_root.parent / ".operator-lifecycle.lock"
+    events: list[object] = []
+
+    class DelegatedGuard:
+        def __init__(
+            self,
+            observed_release_root: Path,
+            holder_pid: int,
+            observed_lock_path: Path,
+        ) -> None:
+            events.append(
+                ("delegated", observed_release_root, holder_pid, observed_lock_path)
+            )
+
+        def __enter__(self) -> DelegatedGuard:
+            events.append("enter")
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            events.append("exit")
+
+        def held_for(self, observed_release_root: Path) -> bool:
+            events.append(("held_for", observed_release_root))
+            return True
+
+    async def observed_recovery(**kwargs: object) -> None:
+        events.append(
+            (
+                "recover",
+                kwargs["cases"],
+                isinstance(kwargs["maintenance_lock"], DelegatedGuard),
+            )
+        )
+
+    monkeypatch.setattr(batch, "DelegatedMaintenanceLockGuard", DelegatedGuard)
+    monkeypatch.setattr(
+        batch,
+        "MaintenanceLockGuard",
+        lambda release_root: pytest.fail("parent must reuse delegated lock authority"),
+    )
+    monkeypatch.setattr(batch, "_run_parent_runtime_recovery", observed_recovery)
+    canonical_case = _case("LOAD-010", safety="canonical_runtime")
+    read_only_case = _case("LOAD-017")
+
+    batch._recover_parent_runtime_state(
+        cases=(canonical_case, read_only_case),  # type: ignore[arg-type]
+        release_root=release_root,
+        run_id="run-1",
+        target="local",
+        delegated_lock_holder_pid=123,
+        delegated_lock_path=lock_path,
+    )
+
+    assert events == [
+        ("delegated", release_root, 123, lock_path),
+        "enter",
+        ("held_for", release_root),
+        ("recover", (canonical_case,), True),
+        ("held_for", release_root),
+        "exit",
+    ]
+
+
 def test_supervisor_signal_during_first_parent_close_reaps_child_and_restores_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2638,6 +2963,7 @@ def test_supervisor_signal_during_first_parent_close_reaps_child_and_restores_st
     original_close = batch.os.close
     pipe_descriptors: list[int] = []
     child_pids: list[int] = []
+    recovered: list[dict[str, object]] = []
     injected = False
     handlers_before = {
         signal_number: signal.getsignal(signal_number)
@@ -2666,10 +2992,18 @@ def test_supervisor_signal_during_first_parent_close_reaps_child_and_restores_st
     monkeypatch.setattr(batch.os, "pipe", observed_pipe)
     monkeypatch.setattr(batch.os, "fork", observed_fork)
     monkeypatch.setattr(batch.os, "close", signal_on_first_parent_close)
+    monkeypatch.setattr(
+        batch,
+        "_recover_parent_runtime_state",
+        lambda **kwargs: recovered.append(kwargs),
+        raising=False,
+    )
     try:
         with pytest.raises(batch._SupervisorSignal) as caught:
             batch._supervise_case_batch(
-                cases=(_case("DEP-013"),),  # type: ignore[arg-type]
+                cases=(
+                    _case("LOAD-010", safety="canonical_runtime"),
+                ),  # type: ignore[arg-type]
                 release_root=release_root,
                 concurrency=1,
                 require_cleanup=False,
@@ -2679,6 +3013,8 @@ def test_supervisor_signal_during_first_parent_close_reaps_child_and_restores_st
             )
 
         assert caught.value.signal_number == signal.SIGTERM
+        assert len(recovered) == 1
+        assert recovered[0]["run_id"] == "run-1"
         assert injected is True
         assert len(child_pids) == 1
         with pytest.raises(ProcessLookupError):
@@ -2709,6 +3045,124 @@ def test_supervisor_signal_during_first_parent_close_reaps_child_and_restores_st
             try:
                 original_close(descriptor)
             except OSError:
+                pass
+
+
+@pytest.mark.parametrize(
+    "signal_number",
+    (signal.SIGINT, signal.SIGTERM, signal.SIGHUP),
+)
+@pytest.mark.parametrize("signal_window", ("termination", "recovery", "both"))
+@pytest.mark.parametrize("recovery_fails", (False, True))
+def test_signal_is_deferred_until_termination_and_recovery_finish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    signal_number: int,
+    signal_window: str,
+    recovery_fails: bool,
+) -> None:
+    import asyncio
+
+    from scripts import run_milestone_2b_case_batch as batch
+
+    class ForeverRunner:
+        async def run(self, context: object, case: object) -> object:
+            await asyncio.sleep(60)
+
+    parent_pid = os.getpid()
+    original_fork = batch.os.fork
+    original_terminate = batch._terminate_supervised_batch
+    child_pids: list[int] = []
+    events: list[object] = []
+    signal_injected = False
+
+    def observed_fork() -> int:
+        child_pid = original_fork()
+        if os.getpid() == parent_pid:
+            child_pids.append(child_pid)
+        return child_pid
+
+    def signal_at_termination_entry(**kwargs: object) -> int | None:
+        nonlocal signal_injected
+        events.append("termination_entered")
+        if signal_window in ("termination", "both") and not signal_injected:
+            signal_injected = True
+            os.kill(parent_pid, signal_number)
+        child_status = original_terminate(**kwargs)  # type: ignore[arg-type]
+        events.append("termination_reaped")
+        return child_status
+
+    def observed_recovery(**kwargs: object) -> None:
+        child_alive = True
+        try:
+            os.kill(child_pids[0], 0)
+        except ProcessLookupError:
+            child_alive = False
+        events.append(("recovery_entered", child_alive))
+        if signal_window in ("recovery", "both"):
+            os.kill(parent_pid, signal_number)
+        events.append("recovery_finished")
+        if recovery_fails:
+            raise LookupError("recovery failed after deferred signal")
+
+    monkeypatch.setattr(batch, "resolve_runner", lambda _name: ForeverRunner())
+    monkeypatch.setattr(batch.os, "fork", observed_fork)
+    monkeypatch.setattr(
+        batch,
+        "_supervisor_deadline_seconds",
+        lambda cases, *, require_cleanup: 0.0,
+    )
+    monkeypatch.setattr(batch, "_terminate_supervised_batch", signal_at_termination_entry)
+    monkeypatch.setattr(batch, "_recover_parent_runtime_state", observed_recovery)
+    try:
+        expected_exception = (
+            KeyboardInterrupt
+            if signal_number == signal.SIGINT
+            else batch._SupervisorSignal
+        )
+        with pytest.raises(expected_exception) as caught:
+            batch._supervise_case_batch(
+                cases=(
+                    _case("LOAD-010", safety="canonical_runtime"),
+                ),  # type: ignore[arg-type]
+                release_root=_release_root(tmp_path),
+                concurrency=1,
+                require_cleanup=False,
+                require_all_selected=False,
+                run_id="run-1",
+                target="local",
+            )
+
+        if signal_number == signal.SIGINT:
+            assert isinstance(caught.value, KeyboardInterrupt)
+        else:
+            assert isinstance(caught.value, batch._SupervisorSignal)
+            assert caught.value.signal_number == signal_number
+        if recovery_fails:
+            assert isinstance(caught.value.__cause__, LookupError)
+            assert str(caught.value.__cause__) == (
+                "recovery failed after deferred signal"
+            )
+        else:
+            assert caught.value.__cause__ is None
+        assert events == [
+            "termination_entered",
+            "termination_reaped",
+            ("recovery_entered", False),
+            "recovery_finished",
+        ]
+    finally:
+        for child_pid in child_pids:
+            try:
+                os.killpg(child_pid, signal.SIGKILL)
+            except (PermissionError, ProcessLookupError):
+                try:
+                    os.kill(child_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            try:
+                os.waitpid(child_pid, 0)
+            except ChildProcessError:
                 pass
 
 
@@ -2891,6 +3345,7 @@ def test_supervisor_rejects_success_with_surviving_batch_group_descendant(
     (
         (signal.SIGINT, 130),
         (signal.SIGTERM, 128 + signal.SIGTERM),
+        (signal.SIGHUP, 128 + signal.SIGHUP),
     ),
 )
 def test_cli_signal_cleans_batch_and_controlled_command_groups(

@@ -1,5 +1,27 @@
 # Change Ledger
 
+## 2026-08-18 - 8A.3 已恢复前驱的跨 SHA 维护事务
+
+- 根因：`7efac20cf980ee64ea78fe297af6dfdfb2df5b28` 已成功执行 restore，canonical
+  paused ledger 被归档为唯一 `0400` audit；旧 resolver 仍要求 snapshot/paused 成对存在，
+  因而把合法完成态误判为 partial。该问题与 FaceRec 算法和宿主 Conda 无关。
+- 实现内容：新增 `fresh-after-restored-previous`。resolver 严格验证前驱 `0600` 单链接
+  snapshot、唯一 `0400` 单链接 audit、无 archive metadata、终态记录及 `ocr-v6-amd`
+  当前容器绑定/状态；通过后只在当前新 SHA 创建 snapshot/paused。已有平台端口继续由权威
+  Compose 与 Docker inspect 派生，算子 baseline/new 仍从立即前驱只读继承。
+- 反例：可写 audit、符号链接、额外硬链接、多个 audit、active 状态和残留 metadata 均在
+  snapshot/pause 前拒绝；当前 release 自己已经 restore 时要求换新 SHA，禁止覆盖同一不可变报告。
+- 变更文件：`deploy/scripts/operator_lifecycle.py`、canonical 部署场景、平台 `AGENTS.md`、
+  活动 OpenSpec 设计/部署规格、生命周期测试和本 Harness。
+- 本地证据：主成功用例修复前稳定失败为 `maintenance snapshot/paused ledger state is partial`；
+  修复后成功用例与相应反例全部通过。完整 `test_milestone_2b_task9.py` 为
+  `239 passed`；Ruff、strict Mypy 和 `git diff --check` 通过。
+- 远程只读证据：新 resolver 对目标服务器旧 release 的 52 行真实 snapshot、唯一空 audit
+  和当前 `ocr-v6-amd` 容器返回状态 `completed`；未改写旧 release、Docker 或报告。
+- 完成边界：本条只关闭 8A.3 正式执行前的维护状态机 blocker。FaceRec 三实例、18 个 GPU
+  实例和 deployment phase 仍必须在提交后的新 Git SHA/不可变 release 中实际重跑，成功前
+  不勾选 OpenSpec `8A.3`。
+
 ## 2026-08-18 - 8A.2 真实执行证据与基础执行器闭环
 
 - 先前状态：243 条用例已有稳定目录和真实执行报告合同，但 case runner 的超时回收、

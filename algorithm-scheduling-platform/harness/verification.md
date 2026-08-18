@@ -5,6 +5,22 @@ platform root, use the explicit workspace import path below; this prevents a
 bare top-level `tests` package from another checkout from shadowing the
 platform tests:
 
+## 2026-08-18 8A.3 跨 SHA 维护状态机预验证
+
+```bash
+.venv/bin/python -m pytest -q tests/test_milestone_2b_task9.py
+# 239 passed
+
+.venv/bin/ruff check deploy/scripts/operator_lifecycle.py \
+  tests/test_milestone_2b_task9.py
+.venv/bin/mypy --strict deploy/scripts/operator_lifecycle.py
+git diff --check
+```
+
+正式远程重跑仍以 `scenarios/milestone-2b-deploy.md` 为唯一执行入口。只有当前新 SHA 的
+FaceRec 三实例、18 个 GPU 实例和 deployment phase 全部留下终态证据后，才允许把
+OpenSpec `8A.3` 标记完成；resolver 对旧 release 返回 `completed` 只是前置验证，不是阶段完成。
+
 ## 2026-08-18 8A.2 验证合同
 
 8A.2 只验证真实执行证据合同、安全有界 runner 和 DEP/GPU/REG/INF 基础执行器。

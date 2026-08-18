@@ -48,3 +48,45 @@ Control-service SHALL 将注册、生命周期变化、心跳摘要和注销事�
 #### Scenario: 运维人员查看数据库结构
 - **WHEN** 在已执行全部迁移的目标业务库查询 PostgreSQL catalog
 - **THEN** 每张正式调度表及其每个字段都返回非空中文说明
+
+### Requirement: 跨 SHA 容器维护保持可恢复和不可变
+部署场景 SHALL 在同一 release tag 内串行化容器维护，并区分 active 前驱与已完成 restore 的前驱。
+active 前驱 SHALL 只读继承原维护 authority；已恢复前驱只有在其 snapshot、唯一不可写 audit、
+archive metadata 清理和容器恢复事实均严格通过校验后，才允许当前新 SHA 开启新的维护事务。
+旧 release SHALL NOT 被修改、复制 paused ledger 或重新绑定 authority。
+
+#### Scenario: 前一 SHA 已经成功恢复原业务容器
+- **WHEN** 当前新 SHA 指定该不可变 release 为 `PREVIOUS_RELEASE_ROOT`
+- **THEN** resolver 验证终态归档与容器当前事实，授权权威 Compose 已占用端点，在当前 release 新建 snapshot/paused，并继续继承前驱算子 baseline/new 所有权
+
+#### Scenario: 前一 SHA 的归档或恢复事实不可信
+- **WHEN** audit 可写、为链接、数量不唯一、包含 active 状态、残留 archive metadata，或容器身份/状态与 snapshot 不一致
+- **THEN** 部署在 snapshot/pause、Compose 变更和算子启动前 fail closed，旧 release 与现有容器均不被修改
+
+#### Scenario: 新事务在 snapshot 或 pause 后中断
+- **WHEN** 当前新 SHA 已为立即前驱发布不可变 predecessor marker，并在 snapshot 完成后或 pause 完成后中断
+- **THEN** 同一 SHA 携带相同 `PREVIOUS_RELEASE_ROOT` 续跑时分别只继续 pause 或直接复用本地 active 账本，不重做 snapshot、不重复暂停，也不修改前驱 release
+
+#### Scenario: predecessor marker 不可信
+- **WHEN** 当前 release 已出现本地 snapshot/paused，但 predecessor marker 缺失、可写、为 symlink、具有额外硬链接，或其 root/SHA 与 `PREVIOUS_RELEASE_ROOT` 不一致
+- **THEN** resolver 在任何进一步维护或 Compose 动作前 fail closed，且不得替换 marker 或猜测前驱
+
+#### Scenario: provenance authority 已经完成 restore
+- **WHEN** 立即前驱是 provenance，且其 canonical authority paused 已按合同归档为唯一终态 audit
+- **THEN** resolver 严格验证 completed authority 的 snapshot、audit、archive metadata 和当前容器事实后，允许当前新 SHA 发布绑定立即前驱的 marker 并开启新事务；任何 active/archive 混合、partial 或漂移均拒绝
+
+#### Scenario: active provenance authority 不完整或后续漂移
+- **WHEN** provenance 发布时的 active snapshot/paused 为空、schema/status/binding/hash 不完整，或者已发布 provenance 的 authority 文件、policy 或当前 Docker binding 后续发生漂移
+- **THEN** 发布器或每次 resolver 加载均执行完整 active transaction 校验并 fail closed，不创建或复用不可信 provenance，且不修改 authority 所属旧 release
+
+#### Scenario: reuse-local 的 paused ledger 不完整
+- **WHEN** marker 与当前 snapshot/paused 同时存在，但 paused 为空、包含 `pending_stop`/`restoring`/终态状态、binding 或 snapshot hash 不一致，或者与 audit/archive metadata 混合
+- **THEN** resolver 拒绝 reuse-local；只有 schema 完整、非空且唯一 `stopped` 记录与当前 Docker exited/policy-neutralized binding 一致时才可继续
+
+#### Scenario: marker 发布后 predecessor 发生漂移
+- **WHEN** marker-only、snapshot-only 或 reuse-local 再次解析时，predecessor 的 snapshot/audit 被篡改、出现 archive metadata，或当前容器 binding 不再能由 predecessor 恢复态和当前 active transaction 连续证明
+- **THEN** resolver fail closed，并保持 predecessor 全部文件、权限、链接数和 metadata 状态不变
+
+#### Scenario: 尝试向 completed authority 发布 provenance
+- **WHEN** canonical paused 已归档为 completed audit，并调用 provenance 发布器指向该 authority
+- **THEN** 发布器在创建 provenance 前拒绝；completed authority 只能用于严格判断新事务起点，不能伪装为 active inherited authority

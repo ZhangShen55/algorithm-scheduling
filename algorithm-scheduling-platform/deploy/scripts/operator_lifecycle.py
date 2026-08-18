@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import ipaddress
 import json
 import os
@@ -17,13 +18,44 @@ SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SNAPSHOT_NAME = "existing-containers.jsonl"
 PAUSED_NAME = f"{SNAPSHOT_NAME}.paused.jsonl"
 PROVENANCE_NAME = "operator-maintenance-provenance.json"
+PREDECESSOR_NAME = "operator-maintenance-predecessor.json"
 OPERATOR_BASELINE_NAME = "baseline-operator-container-ids.txt"
 OPERATOR_NEW_NAME = "new-operator-container-ids.txt"
+ARCHIVE_METADATA_SUFFIX = ".archive.json"
+COMPLETED_ARCHIVE_PATTERN = re.compile(
+    rf"^{re.escape(PAUSED_NAME)}\.audit\.[0-9a-f]{{32}}\.jsonl$"
+)
+SNAPSHOT_KEYS = {
+    "compose_project",
+    "container_id",
+    "image_id",
+    "image_ref",
+    "labels",
+    "mounts",
+    "name",
+    "ports",
+    "restart_policy",
+    "state",
+}
+PAUSE_ENTRY_KEYS = {
+    "binding",
+    "container_id",
+    "name",
+    "policy_neutralized",
+    "snapshot_sha256",
+    "status",
+    "version",
+}
+TERMINAL_PAUSE_STATUSES = {"not_stopped", "restored"}
 PROVENANCE_KEYS = {
     "authoritative_paused_ledger",
     "authoritative_snapshot",
     "source_git_sha",
     "source_release_root",
+}
+PREDECESSOR_KEYS = {
+    "predecessor_git_sha",
+    "predecessor_release_root",
 }
 
 
@@ -61,6 +93,20 @@ def _require_owned_file(path: Path, label: str) -> os.stat_result:
     return metadata
 
 
+def _require_single_link_file(
+    path: Path,
+    label: str,
+    *,
+    expected_mode: int,
+) -> os.stat_result:
+    metadata = _require_owned_file(path, label)
+    if metadata.st_nlink != 1:
+        raise LifecycleError(f"{label} must have exactly one directory entry")
+    if stat.S_IMODE(metadata.st_mode) != expected_mode:
+        raise LifecycleError(f"{label} must have mode {expected_mode:04o}")
+    return metadata
+
+
 class ReleaseLayout:
     def __init__(self, report_root: str, release_tag: str) -> None:
         _reject_control_characters(report_root, "REPORT_ROOT")
@@ -95,11 +141,291 @@ def _path_exists(path: Path) -> bool:
     return os.path.lexists(path)
 
 
+def _read_jsonl(path: Path, label: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as error:
+        raise LifecycleError(f"cannot read {label}: {error}") from error
+    for line_number, line in enumerate(lines, 1):
+        try:
+            record: Any = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise LifecycleError(
+                f"{label} contains malformed JSON on line {line_number}: {error}"
+            ) from error
+        if not isinstance(record, dict):
+            raise LifecycleError(f"{label} line {line_number} must be an object")
+        records.append(record)
+    return records
+
+
+def _normalized_mounts(record: dict[str, Any]) -> list[dict[str, Any]]:
+    mounts = record.get("Mounts", [])
+    if not isinstance(mounts, list):
+        raise LifecycleError("Docker inspect returned invalid mount metadata")
+    return [
+        {
+            "destination": mount.get("Destination"),
+            "mode": mount.get("Mode"),
+            "propagation": mount.get("Propagation"),
+            "rw": mount.get("RW"),
+            "source": mount.get("Source"),
+            "type": mount.get("Type"),
+        }
+        for mount in mounts
+        if isinstance(mount, dict)
+    ]
+
+
+def _current_container_binding(
+    expected: dict[str, Any],
+) -> dict[str, Any]:
+    container_id = expected["container_id"]
+    try:
+        completed = subprocess.run(
+            ["docker", "inspect", container_id],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        payload: Any = json.loads(completed.stdout)
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as error:
+        raise LifecycleError(
+            f"cannot verify restored container {container_id}: {error}"
+        ) from error
+    if (
+        not isinstance(payload, list)
+        or len(payload) != 1
+        or not isinstance(payload[0], dict)
+        or payload[0].get("Id") != container_id
+    ):
+        raise LifecycleError("Docker inspect did not return the exact restored container")
+    record = payload[0]
+    labels = record.get("Config", {}).get("Labels") or {}
+    if not isinstance(labels, dict):
+        raise LifecycleError("Docker inspect returned invalid restored-container labels")
+    return {
+        "compose_project": labels.get("com.docker.compose.project", ""),
+        "container_id": record.get("Id"),
+        "image_id": record.get("Image"),
+        "image_ref": record.get("Config", {}).get("Image"),
+        "labels": labels,
+        "mounts": _normalized_mounts(record),
+        "name": str(record.get("Name", "")).removeprefix("/"),
+        "ports": record.get("HostConfig", {}).get("PortBindings") or {},
+        "restart_policy": record.get("HostConfig", {}).get("RestartPolicy") or {},
+        "state": record.get("State", {}).get("Status", ""),
+    }
+
+
+def _validate_completed_maintenance(
+    layout: ReleaseLayout,
+    release_root: Path,
+    *,
+    successor_binding: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    directory = layout.validate_maintenance_directory(release_root)
+    snapshot = directory / SNAPSHOT_NAME
+    paused = directory / PAUSED_NAME
+    metadata_path = Path(f"{paused}{ARCHIVE_METADATA_SUFFIX}")
+    if _path_exists(metadata_path):
+        raise LifecycleError("completed maintenance has residual archive metadata")
+
+    candidates = [
+        entry
+        for entry in directory.iterdir()
+        if entry.name.startswith(f"{PAUSED_NAME}.audit.")
+    ]
+    if len(candidates) != 1 or not COMPLETED_ARCHIVE_PATTERN.fullmatch(
+        candidates[0].name
+    ):
+        raise LifecycleError(
+            "completed maintenance requires exactly one canonical audit archive"
+        )
+    archive = candidates[0]
+    _require_single_link_file(snapshot, "completed maintenance snapshot", expected_mode=0o600)
+    _require_single_link_file(archive, "completed maintenance audit", expected_mode=0o400)
+
+    snapshots = _read_jsonl(snapshot, "completed maintenance snapshot")
+    by_id: dict[str, dict[str, Any]] = {}
+    by_name: dict[str, dict[str, Any]] = {}
+    for line_number, record in enumerate(snapshots, 1):
+        if not SNAPSHOT_KEYS.issubset(record):
+            raise LifecycleError(
+                f"completed maintenance snapshot line {line_number} is incomplete"
+            )
+        container_id = record.get("container_id")
+        name = record.get("name")
+        if (
+            not isinstance(container_id, str)
+            or not re.fullmatch(r"[0-9a-f]{12,64}", container_id)
+            or not isinstance(name, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name)
+            or container_id in by_id
+            or name in by_name
+        ):
+            raise LifecycleError("completed maintenance snapshot has invalid identity data")
+        labels = record.get("labels")
+        if not isinstance(labels, dict) or record.get("compose_project") != labels.get(
+            "com.docker.compose.project", ""
+        ):
+            raise LifecycleError("completed maintenance snapshot has invalid Compose identity")
+        by_id[container_id] = record
+        by_name[name] = record
+
+    selected = by_name.get("ocr-v6-amd")
+    if selected is None:
+        raise LifecycleError("completed maintenance snapshot omits ocr-v6-amd")
+    entries = _read_jsonl(archive, "completed maintenance audit")
+    if not entries:
+        if selected.get("state") == "running":
+            raise LifecycleError(
+                "completed maintenance audit is empty for an originally running container"
+            )
+        expected_current = selected
+    else:
+        if len(entries) != 1:
+            raise LifecycleError("completed maintenance audit contains unexpected selectors")
+        entry = entries[0]
+        if (
+            not PAUSE_ENTRY_KEYS.issubset(entry)
+            or entry.get("version") != 1
+            or entry.get("status") not in TERMINAL_PAUSE_STATUSES
+            or entry.get("policy_neutralized") is not False
+            or entry.get("name") != "ocr-v6-amd"
+            or entry.get("container_id") != selected["container_id"]
+            or entry.get("binding") != selected
+        ):
+            raise LifecycleError("completed maintenance audit is not terminal")
+        digest = hashlib.sha256(
+            json.dumps(selected, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if entry.get("snapshot_sha256") != digest:
+            raise LifecycleError("completed maintenance audit snapshot hash differs")
+        expected_current = {**selected, "state": "running"}
+        if selected.get("state") != "running":
+            raise LifecycleError("restored container does not match its original running state")
+
+    if successor_binding is not None:
+        if successor_binding != expected_current:
+            raise LifecycleError(
+                "active maintenance snapshot differs from completed predecessor binding"
+            )
+    elif _current_container_binding(selected) != expected_current:
+        raise LifecycleError("restored container differs from completed maintenance binding")
+
+    return {
+        "authoritative_paused_ledger": str(paused),
+        "authoritative_snapshot": str(snapshot),
+        "source_git_sha": release_root.name,
+        "source_release_root": str(release_root),
+    }
+
+
+def _validate_active_maintenance(
+    layout: ReleaseLayout,
+    release_root: Path,
+) -> dict[str, Any]:
+    directory = layout.validate_maintenance_directory(release_root)
+    snapshot = directory / SNAPSHOT_NAME
+    paused = directory / PAUSED_NAME
+    metadata_path = Path(f"{paused}{ARCHIVE_METADATA_SUFFIX}")
+    archive_present = any(
+        entry.name.startswith(f"{PAUSED_NAME}.audit.")
+        for entry in directory.iterdir()
+    )
+    if _path_exists(metadata_path) or archive_present:
+        raise LifecycleError(
+            "active maintenance cannot coexist with audit or archive metadata"
+        )
+    _require_single_link_file(snapshot, "active maintenance snapshot", expected_mode=0o600)
+    _require_single_link_file(paused, "active maintenance paused ledger", expected_mode=0o600)
+
+    snapshots = _read_jsonl(snapshot, "active maintenance snapshot")
+    if not snapshots:
+        raise LifecycleError("active maintenance snapshot must not be empty")
+    by_id: dict[str, dict[str, Any]] = {}
+    by_name: dict[str, dict[str, Any]] = {}
+    for line_number, record in enumerate(snapshots, 1):
+        if set(record) != SNAPSHOT_KEYS:
+            raise LifecycleError(
+                f"active maintenance snapshot line {line_number} has an invalid schema"
+            )
+        container_id = record.get("container_id")
+        name = record.get("name")
+        if (
+            not isinstance(container_id, str)
+            or not re.fullmatch(r"[0-9a-f]{12,64}", container_id)
+            or not isinstance(name, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name)
+            or container_id in by_id
+            or name in by_name
+        ):
+            raise LifecycleError("active maintenance snapshot has invalid identity data")
+        labels = record.get("labels")
+        if not isinstance(labels, dict) or record.get("compose_project") != labels.get(
+            "com.docker.compose.project", ""
+        ):
+            raise LifecycleError("active maintenance snapshot has invalid Compose identity")
+        by_id[container_id] = record
+        by_name[name] = record
+
+    entries = _read_jsonl(paused, "active maintenance paused ledger")
+    if len(entries) != 1:
+        raise LifecycleError(
+            "active maintenance paused ledger must contain exactly one stopped entry"
+        )
+    entry = entries[0]
+    if set(entry) != PAUSE_ENTRY_KEYS or entry.get("version") != 1:
+        raise LifecycleError("active maintenance paused ledger has an invalid schema")
+    if entry.get("status") != "stopped":
+        raise LifecycleError(
+            "active maintenance paused ledger contains a non-final pause state"
+        )
+    binding = entry.get("binding")
+    entry_container_id = entry.get("container_id")
+    if (
+        not isinstance(binding, dict)
+        or not isinstance(entry_container_id, str)
+        or binding != by_id.get(entry_container_id)
+        or entry.get("name") != binding.get("name")
+        or entry.get("name") != "ocr-v6-amd"
+        or binding.get("state") != "running"
+    ):
+        raise LifecycleError("active maintenance paused ledger binding is inconsistent")
+    digest = hashlib.sha256(
+        json.dumps(binding, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    if entry.get("snapshot_sha256") != digest:
+        raise LifecycleError("active maintenance paused ledger snapshot hash differs")
+    restart_policy = binding.get("restart_policy")
+    if not isinstance(restart_policy, dict):
+        raise LifecycleError("active maintenance snapshot restart policy is invalid")
+    policy_neutralized = restart_policy.get("Name") not in {"", "no"}
+    if entry.get("policy_neutralized") is not policy_neutralized:
+        raise LifecycleError("active maintenance restart policy state is inconsistent")
+    expected_current = {
+        **binding,
+        "restart_policy": (
+            {"Name": "no", "MaximumRetryCount": 0}
+            if policy_neutralized
+            else restart_policy
+        ),
+        "state": "exited",
+    }
+    if _current_container_binding(binding) != expected_current:
+        raise LifecycleError("active maintenance container binding has drifted")
+    return binding
+
+
 def _validate_authoritative_ledgers(
     layout: ReleaseLayout,
     snapshot_text: str,
     paused_text: str,
-) -> tuple[Path, Path]:
+    *,
+    completed_successor_binding: dict[str, Any] | None = None,
+) -> tuple[Path, Path, bool]:
     _reject_control_characters(snapshot_text, "authoritative snapshot")
     _reject_control_characters(paused_text, "authoritative paused ledger")
     snapshot = Path(snapshot_text)
@@ -115,9 +441,24 @@ def _validate_authoritative_ledgers(
     )
     if snapshot.parent != layout.validate_maintenance_directory(authority_root):
         raise LifecycleError("authoritative ledger directory escaped its release root")
-    _require_owned_file(snapshot, "authoritative snapshot")
-    _require_owned_file(paused, "authoritative paused ledger")
-    return snapshot, paused
+    snapshot_present = _path_exists(snapshot)
+    paused_present = _path_exists(paused)
+    if snapshot_present and paused_present:
+        _validate_active_maintenance(layout, authority_root)
+        return snapshot, paused, False
+    if snapshot_present and not paused_present:
+        completed = _validate_completed_maintenance(
+            layout,
+            authority_root,
+            successor_binding=completed_successor_binding,
+        )
+        if (
+            completed["authoritative_snapshot"] != str(snapshot)
+            or completed["authoritative_paused_ledger"] != str(paused)
+        ):
+            raise LifecycleError("completed maintenance authority paths differ")
+        return snapshot, paused, True
+    raise LifecycleError("authoritative maintenance ledger state is partial")
 
 
 def _load_provenance(
@@ -126,7 +467,8 @@ def _load_provenance(
     *,
     owning_release_root: Path,
     expected_source_root: Path | None = None,
-) -> dict[str, str]:
+    completed_successor_binding: dict[str, Any] | None = None,
+) -> tuple[dict[str, str], bool]:
     metadata = _require_owned_file(provenance, "maintenance provenance")
     if stat.S_IMODE(metadata.st_mode) != 0o400:
         raise LifecycleError("maintenance provenance must have immutable mode 0400")
@@ -150,17 +492,154 @@ def _load_provenance(
         raise LifecycleError(
             "maintenance provenance conflicts with PREVIOUS_RELEASE_ROOT; refusing rebinding"
         )
-    snapshot, paused = _validate_authoritative_ledgers(
+    snapshot, paused, authority_completed = _validate_authoritative_ledgers(
         layout,
         payload["authoritative_snapshot"],
         payload["authoritative_paused_ledger"],
+        completed_successor_binding=completed_successor_binding,
     )
+    return (
+        {
+            "authoritative_paused_ledger": str(paused),
+            "authoritative_snapshot": str(snapshot),
+            "source_git_sha": source_root.name,
+            "source_release_root": str(source_root),
+        },
+        authority_completed,
+    )
+
+
+def _validate_completed_predecessor_authority(
+    layout: ReleaseLayout,
+    predecessor_root: Path,
+    *,
+    successor_binding: dict[str, Any] | None = None,
+) -> None:
+    directory = layout.validate_maintenance_directory(predecessor_root)
+    snapshot = directory / SNAPSHOT_NAME
+    paused = directory / PAUSED_NAME
+    provenance = directory / PROVENANCE_NAME
+    snapshot_present = _path_exists(snapshot)
+    paused_present = _path_exists(paused)
+    provenance_present = _path_exists(provenance)
+    if snapshot_present and not paused_present and not provenance_present:
+        _validate_completed_maintenance(
+            layout,
+            predecessor_root,
+            successor_binding=successor_binding,
+        )
+        return
+    if not snapshot_present and not paused_present and provenance_present:
+        _, authority_completed = _load_provenance(
+            layout,
+            provenance,
+            owning_release_root=predecessor_root,
+            completed_successor_binding=successor_binding,
+        )
+        if authority_completed:
+            return
+    raise LifecycleError(
+        "predecessor transaction marker no longer points to completed authority"
+    )
+
+
+def _load_predecessor_marker(
+    layout: ReleaseLayout,
+    marker: Path,
+    *,
+    owning_release_root: Path,
+    expected_predecessor_root: Path,
+) -> dict[str, str]:
+    _require_single_link_file(
+        marker,
+        "predecessor transaction marker",
+        expected_mode=0o400,
+    )
+    try:
+        payload: Any = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise LifecycleError(
+            f"predecessor transaction marker is invalid: {error}"
+        ) from error
+    if not isinstance(payload, dict) or set(payload) != PREDECESSOR_KEYS:
+        raise LifecycleError("predecessor transaction marker has an invalid schema")
+    if not all(isinstance(payload[key], str) for key in PREDECESSOR_KEYS):
+        raise LifecycleError("predecessor transaction marker values must be strings")
+
+    predecessor_root = layout.validate_release_root(
+        payload["predecessor_release_root"],
+        "predecessor transaction marker release root",
+    )
+    if predecessor_root == owning_release_root:
+        raise LifecycleError(
+            "predecessor transaction marker cannot point to its own release"
+        )
+    if payload["predecessor_git_sha"] != predecessor_root.name:
+        raise LifecycleError(
+            "predecessor transaction marker Git SHA does not match its root"
+        )
+    if predecessor_root != expected_predecessor_root:
+        raise LifecycleError(
+            "predecessor transaction marker conflicts with PREVIOUS_RELEASE_ROOT"
+        )
     return {
-        "authoritative_paused_ledger": str(paused),
-        "authoritative_snapshot": str(snapshot),
-        "source_git_sha": source_root.name,
-        "source_release_root": str(source_root),
+        "predecessor_git_sha": predecessor_root.name,
+        "predecessor_release_root": str(predecessor_root),
     }
+
+
+def _publish_predecessor_marker(
+    layout: ReleaseLayout,
+    current_root: Path,
+    previous_root: Path,
+) -> None:
+    directory = layout.validate_maintenance_directory(current_root)
+    destination = directory / PREDECESSOR_NAME
+    if _path_exists(destination):
+        raise LifecycleError(
+            "predecessor transaction marker already exists; refusing replacement"
+        )
+    content = (
+        json.dumps(
+            {
+                "predecessor_git_sha": previous_root.name,
+                "predecessor_release_root": str(previous_root),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode()
+    descriptor, temporary_text = tempfile.mkstemp(
+        prefix=".operator-maintenance-predecessor.",
+        dir=directory,
+    )
+    temporary = Path(temporary_text)
+    try:
+        os.fchmod(descriptor, 0o400)
+        with os.fdopen(descriptor, "wb", closefd=False) as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.close(descriptor)
+        descriptor = -1
+        os.link(temporary, destination, follow_symlinks=False)
+        _fsync_directory(directory)
+    except FileExistsError as error:
+        raise LifecycleError(
+            "predecessor transaction marker appeared concurrently; refusing replacement"
+        ) from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+    _fsync_directory(directory)
+    _load_predecessor_marker(
+        layout,
+        destination,
+        owning_release_root=current_root,
+        expected_predecessor_root=previous_root,
+    )
 
 
 def _maintenance_state(
@@ -177,13 +656,14 @@ def _maintenance_state(
     paused_present = _path_exists(paused)
     provenance_present = _path_exists(provenance)
 
+    if snapshot_present and not paused_present and not provenance_present:
+        return "completed", _validate_completed_maintenance(layout, release_root)
     if snapshot_present != paused_present:
         raise LifecycleError("maintenance snapshot/paused ledger state is partial")
     if snapshot_present and provenance_present:
         raise LifecycleError("maintenance state is ambiguous: ledgers and provenance coexist")
     if snapshot_present:
-        _require_owned_file(snapshot, "maintenance snapshot")
-        _require_owned_file(paused, "maintenance paused ledger")
+        _validate_active_maintenance(layout, release_root)
         return (
             "direct",
             {
@@ -194,14 +674,15 @@ def _maintenance_state(
             },
         )
     if provenance_present:
+        payload, authority_completed = _load_provenance(
+            layout,
+            provenance,
+            owning_release_root=release_root,
+            expected_source_root=expected_source_root,
+        )
         return (
-            "provenance",
-            _load_provenance(
-                layout,
-                provenance,
-                owning_release_root=release_root,
-                expected_source_root=expected_source_root,
-            ),
+            "completed-provenance" if authority_completed else "provenance",
+            payload,
         )
     return "empty", None
 
@@ -217,17 +698,89 @@ def resolve_maintenance(args: argparse.Namespace) -> None:
     if previous_root == current_root:
         raise LifecycleError("PREVIOUS_RELEASE_ROOT must belong to a different Git SHA")
 
-    current_kind, current = _maintenance_state(
-        layout,
-        current_root,
-        expected_source_root=previous_root,
-    )
-    if current_kind == "direct":
-        if previous_root is not None:
+    current_directory = layout.validate_maintenance_directory(current_root)
+    current_snapshot = current_directory / SNAPSHOT_NAME
+    current_paused = current_directory / PAUSED_NAME
+    current_provenance = current_directory / PROVENANCE_NAME
+    predecessor_marker = current_directory / PREDECESSOR_NAME
+    marker_present = _path_exists(predecessor_marker)
+    snapshot_present = _path_exists(current_snapshot)
+    paused_present = _path_exists(current_paused)
+    provenance_present = _path_exists(current_provenance)
+    selected_local = {
+        "authoritative_paused_ledger": str(current_paused),
+        "authoritative_snapshot": str(current_snapshot),
+        "source_git_sha": current_root.name,
+        "source_release_root": str(current_root),
+    }
+    current_kind: str
+    current: dict[str, str] | None
+
+    if marker_present:
+        if previous_root is None:
             raise LifecycleError(
-                "local maintenance ledgers conflict with PREVIOUS_RELEASE_ROOT"
+                "predecessor transaction marker requires PREVIOUS_RELEASE_ROOT"
             )
+        _load_predecessor_marker(
+            layout,
+            predecessor_marker,
+            owning_release_root=current_root,
+            expected_predecessor_root=previous_root,
+        )
+        if provenance_present:
+            raise LifecycleError(
+                "predecessor transaction marker conflicts with maintenance provenance"
+            )
+        if paused_present and not snapshot_present:
+            raise LifecycleError("maintenance snapshot/paused ledger state is partial")
+        active_binding: dict[str, Any] | None = None
+        if snapshot_present and paused_present:
+            active_binding = _validate_active_maintenance(layout, current_root)
+            current_kind, current = "direct", selected_local
+        elif snapshot_present:
+            completion_artifacts = _path_exists(
+                Path(f"{current_paused}{ARCHIVE_METADATA_SUFFIX}")
+            ) or any(
+                entry.name.startswith(f"{PAUSED_NAME}.audit.")
+                for entry in current_directory.iterdir()
+            )
+            if completion_artifacts:
+                current_kind = "completed"
+                current = _validate_completed_maintenance(layout, current_root)
+            else:
+                _require_single_link_file(
+                    current_snapshot,
+                    "interrupted maintenance snapshot",
+                    expected_mode=0o600,
+                )
+                current_kind, current = "snapshot-only", selected_local
+        else:
+            current_kind, current = "marked-empty", selected_local
+        _validate_completed_predecessor_authority(
+            layout,
+            previous_root,
+            successor_binding=active_binding,
+        )
+    else:
+        if previous_root is not None and (snapshot_present or paused_present):
+            raise LifecycleError(
+                "predecessor transaction marker is missing for local maintenance state"
+            )
+        current_kind, current = _maintenance_state(
+            layout,
+            current_root,
+            expected_source_root=previous_root,
+        )
+
+    selected: dict[str, str] | None
+    if current_kind == "direct":
         action = "reuse-local"
+        selected = current
+    elif current_kind == "snapshot-only":
+        action = "resume-pause-after-restored-previous"
+        selected = current
+    elif current_kind == "marked-empty":
+        action = "fresh-after-restored-previous"
         selected = current
     elif current_kind == "provenance":
         if previous_root is None:
@@ -236,11 +789,26 @@ def resolve_maintenance(args: argparse.Namespace) -> None:
             )
         action = "reuse-provenance"
         selected = current
+    elif current_kind in {"completed", "completed-provenance"}:
+        raise LifecycleError(
+            "current release maintenance is already restored; use a new Git SHA release"
+        )
     elif previous_root is not None:
         previous_kind, selected = _maintenance_state(layout, previous_root)
         if previous_kind == "empty":
             raise LifecycleError("PREVIOUS_RELEASE_ROOT has no authoritative maintenance state")
-        action = "inherit"
+        if previous_kind in {"completed", "completed-provenance"}:
+            directory = layout.validate_maintenance_directory(current_root)
+            _publish_predecessor_marker(layout, current_root, previous_root)
+            action = "fresh-after-restored-previous"
+            selected = {
+                "authoritative_paused_ledger": str(directory / PAUSED_NAME),
+                "authoritative_snapshot": str(directory / SNAPSHOT_NAME),
+                "source_git_sha": current_root.name,
+                "source_release_root": str(current_root),
+            }
+        else:
+            action = "inherit"
     else:
         directory = layout.validate_maintenance_directory(current_root)
         action = "fresh"
@@ -254,7 +822,14 @@ def resolve_maintenance(args: argparse.Namespace) -> None:
     assert selected is not None
     provenance_source_root = (
         str(previous_root)
-        if action == "inherit" and previous_root is not None
+        if previous_root is not None
+        and action
+        in {
+            "fresh-after-restored-previous",
+            "inherit",
+            "resume-pause-after-restored-previous",
+            "reuse-local",
+        }
         else selected["source_release_root"]
     )
     output = (
@@ -306,7 +881,7 @@ def resolve_operator_ledgers(args: argparse.Namespace) -> None:
         maintenance_kind, maintenance_state = _maintenance_state(
             layout, release_root
         )
-        if maintenance_kind == "provenance":
+        if maintenance_kind in {"provenance", "completed-provenance"}:
             assert maintenance_state is not None
             release_root = Path(maintenance_state["source_release_root"])
             continue
@@ -337,9 +912,13 @@ def publish_provenance(args: argparse.Namespace) -> None:
     )
     if source_root == current_root:
         raise LifecycleError("maintenance provenance source must be another release")
-    snapshot, paused = _validate_authoritative_ledgers(
+    snapshot, paused, authority_completed = _validate_authoritative_ledgers(
         layout, args.snapshot, args.paused
     )
+    if authority_completed:
+        raise LifecycleError(
+            "cannot publish provenance for a completed maintenance authority"
+        )
     directory = layout.validate_maintenance_directory(current_root)
     destination = directory / PROVENANCE_NAME
     if _path_exists(destination):

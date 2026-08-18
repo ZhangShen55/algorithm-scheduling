@@ -16,7 +16,7 @@ import sys
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager, nullcontext
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -52,6 +52,8 @@ from scripts.milestone_2b_case_runners.process import (
 )
 from scripts.milestone_2b_case_runners.safety import (
     CommandTaskTerminationError,
+    DelegatedMaintenanceLockGuard,
+    MaintenanceLock,
     MaintenanceLockGuard,
     _case_execution_scope,
 )
@@ -123,6 +125,40 @@ class _SupervisorSignal(BaseException):
         self.signal_number = signal_number
 
 
+class _SupervisorSignalState:
+    def __init__(self) -> None:
+        self._defer_depth = 0
+        self._pending_signal_number: int | None = None
+
+    def handle(self, signal_number: int) -> None:
+        if self._defer_depth:
+            if self._pending_signal_number is None:
+                self._pending_signal_number = signal_number
+            return
+        raise self._exception_for(signal_number)
+
+    @contextmanager
+    def defer(self) -> Iterator[None]:
+        self._defer_depth += 1
+        try:
+            yield
+        finally:
+            self._defer_depth -= 1
+
+    def pop_pending(self) -> BaseException | None:
+        signal_number = self._pending_signal_number
+        self._pending_signal_number = None
+        if signal_number is None:
+            return None
+        return self._exception_for(signal_number)
+
+    @staticmethod
+    def _exception_for(signal_number: int) -> BaseException:
+        if signal_number == signal.SIGINT:
+            return KeyboardInterrupt()
+        return _SupervisorSignal(signal_number)
+
+
 def resolve_runner(runner_name: str) -> CaseRunner:
     if RUNNER_PATTERN.fullmatch(runner_name) is None:
         raise ValueError(f"runner name is not a safe module.method: {runner_name}")
@@ -184,6 +220,8 @@ async def run_case_batch(
     require_all_selected: bool = False,
     run_id: str,
     target: str,
+    delegated_lock_holder_pid: int | None = None,
+    delegated_lock_path: Path | None = None,
 ) -> BatchResult:
     if type(concurrency) is not int or concurrency <= 0:
         raise ValueError("concurrency must be a positive integer")
@@ -197,6 +235,8 @@ async def run_case_batch(
             require_all_selected=require_all_selected,
             run_id=run_id,
             target=target,
+            delegated_lock_holder_pid=delegated_lock_holder_pid,
+            delegated_lock_path=delegated_lock_path,
         )
 
 
@@ -210,6 +250,8 @@ async def _run_case_batch_in_open_release(
     require_all_selected: bool,
     run_id: str,
     target: str,
+    delegated_lock_holder_pid: int | None,
+    delegated_lock_path: Path | None,
 ) -> BatchResult:
     release_tag, git_sha = release_identity(release_root)
     selected = _snapshot_selected_cases(cases)
@@ -242,9 +284,20 @@ async def _run_case_batch_in_open_release(
 
     semaphore = asyncio.Semaphore(concurrency)
     requires_lock = any(case.safety == "canonical_runtime" for case in pending)
-    lock_context = (
-        MaintenanceLockGuard(release_root) if requires_lock else nullcontext(None)
-    )
+    if (delegated_lock_holder_pid is None) != (delegated_lock_path is None):
+        raise ValueError("delegated maintenance lock requires both holder PID and path")
+    lock_context: AbstractContextManager[MaintenanceLock | None]
+    if requires_lock and delegated_lock_holder_pid is not None:
+        assert delegated_lock_path is not None
+        lock_context = DelegatedMaintenanceLockGuard(
+            release_root,
+            delegated_lock_holder_pid,
+            delegated_lock_path,
+        )
+    else:
+        lock_context = (
+            MaintenanceLockGuard(release_root) if requires_lock else nullcontext(None)
+        )
     completed: list[str] = []
     missing = list(partial)
     with lock_context as maintenance_lock:
@@ -458,7 +511,7 @@ async def _run_selected_case(
     target: str,
     semaphore: asyncio.Semaphore,
     require_cleanup: bool,
-    maintenance_lock: MaintenanceLockGuard | None,
+    maintenance_lock: MaintenanceLock | None,
 ) -> _CaseExecution:
     async with semaphore:
         authority_case = case
@@ -535,9 +588,8 @@ async def _run_selected_case(
                     try:
                         await _await_with_hard_timeout(
                             cleanup_call(cleanup_context, cleanup_case),
-                            timeout_seconds=min(
-                                authority_case.timeout_seconds,
-                                30,
+                            timeout_seconds=_case_cleanup_timeout_seconds(
+                                authority_case
                             ),
                         )
                     except TimeoutError:
@@ -743,7 +795,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--concurrency", type=_positive_int, default=1)
     parser.add_argument("--require-cleanup", action="store_true")
     parser.add_argument("--require-all-selected", action="store_true")
+    parser.add_argument("--delegated-lock-holder-pid", type=_positive_int)
+    parser.add_argument("--delegated-lock-path", type=Path)
     return parser.parse_args(argv)
+
+
+def _case_cleanup_timeout_seconds(case: CaseDefinition) -> float:
+    if case.category == "load" and case.safety == "canonical_runtime":
+        from scripts.milestone_2b_case_runners.load import (
+            _runtime_recovery_cleanup_timeout_seconds,
+        )
+
+        return _runtime_recovery_cleanup_timeout_seconds(case.case_id)
+    return min(case.timeout_seconds, 30)
 
 
 def _supervisor_deadline_seconds(
@@ -757,7 +821,7 @@ def _supervisor_deadline_seconds(
         + CASE_TASK_CANCEL_GRACE_SECONDS
         + command_termination_budget
         + (
-            min(case.timeout_seconds, 30)
+            _case_cleanup_timeout_seconds(case)
             + CASE_TASK_CANCEL_GRACE_SECONDS
             + command_termination_budget
             if require_cleanup
@@ -766,6 +830,78 @@ def _supervisor_deadline_seconds(
         for case in cases
     )
     return case_seconds + SUPERVISOR_FIXED_GRACE_SECONDS
+
+
+async def _run_parent_runtime_recovery(
+    *,
+    cases: Sequence[CaseDefinition],
+    release_root: Path,
+    run_id: str,
+    target: str,
+    maintenance_lock: MaintenanceLock,
+) -> None:
+    resolved_runners = _resolve_selected_runners(cases, None)
+    for authority_case in cases:
+        runner = resolved_runners[authority_case.runner]
+        cleanup = getattr(runner, "cleanup", None)
+        if not callable(cleanup):
+            raise ValueError(
+                f"parent recovery cleanup is not implemented: {authority_case.case_id}"
+            )
+        cleanup_context = CaseContext(release_root, run_id, target)
+        cleanup_case = _copy_case_definition(authority_case)
+        async with _case_execution_scope(
+            cleanup_context,
+            authority_case.safety,
+            maintenance_lock,
+            authority_case,
+        ):
+            await _await_with_hard_timeout(
+                cast(CleanupFunction, cleanup)(cleanup_context, cleanup_case),
+                timeout_seconds=_case_cleanup_timeout_seconds(authority_case),
+            )
+
+
+def _recover_parent_runtime_state(
+    *,
+    cases: Sequence[CaseDefinition],
+    release_root: Path,
+    run_id: str,
+    target: str,
+    delegated_lock_holder_pid: int | None,
+    delegated_lock_path: Path | None,
+) -> None:
+    canonical_cases = tuple(
+        case for case in cases if case.safety == "canonical_runtime"
+    )
+    if not canonical_cases:
+        return
+    if (delegated_lock_holder_pid is None) != (delegated_lock_path is None):
+        raise ValueError("parent recovery delegated lock authority is incomplete")
+    lock_context: AbstractContextManager[MaintenanceLock]
+    if delegated_lock_holder_pid is not None:
+        assert delegated_lock_path is not None
+        lock_context = DelegatedMaintenanceLockGuard(
+            release_root,
+            delegated_lock_holder_pid,
+            delegated_lock_path,
+        )
+    else:
+        lock_context = MaintenanceLockGuard(release_root)
+    with lock_context as maintenance_lock:
+        if not maintenance_lock.held_for(release_root):
+            raise ValueError("parent recovery maintenance lock is not held")
+        asyncio.run(
+            _run_parent_runtime_recovery(
+                cases=canonical_cases,
+                release_root=release_root,
+                run_id=run_id,
+                target=target,
+                maintenance_lock=maintenance_lock,
+            )
+        )
+        if not maintenance_lock.held_for(release_root):
+            raise ValueError("parent recovery maintenance lock was lost")
 
 
 def _write_supervisor_result(
@@ -805,6 +941,8 @@ async def _run_supervised_batch_child(
     run_id: str,
     target: str,
     result_descriptor: int,
+    delegated_lock_holder_pid: int | None,
+    delegated_lock_path: Path | None,
 ) -> int:
     try:
         batch = await run_case_batch(
@@ -815,6 +953,8 @@ async def _run_supervised_batch_child(
             require_all_selected=require_all_selected,
             run_id=run_id,
             target=target,
+            delegated_lock_holder_pid=delegated_lock_holder_pid,
+            delegated_lock_path=delegated_lock_path,
         )
     except ValueError as exc:
         result = _SupervisorResult(exit_code=2, error=_error_text(exc))
@@ -839,6 +979,8 @@ def _batch_child_entry(
     require_all_selected: bool,
     run_id: str,
     target: str,
+    delegated_lock_holder_pid: int | None,
+    delegated_lock_path: Path | None,
     result_read_descriptor: int,
     result_write_descriptor: int,
     process_read_descriptor: int,
@@ -868,6 +1010,8 @@ def _batch_child_entry(
                 run_id=run_id,
                 target=target,
                 result_descriptor=result_write_descriptor,
+                delegated_lock_holder_pid=delegated_lock_holder_pid,
+                delegated_lock_path=delegated_lock_path,
             )
         )
     except BaseException as exc:
@@ -1161,24 +1305,40 @@ def _terminate_supervised_batch(
     raise RuntimeError("supervisor could not reap the batch process tree")
 
 
+def _require_supervised_process_tree_reaped(
+    *,
+    child_pid: int,
+    child_status: int | None,
+    active_process_groups: set[int],
+) -> None:
+    _discard_gone_process_groups(active_process_groups)
+    if (
+        child_status is None
+        or active_process_groups
+        or _process_group_is_alive(child_pid)
+    ):
+        raise RuntimeError("supervisor termination did not reap the batch process tree")
+
+
 @contextmanager
-def _supervisor_signal_scope() -> Iterator[None]:
-    handled_signals = (signal.SIGTERM, signal.SIGHUP)
+def _supervisor_signal_scope() -> Iterator[_SupervisorSignalState]:
+    handled_signals = SUPERVISOR_BLOCKED_SIGNALS
     previous_handlers = {
         signal_number: signal.getsignal(signal_number)
         for signal_number in handled_signals
     }
+    signal_state = _SupervisorSignalState()
 
     def raise_supervisor_signal(
         signal_number: int,
         _frame: object,
     ) -> None:
-        raise _SupervisorSignal(signal_number)
+        signal_state.handle(signal_number)
 
     try:
         for signal_number in handled_signals:
             signal.signal(signal_number, raise_supervisor_signal)
-        yield
+        yield signal_state
     finally:
         for signal_number, previous_handler in previous_handlers.items():
             signal.signal(signal_number, previous_handler)
@@ -1193,8 +1353,10 @@ def _supervise_case_batch(
     require_all_selected: bool,
     run_id: str,
     target: str,
+    delegated_lock_holder_pid: int | None = None,
+    delegated_lock_path: Path | None = None,
 ) -> _SupervisorResult:
-    with _supervisor_signal_scope():
+    with _supervisor_signal_scope() as signal_state:
         return _supervise_case_batch_processes(
             cases=cases,
             release_root=release_root,
@@ -1203,6 +1365,9 @@ def _supervise_case_batch(
             require_all_selected=require_all_selected,
             run_id=run_id,
             target=target,
+            delegated_lock_holder_pid=delegated_lock_holder_pid,
+            delegated_lock_path=delegated_lock_path,
+            signal_state=signal_state,
         )
 
 
@@ -1215,6 +1380,9 @@ def _supervise_case_batch_processes(
     require_all_selected: bool,
     run_id: str,
     target: str,
+    delegated_lock_holder_pid: int | None,
+    delegated_lock_path: Path | None,
+    signal_state: _SupervisorSignalState,
 ) -> _SupervisorResult:
     open_descriptors: set[int] = set()
     inherited_signal_mask: set[int | signal.Signals] | None = None
@@ -1252,6 +1420,8 @@ def _supervise_case_batch_processes(
             require_all_selected=require_all_selected,
             run_id=run_id,
             target=target,
+            delegated_lock_holder_pid=delegated_lock_holder_pid,
+            delegated_lock_path=delegated_lock_path,
             result_read_descriptor=result_read,
             result_write_descriptor=result_write,
             process_read_descriptor=process_read,
@@ -1267,8 +1437,9 @@ def _supervise_case_batch_processes(
     child_status: int | None = None
     result: _SupervisorResult | None = None
     supervisor_error: str | None = None
-    cleanup_attempted = False
+    process_tree_reaped = False
     forced_cleanup_required = False
+    parent_recovery_attempted = False
     deadline = time.monotonic() + _supervisor_deadline_seconds(
         cases,
         require_cleanup=require_cleanup,
@@ -1340,18 +1511,47 @@ def _supervise_case_batch_processes(
             supervisor_error = "batch child did not publish a valid terminal result"
         batch_process_group_alive = _process_group_is_alive(child_pid)
         if child_status is None or active_process_groups or batch_process_group_alive:
-            cleanup_attempted = True
             forced_cleanup_required = True
-            child_status = _terminate_supervised_batch(
-                child_pid=child_pid,
-                child_status=child_status,
-                active_process_groups=active_process_groups,
-                descriptors=descriptors,
-                result_descriptor=result_read,
-                process_descriptor=process_read,
-                result_buffer=result_buffer,
-                process_buffer=process_buffer,
-            )
+            recovery_error: Exception | None = None
+            with signal_state.defer():
+                child_status = _terminate_supervised_batch(
+                    child_pid=child_pid,
+                    child_status=child_status,
+                    active_process_groups=active_process_groups,
+                    descriptors=descriptors,
+                    result_descriptor=result_read,
+                    process_descriptor=process_read,
+                    result_buffer=result_buffer,
+                    process_buffer=process_buffer,
+                )
+                _require_supervised_process_tree_reaped(
+                    child_pid=child_pid,
+                    child_status=child_status,
+                    active_process_groups=active_process_groups,
+                )
+                process_tree_reaped = True
+                parent_recovery_attempted = True
+                try:
+                    _recover_parent_runtime_state(
+                        cases=cases,
+                        release_root=release_root,
+                        run_id=run_id,
+                        target=target,
+                        delegated_lock_holder_pid=delegated_lock_holder_pid,
+                        delegated_lock_path=delegated_lock_path,
+                    )
+                except Exception as recovery_exc:
+                    recovery_error = recovery_exc
+            pending_signal = signal_state.pop_pending()
+            if pending_signal is not None:
+                if recovery_error is not None:
+                    raise pending_signal from recovery_error
+                raise pending_signal
+            if recovery_error is not None:
+                return _SupervisorResult(
+                    exit_code=2,
+                    error=f"parent runtime recovery failed: {_error_text(recovery_error)}",
+                )
         _drain_supervisor_pipes(
             descriptors,
             result_descriptor=result_read,
@@ -1382,28 +1582,61 @@ def _supervise_case_batch_processes(
             return _SupervisorResult(exit_code=2, error=terminal_state_error)
         return result
     except BaseException as exc:
-        if not cleanup_attempted:
-            try:
-                cleanup_attempted = True
-                _terminate_supervised_batch(
-                    child_pid=child_pid,
-                    child_status=child_status,
-                    active_process_groups=active_process_groups,
-                    descriptors=descriptors,
-                    result_descriptor=result_read,
-                    process_descriptor=process_read,
-                    result_buffer=result_buffer,
-                    process_buffer=process_buffer,
-                )
-            except (OSError, RuntimeError, ValueError) as cleanup_exc:
-                if not isinstance(exc, Exception):
-                    raise exc from cleanup_exc
-                return _SupervisorResult(
-                    exit_code=2,
-                    error=f"supervisor cleanup failed: {_error_text(cleanup_exc)}",
-                )
+        cleanup_error: Exception | None = None
+        recovery_error = None
+        with signal_state.defer():
+            if not process_tree_reaped:
+                try:
+                    child_status = _terminate_supervised_batch(
+                        child_pid=child_pid,
+                        child_status=child_status,
+                        active_process_groups=active_process_groups,
+                        descriptors=descriptors,
+                        result_descriptor=result_read,
+                        process_descriptor=process_read,
+                        result_buffer=result_buffer,
+                        process_buffer=process_buffer,
+                    )
+                    _require_supervised_process_tree_reaped(
+                        child_pid=child_pid,
+                        child_status=child_status,
+                        active_process_groups=active_process_groups,
+                    )
+                    process_tree_reaped = True
+                except Exception as cleanup_exc:
+                    cleanup_error = cleanup_exc
+            if process_tree_reaped and not parent_recovery_attempted:
+                parent_recovery_attempted = True
+                try:
+                    _recover_parent_runtime_state(
+                        cases=cases,
+                        release_root=release_root,
+                        run_id=run_id,
+                        target=target,
+                        delegated_lock_holder_pid=delegated_lock_holder_pid,
+                        delegated_lock_path=delegated_lock_path,
+                    )
+                except Exception as recovery_exc:
+                    recovery_error = recovery_exc
+        pending_signal = signal_state.pop_pending()
         if not isinstance(exc, Exception):
+            failure = recovery_error or cleanup_error
+            if failure is not None:
+                raise exc from failure
             raise
+        if pending_signal is not None:
+            failure = recovery_error or cleanup_error or exc
+            raise pending_signal from failure
+        if cleanup_error is not None:
+            return _SupervisorResult(
+                exit_code=2,
+                error=f"supervisor cleanup failed: {_error_text(cleanup_error)}",
+            )
+        if recovery_error is not None:
+            return _SupervisorResult(
+                exit_code=2,
+                error=f"parent runtime recovery failed: {_error_text(recovery_error)}",
+            )
         return _SupervisorResult(
             exit_code=2,
             error=f"supervisor failed: {_error_text(exc)}",
@@ -1431,6 +1664,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             require_all_selected=arguments.require_all_selected,
             run_id=uuid.uuid4().hex,
             target=socket.gethostname(),
+            delegated_lock_holder_pid=arguments.delegated_lock_holder_pid,
+            delegated_lock_path=arguments.delegated_lock_path,
         )
     except ValueError as exc:
         print(f"milestone 2B case batch rejected: {exc}", file=sys.stderr)

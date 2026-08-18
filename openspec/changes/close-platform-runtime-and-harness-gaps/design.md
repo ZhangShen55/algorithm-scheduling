@@ -203,6 +203,53 @@ harness/scenarios/*.md
 没有已确认吞吐 SLO 的压力场景只判定请求正确性、容量合同、资源稳定性和恢复行为，同时报告
 实际吞吐与延迟，不把测试值升级为产品承诺。任何失败使对应阶段和最终报告保持失败。
 
+### 14. 已恢复前驱允许新 SHA 开启新的维护事务
+
+跨 SHA 续跑需要区分“前驱维护仍活跃”和“前驱已经成功恢复”。前者继续只读继承原
+snapshot/paused authority，不重新暂停业务；后者的 canonical paused ledger 已按恢复合同归档，
+当前新 SHA 必须建立自己的 snapshot/paused，不能复制归档或伪造旧 ledger。
+
+已恢复前驱只有在以下事实全部成立时才可作为新事务起点：snapshot 是当前部署身份所有的
+`0600` 单链接普通文件；恰有一个命名合法的 `0400` 单链接 audit；不存在残留 archive metadata；
+audit 为空时获准选择的 `ocr-v6-amd` 在 snapshot 中原本不是 running，audit 非空时全部记录均为
+终态且 restart policy 已恢复；容器当前 ID、名称、镜像、挂载、端口、标签、策略和状态与上述
+事实一致。当前 release 仍从立即前驱解析算子 baseline/new 所有权，并只授权经权威 Compose 与
+Docker inspect 推导的现有监听端点。任何 partial、多个 audit、可写/链接归档、active 状态或
+容器漂移均 fail closed；旧 release 始终只读。
+
+新事务在任何 snapshot/pause 前，先在当前 release 原子发布
+`operator-maintenance-predecessor.json`。该 marker 只记录立即前驱 root/SHA，必须由当前 UID
+所有、为非 symlink `0400` 单链接普通文件，且不可替换。marker-only 表示 snapshot 尚未开始；
+marker + snapshot 表示 snapshot 已完成但 pause 尚未完成；marker + snapshot/paused 表示本地
+active 维护事务可直接复用。续跑携带的 `PREVIOUS_RELEASE_ROOT` 必须与 marker 精确一致；marker
+缺失、可写、symlink、额外硬链接或绑定不一致均 fail closed。这样在 snapshot 或 pause 后中断时，
+同一新 SHA 可以继续原事务，而不会重做 snapshot、重新暂停或改写旧 release。
+
+provenance 的 authority 允许在后继执行期间从 active 变为 completed。解析器仍要求 provenance
+自身 schema/source/path 严格匹配；active snapshot/paused 无论在 provenance 发布时还是后续每次
+解析时，都必须执行与 direct/reuse-local 相同的权限、schema、唯一 stopped 记录、hash、policy 和
+当前 Docker binding 完整校验。当 canonical paused 已不存在时，只能通过同一 authority root 的
+`0600` 单链接 snapshot、唯一 `0400` 单链接终态 audit、无 archive metadata 以及当前容器恢复事实
+来确认 completed authority。active/archive 混合、任一 partial 或容器漂移均拒绝。因此
+A（active direct）→B（provenance）→restore A→C（新 SHA）可以安全开启 C 的新事务，同时 A、B
+保持全程只读。
+
+marker 不是 completed predecessor 的缓存替代物。marker-only、snapshot-only 和 reuse-local 每次
+解析都必须重新读取 marker 所指的立即前驱，并复核 completed snapshot、唯一终态 audit、无残留
+archive metadata 及容器 binding。前两种状态要求容器仍处于 predecessor 的恢复事实；reuse-local
+允许容器已被当前事务暂停，但当前 active snapshot 必须与 predecessor 的恢复 binding 完全一致，
+随后 paused ledger 还必须证明同一容器已完整进入 stopped 状态。任一旧 archive 篡改、当前容器
+漂移或跨事务 binding 不连续均 fail closed，验证过程不得创建 metadata 或改写旧 release。
+
+reuse-local 的 direct snapshot/paused 不是“文件存在即有效”。两者必须为当前 UID 所有的 `0600`
+单链接普通文件；snapshot schema、容器 ID/名称、Compose 身份必须完整且唯一；paused 必须非空，
+且 canonical 场景只允许唯一 `ocr-v6-amd` 的 `stopped` 记录。binding、snapshot SHA-256、原始
+running 状态、restart policy neutralization 和当前 Docker exited binding 必须逐项一致。
+`pending_stop`、`restoring`、`restored`、`not_stopped`、空 ledger、audit/archive metadata 混合及
+任一身份/hash 漂移都不是可复用的 active transaction。`publish-provenance` 只允许 active
+snapshot/paused authority；如果 paused 已归档为 completed audit，即使 completed authority 本身
+可信，也必须拒绝发布新的 active provenance。
+
 ## 风险与权衡
 
 - [真实 E2E 变慢且更容易受环境影响] → 单元测试继续覆盖算法细节，Harness 将 broker E2E 独立分层并输出诊断。
