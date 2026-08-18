@@ -38,7 +38,14 @@
 - 根因 2：deployment batch 以文件路径执行，导致 `ModuleNotFoundError: No module named
   'scripts'`。入口已改为 `.venv/bin/python -m scripts.run_milestone_2b_case_batch`，并有专门
   回归防止退回文件路径执行。
-- 证据与边界：修正分别在 `6dedca2` 和 `b8431c0` 提交，本地完整回归、Ruff、
+- 根因 3：`b8431c0` 已证明模块入口修复生效，deployment batch 进入后继续被
+  `delegated maintenance lock holder or binding is invalid` 拒绝。Canonical Bash 使用
+  `coproc { python ...; }`，`$..._PID` 是 coprocess 包装 shell，而不是真正持有锁 inode
+  的 `operator_lifecycle.py`。持锁命令改为 `coproc { exec python ...; }`，使委托 PID、
+  命令身份、打开 inode 和 `flock` 权威重新指向同一进程；安全校验本身没有放宽。
+- 根因 3 TDD：新回归先在旧 canonical 脚本上因缺少 `exec` 失败；最小修正后，
+  canonical 持锁、委托锁、parent recovery 和 8A.3 控制器聚焦回归全部通过。
+- 证据与边界：前两项修正分别在 `6dedca2` 和 `b8431c0` 提交，本地完整回归、Ruff、
   strict Mypy、compileall 和 OpenSpec strict 均通过。这只关闭两个 Harness blocker，不代表
   `8A.3` 远程终态已通过。
 

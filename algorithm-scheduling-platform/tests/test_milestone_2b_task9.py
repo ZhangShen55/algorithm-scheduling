@@ -1894,6 +1894,14 @@ def _run_prepared_lifecycle(
     return completed, state
 
 
+def test_canonical_coproc_pid_is_the_operator_lifecycle_holder() -> None:
+    release_block = _extract_scenario_bash_blocks_before(
+        "## 阶段 1：服务器预检、快照和暂停"
+    )[0]
+
+    assert "coproc OPERATOR_LIFECYCLE_LOCK_HOLDER {\n    exec \"$DEPLOY_PYTHON\"" in release_block
+
+
 def _run_lifecycle_script(
     tmp_path: Path,
     script: str,

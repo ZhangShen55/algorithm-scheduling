@@ -121,7 +121,7 @@ acquire_operator_lifecycle_lock() {
   lock_path="$release_tag_root/.operator-lifecycle.lock"
   OPERATOR_LIFECYCLE_LOCK_PATH="$lock_path"
   coproc OPERATOR_LIFECYCLE_LOCK_HOLDER {
-    "$DEPLOY_PYTHON" deploy/scripts/operator_lifecycle.py hold-lock \
+    exec "$DEPLOY_PYTHON" deploy/scripts/operator_lifecycle.py hold-lock \
       --release-tag-root "$release_tag_root" --lock-path "$lock_path"
   }
   OPERATOR_LIFECYCLE_LOCK_PID="$OPERATOR_LIFECYCLE_LOCK_HOLDER_PID"
