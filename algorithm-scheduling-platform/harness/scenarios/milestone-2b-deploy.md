@@ -322,7 +322,9 @@ fi
 的原 `ocr-v6-amd`。`resume-pause-after-restored-previous` 表示当前 release 已经安全发布
 predecessor marker 和 snapshot，只补做尚未完成的 pause，禁止再次生成 snapshot；不要使用
 空选择器或按宽泛名称匹配。权威暂停账本固定为 `$PAUSED_LEDGER`，必须保留到
-恢复完成。previous 路径只以不可替换方式写入权限 `0400` 的指针证据，不复制
+恢复完成。snapshot 中 `ocr-v6-amd` 原本 running 时，paused 必须恰有一条可信 `stopped`
+记录；原本不是 running 时允许 paused 为空，但同 SHA 续跑必须重新核验当前 Docker binding
+与 snapshot 完全一致。previous 路径只以不可替换方式写入权限 `0400` 的指针证据，不复制
 可变 paused ledger。只有无前驱的 fresh 路径强制以空 `AUTHORIZED_OCCUPIED_ENDPOINTS`
 运行 host preflight；续跑和 `fresh-after-restored-previous` 从权威 platform/operator Compose 渲染结果和按 service
 限定的运行容器中，经完整 ID、running、project/service 标签及端口映射校验后

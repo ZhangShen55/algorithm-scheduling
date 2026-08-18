@@ -84,8 +84,8 @@ archive metadata 清理和容器恢复事实均严格通过校验后，才允许
 - **THEN** 发布器或每次 resolver 加载均执行完整 active transaction 校验并 fail closed，不创建或复用不可信 provenance，且不修改 authority 所属旧 release
 
 #### Scenario: reuse-local 的 paused ledger 不完整
-- **WHEN** marker 与当前 snapshot/paused 同时存在，但 paused 为空、包含 `pending_stop`/`restoring`/终态状态、binding 或 snapshot hash 不一致，或者与 audit/archive metadata 混合
-- **THEN** resolver 拒绝 reuse-local；只有 schema 完整、非空且唯一 `stopped` 记录与当前 Docker exited/policy-neutralized binding 一致时才可继续
+- **WHEN** marker 与当前 snapshot/paused 同时存在，但原本 running 的实例缺少唯一 `stopped` 记录、包含 `pending_stop`/`restoring`/终态状态、binding 或 snapshot hash 不一致，或者与 audit/archive metadata 混合
+- **THEN** resolver 拒绝 reuse-local；原本 running 时只有 schema 完整、非空且唯一 `stopped` 记录与当前 Docker exited/policy-neutralized binding 一致才可继续，原本不是 running 时只允许空 paused 且当前 Docker binding 必须与 snapshot 完全一致
 
 #### Scenario: marker 发布后 predecessor 发生漂移
 - **WHEN** marker-only、snapshot-only 或 reuse-local 再次解析时，predecessor 的 snapshot/audit 被篡改、出现 archive metadata，或当前容器 binding 不再能由 predecessor 恢复态和当前 active transaction 连续证明

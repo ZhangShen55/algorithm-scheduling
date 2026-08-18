@@ -1,5 +1,22 @@
 # Change Ledger
 
+## 2026-08-19 - 8A.3 空暂停账本续跑边界修正
+
+- 现场失败：`71e09f10da17a6ad087680b1d5d89e9d5ab431da` 已完成八算子镜像、四平台镜像和
+  runtime preflight，但远程会话在 gpu0 profile 前中断；同 SHA 续跑被
+  `active maintenance paused ledger must contain exactly one stopped entry` 拒绝。
+- 根因证据：本轮 snapshot 中获准维护的原 `ocr-v6-amd` 本来就是 exited，因此 pause 脚本
+  正确发布了空 paused ledger；active resolver 却无条件要求唯一 `stopped` 记录，与 completed
+  authority 已支持的“原本非 running 时空 audit”边界不一致。FaceRec 镜像、GPU、Conda 和注册
+  心跳均不是这次续跑失败原因。
+- 修正：active/reuse-local 校验现在按 snapshot 原始状态分支。原本 running 时仍强制唯一
+  `stopped`、hash、policy neutralization 和 exited binding；原本不是 running 时只允许空
+  paused，并要求当前 Docker binding 与 snapshot 完全一致。
+- 回归证据：新增用例先在旧实现上稳定失败，再由最小实现修复；新合法场景和原有 7 个
+  不完整/不可信 active transaction 反例合计 `8 passed`。
+- 完成边界：该记录只关闭同 SHA 安全续跑 blocker；修复必须进入新 Git SHA/不可变 release，
+  实际完成 FaceRec 三实例、18 个 GPU 实例和全部 deployment 用例后才能勾选 `8A.3`。
+
 ## 2026-08-18 - 8A.3 持久生命周期恢复门禁修正
 
 - 现场失败：`c418234c337dfac4f3feaaa984127f206acbdbca` 的八镜像和四个平台服务构建成功，

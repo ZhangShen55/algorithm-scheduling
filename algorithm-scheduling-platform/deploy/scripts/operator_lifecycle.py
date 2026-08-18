@@ -371,7 +371,19 @@ def _validate_active_maintenance(
         by_id[container_id] = record
         by_name[name] = record
 
+    selected = by_name.get("ocr-v6-amd")
+    if selected is None:
+        raise LifecycleError("active maintenance snapshot omits ocr-v6-amd")
+
     entries = _read_jsonl(paused, "active maintenance paused ledger")
+    if not entries:
+        if selected.get("state") == "running":
+            raise LifecycleError(
+                "active maintenance paused ledger is empty for an originally running container"
+            )
+        if _current_container_binding(selected) != selected:
+            raise LifecycleError("active maintenance container binding has drifted")
+        return selected
     if len(entries) != 1:
         raise LifecycleError(
             "active maintenance paused ledger must contain exactly one stopped entry"

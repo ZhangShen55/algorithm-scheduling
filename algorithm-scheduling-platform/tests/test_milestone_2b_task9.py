@@ -2669,6 +2669,40 @@ def test_new_sha_reuses_local_ledgers_after_pause_interruption(
     assert marker.read_bytes()
 
 
+def test_new_sha_reuses_empty_local_pause_when_selected_container_was_stopped(
+    tmp_path: Path,
+) -> None:
+    _, release_root, environment, baseline_id, profiles = _prepare_fake_lifecycle(
+        tmp_path,
+        initial_profiles=("gpu0",),
+    )
+    previous_root = _previous_release_root(environment)
+    _write_operator_ledgers(previous_root, [baseline_id], sorted(profiles["gpu0"]))
+    _archive_completed_maintenance(previous_root)
+    marker = _write_predecessor_marker(release_root, previous_root)
+    snapshot, paused, _ = _maintenance_paths(release_root)
+    binding = _maintenance_snapshot_record("exited")
+    snapshot.write_text(
+        json.dumps(binding, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    paused.write_text("", encoding="utf-8")
+    snapshot.chmod(0o600)
+    paused.chmod(0o600)
+    _set_legacy_ocr_container_state(environment, running=False)
+
+    completed = _run_maintenance_resolver(environment, release_root, previous_root)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.splitlines() == [
+        "reuse-local",
+        str(previous_root),
+        str(snapshot),
+        str(paused),
+    ]
+    assert marker.read_bytes()
+
+
 @pytest.mark.parametrize(
     "mutation",
     (

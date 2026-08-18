@@ -232,8 +232,10 @@ active 维护事务可直接复用。续跑携带的 `PREVIOUS_RELEASE_ROOT` 必
 
 provenance 的 authority 允许在后继执行期间从 active 变为 completed。解析器仍要求 provenance
 自身 schema/source/path 严格匹配；active snapshot/paused 无论在 provenance 发布时还是后续每次
-解析时，都必须执行与 direct/reuse-local 相同的权限、schema、唯一 stopped 记录、hash、policy 和
-当前 Docker binding 完整校验。当 canonical paused 已不存在时，只能通过同一 authority root 的
+解析时，都必须执行与 direct/reuse-local 相同的权限、schema、pause 记录、hash、policy 和
+当前 Docker binding 完整校验。当 snapshot 中获准选择的 `ocr-v6-amd` 原本 running 时，paused
+必须恰有一条 `stopped` 记录；原本不是 running 时允许 paused 为空，但当前 Docker binding 必须与
+snapshot 精确一致。当 canonical paused 已不存在时，只能通过同一 authority root 的
 `0600` 单链接 snapshot、唯一 `0400` 单链接终态 audit、无 archive metadata 以及当前容器恢复事实
 来确认 completed authority。active/archive 混合、任一 partial 或容器漂移均拒绝。因此
 A（active direct）→B（provenance）→restore A→C（新 SHA）可以安全开启 C 的新事务，同时 A、B
@@ -247,11 +249,12 @@ archive metadata 及容器 binding。前两种状态要求容器仍处于 predec
 漂移或跨事务 binding 不连续均 fail closed，验证过程不得创建 metadata 或改写旧 release。
 
 reuse-local 的 direct snapshot/paused 不是“文件存在即有效”。两者必须为当前 UID 所有的 `0600`
-单链接普通文件；snapshot schema、容器 ID/名称、Compose 身份必须完整且唯一；paused 必须非空，
-且 canonical 场景只允许唯一 `ocr-v6-amd` 的 `stopped` 记录。binding、snapshot SHA-256、原始
-running 状态、restart policy neutralization 和当前 Docker exited binding 必须逐项一致。
-`pending_stop`、`restoring`、`restored`、`not_stopped`、空 ledger、audit/archive metadata 混合及
-任一身份/hash 漂移都不是可复用的 active transaction。`publish-provenance` 只允许 active
+单链接普通文件；snapshot schema、容器 ID/名称、Compose 身份必须完整且唯一。snapshot 中
+`ocr-v6-amd` 原本 running 时，paused 必须非空且只包含该实例唯一 `stopped` 记录；原本不是
+running 时 paused 只能为空，并要求当前 Docker binding 与 snapshot 完全一致。binding、snapshot
+SHA-256、原始状态、restart policy neutralization 和当前 Docker binding 必须逐项一致。
+`pending_stop`、`restoring`、`restored`、`not_stopped`、与原始 running 状态矛盾的空 ledger、
+audit/archive metadata 混合及任一身份/hash 漂移都不是可复用的 active transaction。`publish-provenance` 只允许 active
 snapshot/paused authority；如果 paused 已归档为 completed audit，即使 completed authority 本身
 可信，也必须拒绝发布新的 active provenance。
 
