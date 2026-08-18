@@ -94,3 +94,12 @@ archive metadata 清理和容器恢复事实均严格通过校验后，才允许
 #### Scenario: 尝试向 completed authority 发布 provenance
 - **WHEN** canonical paused 已归档为 completed audit，并调用 provenance 发布器指向该 authority
 - **THEN** 发布器在创建 provenance 前拒绝；completed authority 只能用于严格判断新事务起点，不能伪装为 active inherited authority
+
+### Requirement: 部署控制程序不与子进程共享脚本输入流
+Canonical 部署控制器 SHALL 在同一 Bash 程序中连续执行规定阶段，并 SHALL NOT 通过可被子进程
+继承和消费的标准输入传递该程序。完成判定 SHALL 要求显式终态标记，而不是以最后一个已见
+preflight 的零退出码代替。
+
+#### Scenario: 阶段中的子进程读取标准输入到 EOF
+- **WHEN** preflight 或探针读取其继承的标准输入直到 EOF
+- **THEN** 控制程序后续的算子启动、GPU 验证、deployment 用例、恢复与终态标记仍全部执行

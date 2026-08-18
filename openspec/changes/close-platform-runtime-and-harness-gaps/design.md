@@ -258,6 +258,17 @@ audit/archive metadata 混合及任一身份/hash 漂移都不是可复用的 ac
 snapshot/paused authority；如果 paused 已归档为 completed audit，即使 completed authority 本身
 可信，也必须拒绝发布新的 active provenance。
 
+### 15. Canonical 控制器必须隔离脚本源与子进程标准输入
+
+里程碑 2B 控制器会把多个 Markdown 阶段组装成一个连续 Bash 程序。该程序不能通过 Bash 的
+标准输入执行，因为 preflight、探针或第三方命令可能合法读取继承的 stdin，从而吞掉尚未由
+Bash 解析的后续阶段，并以 0 错误码提前结束。控制器必须把完整脚本作为 `bash -c` 的命令文本
+或等价的受控脚本文件执行；子进程 stdin 只能承载业务输入，不能同时承载控制程序。
+
+回归测试必须包含一个主动读取 stdin 到 EOF 的子进程，并证明其后的终态标记仍被执行。远程
+执行只有出现 `CODEX_STAGE45_COMPLETE` 与 `CODEX_8A3_TERMINAL`，且二者状态均为 0，才允许
+认定 8A.3 控制器完整到达终态；仅有 `preflight runtime: PASS` 不构成阶段完成证据。
+
 ## 风险与权衡
 
 - [真实 E2E 变慢且更容易受环境影响] → 单元测试继续覆盖算法细节，Harness 将 broker E2E 独立分层并输出诊断。

@@ -1,5 +1,22 @@
 # Change Ledger
 
+## 2026-08-19 - 8A.3 Canonical runner 标准输入截断修正
+
+- 现场现象：`a78c64b187d90d2f0cfd7ecb66c72453661ab652` 两次完成八算子镜像、四平台镜像和
+  runtime preflight 后都以状态 0 退出，但没有启动 gpu0 profile，也没有产生
+  `CODEX_STAGE45_COMPLETE` 或 `CODEX_8A3_TERMINAL`。
+- 根因：原临时 `run-8a3-71e09f1.py` 使用 `subprocess.run(["bash"], input=runtime)`，把控制脚本和
+  子进程 stdin 放在同一个管道。`preflight runtime` 内部命令读取继承 stdin 后，尚未被 Bash
+  解析的 profile、GPU、deployment 和恢复阶段被消费，因此产生“成功提前结束”。这与 FaceRec
+  镜像、GPU、Conda 或算子实现无关。
+- 修正：将控制器与 stage45 固化到受版本控制的 `deploy/scripts/`；新增 `execute_runtime`，使用
+  `bash -c <runtime>` 隔离控制程序与子进程 stdin。主入口只改用该执行函数，不修改 canonical
+  阶段内容和维护边界。
+- TDD 证据：新增真实子进程回归，先因 `execute_runtime` 缺失失败；最小实现后，主动读取 stdin
+  到 EOF 的子进程不再吞掉其后的 `CODEX_RUNTIME_CONTINUED` 标记。
+- 完成边界：本条只关闭控制器截断 blocker。修正提交并进入新的 Git SHA/release 后，必须实际
+  取得 FaceRec 三实例、18 个 GPU 实例、全部 deployment 用例、清理和恢复终态，才勾选 8A.3。
+
 ## 2026-08-19 - 8A.3 空暂停账本续跑边界修正
 
 - 现场失败：`71e09f10da17a6ad087680b1d5d89e9d5ab431da` 已完成八算子镜像、四平台镜像和
