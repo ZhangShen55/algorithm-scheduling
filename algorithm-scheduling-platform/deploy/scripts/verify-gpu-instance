@@ -911,20 +911,67 @@ def _process_group_exists(process_group_id: int) -> bool:
     return True
 
 
+def _linux_process_group_states(
+    process_group_id: int, *, proc_root: Path
+) -> list[str] | None:
+    if not proc_root.is_dir():
+        return None
+    try:
+        processes = list(proc_root.iterdir())
+    except OSError:
+        return None
+    states: list[str] = []
+    for process in processes:
+        if not process.name.isdigit():
+            continue
+        try:
+            value = (process / "stat").read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        closing_parenthesis = value.rfind(")")
+        if closing_parenthesis < 0:
+            continue
+        fields = value[closing_parenthesis + 1 :].split()
+        if len(fields) < 3:
+            continue
+        try:
+            member_process_group = int(fields[2])
+        except ValueError:
+            continue
+        if member_process_group == process_group_id:
+            states.append(fields[0])
+    return states
+
+
+def _process_group_has_live_members(
+    process_group_id: int, *, proc_root: Path = Path("/proc")
+) -> bool:
+    if not _process_group_exists(process_group_id):
+        return False
+    states = _linux_process_group_states(process_group_id, proc_root=proc_root)
+    if states is None:
+        return True
+    if states:
+        # A container PID 1 may defer reaping orphaned zombies. They cannot execute
+        # and therefore are not a surviving trigger workload after SIGKILL.
+        return any(state != "Z" for state in states)
+    return _process_group_exists(process_group_id)
+
+
 def _wait_process_group_gone(process_group_id: int, timeout: float) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if not _process_group_exists(process_group_id):
+        if not _process_group_has_live_members(process_group_id):
             return True
         time.sleep(0.02)
-    return not _process_group_exists(process_group_id)
+    return not _process_group_has_live_members(process_group_id)
 
 
 def _terminate_process_group(
     process: subprocess.Popen[Any], process_group_id: int
 ) -> None:
     process.poll()
-    if _process_group_exists(process_group_id):
+    if _process_group_has_live_members(process_group_id):
         try:
             os.killpg(process_group_id, signal.SIGTERM)
         except ProcessLookupError:

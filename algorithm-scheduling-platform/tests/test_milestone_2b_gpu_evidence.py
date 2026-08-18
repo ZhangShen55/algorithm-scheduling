@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import runpy
 import signal
 import subprocess
 import sys
@@ -16,6 +17,15 @@ VERIFIER = PLATFORM_ROOT / "deploy/scripts/verify-gpu-instance"
 RELEASE_SHA = "a" * 40
 CONTAINER_ID = "b" * 64
 OTHER_CONTAINER_ID = "b" * 63 + "c"
+
+
+def _write_process_stat(proc_root: Path, pid: int, *, state: str, process_group: int) -> None:
+    process = proc_root / str(pid)
+    process.mkdir(parents=True, exist_ok=True)
+    (process / "stat").write_text(
+        f"{pid} (worker with spaces) {state} 1 {process_group} {process_group}\n",
+        encoding="utf-8",
+    )
 
 
 def _write_executable(path: Path, source: str) -> None:
@@ -1314,3 +1324,32 @@ def test_cleanup_kills_process_group_after_trigger_leader_exits(
     _wait_process_gone(child_pid)
     with pytest.raises(ProcessLookupError):
         os.killpg(parent_pid, 0)
+
+
+def test_linux_process_group_with_only_zombies_is_not_live(tmp_path: Path) -> None:
+    namespace = runpy.run_path(str(VERIFIER))
+    process_group = 4321
+    proc_root = tmp_path / "proc"
+    _write_process_stat(proc_root, 111, state="Z", process_group=process_group)
+    namespace["_process_group_has_live_members"].__globals__[  # type: ignore[attr-defined]
+        "_process_group_exists"
+    ] = lambda _: True
+
+    assert namespace["_process_group_has_live_members"](
+        process_group, proc_root=proc_root
+    ) is False
+
+
+def test_linux_process_group_with_running_member_remains_live(tmp_path: Path) -> None:
+    namespace = runpy.run_path(str(VERIFIER))
+    process_group = 4321
+    proc_root = tmp_path / "proc"
+    _write_process_stat(proc_root, 111, state="Z", process_group=process_group)
+    _write_process_stat(proc_root, 222, state="S", process_group=process_group)
+    namespace["_process_group_has_live_members"].__globals__[  # type: ignore[attr-defined]
+        "_process_group_exists"
+    ] = lambda _: True
+
+    assert namespace["_process_group_has_live_members"](
+        process_group, proc_root=proc_root
+    ) is True
