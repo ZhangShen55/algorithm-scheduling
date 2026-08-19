@@ -42,6 +42,10 @@ Control-service SHALL 将注册、生命周期变化、心跳摘要和注销事�
 - **WHEN** Redis 状态丢失且算子重新注册
 - **THEN** 当前路由状态得到重建，此前的注册和生命周期事实仍可从 PostgreSQL 查询
 
+#### Scenario: Redis 持久化恢复旧容量租约
+- **WHEN** Redis 通过 AOF 恢复了前一 Redis 进程签发且 TTL 尚未到期的容量租约
+- **THEN** 平台按 Redis `run_id` 将旧世代租约视为不存在并原子清理，旧租约不阻塞新容量申请，同时保留实例注册和 PostgreSQL 审计事实
+
 #### Scenario: 受控部署恢复持久生命周期
 - **WHEN** 权威 Compose 中的实例已经注册，但 PostgreSQL 仍保存此前维护产生的 `DRAINING` 或 `OFFLINE`
 - **THEN** 部署 Harness 在成功发布本轮容器账本后按 profile 或显式实例调用鉴权生命周期接口恢复 `ONLINE`，再验证首次就绪心跳；重新注册本身不覆盖运维意图

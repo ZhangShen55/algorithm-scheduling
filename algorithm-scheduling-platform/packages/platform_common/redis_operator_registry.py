@@ -99,6 +99,11 @@ return 1
 
 
 _LEASE_SCRIPT = """
+local server_info = redis.call('INFO', 'server')
+local redis_run_id = string.match(server_info, 'run_id:([%w]+)')
+if not redis_run_id then
+    return redis.error_reply('Redis run_id unavailable')
+end
 local redis_time = redis.call('TIME')
 local now_ms = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2]) / 1000)
 local instance_ids = redis.call('SMEMBERS', KEYS[1])
@@ -111,6 +116,14 @@ for _, instance_id in ipairs(instance_ids) do
         and redis.call('HGET', instance_key, 'model_ready') == '1' then
         local leases_key = ARGV[5] .. instance_id
         redis.call('ZREMRANGEBYSCORE', leases_key, '-inf', now_ms)
+        local lease_ids = redis.call('ZRANGE', leases_key, 0, -1)
+        for _, existing_lease_id in ipairs(lease_ids) do
+            local existing_lease_key = ARGV[6] .. existing_lease_id
+            if redis.call('HGET', existing_lease_key, 'redis_run_id') ~= redis_run_id then
+                redis.call('ZREM', leases_key, existing_lease_id)
+                redis.call('DEL', existing_lease_key)
+            end
+        end
         local active_leases = redis.call('ZCARD', leases_key)
         local reported_inflight = tonumber(redis.call('HGET', instance_key, 'inflight') or '0')
         local used = math.max(active_leases, reported_inflight)
@@ -123,7 +136,8 @@ for _, instance_id in ipairs(instance_ids) do
                 'instance_id', instance_id,
                 'capability', ARGV[7],
                 'service_url', redis.call('HGET', instance_key, 'service_url'),
-                'expires_at', expires_at)
+                'expires_at', expires_at,
+                'redis_run_id', redis_run_id)
             redis.call('PEXPIRE', lease_key, ARGV[1])
             return {instance_id, redis.call('HGET', instance_key, 'service_url'), expires_at}
         end
@@ -138,6 +152,16 @@ local instance_id = redis.call('HGET', KEYS[1], 'instance_id')
 if not instance_id then
     return 0
 end
+local server_info = redis.call('INFO', 'server')
+local redis_run_id = string.match(server_info, 'run_id:([%w]+)')
+if not redis_run_id then
+    return redis.error_reply('Redis run_id unavailable')
+end
+if redis.call('HGET', KEYS[1], 'redis_run_id') ~= redis_run_id then
+    redis.call('ZREM', ARGV[1] .. instance_id, ARGV[2])
+    redis.call('DEL', KEYS[1])
+    return 0
+end
 redis.call('ZREM', ARGV[1] .. instance_id, ARGV[2])
 redis.call('DEL', KEYS[1])
 return 1
@@ -148,6 +172,11 @@ _RENEW_SCRIPT = """
 local instance_id = redis.call('HGET', KEYS[1], 'instance_id')
 if not instance_id then
     return {}
+end
+local server_info = redis.call('INFO', 'server')
+local redis_run_id = string.match(server_info, 'run_id:([%w]+)')
+if not redis_run_id then
+    return redis.error_reply('Redis run_id unavailable')
 end
 local redis_time = redis.call('TIME')
 local now_ms = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2]) / 1000)
@@ -164,6 +193,11 @@ if not current_expiry
     redis.call('DEL', KEYS[1])
     return {}
 end
+if redis.call('HGET', KEYS[1], 'redis_run_id') ~= redis_run_id then
+    redis.call('ZREM', leases_key, ARGV[3])
+    redis.call('DEL', KEYS[1])
+    return {}
+end
 local capability = redis.call('HGET', KEYS[1], 'capability')
 local service_url = redis.call('HGET', KEYS[1], 'service_url')
 local expires_at = now_ms + tonumber(ARGV[1])
@@ -175,9 +209,22 @@ return {instance_id, capability, service_url, expires_at}
 
 
 _ACTIVE_LEASE_COUNT_SCRIPT = """
+local server_info = redis.call('INFO', 'server')
+local redis_run_id = string.match(server_info, 'run_id:([%w]+)')
+if not redis_run_id then
+    return redis.error_reply('Redis run_id unavailable')
+end
 local redis_time = redis.call('TIME')
 local now_ms = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2]) / 1000)
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now_ms)
+local lease_ids = redis.call('ZRANGE', KEYS[1], 0, -1)
+for _, lease_id in ipairs(lease_ids) do
+    local lease_key = ARGV[1] .. lease_id
+    if redis.call('HGET', lease_key, 'redis_run_id') ~= redis_run_id then
+        redis.call('ZREM', KEYS[1], lease_id)
+        redis.call('DEL', lease_key)
+    end
+end
 return redis.call('ZCARD', KEYS[1])
 """
 
@@ -350,6 +397,7 @@ class RedisOperatorRegistry:
                 _ACTIVE_LEASE_COUNT_SCRIPT,
                 1,
                 f"{self._prefix}leases:{instance_id}",
+                f"{self._prefix}lease:",
             ),
         )
 

@@ -1,5 +1,30 @@
 # Change Ledger
 
+## 2026-08-19 - 8A.3 `4af04c69` 第二轮终态与 Redis 租约 epoch 修复
+
+- 第二轮 release：Git SHA 为 `4af04c69a50048ab8995a4fd436d54b88051bb05`，不可变目录为
+  `/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/reports/milestone-2b/releases/v1.0_260812/4af04c69a50048ab8995a4fd436d54b88051bb05`。
+  该目录保持只读。本轮 `CODEX_STAGE45_COMPLETE failures=0`：FaceRec 三卡真实人物创建/识别、
+  18 个 GPU 实例推理与 CUDA PID 生命周期、24 实例注册、6 个 CPU 实例 Smoke 和 8/8 算子
+  full Smoke 全部通过；最终仍为
+  `CODEX_8A3_TERMINAL stage45_failures=0 deployment_status=1`，因此不能勾选 `8A.3`。
+- deployment 唯一失败为 `LOAD-015`。`INF-014` 的结构化 MongoDB 认证分类、`LOAD-014` 的
+  Kafka/Worker 恢复和 FaceRec `recognize` capability 均已通过。`LOAD-015` 通过生产租约 API
+  建立了唯一真实租约，但 Redis 使用 AOF，容器重启后租约 hash 与实例租约 ZSET 一同恢复；
+  旧租约 release 返回 200，而用例要求旧 Redis 进程签发的容量所有权失效。
+- 根因不在 FaceRec 镜像、GPU、MongoDB 或服务器 Conda。容量租约此前只有 TTL，没有 Redis
+  进程世代；AOF 能保留绝对过期时间，却不能证明持有者在 Redis 重启后仍拥有执行权。关闭
+  Redis 持久化会同时丢失实例注册和运维生命周期，不采用。
+- 修正：租约 hash 原子记录当前 Redis `run_id`。申请、续约、释放和容量统计 Lua 脚本均在
+  Redis 内读取当前 `run_id`；世代不匹配或旧版本缺少该字段的租约会从 hash/ZSET 原子清除并
+  按不存在处理。新租约申请也会先清除旧世代成员，避免无人主动 release 时容量永久被占用；
+  实例注册、心跳和 PostgreSQL 审计事实不受影响。
+- TDD：先复现“旧世代租约 release 仍成功”和“旧世代租约阻塞新容量”两个 RED，再做上述
+  最小修正；真实 Redis Registry 集成测试为 `16 passed`，完整部署组合回归为
+  `1276 passed, 3 skipped`。3 个 skip 仅因本机没有远端注册令牌和 Canonical FaceRec GPU
+  容器；Ruff、strict Mypy、compileall、Harness 一致性、OpenSpec strict 和
+  `git diff --check` 均通过。第三轮双终态为零前 `DEC-022` 继续保持部分符合。
+
 ## 2026-08-18 - 8A.3 `f79d0632` 首轮终态与三项部署缺陷修复
 
 - 首轮 release：Git SHA 为 `f79d0632ad86b103a85ad7f46128a9d48830692a`，不可变目录为

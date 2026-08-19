@@ -134,6 +134,41 @@ def test_renew_keeps_async_capacity_reserved(
         redis_registry.lease("teacher_behavior", 30)
 
 
+def test_redis_restart_invalidates_persisted_capacity_lease(
+    redis_registry: RedisOperatorRegistry,
+) -> None:
+    _register_ready(redis_registry, vbas_instance(capacity=1))
+    stale_lease = redis_registry.lease("teacher_behavior", 30)
+    lease_key = f"{redis_registry._prefix}lease:{stale_lease.lease_id}"
+
+    # AOF keeps the lease data, while a restarted Redis process has a new run_id.
+    redis_registry._client.hset(lease_key, "redis_run_id", "previous-redis-process")
+
+    with pytest.raises(CapacityLeaseNotFoundError):
+        redis_registry.release(stale_lease.lease_id)
+    assert redis_registry.active_lease_count(stale_lease.instance_id) == 0
+    assert (
+        redis_registry.lease("teacher_behavior", 30).instance_id
+        == stale_lease.instance_id
+    )
+
+
+def test_redis_restart_stale_lease_does_not_block_new_capacity(
+    redis_registry: RedisOperatorRegistry,
+) -> None:
+    _register_ready(redis_registry, vbas_instance(capacity=1))
+    stale_lease = redis_registry.lease("teacher_behavior", 30)
+    lease_key = f"{redis_registry._prefix}lease:{stale_lease.lease_id}"
+    redis_registry._client.hset(lease_key, "redis_run_id", "previous-redis-process")
+
+    replacement = redis_registry.lease("teacher_behavior", 30)
+
+    assert replacement.instance_id == stale_lease.instance_id
+    assert replacement.lease_id != stale_lease.lease_id
+    with pytest.raises(CapacityLeaseNotFoundError):
+        redis_registry.release(stale_lease.lease_id)
+
+
 def test_expired_heartbeat_excludes_instance_from_routing() -> None:
     client = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
     key_prefix = _unique_key_prefix()

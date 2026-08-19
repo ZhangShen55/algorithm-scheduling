@@ -5,6 +5,45 @@ platform root, use the explicit workspace import path below; this prevents a
 bare top-level `tests` package from another checkout from shadowing the
 platform tests:
 
+## 2026-08-19 8A.3 Redis 租约 epoch 修复与第三轮重跑门禁
+
+第二轮不可变 release `4af04c69a50048ab8995a4fd436d54b88051bb05` 已得到
+`CODEX_STAGE45_COMPLETE failures=0`，但 deployment 的 `LOAD-015` 证明 AOF 会把旧容量租约
+带入新的 Redis 进程，最终为
+`CODEX_8A3_TERMINAL stage45_failures=0 deployment_status=1`。修复后执行：
+
+```bash
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/test_milestone_2b_gpu_evidence.py \
+  tests/test_milestone_2b_foundation_case_runners.py \
+  tests/test_milestone_2b_load_case_runners.py \
+  tests/test_milestone_2b_scripts.py \
+  tests/test_milestone_2b_task9.py \
+  tests/test_run_8a3.py \
+  tests/integration/test_redis_operator_registry.py
+# 1276 passed, 3 skipped in 443.89s
+
+.venv/bin/ruff check packages/platform_common/redis_operator_registry.py \
+  tests/integration/test_redis_operator_registry.py
+MYPYPATH=.. .venv/bin/mypy --strict --explicit-package-bases \
+  packages/platform_common/redis_operator_registry.py
+.venv/bin/python -m compileall -q \
+  packages/platform_common/redis_operator_registry.py \
+  tests/integration/test_redis_operator_registry.py
+.venv/bin/python -m pytest -q tests/test_harness_consistency.py
+# Ruff: All checks passed；strict Mypy: Success；compileall: 退出码 0；Harness: 5 passed
+
+# 从工作区根目录执行
+openspec validate close-platform-runtime-and-harness-gaps --strict
+git diff --check
+```
+
+3 个 skip 仅要求本机不存在的显式注册令牌和 Canonical FaceRec GPU 容器；远端第三轮必须使用
+新 Git SHA、新不可变 release，并把
+`PREVIOUS_RELEASE_ROOT` 精确指向上述 `4af04c69...` release。唯一正式入口仍为
+`python3 deploy/scripts/run_milestone_2b_8a3.py`；只有进程退出码 0、双终态为零、summary 通过、
+24 个测试算子清理、原业务恢复和维护锁释放同时成立，才允许完成 `8A.3`。
+
 ## 2026-08-18 8A.3 三项缺陷修复与新 SHA 正式重跑门禁
 
 本地修复回归：

@@ -129,7 +129,12 @@ Kafka 仍只在课程级边界使用，不把单帧循环拆到 Kafka。
 
 ### 7. Redis 负责实时态，PostgreSQL 负责审计事实
 
-在现有 Redis registry 外增加审计 repository/decorator：注册、心跳摘要、desired lifecycle、unregister 和运维排空写入 PostgreSQL。Redis TTL 到期决定实时 OFFLINE；PostgreSQL 用于运维历史，不参与每次原子 lease 的热路径。注册只写声明并清理同 ID 旧心跳/租约，首次成功心跳后才允许路由；客户端启动必须等待该心跳，后续短暂 HTTP 故障按周期重试。现阶段同一 `instance_id` 只允许一个存活进程，世代令牌不在里程碑 1 范围内。
+在现有 Redis registry 外增加审计 repository/decorator：注册、心跳摘要、desired lifecycle、unregister 和运维排空写入 PostgreSQL。Redis TTL 到期决定实时 OFFLINE；PostgreSQL 用于运维历史，不参与每次原子 lease 的热路径。注册只写声明并清理同 ID 旧心跳/租约，首次成功心跳后才允许路由；客户端启动必须等待该心跳，后续短暂 HTTP 故障按周期重试。现阶段同一 `instance_id` 只允许一个存活进程，算子进程世代令牌不在里程碑 1 范围内。
+
+Redis AOF 可以持久化实例声明，但容量租约不得把 Redis 进程重启前的执行所有权带入新进程。
+每个租约由 Lua 原子记录 Redis `run_id`；申请、续约、释放和容量统计均在 Redis 内与当前
+`run_id` 比较。世代不匹配或旧版本缺少世代字段的租约按不存在处理，并同步清理租约 hash 与
+实例租约 ZSET。该规则只约束容量租约，不删除实例注册、心跳声明或 PostgreSQL 审计事实。
 
 重新注册不得覆盖 PostgreSQL 中持久化的 `DRAINING/OFFLINE` 运维意图。受控部署或
 stop/restart 验收在成功发布本轮容器账本后，必须按权威 Compose profile 或显式实例调用
