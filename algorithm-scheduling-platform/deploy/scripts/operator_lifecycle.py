@@ -560,7 +560,7 @@ def _load_predecessor_marker(
     marker: Path,
     *,
     owning_release_root: Path,
-    expected_predecessor_root: Path,
+    expected_predecessor_root: Path | None = None,
 ) -> dict[str, str]:
     _require_single_link_file(
         marker,
@@ -590,7 +590,10 @@ def _load_predecessor_marker(
         raise LifecycleError(
             "predecessor transaction marker Git SHA does not match its root"
         )
-    if predecessor_root != expected_predecessor_root:
+    if (
+        expected_predecessor_root is not None
+        and predecessor_root != expected_predecessor_root
+    ):
         raise LifecycleError(
             "predecessor transaction marker conflicts with PREVIOUS_RELEASE_ROOT"
         )
@@ -898,6 +901,18 @@ def resolve_operator_ledgers(args: argparse.Namespace) -> None:
             release_root = Path(maintenance_state["source_release_root"])
             continue
         if maintenance_kind == "direct":
+            predecessor_marker = (
+                layout.validate_maintenance_directory(release_root)
+                / PREDECESSOR_NAME
+            )
+            if _path_exists(predecessor_marker):
+                predecessor = _load_predecessor_marker(
+                    layout,
+                    predecessor_marker,
+                    owning_release_root=release_root,
+                )
+                release_root = Path(predecessor["predecessor_release_root"])
+                continue
             raise LifecycleError(
                 "operator ledger ancestor has direct maintenance state "
                 "without a complete operator ledger pair"

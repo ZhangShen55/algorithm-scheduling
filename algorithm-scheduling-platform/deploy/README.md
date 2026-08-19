@@ -533,9 +533,11 @@ ID、project/service 标签和实际端口映射后，从 Docker inspect 的实�
 按同 SHA 恢复处理，保留 baseline 并只刷新 new。新 SHA 仍要求 previous root 属于同一
 `REPORT_ROOT`/release tag 且 SHA 不同，但不得假定立即前驱一定持有算子账本。
 阶段 3 的只读 resolver 从立即前驱开始：遇到最近的完整 baseline/new 对即返回；无账本时
-只允许沿经过所有权、`0400`、schema、source SHA/root 和 authority 路径校验的 maintenance
-provenance `source_release_root` 回溯。partial、环或最终没有完整账本祖先都 fail closed，
-且不得改写当前或祖先 provenance。解析出的 baseline/new 仍必须通过排序、ID、inspect 和
+优先沿经过所有权、`0400`、schema、source SHA/root 和 authority 路径校验的 maintenance
+provenance `source_release_root` 回溯。若候选是合法 direct maintenance、尚无账本且具有当前
+UID 所有、单链接、`0400` 的 predecessor marker，允许沿 marker 指向的同 tag 前驱继续寻找；
+这处理“维护事务已建立、算子账本尚未初始化即中断”的恢复窗口。缺 marker、partial、环或
+最终没有完整账本祖先都 fail closed，且不得改写当前或祖先 marker/provenance。解析出的 baseline/new 仍必须通过排序、ID、inspect 和
 Compose 身份校验；重算的 `current - resolved baseline` 必须与 resolved new 精确一致，
 随后才原子继承 baseline 并立即刷新 new。Compose 同 service 换 ID 后仍按当前 ID 刷新，
 不删除容器规避身份校验。

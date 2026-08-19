@@ -820,9 +820,12 @@ test "$(wc -l <"$NEW_OPERATOR_IDS" | tr -d ' ')" = 24
 只按当前 Docker 状态刷新 new。新 SHA 且显式给出 `PREVIOUS_RELEASE_ROOT` 时，
 previous root 必须属于同一 `REPORT_ROOT`/release tag 且以不同的 40 位 SHA 结尾。
 只读 `resolve-operator-ledgers` 从该立即前驱开始，遇到最近的完整 baseline/new 对即返回；
-没有账本时只允许沿严格验证的 maintenance provenance `source_release_root` 回溯。
-任一候选只有一份账本、provenance 形成环或最终没有完整账本祖先时均 fail closed。
-resolver 不得修改当前或祖先 provenance；因此 A（snapshot/paused）→B（完整算子账本）
+没有账本时优先沿严格验证的 maintenance provenance `source_release_root` 回溯。若候选是
+合法 direct maintenance、没有账本且存在当前 UID 所有、单链接、`0400` 的 predecessor
+marker，说明该 release 可能在账本初始化前中断，resolver 允许沿 marker 的同 tag 前驱继续
+寻找。任一候选只有一份账本、direct 状态缺 marker、marker/provenance 形成环或最终没有完整
+账本祖先时均 fail closed。resolver 不得修改当前或祖先 marker/provenance；因此
+A（snapshot/paused）→B（完整算子账本）
 →C（仅 provenance）→D（当前）中，D 的 maintenance provenance 仍记录 C 且 authority
 仍为 A，阶段 3 仅把 B 作为账本来源。
 

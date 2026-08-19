@@ -1,5 +1,22 @@
 # Change Ledger
 
+## 2026-08-20 - 算子账本在 direct maintenance 中断窗口的只读恢复
+
+- 现场失败：`2009d7b8ffc9ad8be06dbbbfeda28a6e8782ad90` 已完成八类镜像构建，但阶段 3 的
+  `resolve-operator-ledgers` 经 maintenance provenance 到达
+  `b0012b513cdb0548d9ff37b2b5da98f057a76859` 后失败；该 release 已有合法 direct
+  snapshot/paused 和 `0400` predecessor marker，却在 `baseline/new` 初始化前中断。
+- 只读核验：predecessor marker 精确指向具有完整账本的
+  `1aa5da672f75adfa7aea5f767bc91e9ac4889cce`；其空 baseline 与 24 项 new 账本计算出的
+  SHA-256 为 `b96ec6d4c0d78434461d2c438206fd26258b2f8bdf6a19bb6bd41c5050302c7b`，与服务器当前
+  24 个 `algorithm-operators` 完整容器 ID 排序清单字节级一致。
+- 修复边界：resolver 只在候选具有合法 direct maintenance、缺少完整账本并存在当前 UID
+  所有、单链接、`0400` predecessor marker 时沿 marker 查找同 tag 前驱；缺 marker、partial、
+  非法 marker、环或最终无完整账本仍失败关闭。阶段 3 继续强制
+  `current - resolved baseline == resolved new`，且不修改任何历史 release 证据。
+- 当前证据：新增现场等价正向回归和 direct 无 marker 反例；远端 canonical 尚未以修复后的新
+  Git SHA 执行，因此本条不完成 OpenSpec `9.5/12.9/14.1-14.7`。
+
 ## 2026-08-20 - 统一容量发布首次 Canonical 构建失败与构建期配置修复
 
 - 失败 release：Git SHA `b0012b513cdb0548d9ff37b2b5da98f057a76859`，证据目录为

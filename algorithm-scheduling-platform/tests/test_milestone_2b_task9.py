@@ -3202,6 +3202,96 @@ def test_fourth_sha_resolves_nearest_complete_operator_ledgers_through_provenanc
     assert not (Path(environment["FAKE_DOCKER_STATE"]) / "maintenance.log").exists()
 
 
+def test_new_sha_resolves_operator_ledgers_through_direct_predecessor_marker(
+    tmp_path: Path,
+) -> None:
+    project_root, release_root, environment, _, profiles = _prepare_fake_lifecycle(
+        tmp_path,
+        include_baseline=False,
+        initial_profiles=("gpu0", "gpu1", "gpu2", "cpu"),
+    )
+    state = json.loads(
+        (Path(environment["FAKE_DOCKER_STATE"]) / "state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    expected_new = sorted(
+        container_id
+        for profile in ("gpu0", "gpu1", "gpu2", "cpu")
+        for container_id in profiles[profile]
+    )
+    assert sorted(state["current"]) == expected_new
+
+    ledger_root = _release_root_for_sha(environment, "c" * 40)
+    _write_operator_ledgers(ledger_root, [], expected_new)
+    direct_root = _release_root_for_sha(environment, "d" * 40)
+    direct_snapshot, direct_paused = _write_active_maintenance_transaction(direct_root)
+    _write_predecessor_marker(direct_root, ledger_root)
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+    )
+    immediate_root = _previous_release_root(environment)
+    _write_maintenance_provenance(
+        immediate_root,
+        source_release_root=direct_root,
+        authoritative_snapshot=direct_snapshot,
+        authoritative_paused=direct_paused,
+    )
+    environment["PREVIOUS_RELEASE_ROOT"] = str(immediate_root)
+
+    completed, _ = _run_prepared_lifecycle(
+        project_root, environment, _stage_one_and_three_initialization()
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert _ledger_ids(release_root, "baseline-operator-container-ids.txt") == []
+    assert _ledger_ids(
+        release_root, "new-operator-container-ids.txt"
+    ) == expected_new
+
+
+def test_operator_ledger_resolver_rejects_direct_state_without_predecessor_marker(
+    tmp_path: Path,
+) -> None:
+    _, _, environment, _, _ = _prepare_fake_lifecycle(tmp_path)
+    direct_root = _previous_release_root(environment)
+    _write_active_maintenance_transaction(direct_root)
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+    )
+
+    completed = _run_operator_ledger_resolver(environment, direct_root)
+
+    assert completed.returncode != 0
+    assert "direct maintenance state" in completed.stderr
+
+
+def test_operator_ledger_resolver_rejects_mutable_direct_predecessor_marker(
+    tmp_path: Path,
+) -> None:
+    _, _, environment, baseline_id, _ = _prepare_fake_lifecycle(tmp_path)
+    ledger_root = _release_root_for_sha(environment, "c" * 40)
+    _write_operator_ledgers(ledger_root, [baseline_id], [])
+    direct_root = _previous_release_root(environment)
+    _write_active_maintenance_transaction(direct_root)
+    marker = _write_predecessor_marker(direct_root, ledger_root)
+    marker.chmod(0o600)
+    _set_legacy_ocr_container_state(
+        environment,
+        running=False,
+        restart_policy={"Name": "no", "MaximumRetryCount": 0},
+    )
+
+    completed = _run_operator_ledger_resolver(environment, direct_root)
+
+    assert completed.returncode != 0
+    assert "mode 0400" in completed.stderr
+
+
 def test_cross_sha_operator_ledger_resolution_preserves_current_minus_previous_gate(
     tmp_path: Path,
 ) -> None:
