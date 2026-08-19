@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.core.config import settings
+from app.core.config import operator_deployment, settings
 from app.core.logging import setup_logging, get_logger, request_id_ctx, new_request_id
 from app.api.v1.routes.meta import router as meta_router
 from app.api.v1.routes.extract_keywords_segments import router as keywords_segments_router
@@ -125,6 +125,10 @@ install_operator_runtime(
     operator_code="text_analysis",
     capabilities=["course_overviews", "extract_keywords"],
     default_port=8000,
+    registration_enabled=operator_deployment.platform.registration_enabled,
+    control_service_url=operator_deployment.platform.control_service_url,
+    heartbeat_interval_seconds=operator_deployment.platform.heartbeat_interval_seconds,
+    max_concurrent_requests=operator_deployment.platform.max_concurrent_requests,
 )
 
 log.info("FastAPI app initialized")

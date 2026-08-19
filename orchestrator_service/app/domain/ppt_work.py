@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 from uuid import NAMESPACE_URL, uuid5
 
 ResultT = TypeVar("ResultT")
@@ -18,6 +18,14 @@ class PptImageWork:
     ppt_image_id: str
     image_path: Path
     ordinal: int
+
+
+@dataclass(frozen=True, slots=True)
+class PptSliceAsyncAccepted:
+    task_id: str
+    operator_task_id: str
+    reason: str
+    progress: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,5 +67,16 @@ async def run_bounded_work(
 
     results: list[ResultT] = []
     for batch in iter_work_batches(work, limits):
-        results.extend(await asyncio.gather(*(run_one(item) for item in batch)))
+        batch_results = await asyncio.gather(
+            *(run_one(item) for item in batch),
+            return_exceptions=True,
+        )
+        first_error: BaseException | None = None
+        for result in batch_results:
+            if isinstance(result, BaseException):
+                first_error = first_error or result
+            else:
+                results.append(result)
+        if first_error is not None:
+            raise first_error
     return results

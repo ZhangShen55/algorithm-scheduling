@@ -87,7 +87,7 @@ CASE_SPECS: Mapping[str, FoundationCaseSpec] = {
         "GPU 预检失败",
     ),
     "DEP-010": _spec("算子镜像缺少注册客户端 wheel", "镜像导入测试失败"),
-    "DEP-011": _spec("wheel 版本不是 0.1.0", "镜像构建或依赖检查失败"),
+    "DEP-011": _spec("wheel 版本不是 0.2.0", "镜像构建或运行预检失败"),
     "DEP-012": _spec("模型目录不存在", "对应镜像构建或 readiness 失败"),
     "DEP-013": _spec(
         "模型文件数量或清单哈希与传输前不一致",
@@ -661,8 +661,9 @@ def _check_dep_010() -> dict[str, Any]:
 
 def _check_dep_011() -> dict[str, Any]:
     dockerfile = (
-        "COPY wheel/algorithm_operator_registry_client-0.2.0-py3-none-any.whl "
+        "COPY wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl "
         "/tmp/client.whl\n"
+        "RUN python -m pip install --no-deps /tmp/client.whl\n"
     )
     return _expect_error(
         lambda: deployment_contracts.validate_registry_wheel_dockerfile(

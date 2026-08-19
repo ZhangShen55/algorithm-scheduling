@@ -18,6 +18,7 @@ from packages.platform_common.kafka import (
     KafkaMessage,
     KafkaTopicManager,
 )
+from packages.platform_common.media import FFprobeMediaInspector, MediaDownloader
 from packages.platform_common.repository import CourseRepository
 
 from ..application.dispatcher import LeaseAwareDispatcher
@@ -25,8 +26,20 @@ from ..application.executor import NodeExecutor
 from ..application.outbox import OutboxPublisher
 from ..application.pipeline import PipelineInitializer
 from ..core.config import OrchestratorSettings
+from ..domain.ppt_work import PptWorkLimits
+from .asr import OfflineAsrAdapter
+from .audio import FFmpegAudioExtractor
 from .contract_stub import ContractStubAdapter
 from .control_client import ControlLeaseClient
+from .course_overview import CourseOverviewAdapter
+from .node_execution import NodeExecutionRouter
+from .ppt_runtime import PptRuntimeCoordinator
+from .ppt_slice import (
+    PptSliceAdapter,
+    PptSliceManifestValidator,
+    PptSliceTerminalHandler,
+)
+from .ppt_text import KeywordAdapter, OcrAdapter, PptTextPipeline
 
 
 class CourseConsumer(Protocol):
@@ -75,13 +88,19 @@ class OrchestratorResources:
     producer: Any
     consumer: Any
     topic_manager: Any
+    operator_http_client: Any | None = None
 
 
 ResourceFactory = Callable[[OrchestratorSettings], OrchestratorResources]
 
 
 class OrchestratorRuntime:
-    REQUIRED_LOOPS = ("outbox_publisher", "course_consumer", "node_executor")
+    REQUIRED_LOOPS = (
+        "outbox_publisher",
+        "course_consumer",
+        "node_executor",
+        "ppt_reconcile",
+    )
 
     def __init__(
         self,
@@ -99,6 +118,7 @@ class OrchestratorRuntime:
         self._producer_started = False
         self._consumer_started = False
         self._app: FastAPI | None = None
+        self._ppt_coordinator: PptRuntimeCoordinator | None = None
 
     def attach(self, app: FastAPI) -> None:
         self._app = app
@@ -108,6 +128,7 @@ class OrchestratorRuntime:
         app.state.course_repository = (
             self.resources.repository if self.resources is not None else None
         )
+        app.state.ppt_terminal_handler = self._ppt_coordinator
 
     def _build_resources(self, settings: OrchestratorSettings) -> OrchestratorResources:
         postgres = settings.postgres
@@ -121,6 +142,15 @@ class OrchestratorRuntime:
         http_client = httpx.AsyncClient(
             base_url=settings.control.base_url,
             timeout=settings.control.request_timeout_seconds,
+        )
+        operator_http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                max(
+                    settings.asr.request_timeout_seconds,
+                    settings.text_analysis.request_timeout_seconds,
+                    settings.ppt.processing_timeout_seconds,
+                )
+            )
         )
         producer = AioKafkaProducerAdapter(
             bootstrap_servers=settings.kafka.bootstrap_servers,
@@ -153,6 +183,7 @@ class OrchestratorRuntime:
             producer=producer,
             consumer=consumer,
             topic_manager=topic_manager,
+            operator_http_client=operator_http_client,
         )
 
     async def start(self, app: FastAPI) -> None:
@@ -170,14 +201,14 @@ class OrchestratorRuntime:
             self._producer_started = True
             await self.resources.consumer.start()
             self._consumer_started = True
-            self._start_loops()
+            await self._start_loops()
             self._started = True
             self.attach(app)
         except BaseException:
             await self.stop(app)
             raise
 
-    def _start_loops(self) -> None:
+    async def _start_loops(self) -> None:
         assert self.resources is not None
         repository = self.resources.repository
         outbox = OutboxPublisher(
@@ -197,12 +228,85 @@ class OrchestratorRuntime:
             default_ttl_seconds=self.settings.control.default_lease_ttl_seconds,
         )
         dispatcher = LeaseAwareDispatcher(repository, lease_client)
+        operator_http_client = (
+            self.resources.operator_http_client or self.resources.http_client
+        )
+        ocr_pipeline = PptTextPipeline(
+            repository,
+            lease_client,
+            OcrAdapter(operator_http_client),
+            KeywordAdapter(operator_http_client),
+            PptWorkLimits(
+                batch_size=self.settings.ppt.ocr_batch_size,
+                max_concurrency=self.settings.ppt.ocr_max_concurrency,
+            ),
+            lease_ttl_seconds=self.settings.control.default_lease_ttl_seconds,
+            ocr_hard_timeout_seconds=self.settings.ppt.ocr_request_timeout_seconds,
+            keyword_hard_timeout_seconds=self.settings.text_analysis.request_timeout_seconds,
+        )
+        keyword_pipeline = PptTextPipeline(
+            repository,
+            lease_client,
+            OcrAdapter(operator_http_client),
+            KeywordAdapter(operator_http_client),
+            PptWorkLimits(
+                batch_size=self.settings.ppt.keyword_batch_size,
+                max_concurrency=self.settings.ppt.keyword_max_concurrency,
+            ),
+            lease_ttl_seconds=self.settings.control.default_lease_ttl_seconds,
+            ocr_hard_timeout_seconds=self.settings.ppt.ocr_request_timeout_seconds,
+            keyword_hard_timeout_seconds=self.settings.text_analysis.request_timeout_seconds,
+        )
+        terminal_handler = PptSliceTerminalHandler(
+            repository=repository,
+            validator=PptSliceManifestValidator(
+                result_root=self.settings.storage.result_root,
+                max_manifest_bytes=self.settings.ppt.max_manifest_bytes,
+            ),
+        )
+        ppt_coordinator = PptRuntimeCoordinator(
+            repository=repository,
+            terminal_handler=terminal_handler,
+            lease_client=lease_client,
+            lease_ttl_seconds=self.settings.ppt.lease_ttl_seconds,
+            lease_renew_interval_seconds=self.settings.ppt.lease_renew_interval_seconds,
+            reconcile_interval_seconds=self.settings.ppt.reconcile_interval_seconds,
+        )
+        self._ppt_coordinator = ppt_coordinator
+        await ppt_coordinator.recover()
+        adapter = NodeExecutionRouter(
+            repository,
+            ocr_pipeline=ocr_pipeline,
+            keyword_pipeline=keyword_pipeline,
+            fallback=ContractStubAdapter(operator_http_client),
+            media_downloader=MediaDownloader(
+                course_root=self.settings.storage.course_root,
+                http_client=operator_http_client,
+                inspector=FFprobeMediaInspector(),
+                max_bytes=self.settings.storage.max_video_bytes,
+            ),
+            audio_extractor=FFmpegAudioExtractor(
+                course_root=self.settings.storage.course_root,
+            ),
+            asr_adapter=OfflineAsrAdapter(operator_http_client),
+            course_overview_adapter=CourseOverviewAdapter(operator_http_client),
+            ppt_slice_adapter=PptSliceAdapter(operator_http_client),
+            ppt_callback_base_url=self.settings.ppt.callback_base_url,
+            ppt_terminal_callback_path=self.settings.ppt.terminal_callback_path,
+            ppt_slice_threshold=self.settings.ppt.slice_threshold,
+        )
         executor = NodeExecutor(
             repository,
             dispatcher,
-            ContractStubAdapter(self.resources.http_client),
+            adapter,
             worker_id=self.settings.worker.worker_id or f"orchestrator-{uuid4().hex[:12]}",
             concurrency=self.settings.worker.node_concurrency,
+            operator_hard_timeout_seconds=max(
+                self.settings.asr.request_timeout_seconds,
+                self.settings.text_analysis.request_timeout_seconds,
+                self.settings.ppt.processing_timeout_seconds,
+            ),
+            async_node_coordinator=ppt_coordinator,
         )
         self.tasks = {
             "outbox_publisher": asyncio.create_task(
@@ -216,6 +320,10 @@ class OrchestratorRuntime:
             "node_executor": asyncio.create_task(
                 self._run_executor(executor),
                 name="orchestrator-node-executor",
+            ),
+            "ppt_reconcile": asyncio.create_task(
+                ppt_coordinator.run(self.stop_event),
+                name="orchestrator-ppt-reconcile",
             ),
         }
         for name, task in self.tasks.items():
@@ -260,6 +368,8 @@ class OrchestratorRuntime:
                 for task in self.tasks.values():
                     task.cancel()
                 await asyncio.gather(*self.tasks.values(), return_exceptions=True)
+        if self._ppt_coordinator is not None:
+            await self._ppt_coordinator.shutdown()
         if self.resources is not None:
             try:
                 if self._consumer_started:
@@ -270,6 +380,12 @@ class OrchestratorRuntime:
                         await self.resources.producer.stop()
                 finally:
                     try:
+                        if (
+                            self.resources.operator_http_client is not None
+                            and self.resources.operator_http_client
+                            is not self.resources.http_client
+                        ):
+                            await self.resources.operator_http_client.aclose()
                         await self.resources.http_client.aclose()
                     finally:
                         self.resources.engine.dispose()
@@ -278,6 +394,7 @@ class OrchestratorRuntime:
         self._producer_started = False
         self._consumer_started = False
         self._started = False
+        self._ppt_coordinator = None
         self.attach(app)
 
     async def readiness(self) -> dict[str, object]:

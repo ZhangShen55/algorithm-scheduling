@@ -1,7 +1,8 @@
 from collections.abc import Callable
+from typing import Annotated
 
 from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from packages.operator_registry_client.lifecycle import OperatorLifecycle
 
@@ -10,7 +11,7 @@ class OperatorOpsStatus(BaseModel):
     lifecycle: OperatorLifecycle
     model_ready: bool
     inflight: int = Field(ge=0)
-    declared_capacity: int = Field(gt=0)
+    declared_capacity: Annotated[StrictInt, Field(gt=0)]
 
 
 class OperatorOpsMetadata(BaseModel):

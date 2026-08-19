@@ -10,6 +10,7 @@ import re
 import stat
 import sys
 import time
+import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -22,6 +23,11 @@ from typing import Any
 import yaml  # type: ignore[import-untyped]
 
 SCRIPT_ROOT = Path(__file__).resolve().parent
+if str(SCRIPT_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_ROOT))
+
+from deployment_contracts import validate_operator_toml_contract  # noqa: E402
+
 PLATFORM_ROOT = SCRIPT_ROOT.parents[1]
 COMPOSE_PATH = PLATFORM_ROOT / "deploy" / "docker-compose.operators.yml"
 TAG_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
@@ -180,18 +186,27 @@ def load_expected(path: Path) -> dict[str, dict[str, Any]]:
             or service_port <= 0
         ):
             raise ValueError(f"Compose service URL 无效: {instance_id}")
-        raw_capacity = environment.get("PLATFORM_DECLARED_CAPACITY")
-        if isinstance(raw_capacity, int) and not isinstance(raw_capacity, bool):
-            declared_capacity = raw_capacity
-        elif isinstance(raw_capacity, str) and re.fullmatch(r"[1-9][0-9]*", raw_capacity):
-            try:
-                declared_capacity = int(raw_capacity)
-            except ValueError as exc:
-                raise ValueError(f"Compose 声明容量无效: {instance_id}") from exc
-        else:
-            raise ValueError(f"Compose 声明容量无效: {instance_id}")
-        if declared_capacity <= 0:
-            raise ValueError(f"Compose 声明容量无效: {instance_id}")
+        volumes = service.get("volumes")
+        if not isinstance(volumes, list):
+            raise ValueError(f"Compose 配置挂载无效: {instance_id}")
+        config_path = environment.get("CONFIG_PATH")
+        config_mount = next(
+            (
+                mount
+                for mount in volumes
+                if isinstance(mount, dict) and mount.get("target") == config_path
+            ),
+            None,
+        )
+        if config_mount is None:
+            raise ValueError(f"Compose 配置挂载无效: {instance_id}")
+        config_source = Path(str(config_mount.get("source", "")))
+        if not config_source.is_absolute():
+            config_source = path.resolve().parent / config_source
+        config_source = config_source.resolve()
+        validate_operator_toml_contract(instance_id, config_source)
+        config = tomllib.loads(config_source.read_text(encoding="utf-8"))
+        declared_capacity = config["platform"]["max_concurrent_requests"]
         gpu_index = environment.get("PLATFORM_GPU_ID")
         profiles = service.get("profiles")
         if (

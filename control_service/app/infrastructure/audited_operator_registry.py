@@ -12,10 +12,12 @@ from packages.platform_common.operator_audit_repository import OperatorInstanceE
 from packages.platform_common.operator_operations import OperatorOperationsRegistry
 from packages.platform_common.operator_registry import (
     CapacityLease,
+    OperatorActiveLeases,
     OperatorInstance,
     OperatorInstanceNotFoundError,
     OperatorLifecycle,
     OperatorRegistry,
+    WorkContext,
 )
 
 logger = logging.getLogger(__name__)
@@ -281,8 +283,25 @@ class AuditedOperatorRegistry:
         self._clear_audit_error(instance_id)
         return instance
 
-    def lease(self, capability: str, ttl_seconds: int) -> CapacityLease:
-        return self._realtime.lease(capability, ttl_seconds)
+    def lease(
+        self,
+        capability: str,
+        ttl_seconds: int,
+        work_context: WorkContext | None = None,
+    ) -> CapacityLease:
+        if work_context is None:
+            return self._realtime.lease(capability, ttl_seconds)
+        return self._realtime.lease(capability, ttl_seconds, work_context)
+
+    def bind_lease_context(
+        self,
+        lease_id: str,
+        work_context: WorkContext,
+    ) -> CapacityLease:
+        return self._realtime.bind_lease_context(lease_id, work_context)
+
+    def list_active_leases(self, instance_id: str) -> OperatorActiveLeases:
+        return self._realtime.list_active_leases(instance_id)
 
     def renew(self, lease_id: str, ttl_seconds: int) -> CapacityLease:
         return self._realtime.renew(lease_id, ttl_seconds)

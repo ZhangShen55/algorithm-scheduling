@@ -69,6 +69,16 @@ FORBIDDEN_COMMAND = re.compile(
     r"(?i)(repository\s*\.\s*(complete|finish|mark)|complete_node|mark_node_completed|authorization\s*:|bearer\s+|token\s*=)"
 )
 CONTAINER_ID_PATTERN = re.compile(r"[0-9a-f]{64}")
+FORBIDDEN_OPERATOR_ENVIRONMENT_FIELDS = frozenset(
+    {
+        "PLATFORM_REGISTRATION_ENABLED",
+        "PLATFORM_CONTROL_SERVICE_URL",
+        "PLATFORM_HEARTBEAT_INTERVAL_SECONDS",
+        "PLATFORM_DECLARED_CAPACITY",
+        "REQUIRE_GPU",
+        "GPU_PROCESS_NAME",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -432,6 +442,14 @@ def _load_operator_authority(
         environment = _require_object(
             service.get("environment"), f"Compose service {service_name}.environment"
         )
+        present_forbidden_fields = sorted(
+            FORBIDDEN_OPERATOR_ENVIRONMENT_FIELDS.intersection(environment)
+        )
+        if present_forbidden_fields:
+            raise ValueError(
+                f"Compose service {service_name} 仍包含已移除环境字段: "
+                f"{present_forbidden_fields}"
+            )
         instance_id = _require_string(
             environment.get("PLATFORM_INSTANCE_ID"),
             f"Compose service {service_name}.PLATFORM_INSTANCE_ID",
@@ -460,12 +478,7 @@ def _load_operator_authority(
             if type(raw_gpu) is not str or not raw_gpu.isdigit():
                 raise ValueError(f"Compose service {service_name} GPU ID 无效")
             physical_gpu = int(raw_gpu)
-            process_name = _require_string(
-                environment.get("GPU_PROCESS_NAME"),
-                f"Compose service {service_name}.GPU_PROCESS_NAME",
-            )
-            if process_name != operator_code:
-                raise ValueError(f"Compose service {service_name} GPU process 不匹配")
+            process_name = operator_code
         authorities[instance_id] = OperatorAuthority(
             service_name=service_name,
             instance_id=instance_id,

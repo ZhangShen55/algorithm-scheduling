@@ -47,7 +47,7 @@ config*.toml
 
 # 仅 registry client 固定 wheel 属于镜像输入，其他本地 wheel 不得进入 context。
 wheel/*.whl
-!wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl
+!wheel/algorithm_operator_registry_client-0.2.0-py3-none-any.whl
 
 # 文档与杂项（非运行必需，可按需保留 README）
 # README.md

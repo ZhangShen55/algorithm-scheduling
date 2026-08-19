@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
@@ -26,8 +25,10 @@ class PaddleOCRV6Engine:
         settings: OCRSettings,
         pipeline_factory: Callable[..., Any] | None = None,
         paddle_module: Any | None = None,
+        require_gpu: bool = False,
     ):
         self.device = settings.device
+        self.require_gpu = require_gpu
         try:
             verify_configured_models(
                 [
@@ -105,12 +106,7 @@ class PaddleOCRV6Engine:
 
     def _validate_device(self, paddle_module: Any) -> None:
         kind, index = parse_device(self.device)
-        require_gpu = os.getenv("REQUIRE_GPU", "false").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-        }
-        if require_gpu and kind != "cuda":
+        if self.require_gpu and kind != "cuda":
             raise ConfigurationError(
                 "部署要求使用 GPU，但 OCR 配置不是 cuda:<index>"
             )

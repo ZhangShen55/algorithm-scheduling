@@ -1,4 +1,18 @@
 # 三卡服务器 OCR 共享配置；容器内 GPU 统一编号为 0。
+[platform]
+# 容器部署时主动向 control-service 注册。
+registration_enabled = true
+# 容器网络内的 control-service 地址。
+control_service_url = "http://control-service:18100"
+# 算子注册心跳间隔秒数。
+heartbeat_interval_seconds = 5
+# 平台允许同时分发到单个 OCR 实例的图片请求数。
+max_concurrent_requests = 256
+
+[runtime]
+# 三卡部署必须检测到容器内 CUDA 设备。
+require_gpu = true
+
 [application]
 name = "jy-algorithm-app-ocr-v6-service"
 version = "OCR_V3.0_PP-OCRv6"
@@ -17,7 +31,7 @@ cpu_threads = 8
 enable_mkldnn = false
 enable_hpi = false
 max_concurrency = 1
-image_max_bytes = 20971520
+image_max_bytes = 52428800
 
 [ocr.detection]
 limit_side_len = 960

@@ -119,6 +119,23 @@ retention_days = 7
 hourly_retention_days = 30
 ```
 
+#### 平台注册与运行配置
+
+仓库根 `config.toml` 是本地安全默认配置；受控 GPU 部署使用
+`algorithm-scheduling-platform/deploy/config/operators/facerec.gpu.toml`：
+
+| 字段 | 本地根配置 | 受控部署 | 说明 |
+| --- | --- | --- | --- |
+| `platform.registration_enabled` | `false` | `true` | 是否主动注册到调度平台 |
+| `platform.control_service_url` | `""` | `http://control-service:18100` | 注册与心跳地址 |
+| `platform.heartbeat_interval_seconds` | `5` | `5` | 心跳间隔 |
+| `platform.max_concurrent_requests` | `128` | `128` | 单实例平台注册容量 |
+| `runtime.require_gpu` | `false` | `true` | `true` 时必须使用可用的 `cuda:<index>` |
+
+Compose 继续提供实例 ID、服务 URL、注册 Token、MongoDB 凭据、物理 GPU/可见设备、
+`CONFIG_PATH`、端口和 `UVICORN_WORKERS=1`。`threading.max_workers` 仍只控制 Dlib 本地进程池，
+不会被平台注册容量 `128` 覆盖。
+
 ### 5) 启动服务
 
 在项目根目录执行：

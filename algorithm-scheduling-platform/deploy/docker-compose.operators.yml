@@ -37,6 +37,54 @@ x-gpu2-reservation: &gpu2-reservation
           device_ids: ["2"]
           capabilities: [gpu]
 
+x-operator-environment: &operator-environment
+  UVICORN_WORKERS: "1"
+  PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
+
+x-asr-offline-environment: &asr-offline-environment
+  <<: *operator-environment
+  OPERATOR_PORT: "8083"
+  PORT: "8083"
+  CONFIG_PATH: /config.toml
+
+x-asr-online-environment: &asr-online-environment
+  <<: *operator-environment
+  OPERATOR_PORT: "8084"
+  PORT: "8084"
+  CONFIG_PATH: /config.toml
+
+x-ocr-environment: &ocr-environment
+  <<: *operator-environment
+  OPERATOR_PORT: "8866"
+  CONFIG_PATH: /app/config.toml
+
+x-vbas-environment: &vbas-environment
+  <<: *operator-environment
+  OPERATOR_PORT: "8981"
+  CONFIG_PATH: /workspace/config.toml
+
+x-facerec-environment: &facerec-environment
+  <<: *operator-environment
+  OPERATOR_PORT: "8000"
+  CONFIG_PATH: /config/config.toml
+  FACEREC_MONGO_USERNAME: ${MONGO_ROOT_USERNAME:-root}
+  FACEREC_MONGO_PASSWORD: ${MONGO_ROOT_PASSWORD:-root}
+
+x-screen-det-environment: &screen-det-environment
+  <<: *operator-environment
+  OPERATOR_PORT: "8880"
+  CONFIG_PATH: /app/config.toml
+
+x-ppt-slice-environment: &ppt-slice-environment
+  <<: *operator-environment
+  OPERATOR_PORT: "9001"
+  CONFIG_PATH: /workspace/config.toml
+
+x-text-analysis-environment: &text-analysis-environment
+  <<: *operator-environment
+  OPERATOR_PORT: "8000"
+  CONFIG_PATH: /app/config.toml
+
 x-asr-offline: &asr-offline
   <<: *operator-common
   image: ${ASR_OFFLINE_IMAGE:-seacraft-asr-offline:v1.0_260812}
@@ -115,20 +163,10 @@ services:
     profiles: [gpu0]
     ports: ["127.0.0.1:18083:8083"]
     environment:
-      OPERATOR_PORT: "8083"
-      PORT: "8083"
-      CONFIG_PATH: /config.toml
-      UVICORN_WORKERS: "1"
-      REQUIRE_GPU: "true"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *asr-offline-environment
       PLATFORM_INSTANCE_ID: asr-offline-gpu0
       PLATFORM_SERVICE_URL: http://asr-offline-gpu0:8083
-      PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "0"
-      GPU_PROCESS_NAME: asr_offline
       NVIDIA_VISIBLE_DEVICES: "0"
     deploy: *gpu0-reservation
 
@@ -137,20 +175,10 @@ services:
     profiles: [gpu1]
     ports: ["127.0.0.1:28083:8083"]
     environment:
-      OPERATOR_PORT: "8083"
-      PORT: "8083"
-      CONFIG_PATH: /config.toml
-      UVICORN_WORKERS: "1"
-      REQUIRE_GPU: "true"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *asr-offline-environment
       PLATFORM_INSTANCE_ID: asr-offline-gpu1
       PLATFORM_SERVICE_URL: http://asr-offline-gpu1:8083
-      PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "1"
-      GPU_PROCESS_NAME: asr_offline
       NVIDIA_VISIBLE_DEVICES: "1"
     deploy: *gpu1-reservation
 
@@ -159,20 +187,10 @@ services:
     profiles: [gpu2]
     ports: ["127.0.0.1:38083:8083"]
     environment:
-      OPERATOR_PORT: "8083"
-      PORT: "8083"
-      CONFIG_PATH: /config.toml
-      UVICORN_WORKERS: "1"
-      REQUIRE_GPU: "true"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *asr-offline-environment
       PLATFORM_INSTANCE_ID: asr-offline-gpu2
       PLATFORM_SERVICE_URL: http://asr-offline-gpu2:8083
-      PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "2"
-      GPU_PROCESS_NAME: asr_offline
       NVIDIA_VISIBLE_DEVICES: "2"
     deploy: *gpu2-reservation
 
@@ -181,20 +199,10 @@ services:
     profiles: [gpu0]
     ports: ["127.0.0.1:18084:8084"]
     environment:
-      OPERATOR_PORT: "8084"
-      PORT: "8084"
-      CONFIG_PATH: /config.toml
-      UVICORN_WORKERS: "1"
-      REQUIRE_GPU: "true"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *asr-online-environment
       PLATFORM_INSTANCE_ID: asr-online-gpu0
       PLATFORM_SERVICE_URL: http://asr-online-gpu0:8084
-      PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "0"
-      GPU_PROCESS_NAME: asr_online
       NVIDIA_VISIBLE_DEVICES: "0"
     deploy: *gpu0-reservation
 
@@ -203,20 +211,10 @@ services:
     profiles: [gpu1]
     ports: ["127.0.0.1:28084:8084"]
     environment:
-      OPERATOR_PORT: "8084"
-      PORT: "8084"
-      CONFIG_PATH: /config.toml
-      UVICORN_WORKERS: "1"
-      REQUIRE_GPU: "true"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *asr-online-environment
       PLATFORM_INSTANCE_ID: asr-online-gpu1
       PLATFORM_SERVICE_URL: http://asr-online-gpu1:8084
-      PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "1"
-      GPU_PROCESS_NAME: asr_online
       NVIDIA_VISIBLE_DEVICES: "1"
     deploy: *gpu1-reservation
 
@@ -225,20 +223,10 @@ services:
     profiles: [gpu2]
     ports: ["127.0.0.1:38084:8084"]
     environment:
-      OPERATOR_PORT: "8084"
-      PORT: "8084"
-      CONFIG_PATH: /config.toml
-      UVICORN_WORKERS: "1"
-      REQUIRE_GPU: "true"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *asr-online-environment
       PLATFORM_INSTANCE_ID: asr-online-gpu2
       PLATFORM_SERVICE_URL: http://asr-online-gpu2:8084
-      PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "2"
-      GPU_PROCESS_NAME: asr_online
       NVIDIA_VISIBLE_DEVICES: "2"
     deploy: *gpu2-reservation
 
@@ -247,19 +235,10 @@ services:
     profiles: [gpu0]
     ports: ["127.0.0.1:18866:8866"]
     environment:
-      OPERATOR_PORT: "8866"
-      CONFIG_PATH: /app/config.toml
-      UVICORN_WORKERS: "1"
-      REQUIRE_GPU: "true"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *ocr-environment
       PLATFORM_INSTANCE_ID: ocr-gpu0
       PLATFORM_SERVICE_URL: http://ocr-gpu0:8866
-      PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "0"
-      GPU_PROCESS_NAME: ocr
       NVIDIA_VISIBLE_DEVICES: "0"
     deploy: *gpu0-reservation
 
@@ -268,19 +247,10 @@ services:
     profiles: [gpu1]
     ports: ["127.0.0.1:28866:8866"]
     environment:
-      OPERATOR_PORT: "8866"
-      CONFIG_PATH: /app/config.toml
-      UVICORN_WORKERS: "1"
-      REQUIRE_GPU: "true"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *ocr-environment
       PLATFORM_INSTANCE_ID: ocr-gpu1
       PLATFORM_SERVICE_URL: http://ocr-gpu1:8866
-      PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "1"
-      GPU_PROCESS_NAME: ocr
       NVIDIA_VISIBLE_DEVICES: "1"
     deploy: *gpu1-reservation
 
@@ -289,19 +259,10 @@ services:
     profiles: [gpu2]
     ports: ["127.0.0.1:38866:8866"]
     environment:
-      OPERATOR_PORT: "8866"
-      CONFIG_PATH: /app/config.toml
-      UVICORN_WORKERS: "1"
-      REQUIRE_GPU: "true"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *ocr-environment
       PLATFORM_INSTANCE_ID: ocr-gpu2
       PLATFORM_SERVICE_URL: http://ocr-gpu2:8866
-      PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "2"
-      GPU_PROCESS_NAME: ocr
       NVIDIA_VISIBLE_DEVICES: "2"
     deploy: *gpu2-reservation
 
@@ -310,19 +271,10 @@ services:
     profiles: [gpu0]
     ports: ["127.0.0.1:18981:8981"]
     environment:
-      OPERATOR_PORT: "8981"
-      CONFIG_PATH: /workspace/config.toml
-      UVICORN_WORKERS: "1"
-      REQUIRE_GPU: "true"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *vbas-environment
       PLATFORM_INSTANCE_ID: vbas-gpu0
       PLATFORM_SERVICE_URL: http://vbas-gpu0:8981
-      PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "0"
-      GPU_PROCESS_NAME: vbas
       NVIDIA_VISIBLE_DEVICES: "0"
     deploy: *gpu0-reservation
 
@@ -331,19 +283,10 @@ services:
     profiles: [gpu1]
     ports: ["127.0.0.1:28981:8981"]
     environment:
-      OPERATOR_PORT: "8981"
-      CONFIG_PATH: /workspace/config.toml
-      UVICORN_WORKERS: "1"
-      REQUIRE_GPU: "true"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *vbas-environment
       PLATFORM_INSTANCE_ID: vbas-gpu1
       PLATFORM_SERVICE_URL: http://vbas-gpu1:8981
-      PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "1"
-      GPU_PROCESS_NAME: vbas
       NVIDIA_VISIBLE_DEVICES: "1"
     deploy: *gpu1-reservation
 
@@ -352,19 +295,10 @@ services:
     profiles: [gpu2]
     ports: ["127.0.0.1:38981:8981"]
     environment:
-      OPERATOR_PORT: "8981"
-      CONFIG_PATH: /workspace/config.toml
-      UVICORN_WORKERS: "1"
-      REQUIRE_GPU: "true"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *vbas-environment
       PLATFORM_INSTANCE_ID: vbas-gpu2
       PLATFORM_SERVICE_URL: http://vbas-gpu2:8981
-      PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "2"
-      GPU_PROCESS_NAME: vbas
       NVIDIA_VISIBLE_DEVICES: "2"
     deploy: *gpu2-reservation
 
@@ -373,21 +307,10 @@ services:
     profiles: [gpu0]
     ports: ["127.0.0.1:18003:8000"]
     environment:
-      OPERATOR_PORT: "8000"
-      CONFIG_PATH: /config/config.toml
-      FACEREC_MONGO_USERNAME: ${MONGO_ROOT_USERNAME:-root}
-      FACEREC_MONGO_PASSWORD: ${MONGO_ROOT_PASSWORD:-root}
-      UVICORN_WORKERS: "1"
-      REQUIRE_GPU: "true"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *facerec-environment
       PLATFORM_INSTANCE_ID: facerec-gpu0
       PLATFORM_SERVICE_URL: http://facerec-gpu0:8000
-      PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "0"
-      GPU_PROCESS_NAME: facerec
       NVIDIA_VISIBLE_DEVICES: "0"
     deploy: *gpu0-reservation
 
@@ -396,21 +319,10 @@ services:
     profiles: [gpu1]
     ports: ["127.0.0.1:28003:8000"]
     environment:
-      OPERATOR_PORT: "8000"
-      CONFIG_PATH: /config/config.toml
-      FACEREC_MONGO_USERNAME: ${MONGO_ROOT_USERNAME:-root}
-      FACEREC_MONGO_PASSWORD: ${MONGO_ROOT_PASSWORD:-root}
-      UVICORN_WORKERS: "1"
-      REQUIRE_GPU: "true"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *facerec-environment
       PLATFORM_INSTANCE_ID: facerec-gpu1
       PLATFORM_SERVICE_URL: http://facerec-gpu1:8000
-      PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "1"
-      GPU_PROCESS_NAME: facerec
       NVIDIA_VISIBLE_DEVICES: "1"
     deploy: *gpu1-reservation
 
@@ -419,21 +331,10 @@ services:
     profiles: [gpu2]
     ports: ["127.0.0.1:38003:8000"]
     environment:
-      OPERATOR_PORT: "8000"
-      CONFIG_PATH: /config/config.toml
-      FACEREC_MONGO_USERNAME: ${MONGO_ROOT_USERNAME:-root}
-      FACEREC_MONGO_PASSWORD: ${MONGO_ROOT_PASSWORD:-root}
-      UVICORN_WORKERS: "1"
-      REQUIRE_GPU: "true"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *facerec-environment
       PLATFORM_INSTANCE_ID: facerec-gpu2
       PLATFORM_SERVICE_URL: http://facerec-gpu2:8000
-      PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "2"
-      GPU_PROCESS_NAME: facerec
       NVIDIA_VISIBLE_DEVICES: "2"
     deploy: *gpu2-reservation
 
@@ -442,19 +343,10 @@ services:
     profiles: [gpu0]
     ports: ["127.0.0.1:18880:8880"]
     environment:
-      OPERATOR_PORT: "8880"
-      CONFIG_PATH: /app/config.toml
-      UVICORN_WORKERS: "1"
-      REQUIRE_GPU: "true"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *screen-det-environment
       PLATFORM_INSTANCE_ID: screen-det-gpu0
       PLATFORM_SERVICE_URL: http://screen-det-gpu0:8880
-      PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "0"
-      GPU_PROCESS_NAME: screen_det
       NVIDIA_VISIBLE_DEVICES: "0"
     deploy: *gpu0-reservation
 
@@ -463,19 +355,10 @@ services:
     profiles: [gpu1]
     ports: ["127.0.0.1:28880:8880"]
     environment:
-      OPERATOR_PORT: "8880"
-      CONFIG_PATH: /app/config.toml
-      UVICORN_WORKERS: "1"
-      REQUIRE_GPU: "true"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *screen-det-environment
       PLATFORM_INSTANCE_ID: screen-det-gpu1
       PLATFORM_SERVICE_URL: http://screen-det-gpu1:8880
-      PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "1"
-      GPU_PROCESS_NAME: screen_det
       NVIDIA_VISIBLE_DEVICES: "1"
     deploy: *gpu1-reservation
 
@@ -484,19 +367,10 @@ services:
     profiles: [gpu2]
     ports: ["127.0.0.1:38880:8880"]
     environment:
-      OPERATOR_PORT: "8880"
-      CONFIG_PATH: /app/config.toml
-      UVICORN_WORKERS: "1"
-      REQUIRE_GPU: "true"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *screen-det-environment
       PLATFORM_INSTANCE_ID: screen-det-gpu2
       PLATFORM_SERVICE_URL: http://screen-det-gpu2:8880
-      PLATFORM_DECLARED_CAPACITY: "1"
       PLATFORM_GPU_ID: "2"
-      GPU_PROCESS_NAME: screen_det
       NVIDIA_VISIBLE_DEVICES: "2"
     deploy: *gpu2-reservation
 
@@ -505,96 +379,54 @@ services:
     profiles: [cpu]
     ports: ["127.0.0.1:19001:9001"]
     environment:
-      OPERATOR_PORT: "9001"
-      CONFIG_PATH: /workspace/config.toml
-      UVICORN_WORKERS: "1"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *ppt-slice-environment
       PLATFORM_INSTANCE_ID: ppt-slice-cpu0
       PLATFORM_SERVICE_URL: http://ppt-slice-cpu0:9001
-      PLATFORM_DECLARED_CAPACITY: "15"
 
   ppt-slice-cpu1:
     <<: *ppt-slice
     profiles: [cpu]
     ports: ["127.0.0.1:29001:9001"]
     environment:
-      OPERATOR_PORT: "9001"
-      CONFIG_PATH: /workspace/config.toml
-      UVICORN_WORKERS: "1"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *ppt-slice-environment
       PLATFORM_INSTANCE_ID: ppt-slice-cpu1
       PLATFORM_SERVICE_URL: http://ppt-slice-cpu1:9001
-      PLATFORM_DECLARED_CAPACITY: "15"
 
   ppt-slice-cpu2:
     <<: *ppt-slice
     profiles: [cpu]
     ports: ["127.0.0.1:39001:9001"]
     environment:
-      OPERATOR_PORT: "9001"
-      CONFIG_PATH: /workspace/config.toml
-      UVICORN_WORKERS: "1"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *ppt-slice-environment
       PLATFORM_INSTANCE_ID: ppt-slice-cpu2
       PLATFORM_SERVICE_URL: http://ppt-slice-cpu2:9001
-      PLATFORM_DECLARED_CAPACITY: "15"
 
   text-analysis-cpu0:
     <<: *text-analysis
     profiles: [cpu]
     ports: ["127.0.0.1:18000:8000"]
     environment:
-      OPERATOR_PORT: "8000"
-      CONFIG_PATH: /app/config.toml
-      UVICORN_WORKERS: "1"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *text-analysis-environment
       PLATFORM_INSTANCE_ID: text-analysis-cpu0
       PLATFORM_SERVICE_URL: http://text-analysis-cpu0:8000
-      PLATFORM_DECLARED_CAPACITY: "4"
 
   text-analysis-cpu1:
     <<: *text-analysis
     profiles: [cpu]
     ports: ["127.0.0.1:28000:8000"]
     environment:
-      OPERATOR_PORT: "8000"
-      CONFIG_PATH: /app/config.toml
-      UVICORN_WORKERS: "1"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *text-analysis-environment
       PLATFORM_INSTANCE_ID: text-analysis-cpu1
       PLATFORM_SERVICE_URL: http://text-analysis-cpu1:8000
-      PLATFORM_DECLARED_CAPACITY: "4"
 
   text-analysis-cpu2:
     <<: *text-analysis
     profiles: [cpu]
     ports: ["127.0.0.1:38000:8000"]
     environment:
-      OPERATOR_PORT: "8000"
-      CONFIG_PATH: /app/config.toml
-      UVICORN_WORKERS: "1"
-      PLATFORM_REGISTRATION_ENABLED: "true"
-      PLATFORM_CONTROL_SERVICE_URL: http://control-service:18100
-      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
-      PLATFORM_HEARTBEAT_INTERVAL_SECONDS: "5"
+      <<: *text-analysis-environment
       PLATFORM_INSTANCE_ID: text-analysis-cpu2
       PLATFORM_SERVICE_URL: http://text-analysis-cpu2:8000
-      PLATFORM_DECLARED_CAPACITY: "4"
 
 networks:
   algorithm-platform:

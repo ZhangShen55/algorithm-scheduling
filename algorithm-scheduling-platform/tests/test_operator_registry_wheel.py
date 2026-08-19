@@ -33,17 +33,19 @@ EXPECTED_SOURCE_FILES = (
     "README.md",
     "__init__.py",
     "client.py",
+    "config.py",
     "lifecycle.py",
     "ops.py",
     "pyproject.toml",
     "runtime.py",
+    "validation.py",
 )
 EXPECTED_PACKAGE_MEMBERS = {
     f"packages/operator_registry_client/{name}"
     for name in EXPECTED_SOURCE_FILES
     if name.endswith(".py")
 }
-DIST_INFO = "algorithm_operator_registry_client-0.1.0.dist-info"
+DIST_INFO = "algorithm_operator_registry_client-0.2.0.dist-info"
 EXPECTED_DIST_INFO_MEMBERS = {
     f"{DIST_INFO}/METADATA",
     f"{DIST_INFO}/WHEEL",
@@ -202,9 +204,11 @@ def test_default_source_allowlist_comes_from_tracked_package_files() -> None:
     assert EXPECTED_PACKAGE_MODULES == (
         "__init__.py",
         "client.py",
+        "config.py",
         "lifecycle.py",
         "ops.py",
         "runtime.py",
+        "validation.py",
     )
 
 

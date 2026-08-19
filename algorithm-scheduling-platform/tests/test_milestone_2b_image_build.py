@@ -41,7 +41,7 @@ openspec/
 *.p12
 *.pfx
 wheel/*.whl
-!wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl
+!wheel/algorithm_operator_registry_client-0.2.0-py3-none-any.whl
 """
 
 
@@ -75,7 +75,7 @@ def _make_workspace(tmp_path: Path) -> Path:
         (project / dockerfile).write_text(
             "FROM scratch\n"
             "COPY app/ /app/\n"
-            "COPY wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl "
+            "COPY wheel/algorithm_operator_registry_client-0.2.0-py3-none-any.whl "
             "/tmp/client.whl\n",
             encoding="utf-8",
         )
@@ -850,7 +850,7 @@ def test_git_input_gate_allows_the_exact_registry_wheel(tmp_path: Path) -> None:
     _initialize_git_workspace(workspace)
     wheel = (
         workspace
-        / "asr_offline/wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl"
+        / "asr_offline/wheel/algorithm_operator_registry_client-0.2.0-py3-none-any.whl"
     )
     wheel.parent.mkdir(exist_ok=True)
     wheel.write_bytes(b"registry-wheel")
@@ -959,7 +959,7 @@ def test_all_real_contexts_only_reinclude_the_exact_registry_wheel() -> None:
         )
         assert "wheel/*.whl" in dockerignore
         assert (
-            "!wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl"
+            "!wheel/algorithm_operator_registry_client-0.2.0-py3-none-any.whl"
             in dockerignore
         )
 

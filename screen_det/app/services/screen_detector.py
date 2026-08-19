@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
 from dataclasses import dataclass
@@ -19,13 +18,8 @@ logger = logging.getLogger(__name__)
 ALLOWED_LABELS = frozenset({0, 1, 2, 3})
 
 
-def resolve_yolo_device(device: str) -> str:
+def resolve_yolo_device(device: str, *, require_gpu: bool = False) -> str:
     value = str(device).strip().lower()
-    require_gpu = os.getenv("REQUIRE_GPU", "false").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
     if require_gpu and not value.startswith("cuda:"):
         raise RuntimeError("部署要求使用 GPU，但 YOLO 配置不是 cuda:<index>")
     if value == "cpu":
@@ -95,7 +89,10 @@ class ScreenModelHolder:
         weights = Path(settings.screen_detection.weights_path)
         if not weights.is_absolute():
             weights = BASE_DIR / weights
-        device = resolve_yolo_device(settings.yolo.device)
+        device = resolve_yolo_device(
+            settings.yolo.device,
+            require_gpu=settings.operator_deployment.runtime.require_gpu,
+        )
 
         with self._lock:
             if (

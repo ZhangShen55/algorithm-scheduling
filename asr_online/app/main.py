@@ -4,7 +4,7 @@ from datetime import datetime
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.config import settings
+from app.core.config import operator_deployment, settings
 from app.core.logging import setup_logging
 from app.core.models import load_models_if_needed
 from app.api.routes.ws_online import router as ws_router
@@ -40,6 +40,14 @@ def create_app() -> FastAPI:
         operator_code="asr_online",
         capabilities=["asr_online"],
         default_port=8084,
+        registration_enabled=operator_deployment.platform.registration_enabled,
+        control_service_url=operator_deployment.platform.control_service_url,
+        heartbeat_interval_seconds=(
+            operator_deployment.platform.heartbeat_interval_seconds
+        ),
+        max_concurrent_requests=(
+            operator_deployment.platform.max_concurrent_requests
+        ),
     )
 
     return app

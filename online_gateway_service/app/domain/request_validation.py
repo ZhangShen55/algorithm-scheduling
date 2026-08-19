@@ -40,11 +40,30 @@ def _valid_vbas_image(item: object) -> bool:
 
 
 def is_base64_image(value: str) -> bool:
-    encoded = value.split(",", 1)[1] if value.startswith("data:") and "," in value else value
+    return decoded_base64_size(value) is not None
+
+
+def decoded_base64_size(
+    value: str,
+    *,
+    max_decoded_bytes: int | None = None,
+    allow_data_uri: bool = True,
+) -> int | None:
+    if value.startswith("data:"):
+        if not allow_data_uri or "," not in value:
+            return None
+        encoded = value.split(",", 1)[1]
+    else:
+        encoded = value
     if not encoded:
-        return False
+        return None
+    estimated_size = (len(encoded) * 3) // 4
+    if max_decoded_bytes is not None and estimated_size > max_decoded_bytes + 2:
+        return None
     try:
-        base64.b64decode(encoded, validate=True)
+        decoded = base64.b64decode(encoded, validate=True)
     except (binascii.Error, ValueError):
-        return False
-    return True
+        return None
+    if max_decoded_bytes is not None and len(decoded) > max_decoded_bytes:
+        return None
+    return len(decoded)

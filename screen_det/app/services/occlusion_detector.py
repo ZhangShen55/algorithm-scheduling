@@ -46,7 +46,10 @@ class YoloOcclusionModelHolder:
         weights = self._resolve_weights(config)
         from app.services.screen_detector import resolve_yolo_device
 
-        device = resolve_yolo_device(settings.yolo.device)
+        device = resolve_yolo_device(
+            settings.yolo.device,
+            require_gpu=settings.operator_deployment.runtime.require_gpu,
+        )
         with self._lock:
             if (
                 self._model is not None

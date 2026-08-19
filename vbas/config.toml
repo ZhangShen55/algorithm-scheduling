@@ -5,6 +5,18 @@ INSTANCE_COUNT = 1
 WORKERS_PER_INSTANCE = 1
 GPU_ID = "cpu"
 
+[platform]
+# 本地默认不主动向调度平台注册
+registration_enabled = false
+control_service_url = ""  # 启用注册时填写 Control Service 地址
+heartbeat_interval_seconds = 5  # 注册心跳间隔秒数，必须为有限正数
+# 学生、教师和头部姿态能力共享本实例总容量
+max_concurrent_requests = 128
+
+[runtime]
+# 本地默认允许 CPU；GPU 部署配置显式设为 true
+require_gpu = false
+
 [TIAS]
 # TIAS 实例身份和对外访问地址。
 InstanceId = "tias-8981"

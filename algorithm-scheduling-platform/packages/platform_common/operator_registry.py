@@ -3,6 +3,29 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Protocol
 
+WORK_CONTEXT_IDENTIFIER_MAX_LENGTH = 200
+
+
+def validate_positive_int(value: object, *, field_name: str) -> int:
+    if type(value) is not int or value <= 0:
+        raise ValueError(f"{field_name}必须是正整数")
+    return value
+
+
+def _validate_work_identifier(value: object, *, field_name: str) -> str:
+    if type(value) is not str:
+        raise ValueError(f"{field_name}必须是字符串")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field_name}不能为空")
+    if len(normalized) > WORK_CONTEXT_IDENTIFIER_MAX_LENGTH:
+        raise ValueError(
+            f"{field_name}长度不能超过 {WORK_CONTEXT_IDENTIFIER_MAX_LENGTH} 个字符"
+        )
+    if any(character in normalized for character in ("\x00", "\r", "\n")):
+        raise ValueError(f"{field_name}不能包含控制字符")
+    return normalized
+
 
 class OperatorCode(StrEnum):
     ASR_OFFLINE = "asr_offline"
@@ -33,6 +56,57 @@ class CapacityLeaseNotFoundError(LookupError):
     pass
 
 
+class CapacityLeaseContextConflictError(RuntimeError):
+    pass
+
+
+class LeaseContextStatus(StrEnum):
+    BOUND = "BOUND"
+    UNBOUND = "UNBOUND"
+
+
+@dataclass(frozen=True, slots=True)
+class WorkContext:
+    source_service: str
+    work_type: str
+    work_id: str
+    task_id: str | None = None
+    node_id: str | None = None
+    item_id: str | None = None
+    trace_id: str | None = None
+
+    def __post_init__(self) -> None:
+        for field_name in ("source_service", "work_type", "work_id"):
+            object.__setattr__(
+                self,
+                field_name,
+                _validate_work_identifier(
+                    getattr(self, field_name),
+                    field_name=field_name,
+                ),
+            )
+        for field_name in ("task_id", "node_id", "item_id", "trace_id"):
+            value = getattr(self, field_name)
+            if value is not None:
+                object.__setattr__(
+                    self,
+                    field_name,
+                    _validate_work_identifier(value, field_name=field_name),
+                )
+
+    def as_dict(self) -> dict[str, str]:
+        values = {
+            "source_service": self.source_service,
+            "work_type": self.work_type,
+            "work_id": self.work_id,
+            "task_id": self.task_id,
+            "node_id": self.node_id,
+            "item_id": self.item_id,
+            "trace_id": self.trace_id,
+        }
+        return {key: value for key, value in values.items() if value is not None}
+
+
 @dataclass(frozen=True, slots=True)
 class OperatorInstance:
     instance_id: str
@@ -48,6 +122,9 @@ class OperatorInstance:
     model_ready: bool = True
     last_heartbeat_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
+    def __post_init__(self) -> None:
+        validate_positive_int(self.declared_capacity, field_name="算子声明容量")
+
 
 @dataclass(frozen=True, slots=True)
 class CapacityLease:
@@ -56,6 +133,29 @@ class CapacityLease:
     capability: str
     service_url: str
     expires_at: datetime
+    acquired_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    work_context: WorkContext | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveCapacityLease:
+    lease_id: str
+    instance_id: str
+    capability: str
+    service_url: str
+    acquired_at: datetime
+    expires_at: datetime
+    context_status: LeaseContextStatus
+    work_context: WorkContext | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorActiveLeases:
+    instance_id: str
+    active_lease_count: int
+    reported_inflight: int
+    attribution_difference: int
+    leases: tuple[ActiveCapacityLease, ...]
 
 
 class OperatorRegistry(Protocol):
@@ -79,7 +179,20 @@ class OperatorRegistry(Protocol):
         lifecycle: OperatorLifecycle,
     ) -> OperatorInstance: ...
 
-    def lease(self, capability: str, ttl_seconds: int) -> CapacityLease: ...
+    def lease(
+        self,
+        capability: str,
+        ttl_seconds: int,
+        work_context: WorkContext | None = None,
+    ) -> CapacityLease: ...
+
+    def bind_lease_context(
+        self,
+        lease_id: str,
+        work_context: WorkContext,
+    ) -> CapacityLease: ...
+
+    def list_active_leases(self, instance_id: str) -> OperatorActiveLeases: ...
 
     def renew(self, lease_id: str, ttl_seconds: int) -> CapacityLease: ...
 
@@ -119,9 +232,28 @@ class UnavailableOperatorRegistry:
         self._unavailable()
         raise OperatorInstanceNotFoundError(instance_id)
 
-    def lease(self, capability: str, ttl_seconds: int) -> CapacityLease:
+    def lease(
+        self,
+        capability: str,
+        ttl_seconds: int,
+        work_context: WorkContext | None = None,
+    ) -> CapacityLease:
+        del work_context
         self._unavailable()
         raise CapacityUnavailableError(capability)
+
+    def bind_lease_context(
+        self,
+        lease_id: str,
+        work_context: WorkContext,
+    ) -> CapacityLease:
+        del work_context
+        self._unavailable()
+        raise CapacityLeaseNotFoundError(lease_id)
+
+    def list_active_leases(self, instance_id: str) -> OperatorActiveLeases:
+        self._unavailable()
+        raise OperatorInstanceNotFoundError(instance_id)
 
     def renew(self, lease_id: str, ttl_seconds: int) -> CapacityLease:
         self._unavailable()

@@ -8,6 +8,18 @@ device = "cpu"
 concurrency = 5              # 单实例 GPU slot 并发数
 gpu_slot_timeout_seconds = 720  # 等待 GPU slot 的最长秒数，超时后返回 408/业务超时
 
+[platform]
+# 本地默认不主动向调度平台注册
+registration_enabled = false
+control_service_url = ""  # 启用注册时填写 Control Service 地址
+heartbeat_interval_seconds = 5  # 注册心跳间隔秒数，必须为有限正数
+# 平台允许同时分发到本实例的离线转写请求数；不覆盖 concurrency
+max_concurrent_requests = 4
+
+[runtime]
+# 本地默认允许 CPU；GPU 部署配置显式设为 true
+require_gpu = false
+
 # 模型路径配置
 [model_paths]
 vad_model_dir = "./model/speech_fsmn_vad_zh-cn-16k-common-pytorch"

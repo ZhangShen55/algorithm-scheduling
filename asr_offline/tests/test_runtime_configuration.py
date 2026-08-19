@@ -1,3 +1,4 @@
+import os
 import logging
 import tomllib
 import unittest
@@ -13,6 +14,24 @@ WORKSPACE_ROOT = ASR_ROOT.parent
 
 
 class RuntimeConfigurationTests(unittest.TestCase):
+    def test_relative_config_path_is_resolved_from_project_root(self) -> None:
+        from app.core.config import PROJECT_ROOT, resolve_config_path
+
+        original_cwd = Path.cwd()
+        with TemporaryDirectory() as temporary_directory:
+            try:
+                os.chdir(temporary_directory)
+                with patch.dict(
+                    "os.environ",
+                    {"CONFIG_PATH": "configs/local.toml"},
+                ):
+                    self.assertEqual(
+                        resolve_config_path(),
+                        (PROJECT_ROOT / "configs/local.toml").resolve(),
+                    )
+            finally:
+                os.chdir(original_cwd)
+
     def test_runtime_configs_omit_retired_fields(self) -> None:
         config_paths = (
             ASR_ROOT / "config.toml",

@@ -144,15 +144,18 @@ manifest 原子发布后，算子向 `result_callback_uri` POST 一次：
 
 ## 6. 并发
 
-`config.toml` 的 `task.max_concurrent_tasks=N` 表示单个 Uvicorn worker 同时保留的任务容量。容量检查与任务登记在同一把进程内锁中完成，所以恰好允许 `N` 个任务，第 `N+1` 个被拒绝。部署命令必须保持 `--workers 1`。
+`config.toml` 的 `platform.max_concurrent_requests=N` 同时表示本实例向调度平台注册的容量和单个
+Uvicorn worker 可保留的本地任务上限。容量检查与任务登记在同一把进程内锁中完成，所以恰好
+允许 `N` 个任务，第 `N+1` 个被拒绝。部署命令必须保持 `--workers 1`。
 
 ## 7. 配置
 
 `config.toml` 是唯一的文件配置源，服务不读取 `.env`。加载优先级为“显式环境变量 > `config.toml` > 代码默认值”；`CONFIG_PATH` 只负责选择 TOML 文件。监听地址和端口由 Uvicorn 启动参数控制，不在 `config.toml` 中重复配置。
 
 ```toml
-[task]
-max_concurrent_tasks = 15
+[platform]
+# 平台允许同时分发给本实例的任务数，同时作为本地任务上限
+max_concurrent_requests = 10
 
 [paths]
 result_root = "./shared_results"
@@ -167,7 +170,9 @@ cluster_gap_ms = 90000
 cluster_min_segments = 3
 ```
 
-生产容器通常设置 `RESULT_ROOT=/data/result` 并将平台共享卷挂载到 `/data/result`。也可以直接在选定的 `config.toml` 中配置 `[paths].result_root`。
+生产容器通常将平台共享卷挂载到 `/data/result`，并在受控 TOML 中配置
+`paths.result_root="/data/result"`。显式 `RESULT_ROOT` 环境变量仍可覆盖文件路径；平台容量只从
+所选 TOML 的 `[platform]` 读取，不再读取旧的 `task.max_concurrent_tasks`。
 
 `merge_gap_ms` 处理普通短暂停顿；只有至少 `cluster_min_segments` 个动态段的相邻间隔均不超过 `cluster_gap_ms` 时，才把长静止镜头合并进连续动态簇。簇尚未决议时，候选切片只在内存中延迟发布。服务直接从 URL 解码，不下载或落盘源 MP4、完整副本和视频预览。
 

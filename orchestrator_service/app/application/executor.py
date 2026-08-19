@@ -10,6 +10,8 @@ from packages.platform_common.repository import (
 )
 from packages.platform_contracts.status import NodeStatus
 
+from ..domain.errors import CapacityUnavailableError
+from ..domain.ppt_work import PptSliceAsyncAccepted
 from ..infrastructure.contract_stub import NodeExecutionContext
 from .dispatcher import LeaseAwareDispatcher, NodeReservation
 
@@ -40,9 +42,17 @@ class ExecutionRepository(Protocol):
 class NodeExecutionAdapter(Protocol):
     async def execute(
         self,
-        service_url: str,
+        service_url: str | None,
         context: NodeExecutionContext,
-    ) -> NodeResultWrite: ...
+    ) -> NodeResultWrite | PptSliceAsyncAccepted: ...
+
+
+class AsyncNodeCoordinator(Protocol):
+    async def adopt(
+        self,
+        reservation: NodeReservation,
+        accepted: PptSliceAsyncAccepted,
+    ) -> None: ...
 
 
 class NodeExecutor:
@@ -54,6 +64,8 @@ class NodeExecutor:
         *,
         worker_id: str,
         concurrency: int,
+        operator_hard_timeout_seconds: float = 7_200.0,
+        async_node_coordinator: AsyncNodeCoordinator | None = None,
     ) -> None:
         if concurrency <= 0:
             raise ValueError("节点执行并发数必须大于 0")
@@ -62,6 +74,10 @@ class NodeExecutor:
         self._adapter = adapter
         self._worker_id = worker_id
         self._semaphore = asyncio.Semaphore(concurrency)
+        if operator_hard_timeout_seconds <= 0:
+            raise ValueError("算子 HTTP 硬超时必须大于 0")
+        self._operator_hard_timeout_seconds = operator_hard_timeout_seconds
+        self._async_node_coordinator = async_node_coordinator
 
     async def run_once(self) -> int:
         capabilities = await asyncio.to_thread(
@@ -87,6 +103,7 @@ class NodeExecutor:
 
     async def _execute_reservation(self, reservation: NodeReservation) -> None:
         node = reservation.node
+        reservation_transferred = False
         try:
             task_type = await asyncio.to_thread(
                 self._repository.get_task_type,
@@ -99,6 +116,8 @@ class NodeExecutor:
                 f"正在执行节点: {node.node_code}",
             )
             context = NodeExecutionContext(
+                node_id=node.id,
+                course_task_type_id=node.course_task_type_id,
                 task_id=task_type.task_id,
                 task_type=task_type.task_type.value,
                 node_code=node.node_code,
@@ -106,9 +125,25 @@ class NodeExecutor:
                 effective_params=task_type.effective_params,
             )
             try:
-                result = await self._adapter.execute(
-                    reservation.lease.service_url,
-                    context,
+                service_url = (
+                    reservation.lease.service_url
+                    if reservation.lease is not None
+                    else None
+                )
+                result = await self._dispatcher.run_with_renewal(
+                    reservation,
+                    self._adapter.execute(
+                        service_url,
+                        context,
+                    ),
+                    hard_timeout_seconds=self._operator_hard_timeout_seconds,
+                )
+            except CapacityUnavailableError as exc:
+                await asyncio.to_thread(
+                    self._repository.transition_node,
+                    node.id,
+                    NodeStatus.WAITING_OPERATOR,
+                    str(exc),
                 )
             except Exception as exc:
                 await asyncio.to_thread(
@@ -118,12 +153,18 @@ class NodeExecutor:
                     f"节点执行失败: {exc}",
                 )
             else:
-                await asyncio.to_thread(
-                    self._repository.complete_node,
-                    node.id,
-                    result,
-                    reason=f"节点执行完成: {node.node_code}",
-                )
+                if isinstance(result, PptSliceAsyncAccepted):
+                    reservation_transferred = True
+                    if self._async_node_coordinator is None:
+                        raise RuntimeError("PPT 异步节点协调器尚未装配")
+                    await self._async_node_coordinator.adopt(reservation, result)
+                else:
+                    await asyncio.to_thread(
+                        self._repository.complete_node,
+                        node.id,
+                        result,
+                        reason=f"节点执行完成: {node.node_code}",
+                    )
         finally:
             try:
                 await asyncio.to_thread(
@@ -131,4 +172,5 @@ class NodeExecutor:
                     node.course_task_type_id,
                 )
             finally:
-                await self._dispatcher.release(reservation)
+                if not reservation_transferred:
+                    await self._dispatcher.release(reservation)

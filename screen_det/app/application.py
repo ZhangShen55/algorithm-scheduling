@@ -122,4 +122,12 @@ install_operator_runtime(
     operator_code="screen_det",
     capabilities=["detect_all"],
     default_port=8880,
+    registration_enabled=settings.operator_deployment.platform.registration_enabled,
+    control_service_url=settings.operator_deployment.platform.control_service_url,
+    heartbeat_interval_seconds=(
+        settings.operator_deployment.platform.heartbeat_interval_seconds
+    ),
+    max_concurrent_requests=(
+        settings.operator_deployment.platform.max_concurrent_requests
+    ),
 )

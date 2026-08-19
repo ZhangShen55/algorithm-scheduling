@@ -8,7 +8,17 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from online_gateway_service.app.api.routes import create_online_gateway_app
-from online_gateway_service.app.infrastructure.capacity import OnlineCapacityLeaseError
+from online_gateway_service.app.core.config import (
+    Base64Config,
+    BodyConfig,
+    HttpConfig,
+    OnlineGatewaySettings,
+)
+from online_gateway_service.app.infrastructure.capacity import (
+    OnlineCapacityLeaseClient,
+    OnlineCapacityLeaseError,
+    OnlineWorkContext,
+)
 from online_gateway_service.app.main import app
 
 from packages.platform_common.config import PlatformSettings
@@ -39,6 +49,302 @@ def test_online_gateway_exposes_realtime_asr_websocket() -> None:
     assert "/api/online/asr/stream" in route_paths
 
 
+def test_online_gateway_exposes_single_image_ocr_proxy() -> None:
+    route_paths = {route.path for route in app.routes}
+
+    assert "/api/online/ocr/recognize" in route_paths
+
+
+@pytest.mark.parametrize(
+    ("request_body", "expected_formula", "expected_image_id"),
+    [
+        ({"image": "AA=="}, False, None),
+        (
+            {
+                "image_id": "ppt-image-001",
+                "image": "data:image/png;base64,AA==",
+                "enable_formula": True,
+            },
+            True,
+            "ppt-image-001",
+        ),
+    ],
+)
+def test_online_ocr_adapts_single_image_and_preserves_operator_response(
+    request_body: dict[str, object],
+    expected_formula: bool,
+    expected_image_id: str | None,
+) -> None:
+    contexts: list[OnlineWorkContext] = []
+    forwarded: list[dict[str, object]] = []
+
+    class LeaseClient:
+        @asynccontextmanager
+        async def acquire(self, capability: str, *, ttl_seconds: int = 60, **kwargs):
+            assert capability == "ocr"
+            assert ttl_seconds == 60
+            contexts.append(kwargs["work_context"])
+            yield CapacityLease(
+                lease_id="lease-ocr-online",
+                instance_id="ocr-gpu0",
+                capability=capability,
+                service_url="http://ocr-gpu0:8866",
+                expires_at=datetime.now(UTC) + timedelta(seconds=60),
+            )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/ocr/prediction"
+        body = json.loads(request.content)
+        forwarded.append(body)
+        return httpx.Response(
+            200,
+            json={
+                "key": body["key"],
+                "value": ["识别文本"],
+                "formula_results": [[]],
+                "err_no": 0,
+                "err_msg": "",
+            },
+        )
+
+    online_app = create_online_gateway_app()
+    online_app.state.online_lease_client = LeaseClient()
+    operator_http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    online_app.state.online_http_client = operator_http
+    try:
+        with TestClient(online_app) as client:
+            response = client.post("/api/online/ocr/recognize", json=request_body)
+    finally:
+        asyncio.run(operator_http.aclose())
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 0
+    assert response.json()["data"]["value"] == ["识别文本"]
+    assert forwarded[0]["enable_formula"] is expected_formula
+    assert len(forwarded[0]["key"]) == 1
+    if expected_image_id is None:
+        assert forwarded[0]["key"][0].startswith("online-ocr-")
+    else:
+        assert forwarded[0]["key"] == [expected_image_id]
+    assert forwarded[0]["value"] == [request_body["image"]]
+    assert len(contexts) == 1
+    assert contexts[0].source_service == "online-gateway-service"
+    assert contexts[0].work_type == "online_ocr"
+    assert contexts[0].trace_id
+
+
+@pytest.mark.parametrize(
+    "request_body",
+    [
+        {},
+        {"image": ""},
+        {"image": "not-base64"},
+        {"image": "AA==", "enable_formula": 1},
+        {"image": "AA==", "enable_formula": "false"},
+        {"image": "AA==", "image_id": ""},
+    ],
+)
+def test_online_ocr_rejects_invalid_request_before_leasing(
+    request_body: dict[str, object],
+) -> None:
+    class LeaseClient:
+        @asynccontextmanager
+        async def acquire(self, capability: str, **kwargs):
+            del capability, kwargs
+            raise AssertionError("参数错误不应申请容量租约")
+            yield
+
+    online_app = create_online_gateway_app()
+    online_app.state.online_lease_client = LeaseClient()
+    with TestClient(online_app) as client:
+        response = client.post("/api/online/ocr/recognize", json=request_body)
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 40001
+
+
+def test_online_ocr_enforces_body_and_decoded_size_before_leasing() -> None:
+    lease_count = 0
+
+    class LeaseClient:
+        @asynccontextmanager
+        async def acquire(self, capability: str, **kwargs):
+            nonlocal lease_count
+            del capability, kwargs
+            lease_count += 1
+            yield
+
+    decoded_limit_app = create_online_gateway_app(
+        OnlineGatewaySettings(
+            body=BodyConfig(max_bytes=1_024),
+            base64=Base64Config(max_decoded_bytes=2),
+        )
+    )
+    decoded_limit_app.state.online_lease_client = LeaseClient()
+    with TestClient(decoded_limit_app) as client:
+        decoded_response = client.post(
+            "/api/online/ocr/recognize",
+            json={"image": "AAEC"},
+        )
+
+    body_limit_app = create_online_gateway_app(
+        OnlineGatewaySettings(body=BodyConfig(max_bytes=32))
+    )
+    body_limit_app.state.online_lease_client = LeaseClient()
+    with TestClient(body_limit_app) as client:
+        body_response = client.post(
+            "/api/online/ocr/recognize",
+            json={"image": "A" * 64},
+        )
+
+    assert decoded_response.json()["code"] == 40001
+    assert body_response.json()["code"] == 40001
+    assert lease_count == 0
+
+
+@pytest.mark.asyncio
+async def test_online_capacity_client_renews_context_and_releases() -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+    expires_at = datetime.now(UTC) + timedelta(seconds=1)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        calls.append((request.url.path, body))
+        if request.url.path.endswith("/lease"):
+            return httpx.Response(
+                200,
+                json={
+                    "lease_id": "lease-online-renew",
+                    "instance_id": "ocr-gpu0",
+                    "capability": "ocr",
+                    "service_url": "http://ocr-gpu0:8866",
+                    "expires_at": expires_at.isoformat(),
+                    "work_context": body["work_context"],
+                },
+            )
+        if request.url.path.endswith("/renew"):
+            return httpx.Response(
+                200,
+                json={
+                    "lease_id": "lease-online-renew",
+                    "instance_id": "ocr-gpu0",
+                    "capability": "ocr",
+                    "service_url": "http://ocr-gpu0:8866",
+                    "expires_at": expires_at.isoformat(),
+                },
+            )
+        return httpx.Response(200, json={"status": "RELEASED"})
+
+    context = OnlineWorkContext(
+        source_service="online-gateway-service",
+        work_type="online_ocr",
+        work_id="online-ocr-001",
+        trace_id="trace-001",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OnlineCapacityLeaseClient(http, control_service_url="http://control")
+        async with client.acquire(
+            "ocr",
+            ttl_seconds=1,
+            work_context=context,
+            renew_interval_seconds=0.01,
+        ):
+            await asyncio.sleep(0.025)
+
+    assert calls[0] == (
+        "/internal/operator-instances/lease",
+        {
+            "capability": "ocr",
+            "ttl_seconds": 1,
+            "work_context": context.as_dict(),
+        },
+    )
+    assert sum(path.endswith("/renew") for path, _ in calls) >= 2
+    assert calls[-1] == (
+        "/internal/operator-instances/release",
+        {"lease_id": "lease-online-renew"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_online_capacity_renewal_failure_cancels_work_and_releases() -> None:
+    calls: list[str] = []
+    expires_at = datetime.now(UTC) + timedelta(seconds=1)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path.endswith("/lease"):
+            return httpx.Response(
+                200,
+                json={
+                    "lease_id": "lease-renew-failure",
+                    "instance_id": "ocr-gpu0",
+                    "capability": "ocr",
+                    "service_url": "http://ocr-gpu0:8866",
+                    "expires_at": expires_at.isoformat(),
+                },
+            )
+        if request.url.path.endswith("/renew"):
+            return httpx.Response(503, json={"detail": "redis unavailable"})
+        return httpx.Response(200, json={"status": "RELEASED"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OnlineCapacityLeaseClient(http, control_service_url="http://control")
+        with pytest.raises(OnlineCapacityLeaseError, match="续租失败"):
+            async with client.acquire(
+                "ocr",
+                ttl_seconds=1,
+                renew_interval_seconds=0.01,
+            ):
+                await asyncio.sleep(1)
+
+    assert calls[-1].endswith("/release")
+
+
+def test_online_ocr_timeout_and_upstream_errors_release_the_lease() -> None:
+    released: list[str] = []
+
+    class LeaseClient:
+        @asynccontextmanager
+        async def acquire(self, capability: str, **kwargs):
+            del kwargs
+            assert capability == "ocr"
+            try:
+                yield CapacityLease(
+                    lease_id="lease-ocr-timeout",
+                    instance_id="ocr-gpu0",
+                    capability="ocr",
+                    service_url="http://ocr-gpu0:8866",
+                    expires_at=datetime.now(UTC) + timedelta(seconds=60),
+                )
+            finally:
+                released.append("lease-ocr-timeout")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        await asyncio.sleep(0.05)
+        return httpx.Response(200, json={})
+
+    online_app = create_online_gateway_app(
+        OnlineGatewaySettings(http=HttpConfig(hard_timeout_seconds=0.01))
+    )
+    online_app.state.online_lease_client = LeaseClient()
+    operator_http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    online_app.state.online_http_client = operator_http
+    try:
+        with TestClient(online_app) as client:
+            response = client.post(
+                "/api/online/ocr/recognize",
+                json={"image": "AA=="},
+            )
+    finally:
+        asyncio.run(operator_http.aclose())
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 50000
+    assert released == ["lease-ocr-timeout"]
+
+
 def test_online_vbas_proxies_complete_base64_request_through_one_lease(
     tmp_path: Path,
 ) -> None:
@@ -48,7 +354,8 @@ def test_online_vbas_proxies_complete_base64_request_through_one_lease(
 
     class LeaseClient:
         @asynccontextmanager
-        async def acquire(self, capability: str, *, ttl_seconds: int = 60):
+        async def acquire(self, capability: str, *, ttl_seconds: int = 60, **kwargs):
+            assert kwargs["work_context"].source_service == "online-gateway-service"
             acquired.append(capability)
             assert ttl_seconds == 60
             try:
@@ -122,7 +429,8 @@ def test_online_face_recognition_preserves_existing_operator_contract(
 
     class LeaseClient:
         @asynccontextmanager
-        async def acquire(self, capability: str, *, ttl_seconds: int = 60):
+        async def acquire(self, capability: str, *, ttl_seconds: int = 60, **kwargs):
+            assert kwargs["work_context"].source_service == "online-gateway-service"
             del ttl_seconds
             acquired.append(capability)
             yield CapacityLease(
@@ -186,7 +494,8 @@ def test_online_image_quality_uses_detect_all_contract(tmp_path: Path) -> None:
 
     class LeaseClient:
         @asynccontextmanager
-        async def acquire(self, capability: str, *, ttl_seconds: int = 60):
+        async def acquire(self, capability: str, *, ttl_seconds: int = 60, **kwargs):
+            assert kwargs["work_context"].source_service == "online-gateway-service"
             del ttl_seconds
             acquired.append(capability)
             yield CapacityLease(
@@ -256,7 +565,8 @@ def test_multi_image_vbas_request_is_not_split_and_preserves_partial_results(
 
     class LeaseClient:
         @asynccontextmanager
-        async def acquire(self, capability: str, *, ttl_seconds: int = 60):
+        async def acquire(self, capability: str, *, ttl_seconds: int = 60, **kwargs):
+            assert kwargs["work_context"].source_service == "online-gateway-service"
             nonlocal lease_count
             del ttl_seconds
             assert capability == "student_behavior"
@@ -338,7 +648,8 @@ def test_realtime_asr_keeps_one_sticky_lease_for_the_websocket_session(
 
     class LeaseClient:
         @asynccontextmanager
-        async def acquire(self, capability: str, *, ttl_seconds: int = 60):
+        async def acquire(self, capability: str, *, ttl_seconds: int = 60, **kwargs):
+            assert kwargs["work_context"].source_service == "online-gateway-service"
             acquired.append(capability)
             assert ttl_seconds == 3_600
             try:
@@ -413,7 +724,8 @@ def test_online_http_returns_bounded_business_error_when_capacity_is_unavailable
 ) -> None:
     class LeaseClient:
         @asynccontextmanager
-        async def acquire(self, capability: str, *, ttl_seconds: int = 60):
+        async def acquire(self, capability: str, *, ttl_seconds: int = 60, **kwargs):
+            assert kwargs["work_context"].source_service == "online-gateway-service"
             del ttl_seconds
             raise OnlineCapacityLeaseError(f"no capacity: {capability}")
             yield
@@ -448,7 +760,8 @@ async def test_concurrent_online_requests_can_use_different_instances(tmp_path: 
 
     class LeaseClient:
         @asynccontextmanager
-        async def acquire(self, capability: str, *, ttl_seconds: int = 60):
+        async def acquire(self, capability: str, *, ttl_seconds: int = 60, **kwargs):
+            assert kwargs["work_context"].source_service == "online-gateway-service"
             nonlocal next_instance
             del ttl_seconds
             assert capability == "detect_all"
@@ -509,7 +822,8 @@ def test_realtime_asr_operator_disconnect_closes_session_and_releases_lease(
 
     class LeaseClient:
         @asynccontextmanager
-        async def acquire(self, capability: str, *, ttl_seconds: int = 60):
+        async def acquire(self, capability: str, *, ttl_seconds: int = 60, **kwargs):
+            assert kwargs["work_context"].source_service == "online-gateway-service"
             del ttl_seconds
             try:
                 yield CapacityLease(

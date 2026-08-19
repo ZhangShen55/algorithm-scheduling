@@ -164,8 +164,12 @@ class ReleaseTree:
             assert isinstance(instance_id, str)
             assert isinstance(profile, str)
             assert instance_id == service_name
-            process_name = environment.get("GPU_PROCESS_NAME")
             physical_gpu = environment.get("PLATFORM_GPU_ID")
+            process_name = (
+                None
+                if physical_gpu is None
+                else service_name.removesuffix(f"-{profile}").replace("-", "_")
+            )
             instances[instance_id] = {
                 "service_name": service_name,
                 "profile": profile,
@@ -3033,7 +3037,7 @@ def test_operator_inventory_rejects_structural_drift(
 
 @pytest.mark.parametrize(
     "field",
-    ("PLATFORM_GPU_ID", "GPU_PROCESS_NAME", "NVIDIA_VISIBLE_DEVICES", "REQUIRE_GPU"),
+    ("PLATFORM_GPU_ID", "NVIDIA_VISIBLE_DEVICES"),
 )
 def test_operator_inventory_rejects_every_gpu_field_on_cpu(
     tmp_path: Path, field: str
@@ -3044,6 +3048,69 @@ def test_operator_inventory_rejects_every_gpu_field_on_cpu(
 
     with pytest.raises(ValueError, match=field):
         aggregate.load_operator_inventory(_write_compose(tmp_path, document))
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "PLATFORM_REGISTRATION_ENABLED",
+        "PLATFORM_CONTROL_SERVICE_URL",
+        "PLATFORM_HEARTBEAT_INTERVAL_SECONDS",
+        "PLATFORM_DECLARED_CAPACITY",
+        "REQUIRE_GPU",
+        "GPU_PROCESS_NAME",
+    ),
+)
+def test_operator_inventory_rejects_removed_environment_fields(
+    tmp_path: Path, field: str
+) -> None:
+    aggregate = _aggregate_module()
+    document = _compose_document()
+    document["services"]["asr-offline-gpu0"]["environment"][field] = "legacy"
+
+    with pytest.raises(ValueError, match=field):
+        aggregate.load_operator_inventory(_write_compose(tmp_path, document))
+
+
+def test_renderer_derives_gpu_process_name_without_legacy_environment() -> None:
+    renderer = _renderer_module()
+    _, smoke_by_operator = renderer._load_smoke_authority(PLATFORM_ROOT)
+
+    authorities = renderer._load_operator_authority(
+        PLATFORM_ROOT, smoke_by_operator
+    )
+
+    assert authorities["asr-offline-gpu0"].process_name == "asr_offline"
+    assert authorities["ocr-gpu2"].process_name == "ocr"
+    assert authorities["ppt-slice-cpu0"].process_name is None
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "PLATFORM_REGISTRATION_ENABLED",
+        "PLATFORM_CONTROL_SERVICE_URL",
+        "PLATFORM_HEARTBEAT_INTERVAL_SECONDS",
+        "PLATFORM_DECLARED_CAPACITY",
+        "REQUIRE_GPU",
+        "GPU_PROCESS_NAME",
+    ),
+)
+def test_renderer_rejects_removed_operator_environment_fields(
+    tmp_path: Path, field: str
+) -> None:
+    renderer = _renderer_module()
+    _, smoke_by_operator = renderer._load_smoke_authority(PLATFORM_ROOT)
+    document = _compose_document()
+    document["services"]["asr-offline-gpu0"]["environment"][field] = "legacy"
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    (deploy / "docker-compose.operators.yml").write_text(
+        yaml.safe_dump(document, sort_keys=False), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match=field):
+        renderer._load_operator_authority(tmp_path, smoke_by_operator)
 
 
 def test_registration_paths_are_canonical_and_face_hash_is_stable() -> None:

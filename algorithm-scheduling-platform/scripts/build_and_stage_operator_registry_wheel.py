@@ -28,6 +28,7 @@ PACKAGE_ROOT = PLATFORM_ROOT / "packages" / "operator_registry_client"
 DIST_DIR = PACKAGE_ROOT / "dist"
 
 def _canonical_dependency(requirement: str) -> str:
+    requirement = requirement.replace('"', "'")
     for index, character in enumerate(requirement):
         if character in "<>=!~":
             name = requirement[:index]
@@ -49,9 +50,11 @@ EXPECTED_WHEEL_NAME = (
 EXPECTED_PACKAGE_MODULES = (
     "__init__.py",
     "client.py",
+    "config.py",
     "lifecycle.py",
     "ops.py",
     "runtime.py",
+    "validation.py",
 )
 EXPECTED_SOURCE_FILES = tuple(
     sorted(("README.md", "pyproject.toml", *EXPECTED_PACKAGE_MODULES))
@@ -318,7 +321,10 @@ def _validate_wheel(wheelhouse: Path, source_files: Sequence[str]) -> Path:
         actual = metadata[key]
         if actual != expected:
             raise WheelBuildError(f"METADATA {key} 不匹配: {actual!r} != {expected!r}")
-    requirements = metadata.get_all("Requires-Dist", [])
+    requirements = [
+        _canonical_dependency(requirement)
+        for requirement in metadata.get_all("Requires-Dist", [])
+    ]
     if len(requirements) != len(EXPECTED_RUNTIME_REQUIREMENTS) or set(
         requirements
     ) != set(EXPECTED_RUNTIME_REQUIREMENTS):

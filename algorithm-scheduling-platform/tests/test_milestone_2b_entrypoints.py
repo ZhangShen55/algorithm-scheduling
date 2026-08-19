@@ -280,7 +280,7 @@ def test_all_supported_vbas_images_install_registry_client() -> None:
     for relative in SUPPORTED_VBAS_DOCKERFILES:
         dockerfile = ROOT / relative
         source = dockerfile.read_text(encoding="utf-8")
-        assert "algorithm_operator_registry_client-0.1.0-py3-none-any.whl" in source, (
+        assert "algorithm_operator_registry_client-0.2.0-py3-none-any.whl" in source, (
             dockerfile
         )
         assert "pip install --no-deps" in source, dockerfile

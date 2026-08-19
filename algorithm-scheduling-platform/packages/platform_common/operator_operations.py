@@ -25,6 +25,8 @@ class OperatorCapacitySnapshot:
     declared_capacity: int
     reported_inflight: int
     active_lease_count: int
+    schedulable_used: int
+    attribution_difference: int
     capacity_mismatch: bool
 
 
@@ -43,6 +45,8 @@ def build_operator_capacity_snapshot(
                 declared_capacity=instance.declared_capacity,
                 reported_inflight=instance.inflight,
                 active_lease_count=active_lease_count,
+                schedulable_used=active_lease_count,
+                attribution_difference=instance.inflight - active_lease_count,
                 capacity_mismatch=instance.inflight != active_lease_count,
             )
         )

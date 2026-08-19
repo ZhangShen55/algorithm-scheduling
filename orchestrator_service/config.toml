@@ -123,6 +123,8 @@ reconcile_interval_seconds = 30.0
 ocr_batch_size = 8
 # 单个 PPT OCR 节点同时发起的请求数。
 ocr_max_concurrency = 2
+# 单张 PPT 图片 OCR HTTP 调用的绝对硬超时秒数。
+ocr_request_timeout_seconds = 600.0
 # LLM 关键词单批处理的 PPT 图片数。
 keyword_batch_size = 8
 # 单个关键词节点同时发起的请求数。

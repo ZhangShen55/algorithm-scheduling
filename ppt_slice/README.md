@@ -94,7 +94,7 @@ Content-Type: application/json
 }
 ```
 
-当单 worker 中已有 `max_concurrent_tasks` 个任务时返回 `status=70`，不会启动后台处理。
+当单 worker 中已有 `platform.max_concurrent_requests` 个任务时返回 `status=70`，不会启动后台处理。
 
 ## 共享结果
 
@@ -174,13 +174,28 @@ python callback.py
 
 ## 配置
 
-加载优先级为“显式环境变量 > `config.toml` > 代码默认值”。`CONFIG_PATH` 只负责选择 TOML 文件，不提供第二套字段配置。项目不读取 `.env`，也不维护 `.env.example`。
+业务字段加载优先级为“显式环境变量 > `config.toml` > 代码默认值”。`CONFIG_PATH` 只负责选择 TOML 文件，不提供第二套字段配置。`[platform]` 与 `[runtime]` 只从所选 TOML 读取，不接受旧平台环境变量覆盖。项目不读取 `.env`，也不维护 `.env.example`。
+
+本地根配置默认不注册；受控 CPU 部署使用
+`algorithm-scheduling-platform/deploy/config/operators/ppt_slice.cpu.toml`：
+
+| 字段 | 本地根配置 | 受控部署 | 说明 |
+| --- | --- | --- | --- |
+| `platform.registration_enabled` | `false` | `true` | 是否主动注册到调度平台 |
+| `platform.control_service_url` | `""` | `http://control-service:18100` | 注册与心跳地址 |
+| `platform.heartbeat_interval_seconds` | `5` | `5` | 心跳间隔 |
+| `platform.max_concurrent_requests` | `10` | `10` | 平台容量及单 Worker 本地任务上限 |
+| `runtime.require_gpu` | `false` | `false` | PPT 切片使用 CPU |
+
+Compose 继续管理实例 ID、服务 URL、注册 Token、`CONFIG_PATH`、端口和
+`UVICORN_WORKERS=1`；CPU 实例不设置 GPU 字段。PPT Slice 是唯一把统一平台注册容量直接复用为
+本地任务上限的算子，旧 `task.max_concurrent_tasks` 和 `MAX_CONCURRENT_TASKS` 环境覆盖已移除。
 
 | TOML | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `app.name` | `APP_NAME` | `Video PPT Slice Service` | FastAPI 文档、健康信息和日志显示的服务名称 |
 | `app.version` | `APP_VERSION` | `V1.0.0_20260806` | FastAPI 文档、健康信息和版本接口返回的版本 |
-| `task.max_concurrent_tasks` | `MAX_CONCURRENT_TASKS` | `15` | 单 Uvicorn worker 最大并发任务数 |
+| `platform.max_concurrent_requests` | 无 | `10` | 平台容量及单 Uvicorn worker 最大后台任务数 |
 | `task.max_queue_size` | `MAX_QUEUE_SIZE` | `25` | 单任务帧队列容量 |
 | `task.min_frames_ok` | `MIN_FRAMES_OK` | `5` | 任务成功至少需要处理的采样帧数，完成条件为处理帧数大于该值 |
 | `similarity.default_contiguous_similarity` | `DEFAULT_CONTIGUOUS_SIMILARITY` | `0.99` | 相邻采样画面的稳定相似度阈值 |
@@ -214,7 +229,7 @@ python callback.py
 | `logging.format` | `LOG_FORMAT` | 见 `config.toml` | 文件日志格式 |
 | `logging.date_format` | `LOG_DATE_FORMAT` | `%Y-%m-%d %H:%M:%S` | 控制台和文件日志时间格式 |
 
-保持 `--workers 1`。容量锁只负责单 worker 内的 `N` 个并发任务，不设计跨进程协调、Kafka 或数据库依赖。
+保持 `--workers 1`。容量锁只负责单 worker 内最多 `10` 个并发任务，不设计跨进程协调、Kafka 或数据库依赖。
 
 ## Harness
 

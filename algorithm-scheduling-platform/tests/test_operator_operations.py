@@ -37,6 +37,8 @@ def test_capacity_snapshot_marks_reported_inflight_lease_mismatch() -> None:
     assert len(snapshots) == 1
     assert snapshots[0].reported_inflight == 2
     assert snapshots[0].active_lease_count == 0
+    assert snapshots[0].schedulable_used == 0
+    assert snapshots[0].attribution_difference == 2
     assert snapshots[0].capacity_mismatch is True
     assert snapshots[0].lifecycle is OperatorLifecycle.ONLINE
 

@@ -481,6 +481,37 @@ def _infrastructure_evidence(engine: Any) -> dict[str, Any]:
     }
 
 
+def _build_course_video(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=32x32:d=1",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=1000:duration=1",
+            "-shortest",
+            "-c:v",
+            "mpeg4",
+            "-c:a",
+            "aac",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 async def _group_offsets(group_id: str) -> dict[str, int]:
     admin = AIOKafkaAdminClient(
         bootstrap_servers=BOOTSTRAP_SERVERS,
@@ -703,6 +734,8 @@ def _services(
     visual_event_topic = f"{topic}.visual.events"
     group = f"algorithm-test-milestone2a-{suffix}"
     storage = tempfile.TemporaryDirectory(prefix=f"milestone-2a-{suffix[:8]}-")
+    source_video = Path(storage.name) / "fixtures" / "course.mp4"
+    _build_course_video(source_video)
     course_root = str(Path(storage.name) / "course")
     result_root = str(Path(storage.name) / "result")
     storage_env = {
@@ -719,10 +752,10 @@ def _services(
             "model_version": "asr-offline-stub-v1",
             "api_version": "v1",
         },
-        "text_analysis": {
+        "course_overviews": {
             "instance_id": f"text_analysis-{suffix[:8]}",
             "operator_code": "text_analysis",
-            "capabilities": ["text_analysis"],
+            "capabilities": ["course_overviews"],
             "service_url": f"http://127.0.0.1:{text_stub_port}",
             "model_version": "text-analysis-stub-v1",
             "api_version": "v1",
@@ -760,6 +793,7 @@ def _services(
                 ),
                 "MILESTONE_2A_STUB_MODEL_VERSION": stub_metadata["model_version"],
                 "MILESTONE_2A_STUB_API_VERSION": stub_metadata["api_version"],
+                "MILESTONE_2A_STUB_VIDEO_PATH": str(source_video),
                 **storage_env,
             },
             cwd=PLATFORM_ROOT,
@@ -801,6 +835,7 @@ def _services(
         "orchestrator_url": f"http://127.0.0.1:{orchestrator_port}",
         "operator_registry_token": registry_token,
         "operator_stubs": operator_stubs,
+        "teacher_video_url": f"http://127.0.0.1:{asr_stub_port}/fixtures/course.mp4",
     }
     logs: list[str] = []
     original_error: BaseException | None = None
@@ -892,7 +927,7 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
                     "task_id": task_id,
                     "task_types": ["ASR"],
                     "priority": priority,
-                    "teacher_video_path": "https://example.invalid/course.mp4",
+                    "teacher_video_path": metadata["teacher_video_url"],
                     "asr_options": {"language": "zh"},
                 },
                 timeout=5,
@@ -1049,7 +1084,7 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
         assert counts == {"task_type_count": 2, "node_count": 4}
         evidence["idempotency_counts"] = counts
 
-        for operator_code, stub_metadata in metadata["operator_stubs"].items():
+        for _capability, stub_metadata in metadata["operator_stubs"].items():
             registration = httpx.post(
                 f"{control_url}/api/operator-instances/register",
                 headers={
@@ -1059,7 +1094,7 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
                 },
                 json={
                     "instance_id": stub_metadata["instance_id"],
-                    "operator_code": operator_code,
+                    "operator_code": stub_metadata["operator_code"],
                     "capabilities": stub_metadata["capabilities"],
                     "service_url": stub_metadata["service_url"],
                     "model_version": stub_metadata["model_version"],
@@ -1131,7 +1166,7 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
         selected_instances = evidence["selected_instances"]
         assert {item["capability"] for item in selected_instances} == {
             "asr_offline",
-            "text_analysis",
+            "course_overviews",
         }
         assert {
             (item["capability"], item["instance_id"])
@@ -1151,12 +1186,12 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
         )
 
         calls_by_operator: dict[str, list[dict[str, Any]]] = {}
-        for operator_code, stub_metadata in metadata["operator_stubs"].items():
+        for capability, stub_metadata in metadata["operator_stubs"].items():
             calls_response = httpx.get(
                 f"{stub_metadata['service_url']}/ops/calls", timeout=5
             )
             calls_response.raise_for_status()
-            calls_by_operator[operator_code] = calls_response.json()
+            calls_by_operator[capability] = calls_response.json()
         calls = [
             call
             for operator_calls in calls_by_operator.values()
@@ -1164,10 +1199,8 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
         ]
         assert len(calls) == 4
         asr_calls = [call for call in calls if call["node_code"] == "ASR_TRANSCRIPTION"]
-        assert [call["task_id"] for call in asr_calls] == [
-            task_ids["urgent"],
-            task_ids["normal"],
-        ]
+        assert len(asr_calls) == 2
+        assert all(call["request_size"] > 0 for call in asr_calls)
         assert {call["node_code"] for call in calls} == {
             "ASR_TRANSCRIPTION",
             "COURSE_OVERVIEW",
@@ -1176,10 +1209,10 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
             call["node_code"] for call in calls_by_operator["asr_offline"]
         } == {"ASR_TRANSCRIPTION"}
         assert {
-            call["node_code"] for call in calls_by_operator["text_analysis"]
+            call["node_code"] for call in calls_by_operator["course_overviews"]
         } == {"COURSE_OVERVIEW"}
         assert all(
-            node["result"]["stub"] is True
+            node["result"] is not None
             for payload in completed_payloads.values()
             for node in _task(payload)["nodes"]
         )

@@ -76,14 +76,12 @@ class YoloDeviceResolutionTests(unittest.TestCase):
             screen_detector.resolve_yolo_device("gpu")
 
     def test_required_gpu_rejects_cpu(self) -> None:
-        with patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False):
-            with self.assertRaisesRegex(RuntimeError, "部署要求使用 GPU.*cuda:<index>"):
-                screen_detector.resolve_yolo_device("cpu")
+        with self.assertRaisesRegex(RuntimeError, "部署要求使用 GPU.*cuda:<index>"):
+            screen_detector.resolve_yolo_device("cpu", require_gpu=True)
 
     def test_required_gpu_rejects_mps(self) -> None:
-        with patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False):
-            with self.assertRaisesRegex(RuntimeError, "部署要求使用 GPU.*cuda:<index>"):
-                screen_detector.resolve_yolo_device("mps")
+        with self.assertRaisesRegex(RuntimeError, "部署要求使用 GPU.*cuda:<index>"):
+            screen_detector.resolve_yolo_device("mps", require_gpu=True)
 
 
 class YoloHolderFailFastTests(unittest.TestCase):
@@ -95,6 +93,9 @@ class YoloHolderFailFastTests(unittest.TestCase):
             screen_detection=SimpleNamespace(weights_path="model/screen.pt"),
             yolo=SimpleNamespace(device="cpu"),
             model_protection=SimpleNamespace(),
+            operator_deployment=SimpleNamespace(
+                runtime=SimpleNamespace(require_gpu=True)
+            ),
         )
         yolo = Mock()
 
@@ -127,6 +128,9 @@ class YoloHolderFailFastTests(unittest.TestCase):
             ),
             yolo=SimpleNamespace(device="cpu"),
             model_protection=SimpleNamespace(),
+            operator_deployment=SimpleNamespace(
+                runtime=SimpleNamespace(require_gpu=True)
+            ),
         )
         yolo = Mock()
 

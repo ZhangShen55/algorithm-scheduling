@@ -13,7 +13,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-ARG OPERATOR_REGISTRY_CLIENT_WHEEL=algorithm_operator_registry_client-0.1.0-py3-none-any.whl
+ARG OPERATOR_REGISTRY_CLIENT_WHEEL=algorithm_operator_registry_client-0.2.0-py3-none-any.whl
 COPY wheel/${OPERATOR_REGISTRY_CLIENT_WHEEL} /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL}
 RUN --mount=type=bind,source=docker/requirements-docker.txt,target=/tmp/requirements-docker.txt,ro \
     pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} \

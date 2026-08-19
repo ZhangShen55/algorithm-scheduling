@@ -139,18 +139,18 @@ def _face_servers(handler: Any) -> Iterator[list[str]]:
 
 def _expected_instances() -> list[dict[str, Any]]:
     contracts = {
-        "asr-offline": ("asr_offline", ["asr_offline"], 8083, 1),
-        "asr-online": ("asr_online", ["asr_online"], 8084, 1),
-        "ocr": ("ocr", ["ocr"], 8866, 1),
-        "vbas": ("vbas", ["student_behavior", "teacher_behavior"], 8981, 1),
-        "facerec": ("facerec", ["recognize"], 8000, 1),
-        "screen-det": ("screen_det", ["detect_all"], 8880, 1),
-        "ppt-slice": ("ppt_slice", ["ppt_slice"], 9001, 15),
+        "asr-offline": ("asr_offline", ["asr_offline"], 8083, 4),
+        "asr-online": ("asr_online", ["asr_online"], 8084, 10),
+        "ocr": ("ocr", ["ocr"], 8866, 256),
+        "vbas": ("vbas", ["student_behavior", "teacher_behavior"], 8981, 128),
+        "facerec": ("facerec", ["recognize"], 8000, 128),
+        "screen-det": ("screen_det", ["detect_all"], 8880, 128),
+        "ppt-slice": ("ppt_slice", ["ppt_slice"], 9001, 10),
         "text-analysis": (
             "text_analysis",
             ["course_overviews", "extract_keywords"],
             8000,
-            4,
+            256,
         ),
     }
     result = []
@@ -190,6 +190,34 @@ def _compose_with_environment_override(
     return output
 
 
+def _compose_with_toml_capacity_literal(tmp_path: Path, literal: str) -> Path:
+    document = yaml.safe_load(
+        (DEPLOY / "docker-compose.operators.yml").read_text(encoding="utf-8")
+    )
+    service = document["services"]["asr-offline-gpu0"]
+    config_path = service["environment"]["CONFIG_PATH"]
+    config_mount = next(
+        mount for mount in service["volumes"] if mount.get("target") == config_path
+    )
+    source = (DEPLOY / config_mount["source"]).resolve()
+    invalid_config = tmp_path / "asr_offline.invalid.toml"
+    content = re.sub(
+        r"(?m)^max_concurrent_requests\s*=.*$",
+        f"max_concurrent_requests = {literal}",
+        source.read_text(encoding="utf-8"),
+        count=1,
+    )
+    invalid_config.write_text(content, encoding="utf-8")
+    config_mount["source"] = str(invalid_config)
+
+    output = tmp_path / "docker-compose.operators.yml"
+    output.write_text(
+        yaml.safe_dump(document, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    return output
+
+
 @pytest.mark.parametrize(
     "value",
     (
@@ -215,17 +243,15 @@ def test_registration_verifier_rejects_invalid_compose_service_url(
 
 
 @pytest.mark.parametrize(
-    "value",
-    (1.5, 1.0, True, float("inf"), b"1", "1.5", " 1 ", "+1"),
+    "literal",
+    ("1.5", "1.0", "true", "inf", '"1.5"', '" 1 "', '"+1"'),
 )
-def test_registration_verifier_rejects_non_strict_compose_capacity(
-    tmp_path: Path, value: Any
+def test_registration_verifier_rejects_non_strict_toml_capacity(
+    tmp_path: Path, literal: str
 ) -> None:
-    compose = _compose_with_environment_override(
-        tmp_path, "PLATFORM_DECLARED_CAPACITY", value
-    )
+    compose = _compose_with_toml_capacity_literal(tmp_path, literal)
 
-    with pytest.raises(ValueError, match="Compose 声明容量无效"):
+    with pytest.raises(ValueError, match=r"platform\.max_concurrent_requests"):
         load_registration_expected(compose)
 
 
@@ -1467,7 +1493,7 @@ def _prepare_fake_lifecycle(
         fake_venv / "python",
         """#!/usr/bin/env bash
 set -euo pipefail
-if [[ "${1:-}" == "scripts/run_milestone_2b_case_batch.py" ]]; then
+if [[ "${1:-}" == "-m" && "${2:-}" == "scripts.run_milestone_2b_case_batch" ]]; then
   printf '%s\n' "case-batch" >>"$FAKE_DOCKER_STATE/cleanup-order.log"
   exit 0
 fi

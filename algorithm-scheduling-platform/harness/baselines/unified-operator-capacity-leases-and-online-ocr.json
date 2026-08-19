@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "baseline_git_revision": "bd59541",
+  "operators": {
+    "asr_online": {
+      "default_port": 8084,
+      "business_routes": [{"method": "WEBSOCKET", "path": "/v1.0.1/seacraft_asr_online"}],
+      "root_platform_section": false,
+      "root_runtime_section": false,
+      "compose_declared_capacity": 1
+    },
+    "asr_offline": {
+      "default_port": 8083,
+      "business_routes": [{"method": "POST", "path": "/v1.1.8/seacraft_asr"}],
+      "root_platform_section": false,
+      "root_runtime_section": false,
+      "compose_declared_capacity": 1
+    },
+    "facerec": {
+      "default_port": 8003,
+      "business_routes": [{"method": "POST", "path": "/recognize"}],
+      "root_platform_section": false,
+      "root_runtime_section": false,
+      "compose_declared_capacity": 1
+    },
+    "ocr": {
+      "default_port": 8866,
+      "business_routes": [{"method": "POST", "path": "/ocr/prediction"}],
+      "root_platform_section": false,
+      "root_runtime_section": false,
+      "compose_declared_capacity": 1,
+      "deploy_image_max_bytes": 20971520
+    },
+    "screen_det": {
+      "default_port": 8880,
+      "business_routes": [{"method": "POST", "path": "/detect_all"}],
+      "root_platform_section": false,
+      "root_runtime_section": true,
+      "root_runtime_require_gpu": null,
+      "compose_declared_capacity": 1
+    },
+    "ppt_slice": {
+      "default_port": 9001,
+      "business_routes": [{"method": "POST", "path": "/LocalVideoPPTSliceTasks/v1.0.0"}],
+      "root_platform_section": false,
+      "root_runtime_section": false,
+      "compose_declared_capacity": 15,
+      "deploy_task_max_concurrent_tasks": 15
+    },
+    "vbas": {
+      "default_port": 8981,
+      "business_routes": [
+        {"method": "POST", "path": "/ImageDetect/student/v1.0.0"},
+        {"method": "POST", "path": "/ImageDetect/teacher/v1.0.0"}
+      ],
+      "root_platform_section": false,
+      "root_runtime_section": false,
+      "compose_declared_capacity": 1
+    },
+    "text_analysis": {
+      "default_port": 8000,
+      "business_routes": [
+        {"method": "POST", "path": "/v1/course_overviews"},
+        {"method": "POST", "path": "/v1/extract_keywords"}
+      ],
+      "root_platform_section": false,
+      "root_runtime_section": false,
+      "compose_declared_capacity": 4
+    }
+  },
+  "compose_type_configuration_environment": [
+    "PLATFORM_REGISTRATION_ENABLED",
+    "PLATFORM_CONTROL_SERVICE_URL",
+    "PLATFORM_HEARTBEAT_INTERVAL_SECONDS",
+    "PLATFORM_DECLARED_CAPACITY",
+    "REQUIRE_GPU",
+    "GPU_PROCESS_NAME"
+  ],
+  "approved_current_capacities": {
+    "asr_online": 10,
+    "asr_offline": 4,
+    "facerec": 128,
+    "ocr": 256,
+    "screen_det": 128,
+    "ppt_slice": 10,
+    "vbas": 128,
+    "text_analysis": 256
+  },
+  "protected_untracked_paths": [
+    "asr_offline/docker/README.md",
+    "docs/运维可视化平台详细设计文档-v1.md"
+  ]
+}

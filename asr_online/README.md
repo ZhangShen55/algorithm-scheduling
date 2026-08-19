@@ -51,19 +51,38 @@ Uvicorn :8084  (app.main:app, workers=1)
 
 ## 配置说明
 
-配置文件路径由环境变量 `CONFIG_PATH` 指定，默认为 `./config.toml`；Docker 内固定为 `/config.toml`。
+配置文件路径由环境变量 `CONFIG_PATH` 指定；未设置时读取项目根 `config.toml`，相对路径也按项目根解析，Docker 内固定为 `/config.toml`。
+
+### 平台注册与运行配置
+
+项目根 `config.toml` 用于本地安全运行；受控三卡部署使用
+`algorithm-scheduling-platform/deploy/config/operators/asr_online.gpu.toml`：
+
+| 字段 | 本地根配置 | 受控部署 | 说明 |
+| --- | --- | --- | --- |
+| `platform.registration_enabled` | `false` | `true` | 是否主动注册到调度平台 |
+| `platform.control_service_url` | `""` | `http://control-service:18100` | 注册与心跳地址 |
+| `platform.heartbeat_interval_seconds` | `5` | `5` | 心跳间隔，必须为有限正数 |
+| `platform.max_concurrent_requests` | `10` | `10` | 单实例可分发的 WebSocket 会话数 |
+| `runtime.require_gpu` | `false` | `true` | `true` 时 CUDA 配置或设备不可用会启动失败 |
+
+实例级和启动前事实仍由 Compose 管理，包括 `PLATFORM_INSTANCE_ID`、
+`PLATFORM_SERVICE_URL`、`PLATFORM_OPERATOR_REGISTRY_TOKEN`、`PLATFORM_GPU_ID`、
+`NVIDIA_VISIBLE_DEVICES`、`CONFIG_PATH`、端口和 `UVICORN_WORKERS=1`。这些字段不写入共享
+TOML。平台容量按一个 WebSocket 会话计量，不改变在线模型原有的流式处理和会话生命周期。
 
 ```toml
 id_engine = "online-1"
 version = "seacraft-asr-online-v1.0.0"
-device = "cuda:0"          # 无 GPU 时自动回退 CPU（见 core/models.py）
-ngpu = 1
+device = "cpu"             # GPU 部署改为 cuda:0
+ngpu = 0                    # CUDA 模式必须为 1
 log_path = "./asr_online_service.log"
 
 # 模型默认使用镜像内 ./model，可按需添加 [model_paths] 覆盖。
 ```
 
 镜像默认使用内置 `./model` 目录；如需使用外部模型，可在 `config.toml` 中添加 `[model_paths]` 覆盖。
+配置为 `cuda:<index>` 时不会自动回退 CPU；CUDA 不可用、索引越界或 `ngpu != 1` 都会失败关闭。
 
 ## API
 

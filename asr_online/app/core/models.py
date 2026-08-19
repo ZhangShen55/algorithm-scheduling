@@ -1,12 +1,10 @@
 import asyncio
-import os
-
 import torch
 from funasr import AutoModel
 from modelscope.pipelines import pipeline
 from modelscope.utils.constant import Tasks
 
-from app.core.config import settings
+from app.core.config import operator_deployment, settings
 from app.core.model_assets import prepare_decrypted_model_dir
 
 _model_online = None
@@ -15,7 +13,7 @@ _model_lock = asyncio.Lock()
 
 
 def require_gpu_enabled() -> bool:
-    return os.getenv("REQUIRE_GPU", "false").strip().lower() in {"1", "true", "yes"}
+    return operator_deployment.runtime.require_gpu
 
 
 def resolve_runtime_device() -> torch.device:

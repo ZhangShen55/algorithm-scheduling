@@ -39,7 +39,7 @@ REQUIRED_IGNORE_GROUPS = (
 )
 
 REGISTRY_WHEEL_REINCLUDE = (
-    "!wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl"
+    "!wheel/algorithm_operator_registry_client-0.2.0-py3-none-any.whl"
 )
 
 ALLOWED_REINCLUDES = {
@@ -405,7 +405,7 @@ def _validate_git_inputs(
             MODEL_ASSET_ROOTS.get(path.partition("/")[0], ()),
         )
         and not path.endswith(
-            "/wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl"
+            "/wheel/algorithm_operator_registry_client-0.2.0-py3-none-any.whl"
         )
         and PurePosixPath(path).name not in IGNORABLE_UNTRACKED_NAMES
         and ".vscode" not in PurePosixPath(path).parts

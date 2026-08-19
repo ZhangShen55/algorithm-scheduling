@@ -1,5 +1,24 @@
 # Change Ledger
 
+## 2026-08-19 - 统一容量租约与在线 OCR apply 中间收口
+
+- 公共注册包统一严格解析八算子 `[platform]` 和 `[runtime].require_gpu`，容量只接受正整数；
+  八份根/部署 TOML、Compose 24 实例和注册预检已切换到 TOML 权威，旧平台/GPU同义环境变量
+  已移除，实例身份、Token、服务 URL、GPU 绑定和单 worker 继续由 Compose 管理。
+- Redis 活跃租约成为分发占用权威，`reported_inflight` 只做差异观测；Control 增加可选工作
+  上下文、补绑和实例活跃租约查询，不增加逐租约 PostgreSQL 写入。
+- Orchestrator、Vision Orchestrator 和 Online Gateway 已按真实工作单元申请、续租和释放容量；
+  PPT OCR/关键词按单图租赁并保留部分结果，在线网关新增单图 OCR 和 72/50 MiB 双边界。
+- 本地中间证据：配置/Compose/预检/wheel 合同 `118 passed`，PPT 工作项恢复 `4 passed`，八算子
+  项目测试分别为 `22/58/54/175/78/100/75/25 passed`。这些证据尚未绑定最终 Git SHA，不能
+  替代四服务运行、真实跨服务泳道、24 实例重建和精确旧镜像清理。
+- 平台完整回归修复 4 个部署替身漂移后复跑终态为 `2579 passed、3 skipped、27 warnings`；
+  3 个跳过项仅因本地未提供 canonical FaceRec 集成所需的 `OPERATOR_REGISTRY_TOKEN`，不是功能
+  失败。Ruff、目标范围 strict Mypy（106 个源文件）、变更部署脚本 strict Mypy、compileall、
+  Harness 一致性、OpenSpec strict 与 `git diff --check` 均通过。
+- `docs/运维可视化平台详细设计文档-v1.md` 是用户未跟踪且明确排除的草稿，本轮未修改；因此
+  OpenSpec `10.3` 在总体设计已更新后仍保持未完成。
+
 ## 2026-08-19 - 统一算子容量、可归属租约与在线 OCR Harness 规划基线
 
 - 新增独立 Harness 场景 `scenarios/unified-operator-capacity-leases-and-online-ocr.md`，对应

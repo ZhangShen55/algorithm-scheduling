@@ -9,11 +9,16 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 
 from packages.platform_common.config import PlatformSettings
 from packages.platform_common.operator_registry import (
+    ActiveCapacityLease,
     CapacityLease,
+    CapacityLeaseContextConflictError,
     CapacityLeaseNotFoundError,
     CapacityUnavailableError,
+    LeaseContextStatus,
+    OperatorActiveLeases,
     OperatorInstance,
     OperatorInstanceNotFoundError,
+    WorkContext,
 )
 
 REGISTRY_TOKEN = "registry-test-token"
@@ -25,6 +30,9 @@ class FakeOperatorRegistry:
         self.instances: dict[str, OperatorInstance] = {}
         self.no_capacity = False
         self.missing_release = False
+        self.missing_context_lease = False
+        self.conflicting_context_lease = False
+        self.last_work_context: WorkContext | None = None
 
     def register(self, instance: OperatorInstance) -> OperatorInstance:
         self.instances[instance.instance_id] = instance
@@ -49,15 +57,68 @@ class FakeOperatorRegistry:
     def list_instances(self) -> list[OperatorInstance]:
         return list(self.instances.values())
 
-    def lease(self, capability: str, ttl_seconds: int) -> CapacityLease:
+    def lease(
+        self,
+        capability: str,
+        ttl_seconds: int,
+        work_context: WorkContext | None = None,
+    ) -> CapacityLease:
         if self.no_capacity:
             raise CapacityUnavailableError(capability)
+        self.last_work_context = work_context
         return CapacityLease(
             lease_id="lease-001",
             instance_id="vbas-gpu0",
             capability=capability,
             service_url="http://127.0.0.1:19001",
             expires_at=datetime.now(UTC),
+            work_context=work_context,
+        )
+
+    def bind_lease_context(
+        self,
+        lease_id: str,
+        work_context: WorkContext,
+    ) -> CapacityLease:
+        if self.missing_context_lease:
+            raise CapacityLeaseNotFoundError(lease_id)
+        if self.conflicting_context_lease:
+            raise CapacityLeaseContextConflictError(lease_id)
+        self.last_work_context = work_context
+        return CapacityLease(
+            lease_id=lease_id,
+            instance_id="vbas-gpu0",
+            capability="teacher_behavior",
+            service_url="http://127.0.0.1:19001",
+            expires_at=datetime.now(UTC),
+            work_context=work_context,
+        )
+
+    def list_active_leases(self, instance_id: str) -> OperatorActiveLeases:
+        if instance_id == "missing":
+            raise OperatorInstanceNotFoundError(instance_id)
+        now = datetime.now(UTC)
+        return OperatorActiveLeases(
+            instance_id=instance_id,
+            active_lease_count=1,
+            reported_inflight=2,
+            attribution_difference=1,
+            leases=(
+                ActiveCapacityLease(
+                    lease_id="lease-001",
+                    instance_id=instance_id,
+                    capability="teacher_behavior",
+                    service_url="http://127.0.0.1:19001",
+                    acquired_at=now,
+                    expires_at=now,
+                    context_status=(
+                        LeaseContextStatus.BOUND
+                        if self.last_work_context is not None
+                        else LeaseContextStatus.UNBOUND
+                    ),
+                    work_context=self.last_work_context,
+                ),
+            ),
         )
 
     def release(self, lease_id: str) -> None:
@@ -106,8 +167,25 @@ class UnavailableOperatorRegistry:
         del instance_id, lifecycle
         self._raise()
 
-    def lease(self, capability: str, ttl_seconds: int) -> CapacityLease:
-        del capability, ttl_seconds
+    def lease(
+        self,
+        capability: str,
+        ttl_seconds: int,
+        work_context: WorkContext | None = None,
+    ) -> CapacityLease:
+        del capability, ttl_seconds, work_context
+        self._raise()
+
+    def bind_lease_context(
+        self,
+        lease_id: str,
+        work_context: WorkContext,
+    ) -> CapacityLease:
+        del lease_id, work_context
+        self._raise()
+
+    def list_active_leases(self, instance_id: str) -> OperatorActiveLeases:
+        del instance_id
         self._raise()
 
     def release(self, lease_id: str) -> None:
@@ -290,7 +368,7 @@ def test_registration_accepts_exact_configured_docker_or_local_origin(
     assert response.status_code == 201
 
 
-def test_release_missing_lease_returns_explicit_not_found(tmp_path: Path) -> None:
+def test_release_missing_lease_is_idempotent(tmp_path: Path) -> None:
     registry = FakeOperatorRegistry()
     registry.missing_release = True
     settings = PlatformSettings(
@@ -305,9 +383,10 @@ def test_release_missing_lease_returns_explicit_not_found(tmp_path: Path) -> Non
             json={"lease_id": "missing-lease"},
         )
 
-    assert response.status_code == 404
+    assert response.status_code == 200
     assert response.json() == {
-        "detail": "算子容量租约不存在或已过期: missing-lease"
+        "lease_id": "missing-lease",
+        "status": "ALREADY_RELEASED",
     }
 
 
@@ -366,6 +445,162 @@ def test_capacity_unavailable_returns_http_503(tmp_path: Path) -> None:
 
     assert response.status_code == 503
     assert "ocr" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("invalid_capacity", [0, -1, True, 1.5, "2"])
+def test_registration_rejects_non_positive_or_non_integer_capacity(
+    tmp_path: Path,
+    invalid_capacity: object,
+) -> None:
+    registry = FakeOperatorRegistry()
+    settings = PlatformSettings(
+        course_root=tmp_path / "course",
+        result_root=tmp_path / "result",
+        operator_registry_token=REGISTRY_TOKEN,
+        trusted_operator_service_urls={"ocr-gpu0": "http://ocr-gpu0:8866"},
+    )
+    app = create_control_app(operator_registry=registry, settings=settings)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/operator-instances/register",
+            headers=REGISTRY_HEADERS,
+            json={
+                "instance_id": "ocr-gpu0",
+                "operator_code": "ocr",
+                "capabilities": ["ocr"],
+                "service_url": "http://ocr-gpu0:8866",
+                "declared_capacity": invalid_capacity,
+            },
+        )
+
+    assert response.status_code == 422
+    assert registry.instances == {}
+
+
+def test_capacity_lease_accepts_optional_work_context_without_breaking_legacy_request(
+    tmp_path: Path,
+) -> None:
+    registry = FakeOperatorRegistry()
+    settings = PlatformSettings(course_root=tmp_path / "course", result_root=tmp_path / "result")
+    app = create_control_app(operator_registry=registry, settings=settings)
+    context = {
+        "source_service": "online-gateway-service",
+        "work_type": "online_ocr",
+        "work_id": "request-001",
+        "trace_id": "trace-001",
+    }
+
+    with TestClient(app) as client:
+        legacy = client.post(
+            "/internal/operator-instances/lease",
+            json={"capability": "ocr", "ttl_seconds": 60},
+        )
+        contextual = client.post(
+            "/internal/operator-instances/lease",
+            json={"capability": "ocr", "ttl_seconds": 60, "work_context": context},
+        )
+
+    assert legacy.status_code == 200
+    assert legacy.json()["work_context"] is None
+    assert contextual.status_code == 200
+    assert contextual.json()["work_context"] == {
+        **context,
+        "task_id": None,
+        "node_id": None,
+        "item_id": None,
+    }
+    assert registry.last_work_context == WorkContext(**context)
+
+
+def test_capacity_lease_context_binding_maps_success_not_found_and_conflict(
+    tmp_path: Path,
+) -> None:
+    registry = FakeOperatorRegistry()
+    settings = PlatformSettings(course_root=tmp_path / "course", result_root=tmp_path / "result")
+    app = create_control_app(operator_registry=registry, settings=settings)
+    payload = {
+        "lease_id": "lease-001",
+        "work_context": {
+            "source_service": "orchestrator-service",
+            "work_type": "node",
+            "work_id": "node-7",
+            "task_id": "course-001",
+            "node_id": "7",
+        },
+    }
+
+    with TestClient(app) as client:
+        bound = client.post("/internal/operator-instances/lease/context", json=payload)
+        registry.missing_context_lease = True
+        missing = client.post("/internal/operator-instances/lease/context", json=payload)
+        registry.missing_context_lease = False
+        registry.conflicting_context_lease = True
+        conflict = client.post("/internal/operator-instances/lease/context", json=payload)
+
+    assert bound.status_code == 200
+    assert bound.json()["work_context"]["task_id"] == "course-001"
+    assert missing.status_code == 404
+    assert conflict.status_code == 409
+
+
+@pytest.mark.parametrize(
+    "work_context",
+    [
+        {
+            "source_service": "orchestrator-service",
+            "work_type": "node",
+            "work_id": "node-7",
+            "request_body": "not-allowed",
+        },
+        {
+            "source_service": "orchestrator-service",
+            "work_type": "node",
+            "work_id": "x" * 201,
+        },
+    ],
+)
+def test_capacity_lease_rejects_unbounded_or_extra_work_context(
+    tmp_path: Path,
+    work_context: dict[str, str],
+) -> None:
+    registry = FakeOperatorRegistry()
+    settings = PlatformSettings(course_root=tmp_path / "course", result_root=tmp_path / "result")
+    app = create_control_app(operator_registry=registry, settings=settings)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/internal/operator-instances/lease",
+            json={"capability": "ocr", "work_context": work_context},
+        )
+
+    assert response.status_code == 422
+    assert registry.last_work_context is None
+
+
+def test_operations_active_leases_distinguishes_bound_unbound_and_missing_instance(
+    tmp_path: Path,
+) -> None:
+    registry = FakeOperatorRegistry()
+    settings = PlatformSettings(course_root=tmp_path / "course", result_root=tmp_path / "result")
+    app = create_control_app(operator_registry=registry, settings=settings)
+
+    with TestClient(app) as client:
+        unbound = client.get("/ops/operator-instances/vbas-gpu0/active-leases")
+        registry.last_work_context = WorkContext(
+            source_service="orchestrator-service",
+            work_type="node",
+            work_id="node-7",
+            task_id="course-001",
+        )
+        bound = client.get("/ops/operator-instances/vbas-gpu0/active-leases")
+        missing = client.get("/ops/operator-instances/missing/active-leases")
+
+    assert unbound.status_code == 200
+    assert unbound.json()["leases"][0]["context_status"] == "UNBOUND"
+    assert bound.json()["leases"][0]["context_status"] == "BOUND"
+    assert bound.json()["attribution_difference"] == 1
+    assert missing.status_code == 404
 
 
 def test_capacity_lease_can_be_renewed(tmp_path: Path) -> None:
@@ -431,6 +666,18 @@ def test_unknown_capacity_lease_renewal_returns_http_404(tmp_path: Path) -> None
         ),
         (
             "POST",
+            "/internal/operator-instances/lease/context",
+            {
+                "lease_id": "lease-001",
+                "work_context": {
+                    "source_service": "orchestrator-service",
+                    "work_type": "node",
+                    "work_id": "node-1",
+                },
+            },
+        ),
+        (
+            "POST",
             "/internal/operator-instances/release",
             {"lease_id": "lease-001"},
         ),
@@ -440,6 +687,7 @@ def test_unknown_capacity_lease_renewal_returns_http_404(tmp_path: Path) -> None
             {"lease_id": "lease-001", "ttl_seconds": 60},
         ),
         ("GET", "/ops/operator-instances", None),
+        ("GET", "/ops/operator-instances/vbas-gpu0/active-leases", None),
         ("POST", "/ops/operator-instances/vbas-gpu0/drain", None),
     ],
 )

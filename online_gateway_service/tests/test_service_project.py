@@ -36,6 +36,7 @@ def test_canonical_entrypoint_exposes_online_routes() -> None:
         "/api/online/vbas/analyze",
         "/api/online/face/recognize",
         "/api/online/image-quality/detect",
+        "/api/online/ocr/recognize",
     }
     assert str(app.url_path_for("stream_realtime_asr")) == "/api/online/asr/stream"
 

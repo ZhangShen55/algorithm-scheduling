@@ -2,11 +2,25 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from app.core.config import PROJECT_ROOT, Settings
+from app.core.config import PROJECT_ROOT, Settings, resolve_config_path
 
 
 class PackagingSecurityTests(unittest.TestCase):
+    def test_relative_config_path_is_resolved_from_project_root(self):
+        original_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            try:
+                os.chdir(temporary_directory)
+                with patch.dict(os.environ, {"CONFIG_PATH": "configs/local.toml"}):
+                    self.assertEqual(
+                        resolve_config_path(),
+                        (PROJECT_ROOT / "configs/local.toml").resolve(),
+                    )
+            finally:
+                os.chdir(original_cwd)
+
     def test_model_paths_default_to_image_internal_model_directory(self):
         with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as cfg:
             cfg.write(

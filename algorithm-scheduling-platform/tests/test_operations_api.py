@@ -213,6 +213,8 @@ def test_operations_operator_snapshot_exposes_capacity_mismatch(tmp_path: Path) 
             "declared_capacity": 2,
             "reported_inflight": 2,
             "active_lease_count": 0,
+            "schedulable_used": 0,
+            "attribution_difference": 2,
             "capacity_mismatch": True,
         }
     ]

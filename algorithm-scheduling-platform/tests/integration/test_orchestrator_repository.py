@@ -116,7 +116,7 @@ def test_task_type_status_is_derived_from_node_facts(repository: CourseRepositor
     assert partially_completed.status is NodeStatus.RUNNING
     assert partially_completed.reason == "正在处理节点: COURSE_OVERVIEW"
 
-    overview = repository.claim_ready_node("text_analysis", "worker-a")
+    overview = repository.claim_ready_node("course_overviews", "worker-a")
     assert overview is not None and overview.id == overview_node_id
     repository.transition_node(overview_node_id, NodeStatus.RUNNING, "正在生成课程脑图")
     repository.complete_node(

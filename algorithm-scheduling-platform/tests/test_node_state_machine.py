@@ -10,6 +10,10 @@ def test_node_state_machine_accepts_normal_execution_path() -> None:
     validate_node_transition(NodeStatus.RUNNING, NodeStatus.COMPLETED)
 
 
+def test_running_work_item_can_wait_for_operator_capacity_again() -> None:
+    validate_node_transition(NodeStatus.RUNNING, NodeStatus.WAITING_OPERATOR)
+
+
 def test_node_state_machine_rejects_terminal_state_regression() -> None:
     with pytest.raises(InvalidNodeTransition, match="不允许"):
         validate_node_transition(NodeStatus.COMPLETED, NodeStatus.RUNNING)

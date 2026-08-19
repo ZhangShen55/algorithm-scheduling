@@ -1,10 +1,23 @@
 import tomli
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from packages.operator_registry_client import load_operator_deployment_settings
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def resolve_config_path(config_path: str | Path | None = None) -> Path:
+    selected = Path(
+        config_path
+        if config_path is not None
+        else os.getenv("CONFIG_PATH", PROJECT_ROOT / "config.toml")
+    ).expanduser()
+    if not selected.is_absolute():
+        selected = PROJECT_ROOT / selected
+    return selected.resolve()
 
 
 def _load_toml(path: str) -> dict:
@@ -15,10 +28,11 @@ def _load_toml(path: str) -> dict:
 @dataclass
 class Settings:
     # 从环境变量读取 config.toml 路径
-    config_path: str = os.getenv("CONFIG_PATH", str(PROJECT_ROOT / "config.toml"))
+    config_path: str = field(default_factory=lambda: str(resolve_config_path()))
     _cfg: dict = None  # 实际配置字典
 
     def __post_init__(self):
+        self.config_path = str(resolve_config_path(self.config_path))
         self._cfg = _load_toml(self.config_path)
         model_paths = self._cfg.get("model_paths", {})
         for key, value in model_paths.items():
@@ -135,3 +149,7 @@ class Settings:
 
 
 settings = Settings()
+operator_deployment = load_operator_deployment_settings(
+    settings.config_path,
+    default_capacity=4,
+)

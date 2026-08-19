@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "case_id": "ONLINE-OCR-001",
+      "title": "单图 OCR 通过网关路由到共享 OCR 实例",
+      "expected_business_code": 0
+    },
+    {
+      "case_id": "ONLINE-OCR-002",
+      "title": "Base64 解码后超过 50 MiB 时在租约前拒绝",
+      "expected_business_code": 40001
+    },
+    {
+      "case_id": "ONLINE-OCR-003",
+      "title": "HTTP 正文超过 72 MiB 时在业务解析前拒绝",
+      "expected_business_code": 40001
+    }
+  ]
+}

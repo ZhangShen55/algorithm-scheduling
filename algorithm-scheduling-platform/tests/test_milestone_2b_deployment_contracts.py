@@ -11,7 +11,9 @@ import yaml  # type: ignore[import-untyped]
 from deploy.scripts.deployment_contracts import (
     DeploymentContractError,
     validate_existing_algorithm_containers,
+    validate_operator_config_mounts,
     validate_operator_service_contracts,
+    validate_operator_toml_contract,
     validate_registry_wheel_dockerfile,
     validate_release_architecture,
     validate_release_tag,
@@ -82,6 +84,31 @@ def test_operator_service_contract_accepts_canonical_compose() -> None:
     )
 
     validate_operator_service_contracts(document["services"])
+    validate_operator_config_mounts(
+        document["services"],
+        compose_directory=OPERATOR_COMPOSE.parent,
+    )
+
+
+def test_operator_toml_contract_rejects_invalid_capacity(tmp_path: Path) -> None:
+    config = tmp_path / "ocr.toml"
+    config.write_text(
+        """
+[platform]
+registration_enabled = true
+control_service_url = "http://control-service:18100"
+heartbeat_interval_seconds = 5
+max_concurrent_requests = 0
+[runtime]
+require_gpu = true
+[ocr]
+image_max_bytes = 52428800
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DeploymentContractError, match="max_concurrent_requests"):
+        validate_operator_toml_contract("ocr-gpu0", config)
 
 
 @pytest.mark.parametrize(
@@ -90,7 +117,7 @@ def test_operator_service_contract_accepts_canonical_compose() -> None:
         "FROM python:3.11\nCOPY app /app\n",
         (
             "FROM python:3.11\n"
-            "COPY wheel/algorithm_operator_registry_client-0.2.0-py3-none-any.whl "
+            "COPY wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl "
             "/tmp/client.whl\n"
         ),
     ],
@@ -100,7 +127,7 @@ def test_dep_010_and_011_require_the_exact_registry_wheel(source: str) -> None:
         validate_registry_wheel_dockerfile(source, "operator/Dockerfile")
 
     validate_registry_wheel_dockerfile(
-        "COPY wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl "
+        "COPY wheel/algorithm_operator_registry_client-0.2.0-py3-none-any.whl "
         "/tmp/client.whl\n",
         "operator/Dockerfile",
     )

@@ -7,7 +7,7 @@ COPY app /workspace/app
 COPY requirements.txt /workspace/requirements.txt
 COPY wheel /workspace/wheel
 
-ARG OPERATOR_REGISTRY_CLIENT_WHEEL=algorithm_operator_registry_client-0.1.0-py3-none-any.whl
+ARG OPERATOR_REGISTRY_CLIENT_WHEEL=algorithm_operator_registry_client-0.2.0-py3-none-any.whl
 RUN pip install --no-deps wheel/${OPERATOR_REGISTRY_CLIENT_WHEEL} \
     && pip install --no-cache-dir -r requirements.txt
 

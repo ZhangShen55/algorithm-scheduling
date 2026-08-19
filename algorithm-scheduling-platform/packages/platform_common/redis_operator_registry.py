@@ -8,13 +8,19 @@ from uuid import uuid4
 from redis import Redis
 
 from packages.platform_common.operator_registry import (
+    ActiveCapacityLease,
     CapacityLease,
+    CapacityLeaseContextConflictError,
     CapacityLeaseNotFoundError,
     CapacityUnavailableError,
+    LeaseContextStatus,
+    OperatorActiveLeases,
     OperatorCode,
     OperatorInstance,
     OperatorInstanceNotFoundError,
     OperatorLifecycle,
+    WorkContext,
+    validate_positive_int,
 )
 
 _REGISTER_SCRIPT = """
@@ -115,6 +121,10 @@ for _, instance_id in ipairs(instance_ids) do
         and redis.call('HGET', instance_key, 'lifecycle') == 'ONLINE'
         and redis.call('HGET', instance_key, 'model_ready') == '1' then
         local leases_key = ARGV[5] .. instance_id
+        local expired_lease_ids = redis.call('ZRANGEBYSCORE', leases_key, '-inf', now_ms)
+        for _, expired_lease_id in ipairs(expired_lease_ids) do
+            redis.call('DEL', ARGV[6] .. expired_lease_id)
+        end
         redis.call('ZREMRANGEBYSCORE', leases_key, '-inf', now_ms)
         local lease_ids = redis.call('ZRANGE', leases_key, 0, -1)
         for _, existing_lease_id in ipairs(lease_ids) do
@@ -124,11 +134,10 @@ for _, instance_id in ipairs(instance_ids) do
                 redis.call('DEL', existing_lease_key)
             end
         end
-        local active_leases = redis.call('ZCARD', leases_key)
-        local reported_inflight = tonumber(redis.call('HGET', instance_key, 'inflight') or '0')
-        local used = math.max(active_leases, reported_inflight)
         local capacity = tonumber(redis.call('HGET', instance_key, 'declared_capacity') or '0')
-        if used < capacity then
+        local active_leases = redis.call('ZCARD', leases_key)
+        if capacity and capacity > 0 and capacity == math.floor(capacity)
+            and active_leases < capacity then
             local expires_at = now_ms + tonumber(ARGV[1])
             redis.call('ZADD', leases_key, expires_at, ARGV[2])
             local lease_key = ARGV[6] .. ARGV[2]
@@ -136,10 +145,18 @@ for _, instance_id in ipairs(instance_ids) do
                 'instance_id', instance_id,
                 'capability', ARGV[7],
                 'service_url', redis.call('HGET', instance_key, 'service_url'),
+                'acquired_at', now_ms,
                 'expires_at', expires_at,
+                'work_context', ARGV[8],
                 'redis_run_id', redis_run_id)
             redis.call('PEXPIRE', lease_key, ARGV[1])
-            return {instance_id, redis.call('HGET', instance_key, 'service_url'), expires_at}
+            return {
+                instance_id,
+                redis.call('HGET', instance_key, 'service_url'),
+                now_ms,
+                expires_at,
+                ARGV[8]
+            }
         end
     end
 end
@@ -200,11 +217,57 @@ if redis.call('HGET', KEYS[1], 'redis_run_id') ~= redis_run_id then
 end
 local capability = redis.call('HGET', KEYS[1], 'capability')
 local service_url = redis.call('HGET', KEYS[1], 'service_url')
+local acquired_at = redis.call('HGET', KEYS[1], 'acquired_at')
+local work_context = redis.call('HGET', KEYS[1], 'work_context') or ''
 local expires_at = now_ms + tonumber(ARGV[1])
 redis.call('ZADD', leases_key, expires_at, ARGV[3])
 redis.call('HSET', KEYS[1], 'expires_at', expires_at)
 redis.call('PEXPIRE', KEYS[1], ARGV[1])
-return {instance_id, capability, service_url, expires_at}
+return {instance_id, capability, service_url, acquired_at, expires_at, work_context}
+"""
+
+
+_BIND_LEASE_CONTEXT_SCRIPT = """
+local instance_id = redis.call('HGET', KEYS[1], 'instance_id')
+if not instance_id then
+    return {0}
+end
+local server_info = redis.call('INFO', 'server')
+local redis_run_id = string.match(server_info, 'run_id:([%w]+)')
+if not redis_run_id then
+    return redis.error_reply('Redis run_id unavailable')
+end
+local redis_time = redis.call('TIME')
+local now_ms = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2]) / 1000)
+local leases_key = ARGV[1] .. instance_id
+local current_expiry = redis.call('ZSCORE', leases_key, ARGV[2])
+local instance_key = ARGV[3] .. instance_id
+local heartbeat_key = ARGV[4] .. instance_id
+if not current_expiry
+    or tonumber(current_expiry) <= now_ms
+    or redis.call('EXISTS', instance_key) == 0
+    or redis.call('EXISTS', heartbeat_key) == 0
+    or redis.call('HGET', KEYS[1], 'redis_run_id') ~= redis_run_id then
+    redis.call('ZREM', leases_key, ARGV[2])
+    redis.call('DEL', KEYS[1])
+    return {0}
+end
+local existing_context = redis.call('HGET', KEYS[1], 'work_context') or ''
+if existing_context ~= '' and existing_context ~= ARGV[5] then
+    return {-1}
+end
+if existing_context == '' then
+    redis.call('HSET', KEYS[1], 'work_context', ARGV[5])
+end
+return {
+    1,
+    instance_id,
+    redis.call('HGET', KEYS[1], 'capability'),
+    redis.call('HGET', KEYS[1], 'service_url'),
+    redis.call('HGET', KEYS[1], 'acquired_at'),
+    redis.call('HGET', KEYS[1], 'expires_at'),
+    ARGV[5]
+}
 """
 
 
@@ -216,6 +279,10 @@ if not redis_run_id then
 end
 local redis_time = redis.call('TIME')
 local now_ms = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2]) / 1000)
+local expired_lease_ids = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', now_ms)
+for _, expired_lease_id in ipairs(expired_lease_ids) do
+    redis.call('DEL', ARGV[1] .. expired_lease_id)
+end
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now_ms)
 local lease_ids = redis.call('ZRANGE', KEYS[1], 0, -1)
 for _, lease_id in ipairs(lease_ids) do
@@ -226,6 +293,45 @@ for _, lease_id in ipairs(lease_ids) do
     end
 end
 return redis.call('ZCARD', KEYS[1])
+"""
+
+
+_LIST_ACTIVE_LEASES_SCRIPT = """
+if redis.call('EXISTS', KEYS[1]) == 0 then
+    return {}
+end
+local server_info = redis.call('INFO', 'server')
+local redis_run_id = string.match(server_info, 'run_id:([%w]+)')
+if not redis_run_id then
+    return redis.error_reply('Redis run_id unavailable')
+end
+local redis_time = redis.call('TIME')
+local now_ms = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2]) / 1000)
+local expired_lease_ids = redis.call('ZRANGEBYSCORE', KEYS[2], '-inf', now_ms)
+for _, expired_lease_id in ipairs(expired_lease_ids) do
+    redis.call('DEL', ARGV[1] .. expired_lease_id)
+end
+redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now_ms)
+local result = {redis.call('HGET', KEYS[1], 'inflight') or '0'}
+local lease_ids = redis.call('ZRANGE', KEYS[2], 0, -1)
+for _, lease_id in ipairs(lease_ids) do
+    local lease_key = ARGV[1] .. lease_id
+    if redis.call('HGET', lease_key, 'redis_run_id') ~= redis_run_id then
+        redis.call('ZREM', KEYS[2], lease_id)
+        redis.call('DEL', lease_key)
+    else
+        table.insert(result, cjson.encode({
+            lease_id = lease_id,
+            instance_id = redis.call('HGET', lease_key, 'instance_id'),
+            capability = redis.call('HGET', lease_key, 'capability'),
+            service_url = redis.call('HGET', lease_key, 'service_url'),
+            acquired_at = tonumber(redis.call('HGET', lease_key, 'acquired_at')),
+            expires_at = tonumber(redis.call('HGET', lease_key, 'expires_at')),
+            work_context = redis.call('HGET', lease_key, 'work_context') or ''
+        }))
+    end
+end
+return result
 """
 
 
@@ -257,6 +363,10 @@ class RedisOperatorRegistry:
         return f"{self._prefix}instances"
 
     def register(self, instance: OperatorInstance) -> OperatorInstance:
+        validate_positive_int(
+            instance.declared_capacity,
+            field_name="算子声明容量",
+        )
         instance_key = self._instance_key(instance.instance_id)
         heartbeat_at = datetime.now(UTC)
         self._client.eval(
@@ -349,7 +459,12 @@ class RedisOperatorRegistry:
             raise OperatorInstanceNotFoundError(instance_id)
         return self._get_instance(instance_id)
 
-    def lease(self, capability: str, ttl_seconds: int) -> CapacityLease:
+    def lease(
+        self,
+        capability: str,
+        ttl_seconds: int,
+        work_context: WorkContext | None = None,
+    ) -> CapacityLease:
         if ttl_seconds <= 0:
             raise ValueError("租约 TTL 必须大于 0")
         lease_id = str(uuid4())
@@ -367,16 +482,56 @@ class RedisOperatorRegistry:
                 f"{self._prefix}leases:",
                 f"{self._prefix}lease:",
                 capability,
+                (
+                    json.dumps(work_context.as_dict(), separators=(",", ":"))
+                    if work_context is not None
+                    else ""
+                ),
             ),
         )
         if not result:
             raise CapacityUnavailableError(capability)
-        return CapacityLease(
+        return self._capacity_lease_from_values(
             lease_id=lease_id,
             instance_id=str(result[0]),
             capability=capability,
             service_url=str(result[1]),
-            expires_at=datetime.fromtimestamp(int(result[2]) / 1000, tz=UTC),
+            acquired_at_ms=int(result[2]),
+            expires_at_ms=int(result[3]),
+            work_context_json=str(result[4]),
+        )
+
+    def bind_lease_context(
+        self,
+        lease_id: str,
+        work_context: WorkContext,
+    ) -> CapacityLease:
+        context_json = json.dumps(work_context.as_dict(), separators=(",", ":"))
+        result = cast(
+            list[Any],
+            self._client.eval(
+                _BIND_LEASE_CONTEXT_SCRIPT,
+                1,
+                f"{self._prefix}lease:{lease_id}",
+                f"{self._prefix}leases:",
+                lease_id,
+                f"{self._prefix}instance:",
+                f"{self._prefix}heartbeat:",
+                context_json,
+            ),
+        )
+        if not result or int(result[0]) == 0:
+            raise CapacityLeaseNotFoundError(lease_id)
+        if int(result[0]) == -1:
+            raise CapacityLeaseContextConflictError(lease_id)
+        return self._capacity_lease_from_values(
+            lease_id=lease_id,
+            instance_id=str(result[1]),
+            capability=str(result[2]),
+            service_url=str(result[3]),
+            acquired_at_ms=int(result[4]),
+            expires_at_ms=int(result[5]),
+            work_context_json=str(result[6]),
         )
 
     def release(self, lease_id: str) -> None:
@@ -401,6 +556,56 @@ class RedisOperatorRegistry:
             ),
         )
 
+    def list_active_leases(self, instance_id: str) -> OperatorActiveLeases:
+        result = cast(
+            list[Any],
+            self._client.eval(
+                _LIST_ACTIVE_LEASES_SCRIPT,
+                2,
+                self._instance_key(instance_id),
+                f"{self._prefix}leases:{instance_id}",
+                f"{self._prefix}lease:",
+            ),
+        )
+        if not result:
+            raise OperatorInstanceNotFoundError(instance_id)
+        reported_inflight = int(result[0])
+        leases: list[ActiveCapacityLease] = []
+        for encoded in result[1:]:
+            raw = cast(dict[str, Any], json.loads(str(encoded)))
+            context_json = str(raw.get("work_context") or "")
+            work_context = self._work_context_from_json(context_json)
+            leases.append(
+                ActiveCapacityLease(
+                    lease_id=str(raw["lease_id"]),
+                    instance_id=str(raw["instance_id"]),
+                    capability=str(raw["capability"]),
+                    service_url=str(raw["service_url"]),
+                    acquired_at=datetime.fromtimestamp(
+                        int(raw["acquired_at"]) / 1000,
+                        tz=UTC,
+                    ),
+                    expires_at=datetime.fromtimestamp(
+                        int(raw["expires_at"]) / 1000,
+                        tz=UTC,
+                    ),
+                    context_status=(
+                        LeaseContextStatus.BOUND
+                        if work_context is not None
+                        else LeaseContextStatus.UNBOUND
+                    ),
+                    work_context=work_context,
+                )
+            )
+        active_count = len(leases)
+        return OperatorActiveLeases(
+            instance_id=instance_id,
+            active_lease_count=active_count,
+            reported_inflight=reported_inflight,
+            attribution_difference=reported_inflight - active_count,
+            leases=tuple(leases),
+        )
+
     def renew(self, lease_id: str, ttl_seconds: int) -> CapacityLease:
         if ttl_seconds <= 0:
             raise ValueError("租约 TTL 必须大于 0")
@@ -420,12 +625,43 @@ class RedisOperatorRegistry:
         )
         if not result:
             raise CapacityLeaseNotFoundError(lease_id)
-        return CapacityLease(
+        return self._capacity_lease_from_values(
             lease_id=lease_id,
             instance_id=str(result[0]),
             capability=str(result[1]),
             service_url=str(result[2]),
-            expires_at=datetime.fromtimestamp(int(result[3]) / 1000, tz=UTC),
+            acquired_at_ms=int(result[3]),
+            expires_at_ms=int(result[4]),
+            work_context_json=str(result[5]),
+        )
+
+    @staticmethod
+    def _work_context_from_json(value: str) -> WorkContext | None:
+        if not value:
+            return None
+        raw = cast(dict[str, Any], json.loads(value))
+        return WorkContext(**raw)
+
+    @classmethod
+    def _capacity_lease_from_values(
+        cls,
+        *,
+        lease_id: str,
+        instance_id: str,
+        capability: str,
+        service_url: str,
+        acquired_at_ms: int,
+        expires_at_ms: int,
+        work_context_json: str,
+    ) -> CapacityLease:
+        return CapacityLease(
+            lease_id=lease_id,
+            instance_id=instance_id,
+            capability=capability,
+            service_url=service_url,
+            acquired_at=datetime.fromtimestamp(acquired_at_ms / 1000, tz=UTC),
+            expires_at=datetime.fromtimestamp(expires_at_ms / 1000, tz=UTC),
+            work_context=cls._work_context_from_json(work_context_json),
         )
 
     def _get_instance(self, instance_id: str) -> OperatorInstance:

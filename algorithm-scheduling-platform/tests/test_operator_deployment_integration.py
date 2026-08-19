@@ -1,10 +1,94 @@
+import ast
+import json
+import tomllib
 from pathlib import Path
 
 import yaml
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
-REGISTRY_REQUIREMENT = "algorithm-operator-registry-client==0.1.0"
-REGISTRY_WHEEL = "algorithm_operator_registry_client-0.1.0-py3-none-any.whl"
+REGISTRY_REQUIREMENT = "algorithm-operator-registry-client==0.2.0"
+REGISTRY_WHEEL = "algorithm_operator_registry_client-0.2.0-py3-none-any.whl"
+CAPACITY_BASELINE = (
+    WORKSPACE_ROOT
+    / "algorithm-scheduling-platform/harness/baselines/"
+    "unified-operator-capacity-leases-and-online-ocr.json"
+)
+
+
+def _declared_routes(project: str) -> set[tuple[str, str]]:
+    routes: set[tuple[str, str]] = set()
+    for source_path in (WORKSPACE_ROOT / project / "app").rglob("*.py"):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for decorator in node.decorator_list:
+                if not isinstance(decorator, ast.Call) or not decorator.args:
+                    continue
+                function = decorator.func
+                if not isinstance(function, ast.Attribute):
+                    continue
+                method = function.attr.upper()
+                if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "WEBSOCKET"}:
+                    continue
+                path_node = decorator.args[0]
+                if isinstance(path_node, ast.Constant) and isinstance(path_node.value, str):
+                    routes.add((method, path_node.value))
+    return routes
+
+
+def test_unified_capacity_change_has_machine_readable_compatibility_baseline() -> None:
+    baseline = json.loads(CAPACITY_BASELINE.read_text(encoding="utf-8"))
+    assert baseline["baseline_git_revision"] == "bd59541"
+    capacities = baseline["approved_current_capacities"]
+    deploy_names = {
+        "asr_online": "asr_online.gpu.toml",
+        "asr_offline": "asr_offline.gpu.toml",
+        "facerec": "facerec.gpu.toml",
+        "ocr": "ocr.gpu.toml",
+        "screen_det": "screen_det.gpu.toml",
+        "ppt_slice": "ppt_slice.cpu.toml",
+        "vbas": "vbas.gpu.toml",
+        "text_analysis": "text_analysis.cpu.toml",
+    }
+
+    for project, contract in baseline["operators"].items():
+        current_routes = _declared_routes(project)
+        expected_routes = {
+            (route["method"], route["path"])
+            for route in contract["business_routes"]
+        }
+        assert expected_routes.issubset(current_routes), project
+
+        root_config = tomllib.loads(
+            (WORKSPACE_ROOT / project / "config.toml").read_text(encoding="utf-8")
+        )
+        assert root_config["platform"] == {
+            "registration_enabled": False,
+            "control_service_url": "",
+            "heartbeat_interval_seconds": 5,
+            "max_concurrent_requests": capacities[project],
+        }
+        assert root_config["runtime"]["require_gpu"] is False
+
+        deploy_config = tomllib.loads(
+            (
+                WORKSPACE_ROOT
+                / "algorithm-scheduling-platform/deploy/config/operators"
+                / deploy_names[project]
+            ).read_text(encoding="utf-8")
+        )
+        assert deploy_config["platform"]["max_concurrent_requests"] == capacities[project]
+
+    compose = yaml.safe_load(
+        (
+            WORKSPACE_ROOT
+            / "algorithm-scheduling-platform/deploy/docker-compose.operators.yml"
+        ).read_text(encoding="utf-8")
+    )
+    forbidden = set(baseline["compose_type_configuration_environment"])
+    for service in compose["services"].values():
+        assert forbidden.isdisjoint(service["environment"])
 
 
 def test_all_operator_entrypoints_install_the_shared_registry_runtime() -> None:
@@ -31,7 +115,10 @@ def test_all_operator_entrypoints_install_the_shared_registry_runtime() -> None:
             assert f'"{capability}"' in source, (project, capability)
 
     ppt_source = (WORKSPACE_ROOT / "ppt_slice/app/main.py").read_text(encoding="utf-8")
-    assert "declared_capacity=settings.MAX_CONCURRENT_TASKS" in ppt_source
+    assert (
+        "max_concurrent_requests=(\n"
+        "                operator_deployment.platform.max_concurrent_requests"
+    ) in ppt_source
     assert "inflight_provider=task_manager.get_task_count" in ppt_source
 
 
@@ -76,7 +163,7 @@ def test_asr_images_run_one_registered_uvicorn_endpoint_without_internal_nginx()
 
 def test_asr_images_use_python311_asr_environment_and_versioned_registry_wheel() -> None:
     registry_wheel = (
-        "algorithm_operator_registry_client-0.1.0-py3-none-any.whl"
+        "algorithm_operator_registry_client-0.2.0-py3-none-any.whl"
     )
     for project in ("asr_offline", "asr_online"):
         project_root = WORKSPACE_ROOT / project
@@ -95,7 +182,7 @@ def test_asr_images_use_python311_asr_environment_and_versioned_registry_wheel()
 def test_facerec_image_installs_versioned_registry_wheel() -> None:
     source = (WORKSPACE_ROOT / "facerec/docker/Dockerfile").read_text(encoding="utf-8")
 
-    assert "algorithm_operator_registry_client-0.1.0-py3-none-any.whl" in source
+    assert "algorithm_operator_registry_client-0.2.0-py3-none-any.whl" in source
     assert "pip install --no-deps" in source
 
 
@@ -251,20 +338,45 @@ def test_operator_compose_declares_restart_health_mounts_and_instance_identity()
         ),
     }
     assert set(services) == expected
+    capacities = {
+        "asr-offline": 4,
+        "asr-online": 10,
+        "ocr": 256,
+        "vbas": 128,
+        "facerec": 128,
+        "screen-det": 128,
+        "ppt-slice": 10,
+        "text-analysis": 256,
+    }
+    gpu_operators = {
+        "asr-offline",
+        "asr-online",
+        "ocr",
+        "vbas",
+        "facerec",
+        "screen-det",
+    }
+    forbidden_environment = {
+        "PLATFORM_REGISTRATION_ENABLED",
+        "PLATFORM_CONTROL_SERVICE_URL",
+        "PLATFORM_HEARTBEAT_INTERVAL_SECONDS",
+        "PLATFORM_DECLARED_CAPACITY",
+        "REQUIRE_GPU",
+        "GPU_PROCESS_NAME",
+    }
     for name, service in services.items():
         environment = service["environment"]
+        operator_name = next(
+            operator for operator in capacities if name.startswith(f"{operator}-")
+        )
         assert service["restart"] == "unless-stopped"
         assert service["networks"] == ["algorithm-platform"]
         assert "/ops/health" in " ".join(service["healthcheck"]["test"])
-        assert environment["PLATFORM_REGISTRATION_ENABLED"] == "true"
-        assert environment["PLATFORM_CONTROL_SERVICE_URL"] == (
-            "http://control-service:18100"
-        )
+        assert forbidden_environment.isdisjoint(environment)
         assert environment["PLATFORM_OPERATOR_REGISTRY_TOKEN"] == (
             "${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}"
         )
         assert environment["PLATFORM_INSTANCE_ID"] == name
-        assert int(environment["PLATFORM_DECLARED_CAPACITY"]) > 0
         assert environment["UVICORN_WORKERS"] == "1"
         volume_targets = {volume["target"]: volume for volume in service["volumes"]}
         assert "/data/course" in volume_targets
@@ -276,3 +388,16 @@ def test_operator_compose_declares_restart_health_mounts_and_instance_identity()
         ]
         assert len(config_volumes) == 1
         assert config_volumes[0]["read_only"] is True
+        config_path = (
+            compose_path.parent / config_volumes[0]["source"]
+        ).resolve()
+        config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        assert config["platform"] == {
+            "registration_enabled": True,
+            "control_service_url": "http://control-service:18100",
+            "heartbeat_interval_seconds": 5,
+            "max_concurrent_requests": capacities[operator_name],
+        }
+        assert config["runtime"]["require_gpu"] is (
+            operator_name in gpu_operators
+        )

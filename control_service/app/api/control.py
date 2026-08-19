@@ -3,14 +3,14 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 from secrets import compare_digest
-from typing import Any, Protocol, cast
+from typing import Annotated, Any, Protocol, cast
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -24,13 +24,16 @@ from packages.platform_common.operator_operations import (
 )
 from packages.platform_common.operator_registry import (
     CapacityLease,
+    CapacityLeaseContextConflictError,
     CapacityLeaseNotFoundError,
     CapacityUnavailableError,
+    OperatorActiveLeases,
     OperatorCode,
     OperatorInstance,
     OperatorInstanceNotFoundError,
     OperatorLifecycle,
     OperatorRegistry,
+    WorkContext,
 )
 from packages.platform_common.repository import (
     NodeRecord,
@@ -94,7 +97,7 @@ class OperatorRegistrationRequest(BaseModel):
     service_url: str = Field(pattern=r"^https?://")
     model_version: str | None = None
     api_version: str | None = None
-    declared_capacity: int = Field(gt=0)
+    declared_capacity: Annotated[StrictInt, Field(gt=0)]
     labels: dict[str, str] = Field(default_factory=dict)
 
 
@@ -113,9 +116,30 @@ class OperatorLifecycleRequest(BaseModel):
     lifecycle: OperatorLifecycle
 
 
+class WorkContextRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    source_service: str = Field(min_length=1, max_length=200)
+    work_type: str = Field(min_length=1, max_length=200)
+    work_id: str = Field(min_length=1, max_length=200)
+    task_id: str | None = Field(default=None, min_length=1, max_length=200)
+    node_id: str | None = Field(default=None, min_length=1, max_length=200)
+    item_id: str | None = Field(default=None, min_length=1, max_length=200)
+    trace_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+    def to_domain(self) -> WorkContext:
+        return WorkContext(**self.model_dump(exclude_none=True))
+
+
 class CapacityLeaseRequest(BaseModel):
     capability: str = Field(min_length=1)
     ttl_seconds: int = Field(default=60, gt=0, le=3600)
+    work_context: WorkContextRequest | None = None
+
+
+class CapacityLeaseContextRequest(BaseModel):
+    lease_id: str = Field(min_length=1)
+    work_context: WorkContextRequest
 
 
 class CapacityReleaseRequest(BaseModel):
@@ -552,14 +576,41 @@ def create_control_app(
         request: Request,
     ) -> CapacityLease:
         try:
-            return _operator_registry(request).lease(
+            registry = _operator_registry(request)
+            if payload.work_context is None:
+                return registry.lease(payload.capability, payload.ttl_seconds)
+            return registry.lease(
                 payload.capability,
                 payload.ttl_seconds,
+                payload.work_context.to_domain(),
             )
         except CapacityUnavailableError as exc:
             raise HTTPException(
                 status_code=503,
                 detail=f"暂无可用算子容量: {payload.capability}",
+            ) from exc
+        except REGISTRY_INFRASTRUCTURE_ERRORS as exc:
+            raise _registry_unavailable() from exc
+
+    @app.post("/internal/operator-instances/lease/context")
+    def bind_operator_lease_context(
+        payload: CapacityLeaseContextRequest,
+        request: Request,
+    ) -> CapacityLease:
+        try:
+            return _operator_registry(request).bind_lease_context(
+                payload.lease_id,
+                payload.work_context.to_domain(),
+            )
+        except CapacityLeaseNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail=f"算子容量租约不存在或已过期: {payload.lease_id}",
+            ) from exc
+        except CapacityLeaseContextConflictError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"算子容量租约已绑定其他工作上下文: {payload.lease_id}",
             ) from exc
         except REGISTRY_INFRASTRUCTURE_ERRORS as exc:
             raise _registry_unavailable() from exc
@@ -571,11 +622,8 @@ def create_control_app(
     ) -> dict[str, str]:
         try:
             _operator_registry(request).release(payload.lease_id)
-        except CapacityLeaseNotFoundError as exc:
-            raise HTTPException(
-                status_code=404,
-                detail=f"算子容量租约不存在或已过期: {payload.lease_id}",
-            ) from exc
+        except CapacityLeaseNotFoundError:
+            return {"lease_id": payload.lease_id, "status": "ALREADY_RELEASED"}
         except REGISTRY_INFRASTRUCTURE_ERRORS as exc:
             raise _registry_unavailable() from exc
         return {"lease_id": payload.lease_id, "status": "RELEASED"}
@@ -648,6 +696,21 @@ def create_control_app(
         try:
             registry = cast(OperatorOperationsRegistry, _operator_registry(request))
             return build_operator_capacity_snapshot(registry)
+        except REGISTRY_INFRASTRUCTURE_ERRORS as exc:
+            raise _registry_unavailable() from exc
+
+    @app.get("/ops/operator-instances/{instance_id}/active-leases")
+    def inspect_operator_active_leases(
+        instance_id: str,
+        request: Request,
+    ) -> OperatorActiveLeases:
+        try:
+            return _operator_registry(request).list_active_leases(instance_id)
+        except OperatorInstanceNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail=f"算子实例不存在: {instance_id}",
+            ) from exc
         except REGISTRY_INFRASTRUCTURE_ERRORS as exc:
             raise _registry_unavailable() from exc
 

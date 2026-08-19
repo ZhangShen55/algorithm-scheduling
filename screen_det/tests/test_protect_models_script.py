@@ -53,5 +53,5 @@ class ProtectModelsScriptTests(unittest.TestCase):
         dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
 
         self.assertIn("docker/models-encrypted/*", gitignore)
-        self.assertIn("docker/models-encrypted/*", dockerignore)
-        self.assertIn("model/", dockerignore)
+        self.assertIn("docker/models-encrypted/", dockerignore)
+        self.assertNotIn("model/", dockerignore)

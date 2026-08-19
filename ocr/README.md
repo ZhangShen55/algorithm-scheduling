@@ -25,7 +25,8 @@ docker/                  # CPU/GPU 与 NPU 构建文件
 tests/                   # 契约、单元和集成测试
 scripts/                 # 模型校验和服务冒烟测试
 docs/                    # 接口与部署说明
-config.toml.example      # 唯一配置示例
+config.toml              # 已提交的本地安全默认配置
+config.toml.example      # 可复制的配置示例
 ```
 
 ## 本地 CPU 环境
@@ -45,7 +46,7 @@ cp config.toml.example config.toml
 python scripts/verify_models.py
 ```
 
-`config.toml` 不提交仓库。模型路径相对于该配置文件解析。本地 CPU 配置保持：
+根 `config.toml` 随仓库提交并保持本地安全默认值；部署时可只读挂载另一份配置。模型路径相对于所选配置文件解析。本地 CPU 配置保持：
 
 ```toml
 [ocr]
@@ -58,6 +59,22 @@ recognition_model_dir = "models/PP-FormulaNet_plus-M"
 recognition_batch_size = 1
 layout_threshold = 0.5
 ```
+
+### 平台注册与运行配置
+
+受控 GPU 部署使用 `algorithm-scheduling-platform/deploy/config/operators/ocr.gpu.toml`：
+
+| 字段 | 本地根配置 | 受控部署 | 说明 |
+| --- | --- | --- | --- |
+| `platform.registration_enabled` | `false` | `true` | 是否主动注册到调度平台 |
+| `platform.control_service_url` | `""` | `http://control-service:18100` | 注册与心跳地址 |
+| `platform.heartbeat_interval_seconds` | `5` | `5` | 心跳间隔 |
+| `platform.max_concurrent_requests` | `256` | `256` | 单实例平台图片请求容量 |
+| `runtime.require_gpu` | `false` | `true` | GPU 受控部署失败关闭开关 |
+
+Compose 继续管理实例 ID、服务 URL、注册 Token、物理 GPU/可见设备、`CONFIG_PATH`、端口和
+`UVICORN_WORKERS=1`。平台容量 `256` 不替代 `ocr.max_concurrency=1` 和引擎锁；后两者继续保证
+单引擎串行安全。根配置和受控部署都使用 `ocr.image_max_bytes=52428800`（单图 50 MiB）。
 
 `[formula].enabled` 是服务端总开关，默认关闭；需要提供公式能力时改为 `true`。请求中的 `enable_formula` 是单次请求开关，两级均开启才会使用项目内 `PP-DocLayout_plus-L` 定位公式并由 `PP-FormulaNet_plus-M` 识别 LaTeX。
 

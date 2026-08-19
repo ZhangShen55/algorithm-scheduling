@@ -146,6 +146,9 @@ class FakeYoloHolder:
 def yolo_settings() -> SimpleNamespace:
     return SimpleNamespace(
         runtime=SimpleNamespace(max_image_bytes=10 * 1024 * 1024),
+        operator_deployment=SimpleNamespace(
+            runtime=SimpleNamespace(require_gpu=False),
+        ),
         yolo=SimpleNamespace(device="cpu"),
         model_protection=ModelProtectionConfig(enabled=False),
         occlusion_detection=SimpleNamespace(

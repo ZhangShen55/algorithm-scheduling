@@ -67,7 +67,7 @@ def pipeline_nodes(task_type: TaskType, priority: Priority) -> list[NodeWrite]:
                 NodeStatus.WAITING_PREREQUISITE,
                 priority,
                 "等待 OCR 完成",
-                "text_analysis",
+                "extract_keywords",
                 ("PPT_OCR",),
             ),
         ]
@@ -85,7 +85,7 @@ def pipeline_nodes(task_type: TaskType, priority: Priority) -> list[NodeWrite]:
                 NodeStatus.WAITING_PREREQUISITE,
                 priority,
                 "等待语音转写完成",
-                "text_analysis",
+                "course_overviews",
                 ("ASR_TRANSCRIPTION",),
             ),
         ]

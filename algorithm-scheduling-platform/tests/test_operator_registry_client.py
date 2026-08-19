@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import Iterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
+from pathlib import Path
 
 import httpx
 import pytest
@@ -15,6 +16,124 @@ from packages.operator_registry_client.client import (
     OperatorRuntimeStatus,
 )
 from packages.operator_registry_client.runtime import _wrap_lifespan
+
+
+def _write_operator_config(path: Path, body: str) -> Path:
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_operator_deployment_settings_are_loaded_strictly_from_selected_toml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PLATFORM_REGISTRATION_ENABLED", "true")
+    monkeypatch.setenv("PLATFORM_CONTROL_SERVICE_URL", "http://retired.invalid")
+    monkeypatch.setenv("PLATFORM_HEARTBEAT_INTERVAL_SECONDS", "99")
+    monkeypatch.setenv("PLATFORM_DECLARED_CAPACITY", "999")
+    settings = registry_package.load_operator_deployment_settings(
+        _write_operator_config(
+            tmp_path / "config.toml",
+            """
+[platform]
+registration_enabled = false
+control_service_url = ""
+heartbeat_interval_seconds = 5
+max_concurrent_requests = 4
+
+[runtime]
+require_gpu = false
+""",
+        ),
+        default_capacity=1,
+    )
+
+    assert settings.platform.registration_enabled is False
+    assert settings.platform.control_service_url == ""
+    assert settings.platform.heartbeat_interval_seconds == 5
+    assert settings.platform.max_concurrent_requests == 4
+    assert settings.runtime.require_gpu is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("registration_enabled", '"true"', "registration_enabled"),
+        ("heartbeat_interval_seconds", "0", "heartbeat_interval_seconds"),
+        ("heartbeat_interval_seconds", "-1", "heartbeat_interval_seconds"),
+        ("heartbeat_interval_seconds", "nan", "heartbeat_interval_seconds"),
+        ("heartbeat_interval_seconds", '"5"', "heartbeat_interval_seconds"),
+        ("max_concurrent_requests", "0", "max_concurrent_requests"),
+        ("max_concurrent_requests", "-1", "max_concurrent_requests"),
+        ("max_concurrent_requests", "true", "max_concurrent_requests"),
+        ("max_concurrent_requests", "1.5", "max_concurrent_requests"),
+        ("max_concurrent_requests", '"2"', "max_concurrent_requests"),
+    ],
+)
+def test_operator_platform_settings_reject_invalid_types_and_ranges(
+    tmp_path: Path,
+    field: str,
+    value: str,
+    message: str,
+) -> None:
+    registration_enabled = value if field == "registration_enabled" else "false"
+    heartbeat_interval = value if field == "heartbeat_interval_seconds" else "5"
+    capacity = value if field == "max_concurrent_requests" else "4"
+    config = _write_operator_config(
+        tmp_path / "config.toml",
+        f"""
+[platform]
+registration_enabled = {registration_enabled}
+control_service_url = ""
+heartbeat_interval_seconds = {heartbeat_interval}
+max_concurrent_requests = {capacity}
+
+[runtime]
+require_gpu = false
+""",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        registry_package.load_operator_deployment_settings(config, default_capacity=1)
+
+
+@pytest.mark.parametrize("url", ["", "control-service:18100", "ftp://control"])
+def test_operator_platform_settings_require_http_url_when_registration_enabled(
+    tmp_path: Path,
+    url: str,
+) -> None:
+    config = _write_operator_config(
+        tmp_path / "config.toml",
+        f"""
+[platform]
+registration_enabled = true
+control_service_url = "{url}"
+heartbeat_interval_seconds = 5
+max_concurrent_requests = 4
+
+[runtime]
+require_gpu = false
+""",
+    )
+
+    with pytest.raises(ValueError, match="HTTP"):
+        registry_package.load_operator_deployment_settings(config, default_capacity=1)
+
+
+def test_operator_runtime_settings_require_strict_boolean(tmp_path: Path) -> None:
+    config = _write_operator_config(
+        tmp_path / "config.toml",
+        """
+[platform]
+max_concurrent_requests = 4
+
+[runtime]
+require_gpu = "false"
+""",
+    )
+
+    with pytest.raises(ValueError, match="runtime.require_gpu"):
+        registry_package.load_operator_deployment_settings(config, default_capacity=1)
 
 
 @pytest.fixture
@@ -69,8 +188,10 @@ def test_runtime_installer_exposes_identity_status_and_drain_without_changing_bu
         operator_code="ocr",
         capabilities=["ocr"],
         default_port=8866,
-        declared_capacity=2,
         registration_enabled=False,
+        control_service_url="",
+        heartbeat_interval_seconds=5,
+        max_concurrent_requests=2,
     )
 
     with TestClient(app) as client:
@@ -100,7 +221,7 @@ def test_runtime_installer_exposes_identity_status_and_drain_without_changing_bu
     assert runtime.status().inflight == 0
 
 
-def test_runtime_uses_configured_capacity_and_background_inflight_provider(
+def test_runtime_uses_toml_capacity_and_ignores_retired_capacity_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("PLATFORM_DECLARED_CAPACITY", "15")
@@ -112,12 +233,14 @@ def test_runtime_uses_configured_capacity_and_background_inflight_provider(
         operator_code="ppt_slice",
         capabilities=["ppt_slice"],
         default_port=9001,
-        declared_capacity=1,
         inflight_provider=lambda: active_tasks,
         registration_enabled=False,
+        control_service_url="",
+        heartbeat_interval_seconds=5,
+        max_concurrent_requests=1,
     )
 
-    assert runtime.status().declared_capacity == 15
+    assert runtime.status().declared_capacity == 1
     assert runtime.status().inflight == 3
     assert runtime.heartbeat_status().inflight == 3
 

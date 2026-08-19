@@ -38,7 +38,10 @@ def create_app(
             if resolved_engine is None:
                 from app.engines.paddleocr_v6 import PaddleOCRV6Engine
 
-                resolved_engine = PaddleOCRV6Engine(resolved_settings.ocr)
+                resolved_engine = PaddleOCRV6Engine(
+                    resolved_settings.ocr,
+                    require_gpu=resolved_settings.operator_deployment.runtime.require_gpu,
+                )
             if (
                 resolved_settings.formula.enabled
                 and resolved_formula_engine is None
@@ -89,6 +92,18 @@ def create_app(
         operator_code="ocr",
         capabilities=["ocr"],
         default_port=8866,
+        registration_enabled=(
+            resolved_settings.operator_deployment.platform.registration_enabled
+        ),
+        control_service_url=(
+            resolved_settings.operator_deployment.platform.control_service_url
+        ),
+        heartbeat_interval_seconds=(
+            resolved_settings.operator_deployment.platform.heartbeat_interval_seconds
+        ),
+        max_concurrent_requests=(
+            resolved_settings.operator_deployment.platform.max_concurrent_requests
+        ),
         model_ready_provider=lambda: hasattr(application.state, "ocr_service"),
     )
 

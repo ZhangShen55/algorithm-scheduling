@@ -36,6 +36,7 @@ class HttpConfig(BaseModel):
     read_timeout_seconds: float = 60.0
     write_timeout_seconds: float = 60.0
     pool_timeout_seconds: float = 5.0
+    hard_timeout_seconds: float = 600.0
 
 
 class LeaseConfig(BaseModel):
@@ -44,12 +45,12 @@ class LeaseConfig(BaseModel):
 
 
 class Base64Config(BaseModel):
-    max_decoded_bytes: int = 10_485_760
+    max_decoded_bytes: int = 52_428_800
     allow_data_uri: bool = True
 
 
 class BodyConfig(BaseModel):
-    max_bytes: int = 13_981_016
+    max_bytes: int = 75_497_472
 
 
 class WebSocketConfig(BaseModel):
@@ -57,6 +58,7 @@ class WebSocketConfig(BaseModel):
     ping_interval_seconds: float = 20.0
     ping_timeout_seconds: float = 20.0
     close_timeout_seconds: float = 10.0
+    session_timeout_seconds: float = 14_400.0
 
 
 class ReadinessConfig(BaseModel):

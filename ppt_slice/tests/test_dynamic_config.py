@@ -1,4 +1,8 @@
+import os
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from pydantic import ValidationError
 
@@ -7,7 +11,7 @@ try:
 except ImportError:
     import tomli as tomllib
 
-from app.core.config import PROJECT_ROOT, Settings
+from app.core.config import PROJECT_ROOT, Settings, resolve_config_path
 
 
 RETIRED_SETTING_FIELDS = {
@@ -23,6 +27,19 @@ RETIRED_SETTING_FIELDS = {
 
 
 class ConfigurationSurfaceTests(unittest.TestCase):
+    def test_relative_config_path_is_resolved_from_project_root(self):
+        original_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            try:
+                os.chdir(temporary_directory)
+                with patch.dict(os.environ, {"CONFIG_PATH": "configs/local.toml"}):
+                    self.assertEqual(
+                        resolve_config_path(),
+                        (PROJECT_ROOT / "configs/local.toml").resolve(),
+                    )
+            finally:
+                os.chdir(original_cwd)
+
     def test_settings_do_not_auto_load_dotenv_file(self):
         self.assertIsNone(Settings.model_config.get("env_file"))
 

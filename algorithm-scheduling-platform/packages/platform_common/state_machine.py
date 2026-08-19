@@ -23,7 +23,12 @@ _ALLOWED_TRANSITIONS: dict[NodeStatus, frozenset[NodeStatus]] = {
         {NodeStatus.PENDING, NodeStatus.RUNNING, NodeStatus.CANCELLED}
     ),
     NodeStatus.RUNNING: frozenset(
-        {NodeStatus.COMPLETED, NodeStatus.FAILED, NodeStatus.CANCELLED}
+        {
+            NodeStatus.WAITING_OPERATOR,
+            NodeStatus.COMPLETED,
+            NodeStatus.FAILED,
+            NodeStatus.CANCELLED,
+        }
     ),
     NodeStatus.COMPLETED: frozenset(),
     NodeStatus.FAILED: frozenset(),

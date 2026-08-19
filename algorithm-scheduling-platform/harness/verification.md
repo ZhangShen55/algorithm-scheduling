@@ -5,10 +5,10 @@ platform root, use the explicit workspace import path below; this prevents a
 bare top-level `tests` package from another checkout from shadowing the
 platform tests:
 
-## 2026-08-19 统一算子配置、容量租约、在线 OCR 与镜像清理待实施门禁
+## 2026-08-19 统一算子配置、容量租约、在线 OCR 与镜像清理实施门禁
 
-本节对应 `scenarios/unified-operator-capacity-leases-and-online-ocr.md`。当前只有规划和 Harness
-合同，以下命令尚未形成实现通过证据；实施完成后必须从相应目录执行并把完整输出保存到
+本节对应 `scenarios/unified-operator-capacity-leases-and-online-ocr.md`。当前已取得本地静态、
+单元、真实 Redis 和算子项目测试证据；最终提交后仍必须从相应目录重跑，并把完整输出保存到
 `harness/reports/unified-operator-capacity-leases-and-online-ocr/{完整GitSHA}/`。
 
 ```bash
@@ -30,6 +30,11 @@ PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
   tests/test_operator_deployment_integration.py \
   tests/test_milestone_2b_operator_configs.py \
   tests/test_harness_consistency.py
+
+# orchestrator_service 目录
+PYTHONPATH="$PWD/..:$PWD/../algorithm-scheduling-platform" \
+  ../algorithm-scheduling-platform/.venv/bin/python -m pytest -q \
+  tests/test_control_client.py tests/test_executor.py tests/test_node_execution.py
 ```
 
 上述定向门禁不能替代八个算子各自 `AGENTS.md` 要求的 compileall、导入、项目测试、服务启动、

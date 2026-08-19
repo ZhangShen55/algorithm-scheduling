@@ -1,6 +1,8 @@
 import os
 from typing import Any, Protocol
 
+from app.core.config import operator_deployment
+
 
 class RuntimeOptionLike(Protocol):
     def use_cpu(self) -> None: ...
@@ -9,7 +11,7 @@ class RuntimeOptionLike(Protocol):
 
 
 def require_gpu_enabled() -> bool:
-    return os.getenv("REQUIRE_GPU", "false").strip().lower() in {"1", "true", "yes"}
+    return operator_deployment.runtime.require_gpu
 
 
 def _visible_nvidia_device_count() -> int | None:

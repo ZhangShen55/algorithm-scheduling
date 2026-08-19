@@ -1,4 +1,18 @@
 # 三卡服务器 FaceRec 共享配置；MongoDB 通过 Compose 服务名访问。
+[platform]
+# 容器部署时主动向 control-service 注册。
+registration_enabled = true
+# 容器网络内的 control-service 地址。
+control_service_url = "http://control-service:18100"
+# 算子注册心跳间隔秒数。
+heartbeat_interval_seconds = 5
+# 平台允许同时分发到单个人脸实例的请求数。
+max_concurrent_requests = 128
+
+[runtime]
+# 三卡部署必须检测到容器内 CUDA 设备。
+require_gpu = true
+
 [db]
 username = "root"  # 默认用户名；部署时由 FACEREC_MONGO_USERNAME 覆盖
 password = "root"  # 默认密码；部署时由 FACEREC_MONGO_PASSWORD 覆盖

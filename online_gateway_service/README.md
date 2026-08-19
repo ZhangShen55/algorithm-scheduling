@@ -1,6 +1,6 @@
 # Online Gateway Service
 
-本服务暴露现有在线 VBas、人脸识别、图像质量检测和实时 ASR 转发契约。
+本服务暴露在线 VBas、人脸识别、图像质量检测、单图 OCR 和实时 ASR 转发契约。
 
 在本服务目录安装公共平台包和服务依赖：
 
@@ -20,6 +20,44 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 1
 
 `/ready` 当前只报告进程就绪，尚未探测 control-service；本次迁移不改变 HTTP
 请求转发和 WebSocket 粘性路由契约。
+
+## 在线路由与容量
+
+图片请求由上游直接提供 Base64，网关不拉流、不截图、不进入 Kafka 或离线任务队列。每个同步
+请求申请一个带在线上下文的算子租约；在线 ASR 在整个 WebSocket 会话期间持有并续租同一个
+实例。容量不足不排队，统一以 HTTP `200`、业务码 `50301` 返回；算子调用或响应格式错误使用
+业务码 `50000`。
+
+单图 OCR 接口为 `POST /api/online/ocr/recognize`：
+
+```json
+{
+  "image_id": "frame-001",
+  "image": "data:image/png;base64,...",
+  "enable_formula": false
+}
+```
+
+`image_id` 可省略并由网关生成，`enable_formula` 是严格布尔且默认 `false`。网关转换为 OCR
+现有 `/ocr/prediction` 的单元素 `key/value` 请求，响应对象原样放入
+`BusinessResponse.data`。请求正文最大 `75497472` 字节，Base64 解码后单图最大
+`52428800` 字节；两项都在申请租约前执行。
+
+里程碑 2B 当前不部署 Nginx、Ingress 或其他反向代理，A 服务直接访问宿主机 `18103` 映射的
+Online Gateway，因此当前链路不存在另一个代理请求体上限。以后增加反向代理时，其请求体
+上限必须不小于 `75497472` 字节，并需要把超限和边界请求纳入发布 Smoke 后才能交付。
+
+部署后使用一张无敏感信息的真实 OCR 图片执行网关 Smoke：
+
+```bash
+algorithm-scheduling-platform/deploy/scripts/run-online-gateway-smoke \
+  --image /data/course/_harness/fixtures/ocr.png \
+  --release-tag "$RELEASE_TAG" --git-sha "$EXPECTED_GIT_SHA" \
+  --reports-root "$REPORT_ROOT"
+```
+
+该命令同时验证正常单图 OCR、解码后超过 50 MiB 和正文超过 72 MiB 三个场景，证据只记录
+状态和大小边界，不保存图片、Base64 或 OCR 文本。
 
 从工作区根目录构建镜像：
 

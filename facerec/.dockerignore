@@ -22,4 +22,4 @@ logs/
 config*.toml
 media/
 wheel/*.whl
-!wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl
+!wheel/algorithm_operator_registry_client-0.2.0-py3-none-any.whl

@@ -296,13 +296,13 @@ def test_required_gpu_rejects_cpu_before_pipeline_construction(
 ):
     settings = load_engine_settings(settings_file)
     calls = []
-    monkeypatch.setenv("REQUIRE_GPU", "true")
 
     with pytest.raises(ConfigurationError, match="部署要求使用 GPU.*cuda:<index>"):
         PaddleOCRV6Engine(
             settings,
             pipeline_factory=lambda **kwargs: calls.append(kwargs) or object(),
             paddle_module=fake_paddle(),
+            require_gpu=True,
         )
 
     assert calls == []
@@ -315,7 +315,6 @@ def test_required_gpu_rejects_available_npu_before_pipeline_construction(
         update={"device": "npu:0"}
     )
     calls = []
-    monkeypatch.setenv("REQUIRE_GPU", "true")
 
     with pytest.raises(ConfigurationError, match="部署要求使用 GPU.*cuda:<index>"):
         PaddleOCRV6Engine(
@@ -325,6 +324,7 @@ def test_required_gpu_rejects_available_npu_before_pipeline_construction(
                 npu_compiled=True,
                 custom_devices=["npu:0"],
             ),
+            require_gpu=True,
         )
 
     assert calls == []

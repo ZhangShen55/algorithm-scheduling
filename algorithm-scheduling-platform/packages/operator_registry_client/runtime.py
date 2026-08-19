@@ -16,6 +16,7 @@ from packages.operator_registry_client.client import (
 )
 from packages.operator_registry_client.lifecycle import OperatorLifecycle
 from packages.operator_registry_client.ops import OperatorOpsMetadata, OperatorOpsStatus
+from packages.operator_registry_client.validation import validate_positive_int
 
 ModelReadyProvider = Callable[[], bool]
 InflightProvider = Callable[[], int]
@@ -30,9 +31,10 @@ class OperatorRuntime:
         model_ready_provider: ModelReadyProvider,
         inflight_provider: InflightProvider | None = None,
     ) -> None:
-        if declared_capacity <= 0:
-            raise ValueError("算子声明容量必须大于 0")
-        self._declared_capacity = declared_capacity
+        self._declared_capacity = validate_positive_int(
+            declared_capacity,
+            field_name="算子声明容量",
+        )
         self._model_ready_provider = model_ready_provider
         self._inflight_provider = inflight_provider
         self._lifecycle = OperatorLifecycle.ONLINE
@@ -109,16 +111,21 @@ def install_operator_runtime(
     operator_code: str,
     capabilities: list[str],
     default_port: int,
-    declared_capacity: int = 1,
+    registration_enabled: bool,
+    control_service_url: str,
+    heartbeat_interval_seconds: float,
+    max_concurrent_requests: int,
     model_ready_provider: ModelReadyProvider = lambda: True,
     inflight_provider: InflightProvider | None = None,
     before_registry_shutdown: BeforeRegistryShutdown | None = None,
-    registration_enabled: bool | None = None,
 ) -> OperatorRuntime:
     if not operator_code or not capabilities:
         raise ValueError("算子代码和能力列表不能为空")
-    configured_capacity = int(
-        os.getenv("PLATFORM_DECLARED_CAPACITY", str(declared_capacity))
+    if type(registration_enabled) is not bool:
+        raise ValueError("platform.registration_enabled 必须是布尔值")
+    configured_capacity = validate_positive_int(
+        max_concurrent_requests,
+        field_name="platform.max_concurrent_requests",
     )
     runtime = OperatorRuntime(
         declared_capacity=configured_capacity,
@@ -141,15 +148,10 @@ def install_operator_runtime(
     app.add_middleware(OperatorAdmissionMiddleware, runtime=runtime)
     _add_missing_ops_routes(app, runtime, metadata)
 
-    enabled = (
-        _env_bool("PLATFORM_REGISTRATION_ENABLED", default=False)
-        if registration_enabled is None
-        else registration_enabled
-    )
-    if enabled:
-        control_service_url = os.getenv("PLATFORM_CONTROL_SERVICE_URL", "").strip()
+    if registration_enabled:
+        control_service_url = control_service_url.strip()
         if not control_service_url:
-            raise ValueError("启用算子注册时必须配置 PLATFORM_CONTROL_SERVICE_URL")
+            raise ValueError("启用算子注册时必须配置 platform.control_service_url")
         management_token = os.getenv("PLATFORM_OPERATOR_REGISTRY_TOKEN", "").strip()
         if not management_token:
             raise ValueError("启用算子注册时必须配置 PLATFORM_OPERATOR_REGISTRY_TOKEN")
@@ -169,9 +171,7 @@ def install_operator_runtime(
                 model_version=model_version,
                 api_version=api_version,
                 labels=_env_labels(),
-                heartbeat_interval_seconds=float(
-                    os.getenv("PLATFORM_HEARTBEAT_INTERVAL_SECONDS", "5")
-                ),
+                heartbeat_interval_seconds=heartbeat_interval_seconds,
             ),
             status_provider=runtime.heartbeat_status,
         )
@@ -253,13 +253,6 @@ def _is_ops_path(path: str) -> bool:
         "/AE/WorkerStatus",
         "/AE/Drain",
     }
-
-
-def _env_bool(name: str, *, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _env_labels() -> dict[str, str]:

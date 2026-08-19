@@ -34,6 +34,9 @@ class FakeRepository:
     def list_dispatch_capabilities(self) -> list[str]:
         return []
 
+    def list_running_ppt_slice_nodes(self) -> list[Any]:
+        return []
+
     def count_courses(self) -> int:
         return 0
 
@@ -223,7 +226,9 @@ def test_lifespan_starts_required_loops_reports_ready_and_closes_resources(
             "outbox_publisher",
             "course_consumer",
             "node_executor",
+            "ppt_reconcile",
         }
+        assert app.state.ppt_terminal_handler is not None
 
     assert app.state.runtime_loops_started is False
     assert resources.producer.stopped is True

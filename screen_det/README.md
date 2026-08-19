@@ -453,6 +453,23 @@ curl -X POST http://127.0.0.1:8880/config/reload
 所有配置默认读取项目根目录 `config.toml`。可通过环境变量 `CONFIG_PATH` 覆盖；
 绝对路径直接使用，相对路径始终以项目根目录为基准解析，与当前工作目录无关。
 
+### 平台注册与运行配置
+
+本地根配置默认不注册且允许 CPU/MPS；受控 GPU 部署使用
+`algorithm-scheduling-platform/deploy/config/operators/screen_det.gpu.toml`：
+
+| 字段 | 本地根配置 | 受控部署 | 说明 |
+| --- | --- | --- | --- |
+| `platform.registration_enabled` | `false` | `true` | 是否主动注册到调度平台 |
+| `platform.control_service_url` | `""` | `http://control-service:18100` | 注册与心跳地址 |
+| `platform.heartbeat_interval_seconds` | `5` | `5` | 心跳间隔 |
+| `platform.max_concurrent_requests` | `128` | `128` | 单实例平台请求容量 |
+| `runtime.require_gpu` | `false` | `true` | `true` 时 YOLO 必须使用可用 CUDA |
+
+Compose 继续管理实例 ID、服务 URL、注册 Token、物理 GPU/可见设备、`CONFIG_PATH`、端口和
+`UVICORN_WORKERS=1`。平台容量 `128` 不改变 `screen_detection.max_batch_size=16` 的含义；该字段
+仍只限制一次请求中的图片数量，`runtime.max_image_bytes` 仍限制单张解码图片大小。
+
 ### 应用与服务
 
 ```toml

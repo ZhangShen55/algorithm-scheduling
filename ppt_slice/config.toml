@@ -1,6 +1,18 @@
 # Video PPT Slice Service Configuration
 # 视频PPT切片服务配置文件
 
+[platform]
+# 本地默认不主动向调度平台注册
+registration_enabled = false
+control_service_url = ""  # 启用注册时填写 Control Service 地址
+heartbeat_interval_seconds = 5  # 注册心跳间隔秒数，必须为有限正数
+# 平台容量同时作为单 Uvicorn Worker 的后台任务上限
+max_concurrent_requests = 10
+
+[runtime]
+# PPT 切片使用 CPU，不强制要求 CUDA
+require_gpu = false
+
 [app]
 # 应用基础配置
 # FastAPI 文档、健康信息和日志中显示的服务名称
@@ -10,8 +22,6 @@ version = "V1.0.0_20260806"
 
 [task]
 # 任务配置
-# 单 Uvicorn Worker 最多同时保留的任务数；第 N+1 个请求返回拒绝状态
-max_concurrent_tasks = 15
 # 每个任务的解码帧生产者与切片消费者之间的内存队列容量
 max_queue_size = 25
 # 任务成功至少需要处理的采样帧数；当前完成条件为 processed_frames > min_frames_ok

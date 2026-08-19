@@ -50,7 +50,10 @@ async def health_check(response: Response) -> dict:
             "yolo_device_resolved": (
                 screen_model_holder.device
                 if screen_model["loaded"]
-                else resolve_yolo_device(settings.yolo.device)
+                else resolve_yolo_device(
+                    settings.yolo.device,
+                    require_gpu=settings.operator_deployment.runtime.require_gpu,
+                )
             ),
             "cuda_visible_devices": __import__("os").environ.get("CUDA_VISIBLE_DEVICES"),
         },

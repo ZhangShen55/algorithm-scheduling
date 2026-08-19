@@ -3,17 +3,19 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-from collections.abc import Iterable
+from collections.abc import Awaitable, Iterable
 from typing import Any, Protocol
 
 import httpx
 
+from packages.platform_common.operator_registry import CapacityLease, WorkContext
 from packages.platform_common.repository import (
     NodeResultWrite,
     NodeWorkItemRecord,
     NodeWorkItemWrite,
     WorkItemProgress,
 )
+from packages.platform_contracts.status import NodeStatus
 
 from ..domain.ppt_work import (
     PptImageWork,
@@ -104,6 +106,11 @@ class PptTextRepository(Protocol):
         items: list[NodeWorkItemWrite],
     ) -> list[NodeWorkItemRecord]: ...
 
+    def list_node_work_items(
+        self,
+        task_node_id: int,
+    ) -> list[NodeWorkItemRecord]: ...
+
     def complete_node_work_item(
         self,
         task_node_id: int,
@@ -142,55 +149,125 @@ class KeywordClient(Protocol):
     ) -> dict[str, Any]: ...
 
 
+class PptLeaseClient(Protocol):
+    async def acquire(
+        self,
+        capability: str,
+        *,
+        ttl_seconds: int | None = None,
+        work_context: WorkContext | None = None,
+    ) -> CapacityLease: ...
+
+    async def run_with_renewal(
+        self,
+        lease: CapacityLease,
+        operation: Awaitable[dict[str, Any]],
+        *,
+        ttl_seconds: int | None = None,
+        hard_timeout_seconds: float,
+    ) -> dict[str, Any]: ...
+
+    async def release(self, lease_id: str) -> None: ...
+
+
 class PptTextPipeline:
     def __init__(
         self,
         repository: PptTextRepository,
+        lease_client: PptLeaseClient,
         ocr_adapter: OcrClient,
         keyword_adapter: KeywordClient,
         limits: PptWorkLimits,
+        *,
+        lease_ttl_seconds: int = 60,
+        ocr_hard_timeout_seconds: float = 600.0,
+        keyword_hard_timeout_seconds: float = 600.0,
     ) -> None:
         self._repository = repository
+        self._lease_client = lease_client
         self._ocr_adapter = ocr_adapter
         self._keyword_adapter = keyword_adapter
         self._limits = limits
+        if lease_ttl_seconds <= 0:
+            raise ValueError("PPT 工作项租约时长必须大于 0")
+        if ocr_hard_timeout_seconds <= 0 or keyword_hard_timeout_seconds <= 0:
+            raise ValueError("PPT 工作项 HTTP 硬超时必须大于 0")
+        self._lease_ttl_seconds = lease_ttl_seconds
+        self._ocr_hard_timeout_seconds = ocr_hard_timeout_seconds
+        self._keyword_hard_timeout_seconds = keyword_hard_timeout_seconds
 
     async def run_ocr(
         self,
         *,
+        task_id: str,
         node_id: int,
         work: Iterable[PptImageWork],
-        instance_url: str,
+        trace_id: str | None = None,
+        complete_node: bool = True,
     ) -> dict[str, dict[str, Any]]:
         work_items = list(work)
-        await self._create_work_items(node_id, work_items)
+        pending_work, retained_results = await self._prepare_work_items(
+            node_id,
+            work_items,
+        )
 
         async def recognize(item: PptImageWork) -> dict[str, Any]:
-            result = await self._ocr_adapter.recognize(instance_url, item)
-            await asyncio.to_thread(
-                self._repository.complete_node_work_item,
-                node_id,
-                item.ppt_image_id,
-                result,
-                reason="单张 PPT 图片 OCR 完成",
+            lease = await self._lease_client.acquire(
+                "ocr",
+                ttl_seconds=self._lease_ttl_seconds,
+                work_context=self._work_context(
+                    task_id=task_id,
+                    node_id=node_id,
+                    item=item,
+                    work_type="ppt_ocr_item",
+                    trace_id=trace_id,
+                ),
             )
-            return result
+            try:
+                result = await self._lease_client.run_with_renewal(
+                    lease,
+                    self._ocr_adapter.recognize(lease.service_url, item),
+                    ttl_seconds=self._lease_ttl_seconds,
+                    hard_timeout_seconds=self._ocr_hard_timeout_seconds,
+                )
+                await asyncio.to_thread(
+                    self._repository.complete_node_work_item,
+                    node_id,
+                    item.ppt_image_id,
+                    result,
+                    reason="单张 PPT 图片 OCR 完成",
+                )
+                return result
+            finally:
+                await self._lease_client.release(lease.lease_id)
 
-        completed = await run_bounded_work(work_items, self._limits, recognize)
-        results = {str(item["ppt_image_id"]): item for item in completed}
-        await self._complete_node(node_id, results, reason="PPT 图片 OCR 全部完成")
+        completed = await run_bounded_work(pending_work, self._limits, recognize)
+        results = dict(retained_results)
+        results.update({str(item["ppt_image_id"]): item for item in completed})
+        results = {
+            item.ppt_image_id: results[item.ppt_image_id]
+            for item in work_items
+            if item.ppt_image_id in results
+        }
+        if complete_node:
+            await self._complete_node(node_id, results, reason="PPT 图片 OCR 全部完成")
         return results
 
     async def run_keywords(
         self,
         *,
+        task_id: str,
         node_id: int,
         work: Iterable[PptImageWork],
         ocr_results: dict[str, dict[str, Any]],
-        instance_url: str,
+        trace_id: str | None = None,
+        complete_node: bool = True,
     ) -> dict[str, dict[str, Any]]:
         work_items = list(work)
-        await self._create_work_items(node_id, work_items)
+        pending_work, retained_results = await self._prepare_work_items(
+            node_id,
+            work_items,
+        )
 
         async def extract(item: PptImageWork) -> dict[str, Any]:
             ocr_result = ocr_results.get(item.ppt_image_id)
@@ -199,35 +276,74 @@ class PptTextPipeline:
             text_value = ocr_result.get("text")
             if not isinstance(text_value, str):
                 raise PptTextAdapterError(f"PPT 图片 OCR 文本格式错误: {item.ppt_image_id}")
-            result = await self._keyword_adapter.extract(
-                instance_url,
-                ppt_image_id=item.ppt_image_id,
-                text=text_value,
+            lease = await self._lease_client.acquire(
+                "extract_keywords",
+                ttl_seconds=self._lease_ttl_seconds,
+                work_context=self._work_context(
+                    task_id=task_id,
+                    node_id=node_id,
+                    item=item,
+                    work_type="ppt_keyword_item",
+                    trace_id=trace_id,
+                ),
             )
-            await asyncio.to_thread(
-                self._repository.complete_node_work_item,
-                node_id,
-                item.ppt_image_id,
-                result,
-                reason="单张 PPT 图片关键词提取完成",
-            )
-            return result
+            try:
+                result = await self._lease_client.run_with_renewal(
+                    lease,
+                    self._keyword_adapter.extract(
+                        lease.service_url,
+                        ppt_image_id=item.ppt_image_id,
+                        text=text_value,
+                    ),
+                    ttl_seconds=self._lease_ttl_seconds,
+                    hard_timeout_seconds=self._keyword_hard_timeout_seconds,
+                )
+                await asyncio.to_thread(
+                    self._repository.complete_node_work_item,
+                    node_id,
+                    item.ppt_image_id,
+                    result,
+                    reason="单张 PPT 图片关键词提取完成",
+                )
+                return result
+            finally:
+                await self._lease_client.release(lease.lease_id)
 
-        completed = await run_bounded_work(work_items, self._limits, extract)
-        results = {str(item["ppt_image_id"]): item for item in completed}
-        await self._complete_node(node_id, results, reason="PPT 关键词全部提取完成")
+        completed = await run_bounded_work(pending_work, self._limits, extract)
+        results = dict(retained_results)
+        results.update({str(item["ppt_image_id"]): item for item in completed})
+        results = {
+            item.ppt_image_id: results[item.ppt_image_id]
+            for item in work_items
+            if item.ppt_image_id in results
+        }
+        if complete_node:
+            await self._complete_node(node_id, results, reason="PPT 关键词全部提取完成")
         return results
 
-    async def _create_work_items(
+    async def _prepare_work_items(
         self,
         node_id: int,
         work: list[PptImageWork],
-    ) -> None:
+    ) -> tuple[list[PptImageWork], dict[str, dict[str, Any]]]:
         await asyncio.to_thread(
             self._repository.create_node_work_items,
             node_id,
             [NodeWorkItemWrite(item_key=item.ppt_image_id, ordinal=item.ordinal) for item in work],
         )
+        records = await asyncio.to_thread(
+            self._repository.list_node_work_items,
+            node_id,
+        )
+        retained_results = {
+            record.item_key: record.result
+            for record in records
+            if record.status is NodeStatus.COMPLETED and record.result is not None
+        }
+        pending_work = [
+            item for item in work if item.ppt_image_id not in retained_results
+        ]
+        return pending_work, retained_results
 
     async def _complete_node(
         self,
@@ -245,4 +361,23 @@ class PptTextPipeline:
                 progress={"completed_count": count, "total_count": count},
             ),
             reason=reason,
+        )
+
+    @staticmethod
+    def _work_context(
+        *,
+        task_id: str,
+        node_id: int,
+        item: PptImageWork,
+        work_type: str,
+        trace_id: str | None,
+    ) -> WorkContext:
+        return WorkContext(
+            source_service="orchestrator-service",
+            work_type=work_type,
+            work_id=item.ppt_image_id,
+            task_id=task_id,
+            node_id=str(node_id),
+            item_id=item.ppt_image_id,
+            trace_id=trace_id,
         )

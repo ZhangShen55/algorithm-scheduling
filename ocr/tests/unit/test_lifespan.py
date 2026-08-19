@@ -13,7 +13,8 @@ def test_lifespan_creates_one_engine_and_reuses_it(
     created = []
 
     class RecordingEngine:
-        def __init__(self, settings):
+        def __init__(self, settings, *, require_gpu=False):
+            del settings, require_gpu
             self.calls = 0
             self.close_calls = 0
             created.append(self)
@@ -56,7 +57,8 @@ def test_lifespan_initializes_enabled_formula_engine_once(
     formula_engines = []
 
     class TextEngine:
-        def __init__(self, settings):
+        def __init__(self, settings, *, require_gpu=False):
+            del settings, require_gpu
             self.close_calls = 0
 
         def predict(self, image):
@@ -117,7 +119,8 @@ def test_lifespan_closes_ocr_engine_when_formula_initialization_fails(
     created = []
 
     class TextEngine:
-        def __init__(self, settings):
+        def __init__(self, settings, *, require_gpu=False):
+            del settings, require_gpu
             self.close_calls = 0
             created.append(self)
 

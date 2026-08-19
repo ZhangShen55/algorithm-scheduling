@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 RELEASE_TAG_PATTERN = re.compile(r"^v[0-9]+\.[0-9]+_[0-9]{6}$")
-REGISTRY_WHEEL = "algorithm_operator_registry_client-0.1.0-py3-none-any.whl"
+REGISTRY_WHEEL = "algorithm_operator_registry_client-0.2.0-py3-none-any.whl"
 REGISTRY_WHEEL_PATTERN = re.compile(
     r"algorithm_operator_registry_client-[0-9]+(?:\.[0-9]+){2}-py3-none-any\.whl"
 )
@@ -33,6 +33,29 @@ CONFIG_TARGETS = {
     "ppt-slice": "/workspace/config.toml",
     "text-analysis": "/app/config.toml",
 }
+OPERATOR_CAPACITIES = {
+    "asr-offline": 4,
+    "asr-online": 10,
+    "ocr": 256,
+    "vbas": 128,
+    "facerec": 128,
+    "screen-det": 128,
+    "ppt-slice": 10,
+    "text-analysis": 256,
+}
+GPU_OPERATORS = frozenset(
+    {"asr-offline", "asr-online", "ocr", "vbas", "facerec", "screen-det"}
+)
+FORBIDDEN_OPERATOR_ENVIRONMENT = frozenset(
+    {
+        "PLATFORM_REGISTRATION_ENABLED",
+        "PLATFORM_CONTROL_SERVICE_URL",
+        "PLATFORM_HEARTBEAT_INTERVAL_SECONDS",
+        "PLATFORM_DECLARED_CAPACITY",
+        "REQUIRE_GPU",
+        "GPU_PROCESS_NAME",
+    }
+)
 INFRASTRUCTURE_IDENTITIES = {
     ("algorithm-scheduling-platform", service)
     for service in ("postgres", "kafka", "redis", "mongodb")
@@ -99,6 +122,13 @@ def _expected_config_target(service_name: str) -> str:
     raise DeploymentContractError(f"unknown operator service: {service_name}")
 
 
+def _operator_name(service_name: str) -> str:
+    for operator_name in CONFIG_TARGETS:
+        if service_name.startswith(f"{operator_name}-"):
+            return operator_name
+    raise DeploymentContractError(f"unknown operator service: {service_name}")
+
+
 def _command_tokens(value: Any, service_name: str) -> list[str]:
     if value is None:
         return []
@@ -141,6 +171,12 @@ def validate_operator_service_contracts(
         if not isinstance(service_name, str) or not isinstance(service, Mapping):
             raise DeploymentContractError("operator service document is invalid")
         environment = _environment(service_name, service)
+        forbidden = FORBIDDEN_OPERATOR_ENVIRONMENT & environment.keys()
+        if forbidden:
+            raise DeploymentContractError(
+                f"{service_name} contains TOML-owned environment: "
+                + ", ".join(sorted(forbidden))
+            )
         if environment.get("UVICORN_WORKERS") != "1":
             raise DeploymentContractError(
                 f"{service_name} requires exactly one Uvicorn worker"
@@ -192,6 +228,86 @@ def validate_operator_service_contracts(
             raise DeploymentContractError(
                 f"{service_name} config bind must be read-only"
             )
+
+
+def validate_operator_toml_contract(service_name: str, config_path: Path) -> None:
+    operator_name = _operator_name(service_name)
+    try:
+        import tomllib
+    except ModuleNotFoundError as error:
+        raise DeploymentContractError(
+            "Python 3.11+ is required for operator TOML validation"
+        ) from error
+    try:
+        config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
+        raise DeploymentContractError(
+            f"{service_name} cannot read mounted TOML: {config_path}"
+        ) from error
+    platform = config.get("platform")
+    runtime = config.get("runtime")
+    if not isinstance(platform, Mapping) or not isinstance(runtime, Mapping):
+        raise DeploymentContractError(
+            f"{service_name} mounted TOML requires [platform] and [runtime]"
+        )
+    expected_platform = {
+        "registration_enabled": True,
+        "control_service_url": "http://control-service:18100",
+        "heartbeat_interval_seconds": 5,
+        "max_concurrent_requests": OPERATOR_CAPACITIES[operator_name],
+    }
+    for field, expected in expected_platform.items():
+        actual = platform.get(field)
+        if type(actual) is not type(expected) or actual != expected:
+            raise DeploymentContractError(
+                f"{service_name} platform.{field} must be {expected!r}"
+            )
+    expected_gpu = operator_name in GPU_OPERATORS
+    if (
+        type(runtime.get("require_gpu")) is not bool
+        or runtime.get("require_gpu") is not expected_gpu
+    ):
+        raise DeploymentContractError(
+            f"{service_name} runtime.require_gpu must be {expected_gpu!r}"
+        )
+    if operator_name == "ocr":
+        ocr = config.get("ocr")
+        if not isinstance(ocr, Mapping) or ocr.get("image_max_bytes") != 52_428_800:
+            raise DeploymentContractError(
+                f"{service_name} ocr.image_max_bytes must be 52428800"
+            )
+    if operator_name == "ppt-slice":
+        task = config.get("task")
+        if isinstance(task, Mapping) and "max_concurrent_tasks" in task:
+            raise DeploymentContractError(
+                f"{service_name} must not define task.max_concurrent_tasks"
+            )
+
+
+def validate_operator_config_mounts(
+    services: Mapping[str, Mapping[str, Any]],
+    *,
+    compose_directory: Path,
+) -> None:
+    for service_name, service in services.items():
+        volumes = service.get("volumes")
+        if not isinstance(volumes, list):
+            raise DeploymentContractError(f"{service_name} volumes are invalid")
+        config_mount = next(
+            (
+                mount
+                for mount in volumes
+                if isinstance(mount, Mapping)
+                and str(mount.get("target")) == _expected_config_target(service_name)
+            ),
+            None,
+        )
+        if config_mount is None:
+            raise DeploymentContractError(f"{service_name} config bind is missing")
+        source = Path(str(config_mount["source"]))
+        if not source.is_absolute():
+            source = compose_directory / source
+        validate_operator_toml_contract(service_name, source.resolve())
 
 
 def validate_registry_wheel_dockerfile(source: str, label: str) -> None:
@@ -458,6 +574,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not isinstance(services, Mapping):
             raise DeploymentContractError("operator Compose services are invalid")
         validate_operator_service_contracts(services)
+        validate_operator_config_mounts(
+            services,
+            compose_directory=Path(arguments.document).resolve().parent,
+        )
     elif arguments.command == "operator-compose-yaml":
         try:
             import yaml  # type: ignore[import-untyped]
@@ -474,6 +594,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not isinstance(services, Mapping):
             raise DeploymentContractError("operator Compose services are invalid")
         validate_operator_service_contracts(services)
+        validate_operator_config_mounts(
+            services,
+            compose_directory=Path(arguments.document).resolve().parent,
+        )
     elif arguments.command == "writable-directory":
         for path in arguments.paths:
             validate_writable_directory(Path(path))

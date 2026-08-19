@@ -20,7 +20,7 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_required_gpu_failure_precedes_funasr_and_punctuation_constructors(self) -> None:
         with (
-            patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False),
+            patch.object(self.models, "require_gpu_enabled", return_value=True),
             self._settings_config_patch(),
             patch.object(self.models.torch.cuda, "is_available", return_value=False),
             patch.object(self.models, "AutoModel") as auto_model,
@@ -36,7 +36,7 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.config["device"] = "cuda:1"
 
         with (
-            patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False),
+            patch.object(self.models, "require_gpu_enabled", return_value=True),
             self._settings_config_patch(),
             patch.object(self.models.torch.cuda, "is_available", return_value=True),
             patch.object(self.models.torch.cuda, "device_count", return_value=1),
@@ -48,7 +48,7 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.config["ngpu"] = 0
 
         with (
-            patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False),
+            patch.object(self.models, "require_gpu_enabled", return_value=True),
             self._settings_config_patch(),
             patch.object(self.models.torch.cuda, "is_available", return_value=True),
             patch.object(self.models.torch.cuda, "device_count", return_value=1),

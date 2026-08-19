@@ -87,7 +87,7 @@ pip install -r requirements.txt
 
 ### 配置
 
-配置文件为 `config.toml`（TOML 格式）。服务通过环境变量 `CONFIG_PATH` 指定配置路径，未设置时默认读取当前目录下的 `./config.toml`。
+配置文件为项目根 `config.toml`（TOML 格式）。服务通过环境变量 `CONFIG_PATH` 指定配置路径；未设置时读取项目根配置，相对路径也按项目根解析。
 
 ```toml
 # 基础配置
@@ -117,6 +117,23 @@ open_emotion = true        # Paraformer 路径情感识别
 ban_hotword = true         # 禁用热词
 open_mul_lang = true       # 法语 Faster-Whisper 转写
 ```
+
+#### 平台注册与运行配置
+
+本地根配置默认不注册且允许 CPU；受控部署使用
+`algorithm-scheduling-platform/deploy/config/operators/asr_offline.gpu.toml`：
+
+| 字段 | 本地根配置 | 受控部署 | 说明 |
+| --- | --- | --- | --- |
+| `platform.registration_enabled` | `false` | `true` | 是否主动注册到调度平台 |
+| `platform.control_service_url` | `""` | `http://control-service:18100` | 注册与心跳地址 |
+| `platform.heartbeat_interval_seconds` | `5` | `5` | 心跳间隔 |
+| `platform.max_concurrent_requests` | `4` | `4` | 平台允许同时分发的离线转写请求数 |
+| `runtime.require_gpu` | `false` | `true` | GPU 部署失败关闭开关 |
+
+Compose 继续管理实例 ID、服务 URL、注册 Token、物理 GPU/可见设备、`CONFIG_PATH`、端口和
+`UVICORN_WORKERS=1`。平台容量 `4` 不覆盖 `concurrency=5`：后者仍控制算子内部 GPU slot、
+等待队列与超时，现有模型串行锁也保持不变。
 
 `/get_status` 中的 `appVersion` 固定为 `asr:latest`。`device="cpu"` 时模型使用
 `ngpu=0`，`device="cuda:<index>"` 时使用 `ngpu=1`，两者均不再由配置文件传入。日志固定写入

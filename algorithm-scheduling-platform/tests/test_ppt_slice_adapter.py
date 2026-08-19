@@ -204,6 +204,10 @@ class _Node:
         self.progress = {
             "task_id": "course-001",
             "operator_task_id": "ppt-run-001",
+            "lease_id": "lease-ppt-001",
+            "instance_id": "ppt-slice-cpu0",
+            "service_url": "http://ppt-slice-cpu0:9001",
+            "lease_status": "ACTIVE",
         }
 
 
@@ -261,6 +265,11 @@ def test_terminal_handler_is_idempotent_after_durable_completion(tmp_path: Path)
     assert len(repository.completions) == 1
     assert repository.completions[0][1].artifact_count == 2
     assert repository.completions[0][1].result is not None
+    assert repository.completions[0][1].progress["lease_id"] == "lease-ppt-001"
+    assert (
+        repository.completions[0][1].progress["lease_status"]
+        == "TERMINAL_PERSISTED"
+    )
     assert repository.completions[0][1].result["dynamic_segments"] == [
         {
             "type": "SUSPECTED_VIDEO_PLAYBACK",
@@ -392,7 +401,7 @@ async def test_capacity_lease_is_renewed_until_terminal_persistence() -> None:
 async def test_capacity_lease_is_released_when_background_renewal_failed() -> None:
     class _FailingCapacityClient(_CapacityClient):
         async def renew(self, lease_id: str, ttl_seconds: int) -> None:
-            await super().renew(lease_id, ttl_seconds)
+            await super().renew(lease_id, ttl_seconds=ttl_seconds)
             raise ppt_slice.PptCapacityLeaseError("续租服务不可用")
 
     client = _FailingCapacityClient()
@@ -435,7 +444,7 @@ async def test_capacity_http_client_calls_control_renew_and_release_endpoints() 
             http_client=http_client,
             control_service_url="http://control-service:18100",
         )
-        await client.renew("lease-001", 60)
+        await client.renew("lease-001", ttl_seconds=60)
         await client.release("lease-001")
 
     assert requests == [

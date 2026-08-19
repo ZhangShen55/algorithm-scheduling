@@ -19,6 +19,20 @@ mt_max_concurrency = 256
 # 机器翻译队列等待超时时间，单位秒。
 mt_queue_timeout = 90
 
+[platform]
+# 容器部署时主动向 control-service 注册。
+registration_enabled = true
+# 容器网络内的 control-service 地址。
+control_service_url = "http://control-service:18100"
+# 算子注册心跳间隔秒数。
+heartbeat_interval_seconds = 5
+# 课程脑图与关键词提取共享的单实例平台容量。
+max_concurrent_requests = 256
+
+[runtime]
+# 文本分析服务不要求本机 CUDA。
+require_gpu = false
+
 [eval_weight]
 # 课堂评价基础分。
 base_score = 16.0

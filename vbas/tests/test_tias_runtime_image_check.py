@@ -223,11 +223,8 @@ class GpuRuntimeGuardTest(unittest.TestCase):
             cuda=SimpleNamespace(is_available=lambda: True, device_count=lambda: 1),
             device=lambda value: value,
         )
-        with (
-            patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False),
-            self.assertRaisesRegex(RuntimeError, "部署要求使用 GPU.*GPU_ID"),
-        ):
-            resolve_runtime_device("cpu", torch_module=fake_torch)
+        with self.assertRaisesRegex(RuntimeError, "部署要求使用 GPU.*GPU_ID"):
+            resolve_runtime_device("cpu", torch_module=fake_torch, require_gpu=True)
 
     def test_required_gpu_rejects_unavailable_cuda(self):
         from app.core.runtime_device import resolve_runtime_device
@@ -236,11 +233,8 @@ class GpuRuntimeGuardTest(unittest.TestCase):
             cuda=SimpleNamespace(is_available=lambda: False, device_count=lambda: 0),
             device=lambda value: value,
         )
-        with (
-            patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False),
-            self.assertRaisesRegex(RuntimeError, "要求使用 GPU.*CUDA 不可用"),
-        ):
-            resolve_runtime_device(0, torch_module=fake_torch)
+        with self.assertRaisesRegex(RuntimeError, "要求使用 GPU.*CUDA 不可用"):
+            resolve_runtime_device(0, torch_module=fake_torch, require_gpu=True)
 
     def test_container_gpu_configuration_resolves_to_cuda_zero(self):
         from app.core.runtime_device import resolve_runtime_device
@@ -249,8 +243,10 @@ class GpuRuntimeGuardTest(unittest.TestCase):
             cuda=SimpleNamespace(is_available=lambda: True, device_count=lambda: 1),
             device=lambda value: value,
         )
-        with patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False):
-            self.assertEqual("cuda:0", resolve_runtime_device(0, torch_module=fake_torch))
+        self.assertEqual(
+            "cuda:0",
+            resolve_runtime_device(0, torch_module=fake_torch, require_gpu=True),
+        )
 
     def test_local_cpu_mode_is_preserved_without_deployment_switch(self):
         from app.core.runtime_device import resolve_runtime_device

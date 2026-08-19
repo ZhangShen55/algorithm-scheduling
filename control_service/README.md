@@ -29,6 +29,19 @@ python -m uvicorn app.main:app \
 调试，部署预检会拒绝它。localhost 部署可用
 `CONTROL_OPERATOR_REGISTRY__TRUSTED_SERVICE_URLS` 的 JSON 对象替换默认 Docker 映射。
 
+## 容量租约
+
+Control Service 是算子实例注册和平台容量租约的唯一权威。平台是否还能分发只取决于 Redis
+中的有效租约数；算子心跳的 `reported_inflight` 仅用于观测直连请求、心跳时差或漏租约，
+不会继续占用已经释放的槽位。一个实例声明的全部 capability 共享同一
+`declared_capacity`，不能按能力重复计算容量。
+
+内部调用方可在申请时提交 `work_context`，也可在领取离线节点后通过
+`POST /internal/operator-instances/lease/context` 补绑。运维可使用
+`GET /ops/operator-instances/{instance_id}/active-leases` 查询当前分配到实例的工作、获取/过期
+时间、绑定状态和心跳差异。工作上下文只保存短标识，不保存图片、音频或识别文本。活跃租约
+明细只在 Redis 中维护，不为每次申请、续租和释放增加 PostgreSQL 高频写入。
+
 ## 数据库迁移
 
 启动 `control-service` 前，必须先按文件名顺序将

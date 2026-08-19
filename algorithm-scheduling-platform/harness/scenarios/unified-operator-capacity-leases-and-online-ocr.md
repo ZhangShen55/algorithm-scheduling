@@ -2,9 +2,10 @@
 
 ## 当前状态
 
-本场景对应 OpenSpec `unify-operator-capacity-leases-and-online-ocr`。2026-08-19 的规划基线已经
-通过严格 OpenSpec 校验，proposal、design、三份规格和 tasks 均完整；业务代码、部署配置和
-运行证据尚未实施，OpenSpec 的 88 项任务保持未勾选，本场景结论为“待验证”。
+本场景对应 OpenSpec `unify-operator-capacity-leases-and-online-ocr`。2026-08-19 已进入 apply：
+公共租约模型、Redis 原子容量、Control API、普通/工作项/VBas/在线租约客户端、在线单图 OCR、
+八算子 TOML 配置和 Compose 静态合同已经实现。当前结论是“本地实现部分符合，跨服务与最终
+三卡发布待验证”，不得据此宣称整个变更完成。
 
 本记录使用用户修改后的 OpenSpec 作为权威来源，固定以下新增约束：
 
@@ -18,7 +19,8 @@
   `52428800` 字节（50 MiB）；OCR 的 `ocr.image_max_bytes` 同步为 `52428800`。
 - `192.168.29.11` 的新 SHA 镜像完成 revision、替换、健康、24 实例注册和 Smoke 后，旧平台/算子
   镜像只允许按已核验的精确 ID 删除；基础、基础设施、原业务镜像、模型、数据和证据不得清理。
-- 当前仅建立验收合同和证据目录规范；本文中的命令是实施后必须执行的门禁，不代表已经通过。
+- 当前已经取得静态、单元、真实 Redis 和八算子项目测试证据；四服务运行、真实跨服务泳道、
+  最终 SHA 的 24 实例重建与精确旧镜像清理仍是必须执行的门禁。
 
 权威规划文件：
 
@@ -143,15 +145,70 @@ POST /api/online/ocr/recognize
 
 ## 规格到证据矩阵
 
-| 规格能力 | OpenSpec 任务 | 最低证据 | 当前结论 |
-| --- | --- | --- | --- |
-| `unified-operator-capacity` | 1、8、9、12、14 | 根/部署 TOML、Compose 源/展开配置、注册契约、GPU 默认进程名、八算子真实推理、24 实例与精确镜像清理 | 待验证 |
-| `attributed-capacity-leases` | 2、3、4、5、6、11、13、14 | 真实 Redis 并发、Control API、跨 TTL 时序、PPT/ASR/VBas 跨服务链路 | 待验证 |
-| `online-ocr-routing` | 7、9、11、13、14 | 网关契约替身、72/50 MiB 边界、真实 OCR、在线/离线共享池 | 待验证 |
-| 兼容与交付 | 10、11、12、14 | 路由基线、文档、Harness、全回归和里程碑 2B 不可变证据 | 待验证 |
+| 规格能力 | 主要代码 | 自动测试 | 最低运行证据 | 当前结论 |
+| --- | --- | --- | --- | --- |
+| `unified-operator-capacity` | `packages/operator_registry_client/config.py`、八算子配置/入口、`deploy/docker-compose.operators.yml` | `test_operator_registry_client.py`、`test_operator_deployment_integration.py`、`test_milestone_2b_operator_configs.py`、八算子项目测试 | 根/部署 TOML、Compose 展开配置、真实推理、24 实例、精确镜像清理 | 本地配置/项目测试符合；最终镜像和清理待验证 |
+| `attributed-capacity-leases` | `platform_common/redis_operator_registry.py`、Control 租约 API、三个调用服务的容量客户端 | Redis 集成、Control API、dispatcher/executor、PPT 工作项和 VBas 客户端测试 | 真实 Redis 并发、跨 TTL 时序、PPT/ASR/VBas 跨服务链路 | Redis/API/客户端测试符合；完整泳道待验证 |
+| `online-ocr-routing` | `online_gateway_service/app/api/routes.py`、`request_validation.py`、`capacity.py` | `test_online_gateway.py`、OCR 项目测试 | 契约 OCR、真实 OCR、72/50 MiB 边界、在线/离线同池并发 | 契约和边界测试符合；真实 OCR 同池并发待验证 |
+| 兼容与交付 | 八算子业务入口、四服务 README、总体设计、部署/Harness 脚本 | 路由合同、Harness 一致性、平台/算子全回归 | 四服务运行、全部泳道、最终 SHA 不可变报告 | 文档实施中；最终发布证据待验证 |
 
 任何矩阵行在只有静态代码、模拟成功响应或健康检查时都不得改为“符合”。真实 Redis、服务运行、
 算子契约和三卡部署证据必须分别注明层级，跳过项不能计为通过。
+
+## 2026-08-19 apply 中间证据
+
+当前工作树已取得以下可复现结果，最终提交后必须以完整 Git SHA 重新记录：
+
+```text
+公共配置/Compose/注册预检/wheel 合同：118 passed
+PPT OCR/关键词失败、取消、部分完成和恢复：4 passed
+八算子项目测试：ASR Online 22、ASR Offline 58、FaceRec 54、OCR 175、
+                 ScreenDet 78、PPT Slice 100、VBas 75、Text Analysis 25
+Control 注册 API：37 passed
+Orchestrator 普通节点定向测试：18 passed
+GPU evidence 与报告聚合：657 passed
+```
+
+这些结果分别属于静态、单元和项目级验证；不替代四服务真实运行、真实 OCR 共享池、课程泳道
+和 `192.168.29.11` 最终 SHA 门禁。
+
+同一工作树还完成了下列本机运行验证；记录时的父 revision 为
+`bd59541`，最终提交后仍需用新的完整 SHA 生成不可变报告：
+
+```text
+平台核心定向门禁：147 passed
+平台完整回归首轮：2575 passed、4 failed、3 skipped；4 个失败均为新增部署门禁与既有测试替身
+  不同步，修复后定向 4 passed，部署脚本完整套件 303 passed。
+平台完整回归复跑终态：2579 passed、3 skipped、27 warnings，耗时 561.68 秒；3 个跳过项
+  仅为未提供 `OPERATOR_REGISTRY_TOKEN` 时不执行 canonical FaceRec 集成，不属于功能失败。
+真实 PostgreSQL/Redis/Kafka 集成：59 passed
+四服务：Control、Orchestrator、Vision Orchestrator、Online Gateway 同时启动；健康检查通过；
+  Control PostgreSQL/Redis/schema ready；Orchestrator 的 Outbox、课程消费、节点执行、PPT reconcile
+  四个后台循环及 PostgreSQL/Kafka/Control 依赖均 ready；五个进程（含契约算子）均优雅退出。
+真实 Control 租约 API：申请 10 秒租约 -> 绑定上下文 -> 查询 active_lease_count=1 ->
+  续租为 30 秒且 acquired_at/work_context 不变 -> 释放 -> active_lease_count=0。
+ASR Online：22 passed；8084 健康；真实 WAV WebSocket 会话得到非空增量结果。
+ASR Offline：58 passed；8083 健康；真实 WAV 返回非空结果；6 路并发观察到本地
+  max_processing=5、max_queued=1，未被平台注册容量 4 覆盖。
+FaceRec：54 passed；8003 就绪；真实图片识别成功且未保存人脸原图。
+OCR：175 passed；由于其他本机应用占用 IPv4 127.0.0.1:8866，算子在 IPv6 回环 [::1]:8866
+  启动；版本和真实图片 Smoke 通过；declared_capacity=256，本地 max_concurrency=1；
+  52428800 字节进入格式解析，52428801 字节在推理前拒绝。
+ScreenDet：78 passed；8880 ready；真实图片 /detect_all 的 tilt、screen、quality_abnormal、
+  occlusion 四模块执行成功，failed_modules 为空。
+PPT Slice：100 passed；9001 健康和版本接口正常；本地/平台注册容量均为 10；24 秒六页面
+  合成视频受理后成功发送一次终态回调，status=60、count=3，三张切片和 manifest 均位于
+  /tmp 测试结果根的固定 task_id/ppt 路径，未发现 .part 残留。
+VBas：从既有 Python 3.11 `vbas` 环境克隆规范名 `jy-tias`；75 passed、pip check 通过；8981
+  模型就绪；学生真实图片返回 3 人，教师真实图片返回教师及行为结果；共享容量 128，本地
+  max_concurrent_batches=1、max_queue_size=0，学生请求执行中并发教师请求得到 429，完成后重试成功。
+Text Analysis：从既有 Python 3.11 `openai` 环境克隆规范名 `ai_report`；25 passed、pip check
+  通过；8000 启动并保留 27 条路由；真实 `/v1/extract_keywords` 与 `/v1/course_overviews`
+  均返回 200 和结构化结果；两个平台注册能力共享 declared_capacity=256。
+```
+
+未完成项保持未勾选：八算子尚未逐一以根 TOML 和受控部署 TOML 启动并注入旧环境变量完成
+进程级对照；远端最终 SHA 镜像、24 实例、业务泳道、压力/回滚和精确镜像清理均尚未执行。
 
 ## 实施后验证入口
 

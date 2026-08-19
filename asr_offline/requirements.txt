@@ -1,5 +1,5 @@
 # Runtime dependencies pinned from /root/anaconda3/envs/asr on 2026-06-06.
-algorithm-operator-registry-client==0.1.0
+algorithm-operator-registry-client==0.2.0
 modelscope==1.25.0
 av==14.3.0
 funasr==1.2.6

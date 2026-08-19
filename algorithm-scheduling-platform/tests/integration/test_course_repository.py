@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -33,7 +34,10 @@ from vision_orchestrator_service.app.domain.student_aggregation import (
 )
 
 from packages.platform_common.config import PlatformSettings
-from packages.platform_common.operator_registry import UnavailableOperatorRegistry
+from packages.platform_common.operator_registry import (
+    CapacityLease,
+    UnavailableOperatorRegistry,
+)
 from packages.platform_common.repository import (
     CourseRepository,
     NodeResultWrite,
@@ -460,6 +464,47 @@ def test_failed_result_write_rolls_back_completion(repository: CourseRepository)
         )
 
     assert repository.get_node(node.id).status is NodeStatus.RUNNING
+
+
+def test_list_running_ppt_slice_nodes_returns_only_reconcilable_nodes(
+    repository: CourseRepository,
+) -> None:
+    task_type = repository.create_task_types(
+        task_id="course-ppt-runtime",
+        writes=[TaskTypeWrite(task_type=TaskType.PPT)],
+    )[0]
+    running = repository.create_node(
+        course_task_type_id=task_type.id,
+        node_code="PPT_SLICE",
+        status=NodeStatus.RUNNING,
+        priority=Priority.NORMAL,
+        reason="PPT 算子后台处理中",
+        required_capability="ppt_slice",
+    )
+    repository.create_node(
+        course_task_type_id=task_type.id,
+        node_code="PPT_SLICE_OLD",
+        status=NodeStatus.RUNNING,
+        priority=Priority.NORMAL,
+        reason="其他节点",
+        required_capability="ppt_slice",
+    )
+    pending_task_type = repository.create_task_types(
+        task_id="course-ppt-pending",
+        writes=[TaskTypeWrite(task_type=TaskType.PPT)],
+    )[0]
+    repository.create_node(
+        course_task_type_id=pending_task_type.id,
+        node_code="PPT_SLICE",
+        status=NodeStatus.PENDING,
+        priority=Priority.NORMAL,
+        reason="尚未运行",
+        required_capability="ppt_slice",
+    )
+
+    nodes = repository.list_running_ppt_slice_nodes()
+
+    assert [node.id for node in nodes] == [running.id]
 
 
 def test_missing_node_update_has_explicit_error(repository: CourseRepository) -> None:
@@ -909,25 +954,60 @@ def test_ppt_pipeline_exposes_slices_while_ocr_waits_then_preserves_image_identi
                 "keyword_response": {"result": {"keywords": [text]}},
             }
 
+    class E2eLeaseClient:
+        async def acquire(
+            self,
+            capability: str,
+            *,
+            ttl_seconds: int | None = None,
+            work_context: object | None = None,
+        ) -> CapacityLease:
+            del ttl_seconds
+            assert work_context is not None
+            return CapacityLease(
+                lease_id=f"lease-{capability}-{uuid4().hex}",
+                instance_id=f"{capability}-instance",
+                capability=capability,
+                service_url=(
+                    "http://ocr:8000"
+                    if capability == "ocr"
+                    else "http://text-analysis:8000"
+                ),
+                expires_at=datetime.now(UTC) + timedelta(seconds=60),
+            )
+
+        async def run_with_renewal(
+            self,
+            lease: CapacityLease,
+            operation,
+            **kwargs,
+        ):
+            del lease, kwargs
+            return await operation
+
+        async def release(self, lease_id: str) -> None:
+            del lease_id
+
     work = [
         PptImageWork("ppt-001", Path("/ppt-001.jpg"), 0),
         PptImageWork("ppt-002", Path("/ppt-002.jpg"), 1),
     ]
     pipeline = PptTextPipeline(
         repository,
+        E2eLeaseClient(),
         E2eOcrAdapter(),
         E2eKeywordAdapter(),
         PptWorkLimits(batch_size=2, max_concurrency=2),
     )
     ocr_results = asyncio.run(
         pipeline.run_ocr(
+            task_id="course-ppt-e2e",
             node_id=claimed_ocr.id,
             work=work,
-            instance_url="http://ocr:8000",
         )
     )
 
-    claimed_keywords = dispatcher.claim_next("text_analysis", "ppt-worker")
+    claimed_keywords = dispatcher.claim_next("extract_keywords", "ppt-worker")
     assert claimed_keywords is not None
     repository.transition_node(
         claimed_keywords.id,
@@ -936,10 +1016,10 @@ def test_ppt_pipeline_exposes_slices_while_ocr_waits_then_preserves_image_identi
     )
     asyncio.run(
         pipeline.run_keywords(
+            task_id="course-ppt-e2e",
             node_id=claimed_keywords.id,
             work=work,
             ocr_results=ocr_results,
-            instance_url="http://text-analysis:8000",
         )
     )
 

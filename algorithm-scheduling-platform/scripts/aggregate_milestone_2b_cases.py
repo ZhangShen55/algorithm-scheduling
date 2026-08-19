@@ -65,11 +65,25 @@ CPU_OPERATOR_CODES = {
     "ppt-slice": "ppt_slice",
     "text-analysis": "text_analysis",
 }
-GPU_ENVIRONMENT_FIELDS = (
+GPU_OPERATOR_CODES = {
+    "asr-offline": "asr_offline",
+    "asr-online": "asr_online",
+    "facerec": "facerec",
+    "ocr": "ocr",
+    "screen-det": "screen_det",
+    "vbas": "vbas",
+}
+GPU_BINDING_ENVIRONMENT_FIELDS = (
     "PLATFORM_GPU_ID",
-    "GPU_PROCESS_NAME",
     "NVIDIA_VISIBLE_DEVICES",
+)
+FORBIDDEN_OPERATOR_ENVIRONMENT_FIELDS = (
+    "PLATFORM_REGISTRATION_ENABLED",
+    "PLATFORM_CONTROL_SERVICE_URL",
+    "PLATFORM_HEARTBEAT_INTERVAL_SECONDS",
+    "PLATFORM_DECLARED_CAPACITY",
     "REQUIRE_GPU",
+    "GPU_PROCESS_NAME",
 )
 INSTANCE_ID_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 OPERATOR_CODE_PATTERN = re.compile(r"[a-z][a-z0-9_]*")
@@ -1213,6 +1227,16 @@ def load_operator_inventory(path: Path) -> OperatorInventory:
             service.get("environment"),
             f"{path}: services.{service_name}.environment",
         )
+        present_forbidden_fields = [
+            field
+            for field in FORBIDDEN_OPERATOR_ENVIRONMENT_FIELDS
+            if field in environment
+        ]
+        if present_forbidden_fields:
+            raise ValueError(
+                f"{path}: {service_name} contains removed environment fields "
+                f"{present_forbidden_fields}"
+            )
         raw_profiles = _require_list(
             service.get("profiles"),
             f"{path}: services.{service_name}.profiles",
@@ -1244,24 +1268,19 @@ def load_operator_inventory(path: Path) -> OperatorInventory:
                     f"{path}: {service_name} profile {profile} does not match "
                     f"PLATFORM_GPU_ID {physical_gpu}"
                 )
-            process_name = _require_string(
-                environment.get("GPU_PROCESS_NAME"),
-                f"{path}: {service_name}.GPU_PROCESS_NAME",
-            )
-            if OPERATOR_CODE_PATTERN.fullmatch(process_name) is None:
-                raise ValueError(f"{path}: {service_name} GPU_PROCESS_NAME is invalid")
             suffix = f"-{profile}"
             if not service_name.endswith(suffix):
                 raise ValueError(f"{path}: {service_name} does not match profile {profile}")
-            operator_code = service_name.removesuffix(suffix).replace("-", "_")
-            if process_name != operator_code:
-                raise ValueError(
-                    f"{path}: {service_name} GPU_PROCESS_NAME {process_name} does not "
-                    f"match operator_code {operator_code}"
-                )
+            operator_prefix = service_name.removesuffix(suffix)
+            operator_code = GPU_OPERATOR_CODES.get(operator_prefix)
+            if operator_code is None:
+                raise ValueError(f"{path}: unsupported GPU service: {service_name}")
+            process_name = operator_code
         elif profile == "cpu":
             present_gpu_fields = [
-                field for field in GPU_ENVIRONMENT_FIELDS if field in environment
+                field
+                for field in GPU_BINDING_ENVIRONMENT_FIELDS
+                if field in environment
             ]
             if present_gpu_fields:
                 raise ValueError(

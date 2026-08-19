@@ -9,6 +9,10 @@ from typing import Any
 import toml
 
 from app.core.model_protection import ModelProtectionConfig
+from packages.operator_registry_client import (
+    OperatorDeploymentSettings,
+    load_operator_deployment_settings,
+)
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
@@ -70,6 +74,7 @@ class LoggingConfig:
 
 @dataclass(frozen=True)
 class RuntimeConfig:
+    require_gpu: bool = False
     max_image_bytes: int = 10 * 1024 * 1024
 
 
@@ -136,6 +141,7 @@ class Settings:
     aggregate_detection: AggregateDetectionConfig
     logging: LoggingConfig
     runtime: RuntimeConfig
+    operator_deployment: OperatorDeploymentSettings
 
 
 def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
@@ -187,6 +193,10 @@ def _load_settings() -> Settings:
         ),
         logging=LoggingConfig(**_section(raw, "logging")),
         runtime=RuntimeConfig(**_section(raw, "runtime")),
+        operator_deployment=load_operator_deployment_settings(
+            CONFIG_PATH,
+            default_capacity=128,
+        ),
     )
 
 

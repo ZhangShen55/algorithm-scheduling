@@ -16,6 +16,8 @@ class NodeExecutionContext:
     node_code: str
     request_payload: dict[str, Any]
     effective_params: dict[str, Any] | None
+    node_id: int | None = None
+    course_task_type_id: int | None = None
 
 
 class ContractStubResponse(BaseModel):
@@ -32,12 +34,17 @@ class ContractStubAdapter:
 
     async def execute(
         self,
-        service_url: str,
+        service_url: str | None,
         context: NodeExecutionContext,
     ) -> NodeResultWrite:
+        if service_url is None:
+            raise RuntimeError(f"节点缺少算子实例地址: {context.node_code}")
+        request = asdict(context)
+        request.pop("node_id", None)
+        request.pop("course_task_type_id", None)
         response = await self._http_client.post(
             f"{service_url.rstrip('/')}/execute",
-            json=asdict(context),
+            json=request,
         )
         response.raise_for_status()
         parsed = ContractStubResponse.model_validate(response.json())

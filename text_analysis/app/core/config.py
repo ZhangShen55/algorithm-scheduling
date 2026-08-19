@@ -1,11 +1,16 @@
 import os
+from pathlib import Path
 from pydantic import BaseModel
 from typing import List
+
+from packages.operator_registry_client import load_operator_deployment_settings
 
 try:
     import tomllib
 except ModuleNotFoundError:  # Python 3.10
     import tomli as tomllib
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class _eval_weights(BaseModel):
@@ -411,7 +416,14 @@ def _load_from_config_file(cfg_path: str) -> dict:
     return {}
 
 
-_cfg = _load_from_config_file(os.getenv("CONFIG_PATH", "config.toml"))
+_config_path = Path(os.getenv("CONFIG_PATH", PROJECT_ROOT / "config.toml"))
+if not _config_path.is_absolute():
+    _config_path = (PROJECT_ROOT / _config_path).resolve()
+_cfg = _load_from_config_file(str(_config_path))
+operator_deployment = load_operator_deployment_settings(
+    _config_path,
+    default_capacity=256,
+)
 
 _course_overview_segment_count = _positive_int(
     os.getenv("COURSE_OVERVIEW_SEGMENT_COUNT", _cfg.get("COURSE_OVERVIEW_SEGMENT_COUNT", 4)),

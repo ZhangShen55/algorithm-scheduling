@@ -2,7 +2,7 @@
 # torch 由基础镜像预装（2.6.0+cu118），勿在此声明
 # ultralytics 在 Dockerfile 中 --no-deps 安装，避免 pip 覆盖 torch
 
-algorithm-operator-registry-client==0.1.0
+algorithm-operator-registry-client==0.2.0
 fastapi==0.111.0
 httpx==0.28.1
 uvicorn[standard]==0.30.1

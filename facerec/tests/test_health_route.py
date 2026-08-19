@@ -107,6 +107,9 @@ def test_operator_status_reports_model_not_ready_when_dlib_workers_failed() -> N
         default_port=8003,
         model_ready_provider=readiness.model_ready,
         registration_enabled=False,
+        control_service_url="",
+        heartbeat_interval_seconds=5,
+        max_concurrent_requests=128,
     )
 
     response = TestClient(app).get("/ops/status")

@@ -3,7 +3,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from .api.stu_tea_behavior import build_behavior_router
 from .api.worker_ops import build_worker_ops_router
-from .core.settings import settings
+from .core.settings import operator_deployment, settings
 from .services.worker_state import BatchAdmissionController
 from packages.operator_registry_client import install_operator_runtime
 import logging
@@ -67,6 +67,9 @@ install_operator_runtime(
     operator_code="vbas",
     capabilities=["student_behavior", "teacher_behavior"],
     default_port=8981,
-    declared_capacity=int(getattr(settings, "MaxConcurrentBatches", 1)),
+    registration_enabled=operator_deployment.platform.registration_enabled,
+    control_service_url=operator_deployment.platform.control_service_url,
+    heartbeat_interval_seconds=operator_deployment.platform.heartbeat_interval_seconds,
+    max_concurrent_requests=operator_deployment.platform.max_concurrent_requests,
 )
 

@@ -104,6 +104,7 @@ class PptConfig(BaseModel):
     reconcile_interval_seconds: float = Field(default=30.0, gt=0)
     ocr_batch_size: int = Field(default=8, ge=1)
     ocr_max_concurrency: int = Field(default=2, ge=1)
+    ocr_request_timeout_seconds: float = Field(default=600.0, gt=0)
     keyword_batch_size: int = Field(default=8, ge=1)
     keyword_max_concurrency: int = Field(default=2, ge=1)
 

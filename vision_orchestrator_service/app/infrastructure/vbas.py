@@ -10,7 +10,7 @@ from typing import Any, Protocol
 import httpx
 
 from .cache import VisionStream
-from .capacity import CapacityLease
+from .capacity import CapacityLease, WorkContext
 
 JsonObject = dict[str, Any]
 
@@ -25,6 +25,8 @@ class CapacityLeaseClient(Protocol):
         capability: str,
         *,
         ttl_seconds: int = 60,
+        work_context: WorkContext | None = None,
+        renew_interval_seconds: float | None = None,
     ) -> AbstractAsyncContextManager[CapacityLease]: ...
 
 
@@ -50,12 +52,15 @@ class VbasBatchConfig:
     batch_size: int = 8
     max_concurrency: int = 2
     lease_ttl_seconds: int = 60
+    request_timeout_seconds: float = 60.0
 
     def __post_init__(self) -> None:
         if self.batch_size <= 0 or self.max_concurrency <= 0:
             raise ValueError("VBas 批次大小和并发上限必须大于 0")
         if self.lease_ttl_seconds <= 0:
             raise ValueError("VBas 容量租约时长必须大于 0")
+        if self.request_timeout_seconds <= 0:
+            raise ValueError("VBas 请求超时必须大于 0")
 
 
 class VbasBatchClient:
@@ -76,6 +81,7 @@ class VbasBatchClient:
         task_id: str,
         stream: VisionStream,
         frames: Iterable[VbasFrame],
+        trace_id: str | None = None,
     ) -> list[JsonObject]:
         frame_list = list(frames)
         if not frame_list:
@@ -88,7 +94,13 @@ class VbasBatchClient:
 
         async def run_batch(batch_index: int, batch: list[VbasFrame]) -> list[JsonObject]:
             async with semaphore:
-                return await self._analyze_batch(task_id, stream, batch_index, batch)
+                return await self._analyze_batch(
+                    task_id,
+                    stream,
+                    batch_index,
+                    batch,
+                    trace_id=trace_id,
+                )
 
         batch_results = await asyncio.gather(
             *(run_batch(index, batch) for index, batch in enumerate(batches))
@@ -101,6 +113,8 @@ class VbasBatchClient:
         stream: VisionStream,
         batch_index: int,
         batch: list[VbasFrame],
+        *,
+        trace_id: str | None,
     ) -> list[JsonObject]:
         if stream is VisionStream.TEACHER:
             capability = "teacher_behavior"
@@ -124,15 +138,26 @@ class VbasBatchClient:
         async with self._lease_client.acquire(
             capability,
             ttl_seconds=self._config.lease_ttl_seconds,
+            work_context=WorkContext(
+                source_service="vision-orchestrator-service",
+                work_type=f"vbas_{stream_type}_batch",
+                work_id=batch_id,
+                task_id=task_id,
+                item_id=batch_id,
+                trace_id=trace_id,
+            ),
         ) as lease:
             try:
-                response = await self._http.post(
-                    f"{lease.service_url.rstrip('/')}{endpoint}",
-                    json=request,
+                response = await asyncio.wait_for(
+                    self._http.post(
+                        f"{lease.service_url.rstrip('/')}{endpoint}",
+                        json=request,
+                    ),
+                    timeout=self._config.request_timeout_seconds,
                 )
                 response.raise_for_status()
                 body = response.json()
-            except (httpx.HTTPError, ValueError) as exc:
+            except (TimeoutError, httpx.HTTPError, ValueError) as exc:
                 raise VbasAdapterError(
                     f"VBas 批次调用失败: {task_id}/{batch_id}: {exc}"
                 ) from exc

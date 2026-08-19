@@ -1,18 +1,18 @@
-import os
 from typing import Any
 
 
-def require_gpu_enabled() -> bool:
-    return os.getenv("REQUIRE_GPU", "false").strip().lower() in {"1", "true", "yes"}
-
-
-def resolve_runtime_device(configured: int | str, *, torch_module: Any | None = None):
+def resolve_runtime_device(
+    configured: int | str,
+    *,
+    torch_module: Any | None = None,
+    require_gpu: bool = False,
+):
     if torch_module is None:
         import torch as torch_module
 
     value = str(configured).strip().lower()
     if value == "cpu":
-        if require_gpu_enabled():
+        if require_gpu:
             raise RuntimeError("部署要求使用 GPU，但 VBas GPU_ID 不是 CUDA 设备")
         return torch_module.device("cpu")
 

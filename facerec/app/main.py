@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.core import ai_engine, dlib_worker
-from app.core.config import settings
+from app.core.config import operator_deployment, settings
 from app.core.logger import get_logger, new_request_id, request_id_ctx
 from app.core.runtime_paths import ensure_runtime_directories
 from app.middleware import APIStatsMiddleware
@@ -204,6 +204,10 @@ install_operator_runtime(
     operator_code="facerec",
     capabilities=["recognize"],
     default_port=8003,
+    registration_enabled=operator_deployment.platform.registration_enabled,
+    control_service_url=operator_deployment.platform.control_service_url,
+    heartbeat_interval_seconds=operator_deployment.platform.heartbeat_interval_seconds,
+    max_concurrent_requests=operator_deployment.platform.max_concurrent_requests,
     model_ready_provider=ops.readiness.model_ready,
     before_registry_shutdown=_begin_dlib_shutdown,
 )

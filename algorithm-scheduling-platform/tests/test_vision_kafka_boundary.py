@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -192,3 +193,36 @@ async def test_vision_vbas_calls_use_control_service_capacity_lease() -> None:
             {"lease_id": "lease-vbas-001"},
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_vision_capacity_renews_long_batch_and_releases() -> None:
+    calls: list[str] = []
+    expires_at = datetime.now(UTC) + timedelta(seconds=1)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path.endswith("/lease") or request.url.path.endswith("/renew"):
+            return httpx.Response(
+                200,
+                json={
+                    "lease_id": "lease-vbas-renew",
+                    "instance_id": "vbas-gpu0",
+                    "capability": "teacher_behavior",
+                    "service_url": "http://vbas-gpu0:8981",
+                    "expires_at": expires_at.isoformat(),
+                },
+            )
+        return httpx.Response(200, json={"status": "RELEASED"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = CapacityLeaseHttpClient(http, control_service_url="http://control")
+        async with client.acquire(
+            "teacher_behavior",
+            ttl_seconds=1,
+            renew_interval_seconds=0.01,
+        ):
+            await asyncio.sleep(0.025)
+
+    assert sum(path.endswith("/renew") for path in calls) >= 2
+    assert calls[-1].endswith("/release")

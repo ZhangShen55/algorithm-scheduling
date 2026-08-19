@@ -1,12 +1,10 @@
 import asyncio
-import os
-
 import ctranslate2
 import torch
 from faster_whisper import WhisperModel
 from funasr import AutoModel
 
-from app.core.config import settings
+from app.core.config import operator_deployment, settings
 
 # 单例缓存
 _model_asr = None
@@ -18,7 +16,7 @@ _model_lock = asyncio.Lock()
 
 
 def require_gpu_enabled() -> bool:
-    return os.getenv("REQUIRE_GPU", "false").strip().lower() in {"1", "true", "yes"}
+    return operator_deployment.runtime.require_gpu
 
 
 def resolve_runtime_device() -> torch.device:

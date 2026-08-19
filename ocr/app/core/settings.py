@@ -6,6 +6,10 @@ from typing import Annotated
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from app.core.exceptions import ConfigurationError
+from packages.operator_registry_client import (
+    OperatorDeploymentSettings,
+    load_operator_deployment_settings,
+)
 
 try:
     import tomllib
@@ -14,6 +18,7 @@ except ModuleNotFoundError:  # Python 3.10
 
 
 DEVICE_PATTERN = re.compile(r"^(cpu|cuda:(\d+)|npu:(\d+))$")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def parse_device(raw: str) -> tuple[str, int | None]:
@@ -62,7 +67,7 @@ class OCRSettings(BaseModel):
     enable_mkldnn: bool = True
     enable_hpi: bool = False
     max_concurrency: Annotated[int, Field(ge=1)] = 1
-    image_max_bytes: Annotated[int, Field(ge=1)] = 20 * 1024 * 1024
+    image_max_bytes: Annotated[int, Field(ge=1)] = 50 * 1024 * 1024
     detection: DetectionSettings = Field(default_factory=DetectionSettings)
 
     @field_validator("device")
@@ -102,6 +107,7 @@ class Settings(BaseModel):
     formula: FormulaSettings = Field(default_factory=FormulaSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     config_path: Path
+    operator_deployment: OperatorDeploymentSettings
 
 
 def _resolve_path(base: Path, raw: str | Path) -> Path:
@@ -112,7 +118,8 @@ def _resolve_path(base: Path, raw: str | Path) -> Path:
 
 
 def load_settings(config_path: str | Path | None = None) -> Settings:
-    path = Path(config_path or Path.cwd() / "config.toml").expanduser().resolve()
+    selected = config_path or os.environ.get("CONFIG_PATH") or PROJECT_ROOT / "config.toml"
+    path = Path(selected).expanduser().resolve()
     if not path.is_file():
         raise ConfigurationError(f"配置文件不存在：{path}")
 
@@ -142,6 +149,10 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
             base, logging_data.get("directory", "logs")
         )
         data["config_path"] = path
+        data["operator_deployment"] = load_operator_deployment_settings(
+            path,
+            default_capacity=256,
+        )
         settings = Settings.model_validate(data)
     except (KeyError, TypeError, ValueError, ValidationError) as error:
         raise ConfigurationError(f"配置内容无效：{error}") from error

@@ -6,14 +6,26 @@ from urllib.parse import quote
 
 import tomli
 from pydantic import BaseModel, ConfigDict, computed_field, field_validator
+from packages.operator_registry_client import load_operator_deployment_settings
 
 logger = logging.getLogger(__name__)
 logger.level = logging.DEBUG
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-config_path = Path(
-    os.environ.get("CONFIG_PATH", str(PROJECT_ROOT / "config.toml"))
-).expanduser().resolve()
+
+
+def resolve_config_path(config_path: str | Path | None = None) -> Path:
+    selected = Path(
+        config_path
+        if config_path is not None
+        else os.environ.get("CONFIG_PATH", PROJECT_ROOT / "config.toml")
+    ).expanduser()
+    if not selected.is_absolute():
+        selected = PROJECT_ROOT / selected
+    return selected.resolve()
+
+
+config_path = resolve_config_path()
 
 class DBSettings(BaseModel):
     username: str
@@ -125,3 +137,7 @@ def load_config():
 
 
 settings = load_config()
+operator_deployment = load_operator_deployment_settings(
+    config_path,
+    default_capacity=128,
+)

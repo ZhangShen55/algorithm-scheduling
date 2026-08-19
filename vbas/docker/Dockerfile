@@ -19,7 +19,7 @@ RUN apt-get update && \
 WORKDIR /workspace
 
 COPY ./requirements.txt ./requirements.txt
-ARG OPERATOR_REGISTRY_CLIENT_WHEEL=algorithm_operator_registry_client-0.1.0-py3-none-any.whl
+ARG OPERATOR_REGISTRY_CLIENT_WHEEL=algorithm_operator_registry_client-0.2.0-py3-none-any.whl
 COPY wheel/${OPERATOR_REGISTRY_CLIENT_WHEEL} /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL}
 RUN pip install --no-deps /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL} && \
     pip3 install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ \

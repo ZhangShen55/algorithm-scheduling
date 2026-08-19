@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -314,7 +314,7 @@ class PptTerminalRepository(Protocol):
 
 
 class PptSliceTerminalHandler:
-    """Persist a validated terminal callback and release PPT_OCR atomically."""
+    """Persist a validated PPT terminal callback idempotently."""
 
     def __init__(
         self,
@@ -396,6 +396,18 @@ class PptSliceTerminalHandler:
             raise PptSliceCallbackError(f"PPT 终态状态不合法: {callback.status}")
 
         validated = self._validator.validate(callback)
+        terminal_progress = (
+            dict(node.progress) if isinstance(node.progress, dict) else {}
+        )
+        terminal_progress.update(
+            {
+                "task_id": validated.task_id,
+                "operator_task_id": validated.operator_task_id,
+                "lease_status": "TERMINAL_PERSISTED",
+                "completed_count": validated.count,
+                "total_count": validated.count,
+            }
+        )
         result = NodeResultWrite(
             result={
                 "manifest_path": str(validated.manifest_path),
@@ -414,12 +426,7 @@ class PptSliceTerminalHandler:
             },
             artifact_path=str(validated.path),
             artifact_count=validated.count,
-            progress={
-                "task_id": validated.task_id,
-                "operator_task_id": validated.operator_task_id,
-                "completed_count": validated.count,
-                "total_count": validated.count,
-            },
+            progress=terminal_progress,
         )
         self._repository.complete_node(node_id, result, reason="PPT 切片处理完成")
         return PptTerminalHandleResult(
@@ -431,7 +438,12 @@ class PptSliceTerminalHandler:
 
 
 class PptCapacityClient(Protocol):
-    def renew(self, lease_id: str, ttl_seconds: int) -> Awaitable[object]: ...
+    def renew(
+        self,
+        lease_id: str,
+        *,
+        ttl_seconds: int,
+    ) -> Awaitable[object]: ...
 
     def release(self, lease_id: str) -> Awaitable[object]: ...
 
@@ -450,7 +462,12 @@ class PptCapacityHttpClient:
         self._http = http_client
         self._control_service_url = control_service_url.rstrip("/")
 
-    async def renew(self, lease_id: str, ttl_seconds: int) -> dict[str, Any]:
+    async def renew(
+        self,
+        lease_id: str,
+        *,
+        ttl_seconds: int,
+    ) -> dict[str, Any]:
         try:
             response = await self._http.post(
                 f"{self._control_service_url}/internal/operator-instances/lease/renew",
@@ -495,6 +512,7 @@ class PptCapacityLeaseKeeper:
         lease_id: str,
         ttl_seconds: int,
         renew_interval_seconds: float,
+        on_renewal_failure: Callable[[Exception], Awaitable[None]] | None = None,
     ) -> None:
         if ttl_seconds <= 0 or renew_interval_seconds <= 0:
             raise ValueError("PPT 容量租约参数必须大于 0")
@@ -504,13 +522,18 @@ class PptCapacityLeaseKeeper:
         self._lease_id = lease_id
         self._ttl_seconds = ttl_seconds
         self._renew_interval_seconds = renew_interval_seconds
+        self._on_renewal_failure = on_renewal_failure
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._released = False
+        self._renewal_error: Exception | None = None
 
     async def start(self) -> None:
         if self._task is None:
-            self._task = asyncio.create_task(self._renew_loop())
+            self._task = asyncio.create_task(
+                self._renew_loop(),
+                name=f"renew-ppt-lease-{self._lease_id}",
+            )
 
     async def _renew_loop(self) -> None:
         while True:
@@ -521,7 +544,26 @@ class PptCapacityLeaseKeeper:
                 )
                 return
             except TimeoutError:
-                await self._client.renew(self._lease_id, self._ttl_seconds)
+                try:
+                    await self._client.renew(
+                        self._lease_id,
+                        ttl_seconds=self._ttl_seconds,
+                    )
+                except Exception as exc:  # noqa: BLE001 - capacity client is a protocol
+                    self._renewal_error = exc
+                    if self._on_renewal_failure is not None:
+                        try:
+                            await self._on_renewal_failure(exc)
+                        except Exception:  # noqa: BLE001 - retain the renewal root cause
+                            pass
+                    return
+
+    async def stop_renewal(self) -> None:
+        """Stop heartbeats without releasing work still running in the operator."""
+
+        self._stop.set()
+        if self._task is not None:
+            await self._task
 
     async def release_after_terminal_persistence(self) -> None:
         if self._released:
@@ -533,3 +575,9 @@ class PptCapacityLeaseKeeper:
         finally:
             await self._client.release(self._lease_id)
             self._released = True
+        if self._renewal_error is not None:
+            raise self._renewal_error
+
+    @property
+    def released(self) -> bool:
+        return self._released

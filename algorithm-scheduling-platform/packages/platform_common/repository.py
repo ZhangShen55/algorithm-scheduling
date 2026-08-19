@@ -1093,6 +1093,25 @@ class CourseRepository:
             ).mappings()
             return [_node_record(row) for row in rows]
 
+    def list_running_ppt_slice_nodes(self) -> list[NodeRecord]:
+        with self._engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT n.id, n.course_task_type_id, n.node_code, n.status, n.priority,
+                           n.reason, n.required_capability, n.updated_at,
+                           r.result, r.artifact_path, r.artifact_count, r.progress,
+                           r.effective_params AS result_effective_params
+                    FROM task_nodes AS n
+                    LEFT JOIN node_results AS r ON r.task_node_id = n.id
+                    WHERE n.node_code = 'PPT_SLICE'
+                      AND n.status = 50
+                    ORDER BY n.updated_at, n.id
+                    """
+                )
+            ).mappings()
+            return [_node_record(row) for row in rows]
+
     def create_node_work_items(
         self,
         task_node_id: int,

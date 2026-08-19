@@ -278,11 +278,8 @@ def _operator_compose_config() -> dict[str, Any]:
         values = {
             "OPERATOR_PORT": str(target),
             "PORT": str(target),
-            "PLATFORM_REGISTRATION_ENABLED": "true",
-            "PLATFORM_CONTROL_SERVICE_URL": "http://control-service:18100",
             "PLATFORM_INSTANCE_ID": instance_id,
             "PLATFORM_SERVICE_URL": f"http://{instance_id}:{target}",
-            "PLATFORM_DECLARED_CAPACITY": str(capacity),
         }
         if gpu is not None:
             values.update(
@@ -302,7 +299,7 @@ def _operator_compose_config() -> dict[str, Any]:
         ("facerec", 8000),
         ("screen-det", 8880),
     )
-    cpu_operators = (("ppt-slice", 9001, 15), ("text-analysis", 8000, 4))
+    cpu_operators = (("ppt-slice", 9001, 10), ("text-analysis", 8000, 256))
     for operator, target in gpu_operators:
         for gpu in range(3):
             instance_id = f"{operator}-gpu{gpu}"
@@ -464,18 +461,18 @@ def _image_inspection_fixtures(
 
 def _registered_operator_instances() -> list[dict[str, Any]]:
     contracts = {
-        "asr-offline": ("asr_offline", ["asr_offline"], 8083, 1),
-        "asr-online": ("asr_online", ["asr_online"], 8084, 1),
-        "ocr": ("ocr", ["ocr"], 8866, 1),
-        "vbas": ("vbas", ["student_behavior", "teacher_behavior"], 8981, 1),
-        "facerec": ("facerec", ["recognize"], 8000, 1),
-        "screen-det": ("screen_det", ["detect_all"], 8880, 1),
-        "ppt-slice": ("ppt_slice", ["ppt_slice"], 9001, 15),
+        "asr-offline": ("asr_offline", ["asr_offline"], 8083, 4),
+        "asr-online": ("asr_online", ["asr_online"], 8084, 10),
+        "ocr": ("ocr", ["ocr"], 8866, 256),
+        "vbas": ("vbas", ["student_behavior", "teacher_behavior"], 8981, 128),
+        "facerec": ("facerec", ["recognize"], 8000, 128),
+        "screen-det": ("screen_det", ["detect_all"], 8880, 128),
+        "ppt-slice": ("ppt_slice", ["ppt_slice"], 9001, 10),
         "text-analysis": (
             "text_analysis",
             ["course_overviews", "extract_keywords"],
             8000,
-            4,
+            256,
         ),
     }
     instances: list[dict[str, Any]] = []
@@ -684,6 +681,15 @@ if args[:2] == ["image", "inspect"] and len(args) >= 3:
 if args[:1] == ["run"]:
     print(os.environ.get("GPU_OUTPUT", ""))
     raise SystemExit(int(os.environ.get("GPU_RUN_EXIT", "0")))
+if args[:1] == ["exec"] and len(args) >= 5:
+    version = os.environ.get("OPERATOR_PACKAGE_PROBE_VERSION", "0.2.0")
+    forbidden = json.loads(os.environ.get("OPERATOR_PACKAGE_PROBE_FORBIDDEN", "[]"))
+    print(json.dumps({
+        "distribution": "algorithm-operator-registry-client",
+        "version": version,
+        "forbidden_reads": forbidden,
+    }, sort_keys=True, separators=(",", ":")))
+    raise SystemExit(int(os.environ.get("OPERATOR_PACKAGE_PROBE_EXIT", "0")))
 if args == ["ps", "-aq"]:
     if os.environ.get("BLOCK_PS") == "true":
         entered = Path(os.environ["PS_ENTERED_PATH"])
@@ -1969,6 +1975,10 @@ def test_preflight_fails_closed_when_the_host_socket_parser_exits_nonzero(
         PLATFORM_ROOT / "deploy/docker-compose.operators.yml",
         project_root / "deploy/docker-compose.operators.yml",
     )
+    shutil.copytree(
+        PLATFORM_ROOT / "deploy/config/operators",
+        project_root / "deploy/config/operators",
+    )
     parser_called = tmp_path / "host-sockets.called"
     venv_bin = project_root / ".venv/bin"
     venv_bin.mkdir(parents=True)
@@ -2730,11 +2740,54 @@ def test_preflight_operators_full_checks_running_topology_and_registration(
         command for command in commands if command[1:3] == ["image", "inspect"]
     )
     assert len(image_command[3:]) == 8
+    exec_commands = [command for command in commands if command[1:2] == ["exec"]]
+    assert len(exec_commands) == 24
+    assert {command[2] for command in exec_commands} == set(
+        _operator_runtime_fixtures()[0].values()
+    )
     assert not any(
         action in command[1:]
         for command in commands
-        for action in ("up", "start", "run", "exec")
+        for action in ("up", "start", "run")
     )
+
+
+@pytest.mark.parametrize(
+    ("override", "reason"),
+    (
+        ({"OPERATOR_PACKAGE_PROBE_VERSION": "0.1.0"}, "0.1.0"),
+        (
+            {"OPERATOR_PACKAGE_PROBE_FORBIDDEN": '["REQUIRE_GPU"]'},
+            "REQUIRE_GPU",
+        ),
+        ({"OPERATOR_PACKAGE_PROBE_EXIT": "1"}, "probe failed"),
+    ),
+)
+def test_preflight_operators_rejects_invalid_runtime_package_probe(
+    fake_bin: Path,
+    tmp_path: Path,
+    readiness_server: Any,
+    override: dict[str, str],
+    reason: str,
+) -> None:
+    base_url, state = readiness_server
+    state.update(_registration_responses(_registered_operator_instances()))
+    course, result = _separate_shared_roots(tmp_path)
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
+        **override,
+    )
+
+    completed = _run(
+        "preflight",
+        *_operator_preflight_arguments(tmp_path, base_url, "--profile", "gpu0"),
+        environment=environment,
+    )
+
+    assert completed.returncode != 0
+    assert reason in completed.stderr
 
 
 def test_preflight_operators_profile_checks_only_selected_running_containers(
@@ -3033,10 +3086,8 @@ def test_preflight_operators_normalizes_list_environment_and_allows_system_extra
 @pytest.mark.parametrize(
     "key",
     [
+        "PLATFORM_INSTANCE_ID",
         "PLATFORM_SERVICE_URL",
-        "PLATFORM_CONTROL_SERVICE_URL",
-        "PLATFORM_DECLARED_CAPACITY",
-        "PLATFORM_REGISTRATION_ENABLED",
         "OPERATOR_PORT",
         "PORT",
     ],
@@ -3068,7 +3119,8 @@ def test_preflight_operators_rejects_compose_declared_environment_drift(
     )
 
     assert completed.returncode != 0
-    assert key in completed.stderr
+    expected_detail = "instance ID" if key == "PLATFORM_INSTANCE_ID" else key
+    assert expected_detail in completed.stderr
 
 
 def test_preflight_operators_rejects_an_unknown_profile_before_container_inspection(

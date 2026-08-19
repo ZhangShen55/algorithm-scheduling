@@ -24,7 +24,7 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
     def test_required_gpu_rejects_cpu_configuration(self) -> None:
         self._configure_device(device="cpu")
 
-        with patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False):
+        with patch.object(self.models, "require_gpu_enabled", return_value=True):
             with self.assertRaisesRegex(RuntimeError, "部署要求使用 GPU.*cuda:<index>"):
                 self.models.resolve_runtime_device()
 
@@ -32,7 +32,7 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self._configure_device()
 
         with (
-            patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False),
+            patch.object(self.models, "require_gpu_enabled", return_value=True),
             patch.object(self.models.torch.cuda, "is_available", return_value=False),
             self.assertRaisesRegex(RuntimeError, "要求使用 GPU.*CUDA 不可用"),
         ):
@@ -42,7 +42,7 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self._configure_device(device="cuda:1")
 
         with (
-            patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False),
+            patch.object(self.models, "require_gpu_enabled", return_value=True),
             patch.object(self.models.torch.cuda, "is_available", return_value=True),
             patch.object(self.models.torch.cuda, "device_count", return_value=1),
             self.assertRaisesRegex(RuntimeError, "cuda:1.*索引越界"),
@@ -54,7 +54,7 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.models.settings._cfg["ngpu"] = 0
 
         with (
-            patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False),
+            patch.object(self.models, "require_gpu_enabled", return_value=True),
             patch.object(self.models.torch.cuda, "is_available", return_value=True),
             patch.object(self.models.torch.cuda, "device_count", return_value=1),
         ):
@@ -71,7 +71,7 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
         }
 
         with (
-            patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False),
+            patch.object(self.models, "require_gpu_enabled", return_value=True),
             patch.object(self.models.torch.cuda, "is_available", return_value=False),
             patch.object(self.models, "AutoModel") as auto_model,
             patch.object(self.models, "WhisperModel") as whisper_model,
@@ -91,7 +91,7 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
         }
 
         with (
-            patch.dict("os.environ", {"REQUIRE_GPU": "true"}, clear=False),
+            patch.object(self.models, "require_gpu_enabled", return_value=True),
             patch.object(self.models.torch.cuda, "is_available", return_value=True),
             patch.object(self.models.torch.cuda, "device_count", return_value=1),
             patch.object(ctranslate2, "get_cuda_device_count", return_value=0),

@@ -396,6 +396,14 @@ run_operators() {
   printf 'preflight: OK: selected operator image revisions\n'
   printf 'preflight: OK: selected running operator containers match Compose\n'
 
+  package_probe_args=()
+  for container_id in "${running_containers[@]}"; do
+    package_probe_args+=(--container "$container_id")
+  done
+  "${deploy_root}/scripts/verify-operator-runtime-package" \
+    --expected-version 0.2.0 "${package_probe_args[@]}" || exit 1
+  printf 'preflight: OK: selected operator runtime wheel and migrated settings\n'
+
   "${deploy_root}/scripts/verify-operator-registration" \
     "${registration_args[@]}" "${selection_args[@]}" \
     --expected-compose "$operator_compose" || exit 1

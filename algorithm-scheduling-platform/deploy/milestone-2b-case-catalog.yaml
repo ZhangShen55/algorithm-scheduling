@@ -10,7 +10,7 @@ cases:
   - {case_id: DEP-008, category: negative, phase: deployment, title: "text_analysis 默认两个 worker 未被覆盖", expected: "部署预检失败", runner: deployment.dep_008, timeout_seconds: 120, safety: isolated_mutation}
   - {case_id: DEP-009, category: negative, phase: deployment, title: "Compose 只设置 NVIDIA_VISIBLE_DEVICES 而没有 GPU reservation", expected: "GPU 预检失败", runner: deployment.dep_009, timeout_seconds: 120, safety: isolated_mutation}
   - {case_id: DEP-010, category: negative, phase: deployment, title: "算子镜像缺少注册客户端 wheel", expected: "镜像导入测试失败", runner: deployment.dep_010, timeout_seconds: 120, safety: isolated_mutation}
-  - {case_id: DEP-011, category: negative, phase: deployment, title: "wheel 版本不是 0.1.0", expected: "镜像构建或依赖检查失败", runner: deployment.dep_011, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: DEP-011, category: negative, phase: deployment, title: "wheel 版本不是 0.2.0", expected: "镜像构建或运行预检失败", runner: deployment.dep_011, timeout_seconds: 120, safety: isolated_mutation}
   - {case_id: DEP-012, category: negative, phase: deployment, title: "模型目录不存在", expected: "对应镜像构建或 readiness 失败", runner: deployment.dep_012, timeout_seconds: 120, safety: isolated_mutation}
   - {case_id: DEP-013, category: negative, phase: deployment, title: "模型文件数量或清单哈希与传输前不一致", expected: "模型校验失败，不进入构建", runner: deployment.dep_013, timeout_seconds: 120, safety: isolated_mutation}
   - {case_id: DEP-014, category: negative, phase: deployment, title: "config.toml 未挂载或路径错误", expected: "服务启动失败并给出配置路径原因", runner: deployment.dep_014, timeout_seconds: 120, safety: isolated_mutation}

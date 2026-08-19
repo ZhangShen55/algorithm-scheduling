@@ -1,4 +1,6 @@
+from collections.abc import Awaitable
 from contextlib import AbstractAsyncContextManager
+from inspect import isawaitable
 from typing import Protocol
 
 from fastapi import FastAPI, HTTPException
@@ -20,7 +22,7 @@ class PptTerminalHandler(Protocol):
         *,
         node_id: int,
         callback: PptSliceTerminalCallback,
-    ) -> PptTerminalHandleResult: ...
+    ) -> PptTerminalHandleResult | Awaitable[PptTerminalHandleResult]: ...
 
 
 class RuntimeReadiness(Protocol):
@@ -75,6 +77,8 @@ def create_orchestrator_api(
             raise HTTPException(status_code=503, detail="PPT 终态处理器尚未启动")
         try:
             result = handler.handle_callback(node_id=node_id, callback=callback)
+            if isawaitable(result):
+                result = await result
         except PptSliceCallbackError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {

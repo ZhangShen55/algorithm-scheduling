@@ -9,6 +9,20 @@ device = "cuda:0"
 concurrency = 5              # 单实例 GPU slot 并发数
 gpu_slot_timeout_seconds = 720  # 等待 GPU slot 的最长秒数，超时后返回 408/业务超时
 
+[platform]
+# 容器部署时主动向 control-service 注册。
+registration_enabled = true
+# 容器网络内的 control-service 地址。
+control_service_url = "http://control-service:18100"
+# 算子注册心跳间隔秒数。
+heartbeat_interval_seconds = 5
+# 平台允许同时分发到单个离线 ASR 实例的请求数。
+max_concurrent_requests = 4
+
+[runtime]
+# 三卡部署必须检测到容器内 CUDA 设备。
+require_gpu = true
+
 # 模型路径配置
 [model_paths]
 vad_model_dir = "./model/speech_fsmn_vad_zh-cn-16k-common-pytorch"

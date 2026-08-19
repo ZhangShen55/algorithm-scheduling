@@ -105,7 +105,8 @@ def test_server_configs_keep_required_external_dependencies_and_paths() -> None:
     assert facerec["image"]["save_person_photo"] is False
     ppt_slice = _load(CONFIG_ROOT / "ppt_slice.cpu.toml")
     assert ppt_slice["paths"]["result_root"] == "/data/result"
-    assert ppt_slice["task"]["max_concurrent_tasks"] > 1
+    assert "max_concurrent_tasks" not in ppt_slice["task"]
+    assert ppt_slice["platform"]["max_concurrent_requests"] == 10
     source_text_analysis = _load(WORKSPACE_ROOT / "text_analysis/config.toml")
     text_analysis = _load(CONFIG_ROOT / "text_analysis.cpu.toml")
     assert text_analysis["base_url"] == source_text_analysis["base_url"]

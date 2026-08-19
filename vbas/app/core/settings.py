@@ -7,13 +7,14 @@ import torch
 from pydantic import Field
 from pydantic_settings import BaseSettings
 from ultralytics import YOLO
+from packages.operator_registry_client import load_operator_deployment_settings
 
-from .config_loader import load_config
+from .config_loader import load_config, resolve_config_path
 from .model_protection import ModelPathResolver, ModelProtectionConfig
 from .runtime_device import resolve_runtime_device
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-CONFIG_PATH = os.getenv("CONFIG_PATH", str(PROJECT_ROOT / "config.toml"))
+CONFIG_PATH = str(resolve_config_path())
 _cfg = load_config(CONFIG_PATH)
 
 class Settings(BaseSettings):
@@ -90,8 +91,16 @@ _cfg = {
     "RegisterRetryIntervalSeconds": int(_tias_config.get("RegisterRetryIntervalSeconds", 5)),
 }
 settings = Settings(**_cfg)
+operator_deployment = load_operator_deployment_settings(
+    CONFIG_PATH,
+    default_capacity=128,
+)
 
-device = resolve_runtime_device(settings.GPU_ID, torch_module=torch)
+device = resolve_runtime_device(
+    settings.GPU_ID,
+    torch_module=torch,
+    require_gpu=operator_deployment.runtime.require_gpu,
+)
 # use_half = device.type == "cuda"  # 仅在 CUDA 场景启用 FP16
 use_half = False  # 优先精准度，所以开启 fp32。20251205
 

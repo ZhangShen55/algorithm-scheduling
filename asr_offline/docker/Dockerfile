@@ -42,7 +42,7 @@ RUN PIP_EXTRA_INDEX_URL=https://mirrors.aliyun.com/pypi/simple \
 RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
 
 WORKDIR /tmp/build
-ARG OPERATOR_REGISTRY_CLIENT_WHEEL=algorithm_operator_registry_client-0.1.0-py3-none-any.whl
+ARG OPERATOR_REGISTRY_CLIENT_WHEEL=algorithm_operator_registry_client-0.2.0-py3-none-any.whl
 COPY wheel/${OPERATOR_REGISTRY_CLIENT_WHEEL} /tmp/wheels/${OPERATOR_REGISTRY_CLIENT_WHEEL}
 COPY requirements-pip.txt /tmp/requirements-pip.txt
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1

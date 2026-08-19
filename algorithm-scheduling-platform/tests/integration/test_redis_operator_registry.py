@@ -1,6 +1,7 @@
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from threading import Barrier, Event
 from uuid import uuid4
 
@@ -8,12 +9,15 @@ import pytest
 from redis import Redis
 
 from packages.platform_common.operator_registry import (
+    CapacityLeaseContextConflictError,
     CapacityLeaseNotFoundError,
     CapacityUnavailableError,
+    LeaseContextStatus,
     OperatorCode,
     OperatorInstance,
     OperatorInstanceNotFoundError,
     OperatorLifecycle,
+    WorkContext,
 )
 from packages.platform_common.redis_operator_registry import RedisOperatorRegistry
 
@@ -273,7 +277,7 @@ def test_reregistering_same_instance_does_not_inherit_old_leases(
     assert redis_registry.lease("teacher_behavior", 30).instance_id == "vbas-gpu0"
 
 
-def test_reported_inflight_consumes_capacity_without_double_counting_leases(
+def test_reported_inflight_is_observation_and_does_not_hold_released_capacity(
     redis_registry: RedisOperatorRegistry,
 ) -> None:
     redis_registry.register(vbas_instance(capacity=2))
@@ -288,6 +292,104 @@ def test_reported_inflight_consumes_capacity_without_double_counting_leases(
     redis_registry.release(first.lease_id)
     redis_registry.release(second.lease_id)
     redis_registry.heartbeat("vbas-gpu0", inflight=2, model_ready=True)
+    replacement = redis_registry.lease("teacher_behavior", 30)
+
+    assert replacement.instance_id == "vbas-gpu0"
+    snapshot = redis_registry.list_active_leases("vbas-gpu0")
+    assert snapshot.active_lease_count == 1
+    assert snapshot.reported_inflight == 2
+    assert snapshot.attribution_difference == 1
+
+
+def test_multi_capability_instance_uses_one_shared_capacity_pool(
+    redis_registry: RedisOperatorRegistry,
+) -> None:
+    instance = replace(
+        vbas_instance(capacity=1),
+        capabilities=["teacher_behavior", "student_behavior"],
+    )
+    _register_ready(redis_registry, instance)
+
+    redis_registry.lease("teacher_behavior", 30)
+
+    with pytest.raises(CapacityUnavailableError):
+        redis_registry.lease("student_behavior", 30)
+
+
+def test_lease_context_can_be_created_bound_idempotently_and_queried(
+    redis_registry: RedisOperatorRegistry,
+) -> None:
+    _register_ready(redis_registry, vbas_instance())
+    initial = WorkContext(
+        source_service="online-gateway-service",
+        work_type="online_vbas",
+        work_id="request-001",
+        trace_id="trace-001",
+    )
+    lease = redis_registry.lease("teacher_behavior", 30, initial)
+
+    assert lease.work_context == initial
+    assert lease.acquired_at < lease.expires_at
+    renewed = redis_registry.renew(lease.lease_id, 60)
+    assert renewed.acquired_at == lease.acquired_at
+    assert renewed.work_context == initial
+
+    snapshot = redis_registry.list_active_leases("vbas-gpu0")
+    assert snapshot.active_lease_count == 1
+    assert snapshot.leases[0].context_status is LeaseContextStatus.BOUND
+    assert snapshot.leases[0].work_context == initial
+
+
+def test_lease_context_post_binding_is_idempotent_and_rejects_conflict(
+    redis_registry: RedisOperatorRegistry,
+) -> None:
+    _register_ready(redis_registry, vbas_instance())
+    lease = redis_registry.lease("teacher_behavior", 30)
+    context = WorkContext(
+        source_service="orchestrator-service",
+        work_type="node",
+        work_id="node-7",
+        task_id="course-001",
+        node_id="7",
+    )
+
+    first = redis_registry.bind_lease_context(lease.lease_id, context)
+    repeated = redis_registry.bind_lease_context(lease.lease_id, context)
+
+    assert first.work_context == repeated.work_context == context
+    with pytest.raises(CapacityLeaseContextConflictError):
+        redis_registry.bind_lease_context(
+            lease.lease_id,
+            replace(context, work_id="node-8", node_id="8"),
+        )
+
+
+def test_released_or_expired_lease_cannot_be_bound(
+    redis_registry: RedisOperatorRegistry,
+) -> None:
+    _register_ready(redis_registry, vbas_instance())
+    context = WorkContext(
+        source_service="orchestrator-service",
+        work_type="node",
+        work_id="node-7",
+    )
+    released = redis_registry.lease("teacher_behavior", 30)
+    redis_registry.release(released.lease_id)
+
+    with pytest.raises(CapacityLeaseNotFoundError):
+        redis_registry.bind_lease_context(released.lease_id, context)
+
+
+def test_invalid_capacity_record_is_never_schedulable(
+    redis_registry: RedisOperatorRegistry,
+) -> None:
+    _register_ready(redis_registry, vbas_instance())
+    redis_registry._client.hset(
+        redis_registry._instance_key("vbas-gpu0"),
+        "declared_capacity",
+        "1.5",
+    )
+
     with pytest.raises(CapacityUnavailableError):
         redis_registry.lease("teacher_behavior", 30)
 

@@ -1,3 +1,4 @@
+import tomllib
 from pathlib import Path
 from typing import Any, cast
 
@@ -21,6 +22,24 @@ GPU_OPERATORS = {
 CPU_OPERATORS = {
     "ppt-slice": (9001, 19001, "ppt_slice.cpu.toml"),
     "text-analysis": (8000, 18000, "text_analysis.cpu.toml"),
+}
+OPERATOR_CAPACITIES = {
+    "asr-offline": 4,
+    "asr-online": 10,
+    "ocr": 256,
+    "vbas": 128,
+    "facerec": 128,
+    "screen-det": 128,
+    "ppt-slice": 10,
+    "text-analysis": 256,
+}
+TOML_OWNED_ENVIRONMENT = {
+    "PLATFORM_REGISTRATION_ENABLED",
+    "PLATFORM_CONTROL_SERVICE_URL",
+    "PLATFORM_HEARTBEAT_INTERVAL_SECONDS",
+    "PLATFORM_DECLARED_CAPACITY",
+    "REQUIRE_GPU",
+    "GPU_PROCESS_NAME",
 }
 
 
@@ -49,13 +68,18 @@ def _volume_sources(service: dict[str, Any]) -> dict[str, tuple[str, bool]]:
     return volumes
 
 
+def _load_operator_config(source: str) -> dict[str, Any]:
+    path = (COMPOSE_PATH.parent / source).resolve()
+    return tomllib.loads(path.read_text(encoding="utf-8"))
+
+
 def assert_operator_compose_matrix(compose: dict[str, Any]) -> None:
     services = compose["services"]
     assert set(services) == expected_service_names()
     assert len(services) == 24
     assert compose["networks"]["algorithm-platform"]["external"] is True
 
-    for operator, (container_port, base_port, process_name, config_name) in GPU_OPERATORS.items():
+    for operator, (container_port, base_port, _process_name, config_name) in GPU_OPERATORS.items():
         for gpu_index in range(3):
             name = f"{operator}-gpu{gpu_index}"
             service = services[name]
@@ -65,18 +89,14 @@ def assert_operator_compose_matrix(compose: dict[str, Any]) -> None:
                 f"127.0.0.1:{base_port + gpu_index * 10000}:{container_port}"
             ]
             assert service["image"].endswith(":v1.0_260812}")
-            assert environment["PLATFORM_REGISTRATION_ENABLED"] == "true"
-            assert environment["PLATFORM_CONTROL_SERVICE_URL"] == "http://control-service:18100"
+            assert TOML_OWNED_ENVIRONMENT.isdisjoint(environment)
             assert environment["PLATFORM_OPERATOR_REGISTRY_TOKEN"] == (
                 REQUIRED_REGISTRY_TOKEN_EXPRESSION
             )
             assert environment["PLATFORM_INSTANCE_ID"] == name
             assert environment["PLATFORM_SERVICE_URL"] == f"http://{name}:{container_port}"
-            assert int(environment["PLATFORM_DECLARED_CAPACITY"]) > 0
             assert environment["PLATFORM_GPU_ID"] == str(gpu_index)
-            assert environment["GPU_PROCESS_NAME"] == process_name
             assert environment["UVICORN_WORKERS"] == "1"
-            assert environment["REQUIRE_GPU"] == "true"
             assert environment["NVIDIA_VISIBLE_DEVICES"] == str(gpu_index)
             if operator == "facerec":
                 assert environment["CONFIG_PATH"] == "/config/config.toml"
@@ -107,6 +127,14 @@ def assert_operator_compose_matrix(compose: dict[str, Any]) -> None:
                 f"./config/operators/{config_name}",
                 True,
             )
+            config = _load_operator_config(volumes[_config_target(operator)][0])
+            assert config["platform"] == {
+                "registration_enabled": True,
+                "control_service_url": "http://control-service:18100",
+                "heartbeat_interval_seconds": 5,
+                "max_concurrent_requests": OPERATOR_CAPACITIES[operator],
+            }
+            assert config["runtime"]["require_gpu"] is True
             if operator == "screen-det":
                 assert volumes["/app/config.toml"] == (
                     "./config/operators/screen_det.gpu.toml",
@@ -124,18 +152,14 @@ def assert_operator_compose_matrix(compose: dict[str, Any]) -> None:
                 f"127.0.0.1:{base_port + instance_index * 10000}:{container_port}"
             ]
             assert service["image"].endswith(":v1.0_260812}")
-            assert environment["PLATFORM_REGISTRATION_ENABLED"] == "true"
-            assert environment["PLATFORM_CONTROL_SERVICE_URL"] == "http://control-service:18100"
+            assert TOML_OWNED_ENVIRONMENT.isdisjoint(environment)
             assert environment["PLATFORM_OPERATOR_REGISTRY_TOKEN"] == (
                 REQUIRED_REGISTRY_TOKEN_EXPRESSION
             )
             assert environment["PLATFORM_INSTANCE_ID"] == name
             assert environment["PLATFORM_SERVICE_URL"] == f"http://{name}:{container_port}"
-            assert int(environment["PLATFORM_DECLARED_CAPACITY"]) > 0
             assert environment["UVICORN_WORKERS"] == "1"
             assert "PLATFORM_GPU_ID" not in environment
-            assert "GPU_PROCESS_NAME" not in environment
-            assert "REQUIRE_GPU" not in environment
             assert "deploy" not in service
             volumes = _volume_sources(service)
             assert volumes["/data/course"][0] == "${COURSE_ROOT:-/data/course}"
@@ -144,6 +168,14 @@ def assert_operator_compose_matrix(compose: dict[str, Any]) -> None:
                 f"./config/operators/{config_name}",
                 True,
             )
+            config = _load_operator_config(volumes[_config_target(operator)][0])
+            assert config["platform"] == {
+                "registration_enabled": True,
+                "control_service_url": "http://control-service:18100",
+                "heartbeat_interval_seconds": 5,
+                "max_concurrent_requests": OPERATOR_CAPACITIES[operator],
+            }
+            assert config["runtime"]["require_gpu"] is False
             assert "/ops/health" in " ".join(service["healthcheck"]["test"])
 
 

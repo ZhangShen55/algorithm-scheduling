@@ -5,6 +5,16 @@
 # 修改 [yolo] / [model_protection] / [server] 等需重启进程。
 # =============================================================================
 
+[platform]
+# 容器部署时主动向 control-service 注册。
+registration_enabled = true
+# 容器网络内的 control-service 地址。
+control_service_url = "http://control-service:18100"
+# 算子注册心跳间隔秒数。
+heartbeat_interval_seconds = 5
+# 平台允许同时分发到单个图像质量实例的请求数。
+max_concurrent_requests = 128
+
 [app]
 # 服务名称，用于根路径与健康检查展示
 name = "tilt-detection-service"
@@ -84,6 +94,8 @@ backup_count = 10
 [runtime]
 # 单张图片 Base64 解码后允许的最大字节数（此处 10MB）
 max_image_bytes = 10485760
+# 三卡部署必须检测到容器内 CUDA 设备。
+require_gpu = true
 
 [quality_abnormal_detection]
 # 画面异常检测总开关；包含虚焦、偏色、雪花噪点、花屏

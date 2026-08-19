@@ -42,4 +42,8 @@ def test_active_lease_count_uses_production_redis_script() -> None:
     registry = RedisOperatorRegistry(cast(Any, client), key_prefix="m2b:test:")
 
     assert registry.active_lease_count("vbas-gpu0") == 2
-    assert client.calls[0][1:] == (1, "m2b:test:leases:vbas-gpu0")
+    assert client.calls[0][1:] == (
+        1,
+        "m2b:test:leases:vbas-gpu0",
+        "m2b:test:lease:",
+    )

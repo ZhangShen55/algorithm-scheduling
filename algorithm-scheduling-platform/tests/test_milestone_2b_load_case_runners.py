@@ -1752,7 +1752,7 @@ def test_load_015_acquires_a_real_lease_when_capacity_starts_at_zero(
 
 def test_deployment_harness_runs_case_batch_before_cleanup_and_aggregation() -> None:
     document = (PLATFORM_ROOT / "harness/scenarios/milestone-2b-deploy.md").read_text()
-    batch = document.index("scripts/run_milestone_2b_case_batch.py")
+    batch = document.index("scripts.run_milestone_2b_case_batch")
     cleanup = document.index('docker stop "$container_id"', document.index("## 阶段 6"))
     aggregate = document.index("scripts/aggregate_milestone_2b_cases.py")
 

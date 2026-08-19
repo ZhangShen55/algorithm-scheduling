@@ -1,6 +1,6 @@
 # Docker pip dependencies pinned from /root/anaconda3/envs/asr on 2026-06-06.
 # av is installed by conda in Dockerfile to avoid CentOS 7 source builds.
-algorithm-operator-registry-client==0.1.0
+algorithm-operator-registry-client==0.2.0
 modelscope==1.25.0
 funasr==1.2.6
 faster-whisper==1.1.1

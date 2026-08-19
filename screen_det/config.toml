@@ -1,3 +1,11 @@
+[platform]
+# 本地默认不主动向调度平台注册
+registration_enabled = false
+control_service_url = ""  # 启用注册时填写 Control Service 地址
+heartbeat_interval_seconds = 5  # 注册心跳间隔秒数，必须为有限正数
+# 平台允许同时分发到本实例的请求数；不覆盖单请求批量限制
+max_concurrent_requests = 128
+
 # =============================================================================
 # 屏幕倾斜检测服务 — 统一配置文件
 # 修改 [detection] 后可 POST /config/reload 热重载；
@@ -81,6 +89,8 @@ max_bytes = 10485760
 backup_count = 10
 
 [runtime]
+# 本地默认允许 CPU；GPU 部署配置显式设为 true
+require_gpu = false
 # 单张图片 Base64 解码后允许的最大字节数（此处 10MB）
 max_image_bytes = 10485760
 

@@ -391,17 +391,16 @@ def _base_inspect(
     gpu_id: str = "0",
     device_ids: list[str] | None = None,
     visible_device: str | None = None,
-    process_name: str = "asr_offline",
+    instance_id: str = "asr-offline-gpu0",
 ) -> dict[str, Any]:
     return {
         "Id": container_id,
-        "Name": "/asr-offline-gpu0",
+        "Name": f"/{instance_id}",
         "State": {"Running": running, "Pid": 1000 if running else 0},
         "Config": {
             "Env": [
-                "PLATFORM_INSTANCE_ID=asr-offline-gpu0",
+                f"PLATFORM_INSTANCE_ID={instance_id}",
                 f"PLATFORM_GPU_ID={gpu_id}",
-                f"GPU_PROCESS_NAME={process_name}",
                 f"NVIDIA_VISIBLE_DEVICES={visible_device or gpu_id}",
             ],
             "Labels": {"org.opencontainers.image.revision": RELEASE_SHA},
@@ -442,7 +441,8 @@ import json, os, pathlib, sys
 import time
 args = sys.argv[1:]
 inspect = json.loads(pathlib.Path(os.environ["FAKE_INSPECT"]).read_text())
-if len(args) >= 2 and args[0] == "inspect" and args[1] in {{"asr-offline-gpu0", "{CONTAINER_ID}"}}:
+target_container = os.environ.get("FAKE_TARGET_CONTAINER", "asr-offline-gpu0")
+if len(args) >= 2 and args[0] == "inspect" and args[1] in {{target_container, "{CONTAINER_ID}"}}:
     marker = os.environ.get("FAKE_RESTART_MARKER")
     if marker and pathlib.Path(marker).exists():
         inspect[0 if isinstance(inspect, list) else "Id"] = os.environ["FAKE_RESTART_ID"]
@@ -451,7 +451,7 @@ if len(args) >= 2 and args[0] == "inspect" and args[1] in {{"asr-offline-gpu0", 
 if (
     len(args) >= 3
     and args[0] == "top"
-    and args[1] in {{"asr-offline-gpu0", "{CONTAINER_ID}"}}
+    and args[1] in {{target_container, "{CONTAINER_ID}"}}
     and args[2] == "-eo"
 ):
     time.sleep(float(os.environ.get("FAKE_DOCKER_TOP_DELAY", "0")))
@@ -459,7 +459,7 @@ if (
     print("1000")
     print("2000")
     raise SystemExit(0)
-if len(args) >= 2 and args[0] == "exec" and args[1] in {{"asr-offline-gpu0", "{CONTAINER_ID}"}}:
+if len(args) >= 2 and args[0] == "exec" and args[1] in {{target_container, "{CONTAINER_ID}"}}:
     time.sleep(float(os.environ.get("FAKE_DOCKER_EXEC_DELAY", "0")))
     if "nvidia-smi" in args:
         print(os.environ.get("FAKE_CONTAINER_GPU_ROWS", "0, GPU-A"))
@@ -547,7 +547,7 @@ def emit(event, **overrides):
         "event": event,
         "nonce": nonce,
         "operator_code": os.environ.get("ACTIVITY_OPERATOR", "asr_offline"),
-        "instance_id": "asr-offline-gpu0",
+        "instance_id": os.environ.get("ACTIVITY_INSTANCE_ID", "asr-offline-gpu0"),
         "run_id": "gpu0-asr-run",
         "attempt": 1,
         "target_origin": os.environ.get(
@@ -758,6 +758,8 @@ def test_verifier_records_synchronous_cuda_pid_and_exact_container_mapping(
         "encoder_percent": 0.0,
         "decoder_percent": 0.0,
     }
+
+
     assert report["compatibility"] == {
         "gpu": {
             "physical_index": 0,
@@ -808,6 +810,44 @@ def test_verifier_records_synchronous_cuda_pid_and_exact_container_mapping(
         "<trigger-executable> <redacted-arguments>",
     ]
     assert gpu_runtime["output"].stat().st_mode & 0o777 == 0o600
+
+
+def test_verifier_accepts_image_default_process_name_without_legacy_environment(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    inspect = _base_inspect()
+    assert all(
+        not item.startswith("GPU_PROCESS_NAME=")
+        for item in inspect["Config"]["Env"]
+    )
+    gpu_runtime["inspect_path"].write_text(json.dumps(inspect), encoding="utf-8")
+
+    completed = _run(gpu_runtime)
+
+    assert completed.returncode == 0, completed.stderr
+    assert _report(gpu_runtime)["status"] == "PASS"
+
+
+def test_verifier_rejects_legacy_gpu_process_name_environment(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    inspect = _base_inspect()
+    inspect["Config"]["Env"].append("GPU_PROCESS_NAME=asr_offline")
+    gpu_runtime["inspect_path"].write_text(json.dumps(inspect), encoding="utf-8")
+
+    completed = _run(gpu_runtime)
+
+    assert completed.returncode != 0
+    assert "GPU_PROCESS_NAME" in _report(gpu_runtime)["reason"]
+
+
+def test_verifier_rejects_process_name_that_does_not_match_instance(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    completed = _run_with_process(gpu_runtime, "asr-offline-gpu0", "ocr")
+
+    assert completed.returncode != 0
+    assert "默认值" in _report(gpu_runtime)["reason"]
 
 
 def test_verifier_rejects_driver_cuda_without_container_runtime(
@@ -1226,14 +1266,19 @@ def test_verifier_discards_sample_when_trigger_finishes_during_collection(
 
 
 @pytest.mark.parametrize(
-    ("process_name", "framework"),
-    [("ocr", "paddle"), ("facerec", "fastdeploy")],
+    ("instance_id", "process_name", "framework"),
+    [
+        ("ocr-gpu0", "ocr", "paddle"),
+        ("facerec-gpu0", "facerec", "fastdeploy"),
+    ],
 )
 def test_non_torch_operator_uses_framework_specific_probe(
-    gpu_runtime: dict[str, Any], process_name: str, framework: str
+    gpu_runtime: dict[str, Any],
+    instance_id: str,
+    process_name: str,
+    framework: str,
 ) -> None:
-    inspect = _base_inspect(process_name=process_name)
-    inspect["Config"]["Env"][0] = "PLATFORM_INSTANCE_ID=asr-offline-gpu0"
+    inspect = _base_inspect(instance_id=instance_id)
     gpu_runtime["inspect_path"].write_text(json.dumps(inspect), encoding="utf-8")
     gpu_runtime["env"]["FAKE_PROBE"] = json.dumps(
         {
@@ -1244,7 +1289,7 @@ def test_non_torch_operator_uses_framework_specific_probe(
         }
     )
 
-    completed = _run_with_process(gpu_runtime, process_name)
+    completed = _run_with_process(gpu_runtime, instance_id, process_name)
 
     assert completed.returncode == 0, completed.stderr
     report = _report(gpu_runtime)
@@ -1253,16 +1298,19 @@ def test_non_torch_operator_uses_framework_specific_probe(
 
 
 def _run_with_process(
-    runtime: dict[str, Any], process_name: str, *extra: str
+    runtime: dict[str, Any], instance_id: str, process_name: str, *extra: str
 ) -> subprocess.CompletedProcess[str]:
     command = [
-        str(VERIFIER), "--container", "asr-offline-gpu0", "--physical-gpu", "0",
-        "--process-name", process_name, "--output", str(runtime["output"]),
+        str(VERIFIER), "--container", instance_id, "--physical-gpu", "0",
+        "--instance-id", instance_id, "--process-name", process_name,
+        "--output", str(runtime["output"]),
         "--trigger-file", str(runtime["trigger_file"]), "--sample-window", "0.6",
         "--sample-interval", "0.02", *extra,
     ]
     runtime["env"]["FAKE_PROCESS_ROWS_DURING"] = f"GPU-A, 2000, {process_name}, 300"
     runtime["env"]["ACTIVITY_OPERATOR"] = process_name
+    runtime["env"]["ACTIVITY_INSTANCE_ID"] = instance_id
+    runtime["env"]["FAKE_TARGET_CONTAINER"] = instance_id
     return subprocess.run(command, env=runtime["env"], text=True, capture_output=True, check=False)
 
 
@@ -1475,6 +1523,30 @@ def test_stopped_mode_ignores_recycled_prior_pid_owned_by_another_container(
 
     assert completed.returncode == 0, completed.stderr
     assert _report(gpu_runtime)["remaining_cuda_pids"] == []
+
+
+def test_stopped_mode_rejects_legacy_gpu_process_name_environment(
+    gpu_runtime: dict[str, Any],
+) -> None:
+    assert _run(gpu_runtime).returncode == 0
+    prior = gpu_runtime["output"]
+    recovery_output = prior.parent.parent / "recovery/legacy-process-name.json"
+    recovery_output.parent.mkdir()
+    gpu_runtime["output"] = recovery_output
+    inspect = _base_inspect(running=False)
+    inspect["Config"]["Env"].append("GPU_PROCESS_NAME=asr_offline")
+    gpu_runtime["inspect_path"].write_text(json.dumps(inspect), encoding="utf-8")
+    gpu_runtime["env"]["FAKE_PROCESS_ROWS_BEFORE"] = ""
+
+    completed = _run(
+        gpu_runtime,
+        "--assert-stopped",
+        "--evidence",
+        str(prior),
+    )
+
+    assert completed.returncode != 0
+    assert "GPU_PROCESS_NAME" in _report(gpu_runtime)["reason"]
 
 
 def test_stopped_mode_rejects_recreated_container_id(

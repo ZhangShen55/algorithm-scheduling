@@ -5,6 +5,15 @@ import types
 
 def _install_lightweight_tias_settings():
     sys.modules["app.core.settings"] = types.SimpleNamespace(
+        operator_deployment=types.SimpleNamespace(
+            platform=types.SimpleNamespace(
+                registration_enabled=False,
+                control_service_url="",
+                heartbeat_interval_seconds=5,
+                max_concurrent_requests=128,
+            ),
+            runtime=types.SimpleNamespace(require_gpu=False),
+        ),
         settings=types.SimpleNamespace(
             TiasExposeLegacySyncTasks=False,
             InstanceId="tias-test",

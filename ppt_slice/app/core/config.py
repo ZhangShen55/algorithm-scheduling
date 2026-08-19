@@ -13,12 +13,24 @@ except ImportError:
 from pydantic import field_validator
 from pydantic import Field
 from pydantic_settings import BaseSettings
+from packages.operator_registry_client import load_operator_deployment_settings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_LOG_FORMAT = (
     "%(asctime)s - %(name)s - %(levelname)s - "
     "[%(filename)s:%(lineno)d] - %(message)s"
 )
+
+
+def resolve_config_path(config_path: str | Path | None = None) -> Path:
+    selected = Path(
+        config_path
+        if config_path is not None
+        else os.environ.get("CONFIG_PATH", PROJECT_ROOT / "config.toml")
+    ).expanduser()
+    if not selected.is_absolute():
+        selected = PROJECT_ROOT / selected
+    return selected.resolve()
 
 
 def load_toml_config() -> dict:
@@ -28,9 +40,7 @@ def load_toml_config() -> dict:
     Returns:
         配置字典
     """
-    config_file = Path(os.environ.get("CONFIG_PATH", PROJECT_ROOT / "config.toml"))
-    if not config_file.is_absolute():
-        config_file = (PROJECT_ROOT / config_file).resolve()
+    config_file = resolve_config_path()
 
     if not config_file.exists():
         return {}
@@ -49,7 +59,6 @@ def load_toml_config() -> dict:
 
         # task section
         if "task" in config:
-            flat_config["MAX_CONCURRENT_TASKS"] = config["task"].get("max_concurrent_tasks")
             flat_config["MAX_QUEUE_SIZE"] = config["task"].get("max_queue_size")
             flat_config["MIN_FRAMES_OK"] = config["task"].get("min_frames_ok")
 
@@ -116,7 +125,7 @@ class Settings(BaseSettings):
     APP_VERSION: str = "V1.0.0_20260806"
 
     # 任务配置
-    MAX_CONCURRENT_TASKS: int = 15  # 最大并发任务数
+    MAX_CONCURRENT_TASKS: int = 10  # 由 platform.max_concurrent_requests 统一提供
     MAX_QUEUE_SIZE: int = 25  # 帧队列最大缓冲大小
     MIN_FRAMES_OK: int = 5  # 最小有效帧数
 
@@ -186,3 +195,9 @@ for field_name in Settings.model_fields:
     if field_name in os.environ:
         toml_config.pop(field_name, None)
 settings = Settings(**toml_config)
+operator_deployment = load_operator_deployment_settings(
+    resolve_config_path(),
+    default_capacity=10,
+)
+# 保留既有应用内字段名，但唯一来源改为统一平台容量。
+settings.MAX_CONCURRENT_TASKS = operator_deployment.platform.max_concurrent_requests

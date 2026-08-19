@@ -5,6 +5,12 @@ from packages.operator_registry_client.client import (
     OperatorRegistryClientConfig,
     OperatorRuntimeStatus,
 )
+from packages.operator_registry_client.config import (
+    OperatorDeploymentSettings,
+    OperatorPlatformSettings,
+    OperatorRuntimeSettings,
+    load_operator_deployment_settings,
+)
 from packages.operator_registry_client.lifecycle import OperatorLifecycle
 from packages.operator_registry_client.ops import OperatorOpsStatus, create_operator_ops_router
 from packages.operator_registry_client.runtime import OperatorRuntime, install_operator_runtime
@@ -14,8 +20,12 @@ __all__ = [
     "OperatorRegistryClientConfig",
     "OperatorRuntimeStatus",
     "OperatorLifecycle",
+    "OperatorDeploymentSettings",
     "OperatorOpsStatus",
+    "OperatorPlatformSettings",
+    "OperatorRuntimeSettings",
     "OperatorRuntime",
     "create_operator_ops_router",
     "install_operator_runtime",
+    "load_operator_deployment_settings",
 ]

@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import video
-from app.core.config import settings
+from app.core.config import operator_deployment, settings
 from app.core.logger import get_logger
 from app.services.task_manager import task_manager
 try:
@@ -76,7 +76,14 @@ def create_app() -> FastAPI:
             operator_code="ppt_slice",
             capabilities=["ppt_slice"],
             default_port=9001,
-            declared_capacity=settings.MAX_CONCURRENT_TASKS,
+            registration_enabled=operator_deployment.platform.registration_enabled,
+            control_service_url=operator_deployment.platform.control_service_url,
+            heartbeat_interval_seconds=(
+                operator_deployment.platform.heartbeat_interval_seconds
+            ),
+            max_concurrent_requests=(
+                operator_deployment.platform.max_concurrent_requests
+            ),
             inflight_provider=task_manager.get_task_count,
         )
     else:

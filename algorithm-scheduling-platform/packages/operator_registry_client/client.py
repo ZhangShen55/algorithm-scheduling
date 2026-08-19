@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import httpx
+
+from packages.operator_registry_client.validation import validate_positive_int
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,10 +31,14 @@ class OperatorRegistryClientConfig:
     heartbeat_interval_seconds: float = 5.0
 
     def __post_init__(self) -> None:
-        if self.declared_capacity <= 0:
-            raise ValueError("算子声明容量必须大于 0")
-        if self.heartbeat_interval_seconds <= 0:
-            raise ValueError("心跳间隔必须大于 0")
+        validate_positive_int(self.declared_capacity, field_name="算子声明容量")
+        if (
+            type(self.heartbeat_interval_seconds) not in {int, float}
+            or isinstance(self.heartbeat_interval_seconds, bool)
+            or not math.isfinite(self.heartbeat_interval_seconds)
+            or self.heartbeat_interval_seconds <= 0
+        ):
+            raise ValueError("心跳间隔必须是有限正数")
         if not self.management_token.strip():
             raise ValueError("算子注册管理令牌不能为空")
 

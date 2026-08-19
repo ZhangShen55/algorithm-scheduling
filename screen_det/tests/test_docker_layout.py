@@ -33,7 +33,7 @@ class DockerLayoutTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue((ROOT / path).is_file())
 
-    def test_dockerfile_builds_cython_extensions_without_models_or_pyarmor(self) -> None:
+    def test_dockerfile_builds_cython_extensions_without_pyarmor_or_baked_config(self) -> None:
         path = ROOT / "docker" / "Dockerfile"
         if not path.is_file():
             self.fail("docker/Dockerfile does not exist")
@@ -44,7 +44,7 @@ class DockerLayoutTests(unittest.TestCase):
         self.assertIn("build_cython_modules.py", dockerfile)
         self.assertIn("--remove-sources", dockerfile)
         self.assertNotIn("pyarmor", lower)
-        self.assertNotIn("COPY model/", dockerfile)
+        self.assertIn("COPY model/ ./model/", dockerfile)
         self.assertNotIn("COPY config.toml", dockerfile)
 
     def test_runtime_image_never_copies_requirements_or_build_materials(self) -> None:
