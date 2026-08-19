@@ -55,6 +55,22 @@ _RUNTIME_RECOVERY_TARGET_READY_TIMEOUT_SECONDS = 180.0
 _RUNTIME_RECOVERY_FINAL_READY_TIMEOUT_SECONDS = 180.0
 _RUNTIME_RECOVERY_OVERHEAD_SECONDS = 30.0
 _RUNTIME_RECOVERY_MAX_TIMEOUT_SECONDS = 1200.0
+_LOAD_015_LEASE_ACQUIRE_TIMEOUT_SECONDS = 30.0
+_LOAD_015_LEASE_RETRY_INTERVAL_SECONDS = 1.0
+_LEASE_EVIDENCE_FIELDS = frozenset(
+    {
+        "instance_id",
+        "operator_code",
+        "capabilities",
+        "lifecycle",
+        "model_ready",
+        "inflight",
+        "reported_inflight",
+        "declared_capacity",
+        "active_lease_count",
+        "capacity_mismatch",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -719,6 +735,25 @@ def _require_instance(instance_id: str, lifecycle: str) -> dict[str, Any]:
     return instance
 
 
+def _require_instance_not_routable(instance_id: str) -> dict[str, Any] | None:
+    instance = next(
+        (item for item in _operator_instances() if item.get("instance_id") == instance_id), None
+    )
+    if instance is not None and instance.get("lifecycle") != "OFFLINE":
+        raise ValueError(f"operator {instance_id} is not offline or absent")
+    return instance
+
+
+def _require_graceful_stop_state(state: Mapping[str, Any]) -> None:
+    if (
+        state.get("Running") is not False
+        or state.get("ExitCode") != 0
+        or state.get("OOMKilled") is not False
+        or state.get("Error") not in {None, ""}
+    ):
+        raise ValueError("operator did not exit gracefully after SIGTERM")
+
+
 def _database_snapshot() -> dict[str, Any]:
     snapshot: dict[str, Any] = {}
     with psycopg.connect(_POSTGRES_DSN) as connection:
@@ -796,7 +831,7 @@ def _course_fact_snapshot(task_id: str) -> dict[str, Any]:
                 FROM task_nodes AS n
                 JOIN course_task_types AS t ON t.id = n.course_task_type_id
                 WHERE t.task_id = %s
-                  AND n.operator_code = 'asr_offline'
+                  AND n.required_capability = 'asr_offline'
                   AND n.status NOT IN (60, 70, 80)
                 """,
                 (task_id,),
@@ -1415,6 +1450,41 @@ def _cleanup_case_lease_receipts(run_id: str) -> tuple[str, ...]:
     return tuple(released)
 
 
+def _sanitized_lease_detail(document: Any) -> str:
+    detail = document.get("detail") if isinstance(document, dict) else None
+    if not isinstance(detail, str):
+        return "unavailable"
+    return "<service detail omitted>"
+
+
+def _sanitized_lease_snapshot(snapshot: Any) -> list[dict[str, Any]] | dict[str, str]:
+    if not isinstance(snapshot, list):
+        return {"error": "response is not a list"}
+    sanitized: list[dict[str, Any]] = []
+    for item in snapshot:
+        if not isinstance(item, dict):
+            return {"error": "response contains a non-object"}
+        sanitized.append(
+            {field: item[field] for field in _LEASE_EVIDENCE_FIELDS if field in item}
+        )
+    return sanitized
+
+
+def _lease_availability_evidence() -> dict[str, Any]:
+    evidence: dict[str, Any] = {}
+    try:
+        evidence["inventory"] = _sanitized_lease_snapshot(_operator_instances())
+    except Exception as exc:
+        evidence["inventory"] = {"error": type(exc).__name__}
+    try:
+        evidence["capacity"] = _sanitized_lease_snapshot(
+            _http_json(_CAPACITY_SNAPSHOT_URL)
+        )
+    except Exception as exc:
+        evidence["capacity"] = {"error": type(exc).__name__}
+    return evidence
+
+
 def _acquire_case_lease(case_id: str, scenario: Mapping[str, Any]) -> dict[str, str]:
     if (
         case_id != "LOAD-015"
@@ -1422,10 +1492,30 @@ def _acquire_case_lease(case_id: str, scenario: Mapping[str, Any]) -> dict[str, 
         or scenario.get("redis_scope") != "algorithm:operator-lease:facerec"
     ):
         raise ValueError("LOAD-015 lease scope does not match the fixed contract")
-    document = _post_json(
-        f"{_CONTROL_URL}/internal/operator-instances/lease",
-        {"capability": "facerec", "ttl_seconds": 3600},
-    )
+    url = f"{_CONTROL_URL}/internal/operator-instances/lease"
+    payload = {"capability": "facerec", "ttl_seconds": 3600}
+    deadline = time.monotonic() + _LOAD_015_LEASE_ACQUIRE_TIMEOUT_SECONDS
+    while True:
+        status_code, document = _post_json_status(url, payload)
+        if 200 <= status_code < 300:
+            break
+        detail = _sanitized_lease_detail(document)
+        if status_code != 503:
+            raise ValueError(
+                f"production lease API returned HTTP {status_code}: detail={detail}"
+            )
+        evidence = {
+            "status_code": status_code,
+            "detail": detail,
+            **_lease_availability_evidence(),
+        }
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ValueError(
+                "LOAD-015 lease capacity unavailable after bounded retry: "
+                + json.dumps(evidence, ensure_ascii=False, separators=(",", ":"))
+            )
+        time.sleep(min(_LOAD_015_LEASE_RETRY_INTERVAL_SECONDS, remaining))
     if not isinstance(document, dict):
         raise ValueError("LOAD-015 lease response is not an object")
     lease = {
@@ -1638,13 +1728,12 @@ def _restart_and_recover(case_id: str, scenario: Mapping[str, Any]) -> dict[str,
 
         if case_id == "LOAD-010":
             stopped_fact = _inspect_state(container_id)
-            if stopped_fact.get("Running") is not False:
-                raise ValueError("operator did not reach a stopped state")
+            _require_graceful_stop_state(stopped_fact)
             assert target.instance_id is not None
             _wait_until(
-                lambda: _require_instance(target.instance_id or "", "OFFLINE"),
+                lambda: _require_instance_not_routable(target.instance_id or ""),
                 timeout=30,
-                label="operator TTL offline",
+                label="operator graceful stop",
             )
             _command(("docker", "start", container_id), timeout=60)
 

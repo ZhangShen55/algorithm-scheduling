@@ -329,6 +329,23 @@ def validate_instances(
     return issues, observed
 
 
+def registration_evidence_instance(row: dict[str, Any]) -> dict[str, Any]:
+    raw_labels = row.get("labels")
+    labels = raw_labels if isinstance(raw_labels, dict) else {}
+    return {
+        "instance_id": row.get("instance_id"),
+        "operator_code": row.get("operator_code"),
+        "capabilities": sorted(str(item) for item in (row.get("capabilities") or [])),
+        "service_url": row.get("service_url"),
+        "declared_capacity": row.get("declared_capacity"),
+        "labels": {"gpu": labels.get("gpu")},
+        "lifecycle": row.get("lifecycle"),
+        "inflight": row.get("inflight"),
+        "model_ready": row.get("model_ready"),
+        "last_heartbeat_at": row.get("last_heartbeat_at"),
+    }
+
+
 def heartbeat_issues(
     base_url: str,
     observed: dict[str, dict[str, Any]],
@@ -365,6 +382,7 @@ def main() -> int:
     last_specific_issues: list[str] = []
     observed_count = 0
     expected_count = 24
+    observed: dict[str, dict[str, Any]] = {}
     selection = {"mode": "full", "values": []}
     try:
         tag = safe_component(args.release_tag, TAG_PATTERN, "release tag")
@@ -460,6 +478,14 @@ def main() -> int:
                 break
             time.sleep(min(args.poll_seconds, max(0, deadline - time.monotonic())))
         status = "通过" if not last_issues else "失败"
+        validated_instances = (
+            [
+                registration_evidence_instance(observed[instance_id])
+                for instance_id in sorted(expected)
+            ]
+            if not last_issues
+            else []
+        )
         report = {
             **base_report,
             "status": status,
@@ -474,6 +500,7 @@ def main() -> int:
                 "observed": observed_count,
                 "valid": len(expected) if not last_issues else 0,
             },
+            "validated_instances": validated_instances,
             "issues": last_issues,
         }
         atomic_json(output, report)
@@ -496,6 +523,7 @@ def main() -> int:
                         "observed": observed_count,
                         "valid": 0,
                     },
+                    "validated_instances": [],
                     "issues": [str(exc)],
                 },
             )

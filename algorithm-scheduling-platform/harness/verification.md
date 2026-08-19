@@ -5,6 +5,41 @@ platform root, use the explicit workspace import path below; this prevents a
 bare top-level `tests` package from another checkout from shadowing the
 platform tests:
 
+## 2026-08-19 8A.3 deployment runner 重跑前验证
+
+```bash
+.venv/bin/python -m pytest -q \
+  tests/test_milestone_2b_gpu_evidence.py \
+  tests/test_milestone_2b_foundation_case_runners.py \
+  tests/test_milestone_2b_load_case_runners.py \
+  tests/test_milestone_2b_scripts.py \
+  tests/test_milestone_2b_task9.py \
+  tests/test_run_8a3.py
+# 1248 passed, 3 skipped
+
+.venv/bin/python -m pytest -q \
+  tests/test_milestone_2b_gpu_evidence.py \
+  tests/test_milestone_2b_foundation_case_runners.py \
+  tests/test_milestone_2b_load_case_runners.py
+# 安全收口修正后：709 passed, 3 skipped
+
+.venv/bin/ruff check deploy/scripts/verify_operator_registration.py \
+  scripts/milestone_2b_case_runners/{gpu,infrastructure,load,registry}.py \
+  tests/test_milestone_2b_{foundation_case_runners,gpu_evidence,load_case_runners}.py
+
+MYPYPATH=.. .venv/bin/mypy --strict --explicit-package-bases \
+  deploy/scripts/verify_operator_registration.py \
+  scripts/milestone_2b_case_runners/{gpu,infrastructure,load,registry}.py
+
+openspec validate close-platform-runtime-and-harness-gaps --strict
+git diff --check
+```
+
+INF/REG 的 `isolated_mutation` 用例（INF mode 为 `controlled_input`，REG mode 为
+`canonical_runtime`）和 GPU canonical evidence 的内存副本变异只验证
+fail-closed 合同，不等同于真的停止远端 MongoDB、注册错误实例或制造 OOM。远端真实推理、
+生命周期、注册、容量、Smoke 和清理仍必须由新 SHA 的 stage45 与 deployment batch 取证。
+
 ## 2026-08-18 8A.3 跨 SHA 维护状态机预验证
 
 ```bash

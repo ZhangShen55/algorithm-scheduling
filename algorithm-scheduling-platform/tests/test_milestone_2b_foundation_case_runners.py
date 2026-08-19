@@ -201,6 +201,10 @@ def _facerec_probe_payload(
             "empty_person_created": False,
             "persistence_error": "Authentication failed",
             "authentication_error_type": "OperationFailure",
+            "authentication_cause_type": "OperationFailure",
+            "authentication_error_code": 18,
+            "authentication_error_code_name": "AuthenticationFailed",
+            "authentication_error_wrapped": False,
             "person_count_after_auth_failure": 0,
             "isolated_database": scenario["mongodb_database"],
             "production_persistence_validator": (
@@ -236,6 +240,21 @@ def _facerec_result_frame(payload: object) -> str:
         separators=(",", ":"),
         sort_keys=True,
     )
+
+
+def _registry_probe_scenario(case_id: str) -> dict[str, object]:
+    run_id = "run-1"
+    return {
+        "schema_version": 1,
+        "case_id": case_id,
+        "mode": "canonical_runtime",
+        "run_id": run_id,
+        "mutation": {"case": case_id},
+        "control_url": "http://127.0.0.1:18100",
+        "redis_prefix": f"m2b:{run_id}:{case_id.lower()}:registry:",
+        "instance_id": f"m2b-{len(run_id)}-{run_id}-{case_id.lower()}-instance",
+        "registration_checker": "deploy/scripts/verify_operator_registration.py",
+    }
 
 
 def _require_canonical_facerec_runtime() -> None:
@@ -416,10 +435,39 @@ def _write_healthy_gpu_evidence(release_root: Path, instance_id: str) -> tuple[P
         "prior_cuda_pids": [host_pid],
         "remaining_cuda_pids": [],
     }
-    registration = {
+    registration_producer = importlib.import_module(
+        "deploy.scripts.verify_operator_registration"
+    )
+    expected_registration = registration_producer.load_expected(
+        registration_producer.COMPOSE_PATH
+    )[instance.instance_id]
+    validated_instance = {
         "instance_id": instance.instance_id,
-        "operator_code": instance.operator_code,
-        "labels": {"gpu": str(instance.physical_gpu)},
+        "operator_code": expected_registration["operator_code"],
+        "capabilities": sorted(expected_registration["capabilities"]),
+        "service_url": expected_registration["service_url"],
+        "declared_capacity": expected_registration["declared_capacity"],
+        "labels": {"gpu": expected_registration["gpu"]},
+        "lifecycle": "ONLINE",
+        "inflight": 0,
+        "model_ready": True,
+        "last_heartbeat_at": "2026-08-18T10:00:00+08:00",
+    }
+    registration = {
+        "schema_version": 1,
+        "evidence_type": "operator_registration",
+        "mock": False,
+        "target": "operator-registry",
+        "release_tag": release_root.parent.name,
+        "git_sha": git_sha,
+        "started_at": "2026-08-18T10:00:00+08:00",
+        "status": "通过",
+        "finished_at": "2026-08-18T10:00:01+08:00",
+        "control_endpoint": "http://127.0.0.1:18100",
+        "selection": {"mode": "instance", "values": [instance.instance_id]},
+        "summary": {"expected": 1, "observed": 1, "valid": 1},
+        "validated_instances": [validated_instance],
+        "issues": [],
     }
     paths = (
         release_root / "gpu-instances" / f"{instance_id}.json",
@@ -752,6 +800,94 @@ def test_reg_009_routes_bad_service_url_through_registration_and_lease() -> None
         "api_version": "v1",
     }
     assert observed["lease_rejection"] == "CapacityUnavailableError"
+
+
+def test_reg_009_evaluate_scenario_builds_isolated_redis_registry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry_module = importlib.import_module(
+        "scripts.milestone_2b_case_runners.registry"
+    )
+    scenario = _registry_probe_scenario("REG-009")
+    calls: list[str] = []
+    instance: Any = None
+    constructed: list[dict[str, object]] = []
+
+    class RecordingClient:
+        closed = False
+
+        def ping(self) -> bool:
+            return True
+
+        def scan_iter(self, **kwargs: object) -> list[str]:
+            assert kwargs == {"match": f"{scenario['redis_prefix']}*", "count": 100}
+            return []
+
+        def delete(self, *keys: object) -> None:
+            raise AssertionError(f"empty isolated namespace deleted keys: {keys}")
+
+        def close(self) -> None:
+            self.closed = True
+
+    class RecordingRegistry:
+        def register(self, value: object) -> object:
+            nonlocal instance
+            calls.append("register")
+            instance = value
+            return value
+
+        def heartbeat(self, instance_id: str, **kwargs: object) -> object:
+            nonlocal instance
+            del instance_id, kwargs
+            calls.append("heartbeat")
+            instance = replace(instance, model_ready=False)
+            return instance
+
+        def lease(self, capability: str, ttl_seconds: int) -> SimpleNamespace:
+            del capability, ttl_seconds
+            calls.append("lease-attempt")
+            if not instance.model_ready:
+                raise registry_module.CapacityUnavailableError("teacher_behavior")
+            return SimpleNamespace(lease_id="unexpected")
+
+    client = RecordingClient()
+
+    def redis_registry(
+        actual_client: object,
+        *,
+        heartbeat_ttl_seconds: int,
+        key_prefix: str,
+    ) -> RecordingRegistry:
+        constructed.append(
+            {
+                "client": actual_client,
+                "heartbeat_ttl_seconds": heartbeat_ttl_seconds,
+                "key_prefix": key_prefix,
+            }
+        )
+        return RecordingRegistry()
+
+    monkeypatch.setattr(
+        registry_module,
+        "Redis",
+        SimpleNamespace(from_url=lambda *args, **kwargs: client),
+    )
+    monkeypatch.setattr(registry_module, "RedisOperatorRegistry", redis_registry)
+
+    result = registry_module.evaluate_scenario("REG-009", scenario)
+
+    assert result["status"] == "通过"
+    assert result["observed"]["health_verified"] is False
+    assert result["observed"]["lease_rejection"] == "CapacityUnavailableError"
+    assert calls == ["register", "heartbeat", "lease-attempt"]
+    assert constructed == [
+        {
+            "client": client,
+            "heartbeat_ttl_seconds": 1,
+            "key_prefix": scenario["redis_prefix"],
+        }
+    ]
+    assert client.closed is True
 
 
 def test_reg_014_restarts_from_postgresql_after_exact_redis_prefix_loss(
@@ -1604,6 +1740,137 @@ def test_facerec_container_probes_use_real_mongo_and_production_recognition_wiri
     assert embedding_source.count("print(") == 1
 
 
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_facerec_auth_classifier_accepts_only_code_18_authentication_failure(
+    wrapped: bool,
+) -> None:
+    from pymongo.errors import OperationFailure, ServerSelectionTimeoutError
+
+    infrastructure = importlib.import_module(
+        "scripts.milestone_2b_case_runners.infrastructure"
+    )
+    namespace: dict[str, object] = {}
+    exec(infrastructure._FACEREC_MONGO_AUTH_FAILURE_HELPER, namespace)
+    classify = namespace["mongodb_authentication_failure_facts"]
+    authentication_failure = OperationFailure(
+        "Authentication failed.",
+        code=18,
+        details={
+            "ok": 0.0,
+            "errmsg": "Authentication failed.",
+            "code": 18,
+            "codeName": "AuthenticationFailed",
+        },
+    )
+    error = (
+        ServerSelectionTimeoutError(
+            "Authentication failed.",
+            errors={"mongodb:27017": authentication_failure},
+        )
+        if wrapped
+        else authentication_failure
+    )
+
+    observed = classify(error)
+
+    assert observed == {
+        "authentication_error_type": type(error).__name__,
+        "authentication_cause_type": "OperationFailure",
+        "authentication_error_code": 18,
+        "authentication_error_code_name": "AuthenticationFailed",
+        "authentication_error_wrapped": wrapped,
+    }
+
+
+def test_facerec_auth_classifier_rejects_plain_server_selection_timeout() -> None:
+    from pymongo.errors import ServerSelectionTimeoutError
+
+    infrastructure = importlib.import_module(
+        "scripts.milestone_2b_case_runners.infrastructure"
+    )
+    namespace: dict[str, object] = {}
+    exec(infrastructure._FACEREC_MONGO_AUTH_FAILURE_HELPER, namespace)
+    classify = namespace["mongodb_authentication_failure_facts"]
+
+    observed = classify(
+        ServerSelectionTimeoutError(
+            "No servers found yet",
+            errors={"mongodb:27017": TimeoutError("connection timed out")},
+        )
+    )
+
+    assert observed is None
+
+
+def test_mongodb_down_probe_decodes_one_strict_marker_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    infrastructure = importlib.import_module(
+        "scripts.milestone_2b_case_runners.infrastructure"
+    )
+    payload = {
+        "ready": False,
+        "database_ready": False,
+        "production_validator": "FaceRecReadiness",
+    }
+    monkeypatch.setattr(
+        infrastructure.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="INFO FaceRec import completed\n" + _facerec_result_frame(payload) + "\n",
+            stderr="",
+        ),
+    )
+
+    observed = infrastructure._run_production_readiness_probe("mongodb_down")
+
+    assert observed == payload
+
+
+@pytest.mark.parametrize(
+    ("stdout", "error"),
+    [
+        ("INFO no result\n", "exactly one result frame"),
+        (
+            _facerec_result_frame({"ready": False})
+            + "\n"
+            + _facerec_result_frame({"ready": False}),
+            "exactly one result frame",
+        ),
+        (
+            FACEREC_PROBE_RESULT_MARKER + '{"ready":false} trailing',
+            "result frame is not strict JSON",
+        ),
+        (FACEREC_PROBE_RESULT_MARKER + "[]", "result frame is not a JSON object"),
+        (
+            FACEREC_PROBE_RESULT_MARKER + '{"ready":false,"value":NaN}',
+            "result frame is not strict JSON",
+        ),
+    ],
+)
+def test_mongodb_down_probe_rejects_invalid_result_frames(
+    monkeypatch: pytest.MonkeyPatch,
+    stdout: str,
+    error: str,
+) -> None:
+    infrastructure = importlib.import_module(
+        "scripts.milestone_2b_case_runners.infrastructure"
+    )
+    monkeypatch.setattr(
+        infrastructure.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=stdout,
+            stderr="",
+        ),
+    )
+
+    with pytest.raises(ValueError, match=error):
+        infrastructure._run_production_readiness_probe("mongodb_down")
+
+
 @pytest.mark.parametrize("case_id", ["INF-014", "INF-015"])
 def test_facerec_probe_accepts_logs_before_one_explicit_result_frame(
     monkeypatch: pytest.MonkeyPatch,
@@ -1798,7 +2065,16 @@ def test_mongodb_auth_probe_executes_person_persistence_with_zero_writes() -> No
     assert observed["person_lookup_attempts"] == 1
     assert observed["person_write_attempts"] == 0
     assert observed["empty_person_created"] is False
-    assert observed["authentication_error_type"] == "OperationFailure"
+    assert observed["authentication_error_type"] in {
+        "OperationFailure",
+        "ServerSelectionTimeoutError",
+    }
+    assert observed["authentication_cause_type"] == "OperationFailure"
+    assert observed["authentication_error_code"] == 18
+    assert observed["authentication_error_code_name"] == "AuthenticationFailed"
+    assert observed["authentication_error_wrapped"] is (
+        observed["authentication_error_type"] == "ServerSelectionTimeoutError"
+    )
     assert observed["person_count_after_auth_failure"] == 0
     assert "认证失败" in observed["persistence_error"]
 
@@ -2980,6 +3256,12 @@ async def test_gpu_canonical_runner_validates_health_then_rejects_isolated_mutat
     before = {
         path: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths
     }
+    if case_id == "GPU-018":
+        registration = json.loads(paths[2].read_text(encoding="utf-8"))
+        assert "instance_id" not in registration
+        assert registration["validated_instances"][0]["instance_id"] == (
+            gpu._TARGET_CONTAINERS[case_id]
+        )
 
     with MaintenanceLockGuard(context.release_root) as maintenance_lock:
         async with _case_execution_scope(

@@ -349,6 +349,10 @@ def _canonical_bundle(
             ),
         )
     validate_gpu_pair(instance, running, stopped, git_sha)
+    if running.get("status") != "PASS" or stopped.get("status") != "PASS":
+        raise ValueError(
+            "canonical running and stopped evidence must both be PASS"
+        )
     return instance, running, stopped, registration, git_sha
 
 
@@ -502,11 +506,42 @@ def _registration_validator(
     git_sha: str,
 ) -> None:
     _pair_validator(instance, running, stopped, registration, git_sha)
-    if not isinstance(registration, dict):
-        raise ValueError("canonical GPU registration evidence is missing")
-    if registration.get("instance_id") != instance.instance_id:
+    expected_selection = {
+        "mode": "instance",
+        "values": [instance.instance_id],
+    }
+    if (
+        not isinstance(registration, dict)
+        or type(registration.get("schema_version")) is not int
+        or registration.get("schema_version") != 1
+        or registration.get("evidence_type") != "operator_registration"
+        or registration.get("mock") is not False
+        or registration.get("target") != "operator-registry"
+        or registration.get("git_sha") != git_sha
+        or registration.get("status") != "通过"
+        or registration.get("selection") != expected_selection
+        or registration.get("summary")
+        != {"expected": 1, "observed": 1, "valid": 1}
+        or registration.get("issues") != []
+    ):
+        raise ValueError(
+            "canonical GPU registration evidence is not a production "
+            "instance registration envelope"
+        )
+    validated_instances = registration.get("validated_instances")
+    if (
+        not isinstance(validated_instances, list)
+        or len(validated_instances) != 1
+        or not isinstance(validated_instances[0], dict)
+    ):
+        raise ValueError(
+            "canonical GPU registration evidence does not contain exactly one "
+            "validated instance"
+        )
+    registered_instance = validated_instances[0]
+    if registered_instance.get("instance_id") != instance.instance_id:
         raise ValueError("GPU registration instance does not match inventory")
-    labels = registration.get("labels")
+    labels = registered_instance.get("labels")
     if not isinstance(labels, dict) or labels.get("gpu") != str(
         instance.physical_gpu
     ):
@@ -1154,7 +1189,7 @@ def _check_gpu_018(scenario: Mapping[str, Any]) -> dict[str, Any]:
         del running, stopped, instance
         if registration is None:
             raise ValueError("GPU registration mutation lacks evidence")
-        registration["labels"]["gpu"] = "1"
+        registration["validated_instances"][0]["labels"]["gpu"] = "1"
 
     return _assert_isolated_rejection(
         scenario=scenario,
@@ -1274,7 +1309,7 @@ def evaluate_scenario(case_id: str, scenario: Mapping[str, Any]) -> dict[str, An
         }
     try:
         observed = checker(scenario)
-    except (OSError, RuntimeError, ValueError) as exc:
+    except (IndexError, KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
         return {
             "case_id": case_id,
             "status": "失败",
@@ -1299,7 +1334,15 @@ def checker_main(argv: Sequence[str] | None = None) -> int:
         if not isinstance(document, dict):
             raise ValueError("checker input must be a JSON object")
         result = evaluate_scenario(arguments.check, document)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+    except (
+        IndexError,
+        KeyError,
+        OSError,
+        TypeError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        ValueError,
+    ) as exc:
         result = {
             "case_id": arguments.check,
             "status": "失败",

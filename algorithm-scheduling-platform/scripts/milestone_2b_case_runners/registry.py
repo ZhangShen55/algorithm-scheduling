@@ -1121,7 +1121,6 @@ def evaluate_scenario(case_id: str, scenario: Mapping[str, Any]) -> dict[str, An
             "REG-006",
             "REG-007",
             "REG-008",
-            "REG-009",
             "REG-018",
         }
         control = _require_control(control_url) if case_id in control_cases else None

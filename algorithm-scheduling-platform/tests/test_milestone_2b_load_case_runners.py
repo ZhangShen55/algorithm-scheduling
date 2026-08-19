@@ -461,6 +461,50 @@ def test_course_fact_cleanup_sql_is_exactly_scoped_to_task_id() -> None:
     assert "DELETE FROM course_jobs WHERE task_id = %s" in statements[2][0]
 
 
+def test_course_fact_snapshot_uses_task_node_required_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load = importlib.import_module("scripts.milestone_2b_case_runners.load")
+    executed: list[str] = []
+    rows = iter(((0,), (0,), (0, 0), (0,), (0,), (0, 0, 0)))
+
+    class Cursor:
+        def __enter__(self) -> Cursor:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def execute(self, statement: str, parameters: tuple[str]) -> None:
+            executed.append(statement)
+
+        def fetchone(self) -> tuple[int, ...]:
+            return next(rows)
+
+        def fetchall(self) -> list[tuple[int, int]]:
+            return []
+
+    class Connection:
+        def __enter__(self) -> Connection:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+    monkeypatch.setattr(load.psycopg, "connect", lambda dsn: Connection())
+
+    load._course_fact_snapshot("m2b-run-1-load-011")
+
+    migration = (PLATFORM_ROOT / "migrations/0001_initial.sql").read_text(encoding="utf-8")
+    unfinished_query = next(sql for sql in executed if "status NOT IN" in sql)
+    assert "required_capability text" in migration
+    assert "n.required_capability = 'asr_offline'" in unfinished_query
+    assert "n.operator_code" not in unfinished_query
+
+
 def test_scoped_recovery_requires_outbox_dag_and_offset_progress() -> None:
     load = importlib.import_module("scripts.milestone_2b_case_runners.load")
     before = {
@@ -598,6 +642,116 @@ def test_canonical_runtime_receipt_is_written_before_any_docker_mutation(
         load._restart_and_recover(case_id, scenario)
 
     assert mutations == []
+
+
+@pytest.mark.parametrize(
+    "inventory", ([], [{"instance_id": "facerec-gpu0", "lifecycle": "OFFLINE"}])
+)
+def test_graceful_stop_accepts_absent_or_offline_instance(
+    inventory: list[dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load = importlib.import_module("scripts.milestone_2b_case_runners.load")
+    monkeypatch.setattr(load, "_operator_instances", lambda: inventory)
+
+    load._require_instance_not_routable("facerec-gpu0")
+
+
+@pytest.mark.parametrize("lifecycle", ("ONLINE", "DRAINING"))
+def test_graceful_stop_rejects_instance_that_remains_routable(
+    lifecycle: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load = importlib.import_module("scripts.milestone_2b_case_runners.load")
+    monkeypatch.setattr(
+        load,
+        "_operator_instances",
+        lambda: [{"instance_id": "facerec-gpu0", "lifecycle": lifecycle}],
+    )
+
+    with pytest.raises(ValueError, match="not offline or absent"):
+        load._require_instance_not_routable("facerec-gpu0")
+
+
+@pytest.mark.parametrize(
+    "state",
+    (
+        {"Running": False, "ExitCode": 137, "OOMKilled": False, "Error": ""},
+        {"Running": False, "ExitCode": 0, "OOMKilled": True, "Error": ""},
+        {"Running": False, "ExitCode": 0, "OOMKilled": False, "Error": "daemon error"},
+    ),
+)
+def test_graceful_stop_rejects_non_graceful_container_exit(
+    state: dict[str, Any],
+) -> None:
+    load = importlib.import_module("scripts.milestone_2b_case_runners.load")
+
+    with pytest.raises(ValueError, match="gracefully"):
+        load._require_graceful_stop_state(state)
+
+
+def test_graceful_stop_accepts_clean_zero_exit() -> None:
+    load = importlib.import_module("scripts.milestone_2b_case_runners.load")
+
+    load._require_graceful_stop_state(
+        {"Running": False, "ExitCode": 0, "OOMKilled": False, "Error": ""}
+    )
+
+
+def test_load_010_accepts_unregister_and_rechecks_exact_instance_online(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load = importlib.import_module("scripts.milestone_2b_case_runners.load")
+    running = True
+    required: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        load,
+        "_resolve_container",
+        lambda target: ("a" * 64, {"State": {"StartedAt": "before"}}),
+    )
+    monkeypatch.setattr(
+        load,
+        "_write_runtime_recovery_receipt",
+        lambda case_id, scenario, resolved: None,
+    )
+    monkeypatch.setattr(load, "_operator_instances", lambda: [])
+
+    def require_instance(instance_id: str, lifecycle: str) -> dict[str, Any]:
+        required.append((instance_id, lifecycle))
+        if lifecycle != "ONLINE":
+            pytest.fail("LOAD-010 must not require a visible TTL-OFFLINE instance")
+        return {"instance_id": instance_id, "lifecycle": lifecycle, "model_ready": True}
+
+    def command(argv: tuple[str, ...], **kwargs: Any) -> str:
+        nonlocal running
+        if argv[1] == "stop":
+            running = False
+        elif argv[1] == "start":
+            running = True
+        return ""
+
+    monkeypatch.setattr(load, "_require_instance", require_instance)
+    monkeypatch.setattr(load, "_command", command)
+    monkeypatch.setattr(
+        load,
+        "_inspect_state",
+        lambda container_id: {
+            "Running": running,
+            "ExitCode": 0,
+            "OOMKilled": False,
+            "Error": "",
+        },
+    )
+    monkeypatch.setattr(
+        load, "_require_running_healthy", lambda container_id: {"Running": running}
+    )
+    monkeypatch.setattr(load, "_readiness_snapshot", lambda urls: {})
+    monkeypatch.setattr(load, "_wait_until", lambda check, *, timeout, label: check())
+
+    load._restart_and_recover("LOAD-010", _canonical_scenario(load, "LOAD-010"))
+
+    assert required == [("facerec-gpu0", "ONLINE"), ("facerec-gpu0", "ONLINE")]
 
 
 def test_load_011_outages_all_asr_instances_before_submitting_pending_work(
@@ -1216,6 +1370,160 @@ def test_load_015_requires_real_lease_before_restart_and_zero_after(
     assert observed["before_active_lease_count"] == 1
 
 
+def test_load_015_retries_capacity_503_before_receipt_and_redis_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load = importlib.import_module("scripts.milestone_2b_case_runners.load")
+    _stub_canonical_runtime(monkeypatch, load)
+    events: list[str] = []
+    lease_attempts = iter((503, 200))
+    capacities = iter(
+        (
+            [{"instance_id": "facerec-gpu0", "active_lease_count": 0}],
+            [{"instance_id": "facerec-gpu0", "active_lease_count": 0}],
+            [{"instance_id": "facerec-gpu0", "active_lease_count": 1}],
+            [{"instance_id": "facerec-gpu0", "active_lease_count": 0}],
+        )
+    )
+    instances = [
+        {
+            "instance_id": "facerec-gpu0",
+            "lifecycle": "ONLINE",
+            "model_ready": True,
+        }
+    ]
+
+    def post_status(url: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        if url.endswith("/release"):
+            events.append("release")
+            return 404, {"detail": "expired"}
+        status = next(lease_attempts)
+        events.append(f"lease:{status}")
+        if status == 503:
+            return status, {"detail": "capacity temporarily unavailable"}
+        return status, {
+            "lease_id": "lease-1",
+            "instance_id": "facerec-gpu0",
+            "capability": "facerec",
+        }
+
+    monkeypatch.setattr(load, "_operator_instances", lambda: instances)
+    monkeypatch.setattr(load, "_require_online_ids", lambda expected_ids: instances)
+    monkeypatch.setattr(load, "_http_json", lambda url: next(capacities))
+    monkeypatch.setattr(load, "_post_json_status", post_status)
+    monkeypatch.setattr(
+        load,
+        "_post_json",
+        lambda url, payload: pytest.fail("lease acquisition must inspect HTTP status"),
+    )
+    monkeypatch.setattr(load.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        load,
+        "_write_lease_receipt",
+        lambda scenario, lease: events.append("lease-receipt"),
+    )
+    monkeypatch.setattr(
+        load,
+        "_command",
+        lambda argv, **kwargs: events.append(f"docker:{argv[1]}") or "",
+    )
+
+    load._restart_and_recover("LOAD-015", _canonical_scenario(load, "LOAD-015"))
+
+    assert events[:4] == ["lease:503", "lease:200", "lease-receipt", "docker:restart"]
+
+
+def test_load_015_persistent_capacity_503_fails_closed_with_sanitized_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load = importlib.import_module("scripts.milestone_2b_case_runners.load")
+    clock = iter((0.0, 0.0, 1.0))
+    attempts = 0
+
+    def post_status(url: str, payload: dict[str, Any]) -> tuple[int, dict[str, str]]:
+        nonlocal attempts
+        attempts += 1
+        return 503, {
+            "detail": (
+                'capacity unavailable {"token":"json-secret"}; '
+                "Authorization: Bearer bearer-secret; "
+                "redis://user:url-secret@redis:6379/0"
+            )
+        }
+
+    monkeypatch.setattr(load, "_LOAD_015_LEASE_ACQUIRE_TIMEOUT_SECONDS", 1.0)
+    monkeypatch.setattr(load.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(load.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(load, "_post_json_status", post_status)
+    monkeypatch.setattr(
+        load,
+        "_post_json",
+        lambda url, payload: pytest.fail("lease acquisition must inspect HTTP status"),
+    )
+    monkeypatch.setattr(
+        load,
+        "_operator_instances",
+        lambda: [
+            {
+                "instance_id": "facerec-gpu0",
+                "lifecycle": "OFFLINE",
+                "model_ready": False,
+                "service_url": "http://facerec.internal",
+                "management_token": "operator-management-secret",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        load,
+        "_http_json",
+        lambda url: [
+            {
+                "instance_id": "facerec-gpu0",
+                "active_lease_count": 0,
+                "declared_capacity": 1,
+                "reported_inflight": 1,
+                "capacity_mismatch": True,
+                "service_url": "http://facerec.internal",
+            }
+        ],
+    )
+
+    with pytest.raises(ValueError) as error:
+        load._acquire_case_lease("LOAD-015", _canonical_scenario(load, "LOAD-015"))
+
+    message = str(error.value)
+    assert attempts == 2
+    assert "service detail omitted" in message
+    assert "facerec-gpu0" in message
+    assert "active_lease_count" in message
+    assert "reported_inflight" in message
+    assert "capacity_mismatch" in message
+    assert "json-secret" not in message
+    assert "bearer-secret" not in message
+    assert "url-secret" not in message
+    assert "http://facerec.internal" not in message
+    assert "operator-management-secret" not in message
+
+
+@pytest.mark.parametrize(
+    "detail",
+    (
+        "X-Api-Key: hunter2",
+        "Bearer hunter2",
+        "session_id=hunter2",
+        "credential=hunter2",
+        "ordinary capacity detail",
+    ),
+)
+def test_load_015_never_persists_arbitrary_service_detail(detail: str) -> None:
+    load = importlib.import_module("scripts.milestone_2b_case_runners.load")
+
+    observed = load._sanitized_lease_detail({"detail": detail})
+
+    assert observed == "<service detail omitted>"
+    assert detail not in observed
+
+
 def test_load_015_rejects_nonzero_initial_active_lease_before_acquire(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1382,13 +1690,16 @@ def test_load_015_acquires_a_real_lease_when_capacity_starts_at_zero(
     requests: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(
         load,
-        "_post_json",
-        lambda url, payload: requests.append((url, payload))
-        or {
-            "lease_id": "lease-1",
-            "instance_id": "facerec-gpu0",
-            "capability": "facerec",
-        },
+        "_post_json_status",
+        lambda url, payload: (
+            200,
+            requests.append((url, payload))
+            or {
+                "lease_id": "lease-1",
+                "instance_id": "facerec-gpu0",
+                "capability": "facerec",
+            },
+        ),
     )
 
     lease = load._acquire_case_lease("LOAD-015", _canonical_scenario(load, "LOAD-015"))

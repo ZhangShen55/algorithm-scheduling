@@ -454,13 +454,59 @@ else:
 print(json.dumps(result, ensure_ascii=False, sort_keys=True))
 '''
 
-_FACEREC_READINESS_PROBE = r'''
+_FACEREC_MONGO_AUTH_FAILURE_HELPER = r'''
+from collections.abc import Mapping, Sequence
+
+from pymongo.errors import OperationFailure
+
+
+def mongodb_authentication_failure_facts(error):
+    outer_error_type = type(error).__name__
+    pending = [error]
+    visited = set()
+    while pending:
+        current = pending.pop()
+        identity = id(current)
+        if identity in visited:
+            continue
+        visited.add(identity)
+        if isinstance(current, OperationFailure):
+            details = current.details if isinstance(current.details, Mapping) else {}
+            if current.code == 18 and details.get("codeName") == "AuthenticationFailed":
+                return {
+                    "authentication_error_type": outer_error_type,
+                    "authentication_cause_type": type(current).__name__,
+                    "authentication_error_code": current.code,
+                    "authentication_error_code_name": details["codeName"],
+                    "authentication_error_wrapped": current is not error,
+                }
+        for attribute in ("errors", "details"):
+            nested = getattr(current, attribute, None)
+            if isinstance(nested, Mapping):
+                pending.extend(nested.values())
+            elif isinstance(nested, Sequence) and not isinstance(
+                nested, (str, bytes, bytearray)
+            ):
+                pending.extend(nested)
+        for attribute in ("__cause__", "__context__"):
+            nested = getattr(current, attribute, None)
+            if nested is not None:
+                pending.append(nested)
+    return None
+'''
+
+
+_FACEREC_READINESS_PROBE = (
+    r'''
 import asyncio
 import json
 import sys
 
 probe = sys.argv[1]
 RESULT_MARKER = "@@M2B_FACEREC_PROBE_RESULT_V1@@"
+'''
+    + _FACEREC_MONGO_AUTH_FAILURE_HELPER
+    + r'''
 from app.core.readiness import FaceRecReadiness
 
 if probe == "mongodb_down":
@@ -493,7 +539,7 @@ elif probe == "mongodb_auth":
     from urllib.parse import quote
 
     from motor.motor_asyncio import AsyncIOMotorClient
-    from pymongo.errors import OperationFailure
+    from pymongo.errors import OperationFailure, ServerSelectionTimeoutError
 
     from app.core.config import settings
     from app.services.person import update_or_create_person
@@ -568,15 +614,18 @@ elif probe == "mongodb_auth":
                     counted_database,
                     {"number": "m2b-empty-record-probe"},
                 )
-            except OperationFailure as exc:
+            except (OperationFailure, ServerSelectionTimeoutError) as exc:
+                authentication_facts = mongodb_authentication_failure_facts(exc)
+                if authentication_facts is None:
+                    raise
                 persistence_error = f"MongoDB 认证失败: {exc}"
-                authentication_error_type = type(exc).__name__
             else:
                 raise RuntimeError("MongoDB invalid credentials were accepted")
             person_count = await admin_client.get_database(database_name)[
                 "persons"
             ].count_documents({})
             return {
+                **authentication_facts,
                 "ready": ready,
                 "detail": "MongoDB 认证失败: FaceRecReadiness database_ready=False",
                 "database_ready": readiness.database_ready(),
@@ -585,7 +634,6 @@ elif probe == "mongodb_auth":
                 "person_write_attempts": counted_database.persons.write_attempts,
                 "empty_person_created": person_count != 0,
                 "persistence_error": persistence_error,
-                "authentication_error_type": authentication_error_type,
                 "person_count_after_auth_failure": person_count,
                 "isolated_database": database_name,
                 "production_persistence_validator": (
@@ -606,6 +654,7 @@ else:
 
 print(RESULT_MARKER + json.dumps(result, ensure_ascii=False, sort_keys=True))
 '''
+)
 
 _FACEREC_EMBEDDING_PROBE = r'''
 import asyncio
@@ -807,6 +856,30 @@ def _facerec_probe_credentials(
     )
 
 
+def _decode_facerec_probe_result(stdout: str) -> dict[str, Any]:
+    frames = [
+        line[len(_FACEREC_PROBE_RESULT_MARKER) :]
+        for line in stdout.splitlines()
+        if line.startswith(_FACEREC_PROBE_RESULT_MARKER)
+    ]
+    if len(frames) != 1:
+        raise ValueError("FaceRec probe must return exactly one result frame")
+
+    def reject_non_standard_constant(value: str) -> None:
+        raise ValueError(f"non-standard JSON constant: {value}")
+
+    try:
+        result = json.loads(
+            frames[0],
+            parse_constant=reject_non_standard_constant,
+        )
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("FaceRec probe result frame is not strict JSON") from exc
+    if not isinstance(result, dict):
+        raise ValueError("FaceRec probe result frame is not a JSON object")
+    return cast(dict[str, Any], result)
+
+
 def _run_facerec_container_probe(
     *,
     case_id: str,
@@ -870,29 +943,7 @@ def _run_facerec_container_probe(
     )
     if completed.returncode != 0:
         raise ValueError("FaceRec container probe failed: " + completed.stderr.strip())
-    frames = [
-        line[len(_FACEREC_PROBE_RESULT_MARKER) :]
-        for line in completed.stdout.splitlines()
-        if line.startswith(_FACEREC_PROBE_RESULT_MARKER)
-    ]
-    if len(frames) != 1:
-        raise ValueError("FaceRec container probe must return exactly one result frame")
-
-    def reject_non_standard_constant(value: str) -> None:
-        raise ValueError(f"non-standard JSON constant: {value}")
-
-    try:
-        result = json.loads(
-            frames[0],
-            parse_constant=reject_non_standard_constant,
-        )
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise ValueError(
-            "FaceRec container probe result frame is not strict JSON"
-        ) from exc
-    if not isinstance(result, dict):
-        raise ValueError("FaceRec container probe result frame is not a JSON object")
-    return cast(dict[str, Any], result)
+    return _decode_facerec_probe_result(completed.stdout)
 
 
 def _run_production_readiness_probe(
@@ -934,12 +985,15 @@ def _run_production_readiness_probe(
             raise ValueError(
                 f"production readiness probe failed: {completed.stderr.strip()}"
             )
-        try:
-            result = json.loads(completed.stdout)
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                "production readiness probe did not return strict JSON"
-            ) from exc
+        if name == "mongodb_down":
+            result = _decode_facerec_probe_result(completed.stdout)
+        else:
+            try:
+                result = json.loads(completed.stdout)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    "production readiness probe did not return strict JSON"
+                ) from exc
     if not isinstance(result, dict) or result.get("ready") is not False:
         raise ValueError("production readiness probe did not reject controlled failure")
     if name == "postgres_down" and (
@@ -956,7 +1010,13 @@ def _run_production_readiness_probe(
         or result.get("person_lookup_attempts") != 1
         or result.get("person_write_attempts") != 0
         or result.get("empty_person_created") is not False
-        or result.get("authentication_error_type") != "OperationFailure"
+        or result.get("authentication_error_type")
+        not in {"OperationFailure", "ServerSelectionTimeoutError"}
+        or result.get("authentication_cause_type") != "OperationFailure"
+        or result.get("authentication_error_code") != 18
+        or result.get("authentication_error_code_name") != "AuthenticationFailed"
+        or result.get("authentication_error_wrapped")
+        is not (result.get("authentication_error_type") == "ServerSelectionTimeoutError")
         or result.get("person_count_after_auth_failure") != 0
         or result.get("isolated_database") != scenario.get("mongodb_database")
         or not isinstance(result.get("persistence_error"), str)

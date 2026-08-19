@@ -1,5 +1,44 @@
 # Change Ledger
 
+## 2026-08-19 - 8A.3 deployment runner 现场失败收敛与重跑门禁
+
+- 失败 release：`fd079383f507a5d7d16cd20209874deeab1cfd79` 保持只读。该轮 18 个 GPU
+  实例都已进入真实推理、停止、CUDA PID 消失、重启和注册恢复流程；六个 CPU 实例 Smoke
+  与八算子 full Smoke 通过。`CODEX_STAGE45_COMPLETE failures=18` 的统一根因是 GPU2
+  `temperature.gpu.tlimit=[N/A]` 被采集器在目标卡筛选前强制转为浮点；修复已在
+  `3a0af94` 记录。deployment 批次另有 26 个失败，其中 GPU 用例大部分是上述基础 evidence
+  FAIL 的级联，独立问题为 LOAD schema/生命周期/租约、INF FaceRec 探针、REG-009 装配和
+  GPU registration evidence 合同。
+- LOAD 修正：课程事实查询从不存在的 `task_nodes.operator_code` 改为正式字段
+  `required_capability`；SIGTERM 后允许注册客户端按合同注销实例，但容器必须同时满足
+  `Running=false`、`ExitCode=0`、`OOMKilled=false` 和空 Docker state error，不能把超时
+  SIGKILL 当成优雅退出；LOAD-015 只对容量 503 做 30 秒有界重试，成功后先持久化精确租约
+  receipt 再重启 Redis，持续失败保留白名单容量快照。疑似 token、密码、Authorization 或
+  URI 凭据的详情整段脱敏，不把任意服务返回值写入普通报告。
+- INF/REG 修正：FaceRec host readiness 与容器探针共用唯一 marker-frame strict JSON 解码；
+  Mongo 认证探针只接受直接或 `ServerSelectionTimeoutError` 包裹的 code 18
+  `AuthenticationFailed`，普通网络超时继续 fail closed；REG-009 重新获得按 run/case 隔离的
+  Redis registry，不再把 `None` 注入生产 `AuditedOperatorRegistry`。
+- GPU 修正：canonical running/stopped evidence 必须先同时为 PASS，结构错误始终输出单一
+  strict JSON；GPU-012/013 不再因 FAIL/FAIL baseline 错误通过；registration producer 的
+  成功 envelope 增加白名单化 `validated_instances`，只保留契约字段和 `gpu` 标签，GPU-018
+  从唯一真实实例记录校验物理卡标签并拒绝旧扁平假 fixture。
+- 证据分级：INF/REG 目录项的 `safety` 均为 `isolated_mutation`；INF 的 mode 是
+  `controlled_input`，REG 保留 `canonical_runtime` mode 以表示使用生产注册组件和真实隔离 Redis；
+  GPU-012/013/018 使用本 release 的真实 canonical PASS evidence，在内存深拷贝上注入反例以
+  证明验证器会 fail closed，不会真的制造远端 OOM、错误注册或停止 MongoDB。真实 GPU 推理、
+  无 OOM、实例注册与生命周期由 stage45/preflight/Smoke 证据负责；实际并发升压和 OOM 上限
+  属 8A.7。Harness 与最终报告不得把受控反例描述成真实故障注入。
+- TDD 与本地门禁：各缺陷均先复现 RED 后最小修正。聚焦全量为 GPU evidence `108 passed`、
+  foundation `510 passed, 3 skipped`、LOAD `91 passed`；合并部署相关回归为
+  `1248 passed, 3 skipped`，安全收口后核心三套为 `709 passed, 3 skipped`。3 个 skip 只因
+  本机没有远端注册令牌/Canonical FaceRec 容器。Ruff、5 个生产文件 strict Mypy、py_compile、
+  OpenSpec strict 和 `git diff --check` 通过。
+- 完成边界：本条只允许生成新的 Git SHA 并正式重跑。只有新不可变 release 同时出现
+  `CODEX_STAGE45_COMPLETE failures=0` 和
+  `CODEX_8A3_TERMINAL stage45_failures=0 deployment_status=0`，且原业务恢复、维护锁释放，
+  才允许勾选 OpenSpec `8A.3`。
+
 ## 2026-08-19 - 8A.3 GPU 温度上限不可用值语义修正
 
 - 现场现象：`fd079383f507a5d7d16cd20209874deeab1cfd79` 已完成八算子与四平台镜像构建、

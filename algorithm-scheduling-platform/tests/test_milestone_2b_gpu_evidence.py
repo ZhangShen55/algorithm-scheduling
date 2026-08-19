@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import runpy
@@ -12,11 +13,332 @@ from typing import Any
 
 import pytest
 
+from deploy.scripts import verify_operator_registration as registration_producer
+from scripts.milestone_2b_case_runners import gpu as gpu_cases
+
 PLATFORM_ROOT = Path(__file__).resolve().parents[1]
 VERIFIER = PLATFORM_ROOT / "deploy/scripts/verify-gpu-instance"
 RELEASE_SHA = "a" * 40
+RELEASE_TAG = "v1.0_260812"
 CONTAINER_ID = "b" * 64
 OTHER_CONTAINER_ID = "b" * 63 + "c"
+
+
+def _gpu_case_scenario(
+    release_root: Path,
+    case_id: str,
+    *,
+    passing: bool,
+    registration: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    container = gpu_cases._TARGET_CONTAINERS[case_id]
+    inventory = gpu_cases.load_operator_inventory(
+        PLATFORM_ROOT / gpu_cases._OPERATOR_COMPOSE
+    )
+    instance = next(
+        item for item in inventory.gpu_instances if item.instance_id == container
+    )
+    target = {
+        "container": instance.service_name,
+        "instance_id": instance.instance_id,
+        "physical_gpu": instance.physical_gpu,
+        "process_name": instance.process_name,
+    }
+    running: dict[str, Any] = {
+        "schema_version": 1,
+        "timestamp": "2026-08-19T00:00:00+00:00",
+        "commands": ["verify-gpu-instance --running"],
+        "mode": "running-inference",
+        "status": "PASS" if passing else "FAIL",
+        "target": target,
+    }
+    stopped: dict[str, Any] = {
+        "schema_version": 1,
+        "timestamp": "2026-08-19T00:01:00+00:00",
+        "commands": ["verify-gpu-instance --assert-stopped"],
+        "mode": "assert-stopped",
+        "status": "PASS" if passing else "FAIL",
+        "target": target,
+    }
+    if passing:
+        container_evidence = {
+            "id": CONTAINER_ID,
+            "name": instance.service_name,
+            "instance_id": instance.instance_id,
+            "init_host_pid": 1000,
+        }
+        gpu_evidence = {
+            "physical_index": instance.physical_gpu,
+            "physical_uuid": f"GPU-{instance.physical_gpu}",
+            "container_visible": str(instance.physical_gpu),
+        }
+        process = {
+            "process_name": instance.process_name,
+            "host_pid": 2000,
+            "container_pid": 42,
+            "mapping": {
+                "docker_top": True,
+                "cgroup_full_container_id": True,
+                "nspid": [2000, 42],
+            },
+        }
+        running.update(
+            {
+                "release_sha": RELEASE_SHA,
+                "container": container_evidence,
+                "gpu": gpu_evidence,
+                "activity": {
+                    "instance_id": instance.instance_id,
+                    "operator_code": instance.operator_code,
+                    "run_id": f"{case_id.lower()}-run",
+                },
+                "synchronous_samples": [{"processes": [process]}],
+            }
+        )
+        stopped.update(
+            {
+                "release_sha": RELEASE_SHA,
+                "container": container_evidence,
+                "gpu": gpu_evidence,
+                "prior_cuda_pids": [2000],
+                "remaining_cuda_pids": [],
+            }
+        )
+    else:
+        running["reason"] = "nvidia-smi GPU telemetry 数值字段格式异常"
+        stopped["reason"] = "先前 GPU 证据不是 PASS"
+
+    running_path = release_root / f"gpu-instances/{container}.json"
+    stopped_path = release_root / f"recovery/{container}-stopped.json"
+    running_path.parent.mkdir(parents=True, exist_ok=True)
+    stopped_path.parent.mkdir(parents=True, exist_ok=True)
+    running_path.write_text(json.dumps(running), encoding="utf-8")
+    stopped_path.write_text(json.dumps(stopped), encoding="utf-8")
+    if case_id == "GPU-018" and registration is not None:
+        registration_path = (
+            release_root
+            / f"registration/operator-registration-instance-{container}.json"
+        )
+        registration_path.parent.mkdir(parents=True, exist_ok=True)
+        registration_path.write_text(json.dumps(registration), encoding="utf-8")
+
+    scenario: dict[str, Any] = {
+        "schema_version": 1,
+        "case_id": case_id,
+        "mode": gpu_cases.CASE_SPECS[case_id].mode,
+        "mutation": {"case": case_id},
+        "container": container,
+        "release_root": str(release_root),
+        "git_sha": RELEASE_SHA,
+        "operator_compose": gpu_cases._OPERATOR_COMPOSE.as_posix(),
+        "running_evidence": f"gpu-instances/{container}.json",
+        "stopped_evidence": f"recovery/{container}-stopped.json",
+    }
+    if case_id == "GPU-018":
+        scenario["registration_evidence"] = (
+            f"registration/operator-registration-instance-{container}.json"
+        )
+    return scenario
+
+
+@pytest.mark.parametrize("case_id", tuple(f"GPU-{index:03d}" for index in range(3, 21)))
+def test_gpu_checker_rejects_failed_canonical_pair_as_one_strict_json_object(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    case_id: str,
+) -> None:
+    release_root = tmp_path / RELEASE_SHA
+    scenario = _gpu_case_scenario(
+        release_root,
+        case_id,
+        passing=False,
+        registration={} if case_id == "GPU-018" else None,
+    )
+    checker_input = tmp_path / f"{case_id}.json"
+    checker_input.write_text(json.dumps(scenario), encoding="utf-8")
+
+    return_code = gpu_cases.checker_main(
+        ["--check", case_id, "--input", str(checker_input)]
+    )
+
+    captured = capsys.readouterr()
+    output_lines = captured.out.splitlines()
+    assert return_code == 1
+    assert captured.err == ""
+    assert len(output_lines) == 1
+    result = json.loads(output_lines[0])
+    assert result["status"] == "失败"
+    assert "canonical running and stopped evidence must both be PASS" in result["reason"]
+
+
+def test_gpu_checker_normalizes_pass_evidence_shape_error_to_strict_json(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    release_root = tmp_path / RELEASE_SHA
+    scenario = _gpu_case_scenario(release_root, "GPU-008", passing=True)
+    running_path = release_root / "gpu-instances/facerec-gpu0.json"
+    running = json.loads(running_path.read_text(encoding="utf-8"))
+    running["synchronous_samples"].insert(0, {"processes": []})
+    running_path.write_text(json.dumps(running), encoding="utf-8")
+    checker_input = tmp_path / "GPU-008.json"
+    checker_input.write_text(json.dumps(scenario), encoding="utf-8")
+
+    return_code = gpu_cases.checker_main(
+        ["--check", "GPU-008", "--input", str(checker_input)]
+    )
+
+    captured = capsys.readouterr()
+    output_lines = captured.out.splitlines()
+    assert return_code == 1
+    assert captured.err == ""
+    assert len(output_lines) == 1
+    result = json.loads(output_lines[0])
+    assert result["status"] == "失败"
+    assert "GPU checker 未观察到目标状态" in result["reason"]
+
+
+@pytest.mark.parametrize(
+    ("case_id", "expected_stage"),
+    (("GPU-012", "startup"), ("GPU-013", "concurrent_inference")),
+)
+def test_gpu_oom_cases_validate_the_synthetic_failure_after_a_passing_baseline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case_id: str,
+    expected_stage: str,
+) -> None:
+    observed_failures: list[dict[str, Any] | None] = []
+    original_validator = gpu_cases._no_oom_validator
+
+    def recording_validator(*args: Any) -> None:
+        running = args[1]
+        observed_failures.append(running.get("failure"))
+        original_validator(*args)
+
+    monkeypatch.setattr(gpu_cases, "_no_oom_validator", recording_validator)
+    scenario = _gpu_case_scenario(
+        tmp_path / RELEASE_SHA,
+        case_id,
+        passing=True,
+    )
+
+    result = gpu_cases.evaluate_scenario(case_id, scenario)
+
+    assert result["status"] == "通过"
+    assert observed_failures[0] is None
+    assert observed_failures[1]["stage"] == expected_stage
+    assert "OOM rejected" in result["observed"]["rejection_detail"]
+
+
+def test_gpu_018_rejects_flat_registration_fixture(tmp_path: Path) -> None:
+    scenario = _gpu_case_scenario(
+        tmp_path / RELEASE_SHA,
+        "GPU-018",
+        passing=True,
+        registration={
+            "instance_id": "facerec-gpu0",
+            "labels": {"gpu": "0"},
+        },
+    )
+
+    result = gpu_cases.evaluate_scenario("GPU-018", scenario)
+
+    assert result["status"] == "失败"
+    assert "production instance registration envelope" in result["reason"]
+
+
+def test_gpu_018_consumes_the_instance_record_emitted_by_registration_producer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reports_root = tmp_path / "reports"
+    expected = registration_producer.load_expected(
+        registration_producer.COMPOSE_PATH
+    )["facerec-gpu0"]
+    observed_instance = {
+        "instance_id": "facerec-gpu0",
+        "operator_code": expected["operator_code"],
+        "capabilities": sorted(expected["capabilities"]),
+        "service_url": expected["service_url"],
+        "declared_capacity": expected["declared_capacity"],
+        "labels": {
+            "gpu": expected["gpu"],
+            "management_token": "must-not-be-persisted",
+        },
+        "lifecycle": "ONLINE",
+        "inflight": 0,
+        "model_ready": True,
+        "last_heartbeat_at": "2026-08-19T00:00:00Z",
+        "password": "must-not-be-persisted",
+    }
+    arguments = argparse.Namespace(
+        control_url="http://127.0.0.1:18100",
+        release_tag=RELEASE_TAG,
+        git_sha=RELEASE_SHA,
+        reports_root=reports_root,
+        expected_compose=registration_producer.COMPOSE_PATH,
+        profile=[],
+        instance=["facerec-gpu0"],
+        timeout_seconds=1.0,
+        poll_seconds=0.01,
+        request_timeout_seconds=0.2,
+    )
+
+    def fake_get_json(url: str, timeout: float) -> Any:
+        del timeout
+        if url.endswith("/ops/operator-instances"):
+            return [observed_instance]
+        if url.endswith("/events?limit=100"):
+            return [
+                {
+                    "event_type": "HEARTBEAT_SUMMARY",
+                    "event_payload": {"model_ready": True},
+                }
+            ]
+        raise AssertionError(f"unexpected registration URL: {url}")
+
+    monkeypatch.setattr(registration_producer, "parse_args", lambda: arguments)
+    monkeypatch.setattr(registration_producer, "get_json", fake_get_json)
+
+    assert registration_producer.main() == 0
+    release_root = (
+        reports_root
+        / "milestone-2b"
+        / "releases"
+        / RELEASE_TAG
+        / RELEASE_SHA
+    )
+    registration_path = (
+        release_root
+        / "registration/operator-registration-instance-facerec-gpu0.json"
+    )
+    registration = json.loads(registration_path.read_text(encoding="utf-8"))
+    assert registration["validated_instances"] == [
+        {
+            "instance_id": "facerec-gpu0",
+            "operator_code": expected["operator_code"],
+            "capabilities": sorted(expected["capabilities"]),
+            "service_url": expected["service_url"],
+            "declared_capacity": expected["declared_capacity"],
+            "labels": {"gpu": expected["gpu"]},
+            "lifecycle": "ONLINE",
+            "inflight": 0,
+            "model_ready": True,
+            "last_heartbeat_at": "2026-08-19T00:00:00Z",
+        }
+    ]
+    assert "must-not-be-persisted" not in registration_path.read_text(encoding="utf-8")
+    scenario = _gpu_case_scenario(
+        release_root,
+        "GPU-018",
+        passing=True,
+    )
+
+    result = gpu_cases.evaluate_scenario("GPU-018", scenario)
+
+    assert result["status"] == "通过"
+    assert result["observed"]["registration_label_rejection"] is True
 
 
 def _write_process_stat(proc_root: Path, pid: int, *, state: str, process_group: int) -> None:
