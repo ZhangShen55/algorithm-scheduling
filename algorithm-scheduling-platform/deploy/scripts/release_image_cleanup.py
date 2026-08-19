@@ -217,8 +217,32 @@ def _compose_service_images(
     return result
 
 
+def _running_service_image_slots(
+    deploy_root: Path,
+    compose_name: str,
+    services: tuple[str, ...],
+) -> dict[str, str]:
+    ids = _compose_container_ids(deploy_root, compose_name, services)
+    expected = set(services)
+    result: dict[str, str] = {}
+    for record in _inspect_containers(ids):
+        labels = (record.get("Config") or {}).get("Labels") or {}
+        service = labels.get("com.docker.compose.service")
+        image_id = record.get("Image")
+        if (
+            service not in expected
+            or service in result
+            or IMAGE_ID_PATTERN.fullmatch(str(image_id)) is None
+        ):
+            raise ImageCleanupError(f"{compose_name}: running image identity is invalid")
+        result[str(service)] = str(image_id)
+    if set(result) != expected:
+        raise ImageCleanupError(f"{compose_name}: running service set is incomplete")
+    return result
+
+
 def _controlled_image_slots(deploy_root: Path) -> dict[str, str]:
-    platform = _compose_service_images(
+    platform = _running_service_image_slots(
         deploy_root,
         "docker-compose.platform.yml",
         PLATFORM_SERVICES,

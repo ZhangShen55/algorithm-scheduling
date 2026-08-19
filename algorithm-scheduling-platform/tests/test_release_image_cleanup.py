@@ -250,6 +250,48 @@ def test_snapshot_uses_compose_image_slots_without_running_operator_containers(
     assert by_id[operator_image]["container_references"] == []
 
 
+def test_controlled_image_slots_use_running_platform_and_compose_operators(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    platform = {
+        service: f"sha256:{index + 7:064x}"
+        for index, service in enumerate(cleanup.PLATFORM_SERVICES)
+    }
+    operators = {
+        service: f"algorithm-{service.rsplit('-', 1)[0]}:old"
+        for service in cleanup.OPERATOR_SERVICES
+    }
+    monkeypatch.setattr(
+        cleanup,
+        "_running_service_image_slots",
+        lambda root, compose, services: (
+            platform
+            if root == tmp_path
+            and compose == "docker-compose.platform.yml"
+            and services == cleanup.PLATFORM_SERVICES
+            else pytest.fail("平台镜像槽位来源不正确")
+        ),
+    )
+    monkeypatch.setattr(
+        cleanup,
+        "_compose_service_images",
+        lambda root, compose, services: (
+            operators
+            if root == tmp_path
+            and compose == "docker-compose.operators.yml"
+            and services == cleanup.OPERATOR_SERVICES
+            else pytest.fail("算子镜像槽位来源不正确")
+        ),
+    )
+
+    result = cleanup._controlled_image_slots(tmp_path)
+
+    assert result == platform | operators
+    assert len(result) == len(cleanup.PLATFORM_SERVICES) + len(
+        cleanup.OPERATOR_SERVICES
+    )
+
+
 def test_release_image_cleanup_source_has_no_force_or_broad_prune() -> None:
     source = Path(cleanup.__file__).read_text(encoding="utf-8")
 
