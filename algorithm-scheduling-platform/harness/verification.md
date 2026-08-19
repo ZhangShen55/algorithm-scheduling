@@ -27,18 +27,20 @@ PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
   tests/test_ppt_text_pipeline.py \
   tests/test_vbas_batch_client.py \
   tests/test_online_gateway.py \
+  tests/integration/test_unified_capacity_cross_service.py \
   tests/test_operator_deployment_integration.py \
   tests/test_milestone_2b_operator_configs.py \
   tests/test_harness_consistency.py
 
-# orchestrator_service 目录
-PYTHONPATH="$PWD/..:$PWD/../algorithm-scheduling-platform" \
-  ../algorithm-scheduling-platform/.venv/bin/python -m pytest -q \
-  tests/test_control_client.py tests/test_executor.py tests/test_node_execution.py
+# 四个根服务必须分别在自己的项目目录执行，不能从平台目录一次性收集。
+(cd ../control_service && ../algorithm-scheduling-platform/.venv/bin/python -m pytest -q)
+(cd ../orchestrator_service && ../algorithm-scheduling-platform/.venv/bin/python -m pytest -q)
+(cd ../vision_orchestrator_service && ../algorithm-scheduling-platform/.venv/bin/python -m pytest -q)
+(cd ../online_gateway_service && ../algorithm-scheduling-platform/.venv/bin/python -m pytest -q)
 ```
 
 上述定向门禁不能替代八个算子各自 `AGENTS.md` 要求的 compileall、导入、项目测试、服务启动、
-路由检查和真实推理，也不能替代真实 Redis/PostgreSQL、四服务运行、在线/离线 OCR 并发、
+路由检查和真实推理，也不能替代真实 PostgreSQL、真实算子、最终 SHA 的四服务运行、
 同步 HTTP 跨 TTL 续租以及 24 实例里程碑 2B 验收。任何 skipped 或只使用健康检查的结果都不能
 把 `DEC-025` 改为“符合”。
 

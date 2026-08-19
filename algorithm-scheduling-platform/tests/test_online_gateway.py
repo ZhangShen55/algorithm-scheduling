@@ -20,6 +20,7 @@ from online_gateway_service.app.infrastructure.capacity import (
     OnlineWorkContext,
 )
 from online_gateway_service.app.main import app
+from starlette.websockets import WebSocketDisconnect
 
 from packages.platform_common.config import PlatformSettings
 from packages.platform_common.operator_registry import CapacityLease
@@ -717,6 +718,46 @@ def test_realtime_asr_keeps_one_sticky_lease_for_the_websocket_session(
         "ws://asr-online-gpu0:8084/v1.0.1/seacraft_asr_online"
     ]
     assert upstream_messages == [b"pcm-chunk-1", b"pcm-chunk-2"]
+
+
+def test_realtime_asr_returns_capacity_error_and_1013_without_connecting_operator(
+    tmp_path: Path,
+) -> None:
+    class LeaseClient:
+        @asynccontextmanager
+        async def acquire(self, capability: str, **kwargs):
+            assert capability == "asr_online"
+            assert kwargs["work_context"].source_service == "online-gateway-service"
+            raise OnlineCapacityLeaseError("no capacity: asr_online")
+            yield
+
+    class Connector:
+        @asynccontextmanager
+        async def connect(self, url: str):
+            raise AssertionError(f"容量不足时不应连接实时 ASR 算子: {url}")
+            yield
+
+    online_app = create_online_gateway_app(
+        PlatformSettings(
+            service_name="online-gateway-service",
+            course_root=tmp_path / "course",
+            result_root=tmp_path / "result",
+        )
+    )
+    online_app.state.online_lease_client = LeaseClient()
+    online_app.state.asr_websocket_connector = Connector()
+
+    with TestClient(online_app) as client:
+        with client.websocket_connect("/api/online/asr/stream") as websocket:
+            assert websocket.receive_json() == {
+                "code": 50301,
+                "message": "暂无可用实时 ASR 算子容量",
+                "data": None,
+            }
+            with pytest.raises(WebSocketDisconnect) as closed:
+                websocket.receive_json()
+
+    assert closed.value.code == 1013
 
 
 def test_online_http_returns_bounded_business_error_when_capacity_is_unavailable(

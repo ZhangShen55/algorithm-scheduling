@@ -84,7 +84,7 @@
 
 - [x] 10.1 更新八个算子 README，逐一说明根/部署 TOML 的注册开关、地址、心跳、容量、GPU 要求，以及继续留在 Compose 的实例/秘密/容器字段和保留的本地并发字段；配置位置与验证边界属于长期规则时同步对应 `AGENTS.md`。
 - [x] 10.2 更新 Control Service、Orchestrator、Vision Orchestrator 和 Online Gateway README，说明活跃租约权威、上下文接口、在线无队列/离线等待和单图 OCR 契约。
-- [ ] 10.3 修订当前总体设计和运维可视化设计中 `max(active_leases, reported_inflight)` 的旧口径，改为活跃租约调度权威及心跳差异观测，不篡改已封存的历史实施记录。
+- [x] 10.3 核对并修订当前受版本控制的总体设计，使旧 `max(active_leases, reported_inflight)` 口径改为活跃租约调度权威及心跳差异观测；保留已封存的历史实施记录，且按用户边界不编辑、不提交未跟踪的运维可视化初稿。
 - [x] 10.4 在 Harness 调整台账和验证矩阵中建立“规格场景 -> 代码 -> 自动测试 -> 运行证据”映射，明确每项实际达到的验证层级和未执行原因。
 - [x] 10.5 更新 A 服务对接指南，记录 `/api/online/ocr/recognize` 请求/响应、`enable_formula=false` 默认值、`50301` 直接返回 A 服务且不代表 Control Service 排队。
 
@@ -110,13 +110,13 @@
 
 ## 13. 跨服务容量与在线 OCR 验收
 
-- [ ] 13.1 用契约 OCR 替身贯通 Online Gateway -> Control Service -> OCR，覆盖省略/开启公式、图片标识、72 MiB 正文、50 MiB 解码、原始 OCR 响应、`40001/50301/50000` 和请求结束立即释放容量。
-- [ ] 13.2 用真实 Redis 并发发送在线单图 OCR 与离线 PPT OCR，证明两类请求无预留地共享实例容量、允许偏向 `ocr-gpu0`、不会超过总租约上限且离线无容量只等待。
-- [ ] 13.3 贯通多图片 `PPT_SLICE -> PPT_OCR -> PPT_KEYWORDS`，查询每个实例活跃租约并证明每张图片独立归属、无节点级重复租约、结果身份和数据库结构不变。
-- [ ] 13.4 贯通离线 ASR -> `course_overviews` 和 Vision Orchestrator -> VBas，核对普通节点/批次各一个租约、上下文中的任务 ID 正确、长任务续租与终态释放可靠。
-- [ ] 13.5 对在线 VBas、FaceRec、ScreenDet、OCR 和 ASR 发起并发容量耗尽测试，确认上游直接收到 `50301`、Control Service/网关无排队；同时确认算子内部等待仍计活跃租约。
-- [ ] 13.6 制造 `reported_inflight` 高于和低于活跃租约的心跳时差，确认运维查询/指标显示差异但不会阻塞已释放槽位或伪造任务。
-- [ ] 13.7 对 Orchestrator、Vision Orchestrator 和 Online Gateway 的同步 HTTP 调用执行“请求时间超过单次 TTL”测试，确认持续续租同一个租约；再覆盖续租失败、请求超时、取消和调用方停止续租后的 TTL 自动回收。
+- [x] 13.1 用契约 OCR 替身贯通 Online Gateway -> Control Service -> OCR，覆盖省略/开启公式、图片标识、72 MiB 正文、50 MiB 解码、原始 OCR 响应、`40001/50301/50000` 和请求结束立即释放容量。
+- [x] 13.2 用真实 Redis 并发发送在线单图 OCR 与离线 PPT OCR，证明两类请求无预留地共享实例容量、允许偏向 `ocr-gpu0`、不会超过总租约上限且离线无容量只等待。
+- [x] 13.3 贯通多图片 `PPT_SLICE -> PPT_OCR -> PPT_KEYWORDS`，查询每个实例活跃租约并证明每张图片独立归属、无节点级重复租约、结果身份和数据库结构不变。
+- [x] 13.4 贯通离线 ASR -> `course_overviews` 和 Vision Orchestrator -> VBas，核对普通节点/批次各一个租约、上下文中的任务 ID 正确、长任务续租与终态释放可靠。
+- [x] 13.5 对在线 VBas、FaceRec、ScreenDet、OCR 和 ASR 发起并发容量耗尽测试，确认上游直接收到 `50301`、Control Service/网关无排队；同时确认算子内部等待仍计活跃租约。
+- [x] 13.6 制造 `reported_inflight` 高于和低于活跃租约的心跳时差，确认运维查询/指标显示差异但不会阻塞已释放槽位或伪造任务。
+- [x] 13.7 对 Orchestrator、Vision Orchestrator 和 Online Gateway 的同步 HTTP 调用执行“请求时间超过单次 TTL”测试，确认持续续租同一个租约；再覆盖续租失败、请求超时、取消和调用方停止续租后的 TTL 自动回收。
 
 ## 14. 里程碑 2B 部署门禁与交付
 

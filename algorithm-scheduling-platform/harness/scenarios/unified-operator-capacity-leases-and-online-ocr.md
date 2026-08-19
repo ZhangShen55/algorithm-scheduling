@@ -4,8 +4,9 @@
 
 本场景对应 OpenSpec `unify-operator-capacity-leases-and-online-ocr`。2026-08-19 已进入 apply：
 公共租约模型、Redis 原子容量、Control API、普通/工作项/VBas/在线租约客户端、在线单图 OCR、
-八算子 TOML 配置和 Compose 静态合同已经实现。当前结论是“本地实现部分符合，跨服务与最终
-三卡发布待验证”，不得据此宣称整个变更完成。
+八算子 TOML 配置和 Compose 静态合同已经实现。真实 Redis 下的跨服务容量、逐图 PPT、在线
+容量耗尽、心跳差异和三类调用客户端跨 TTL 已取得自动化证据。当前结论是“本地实现和契约
+跨服务层符合，真实八算子泳道与最终三卡发布待验证”，不得据此宣称整个变更完成。
 
 本记录使用用户修改后的 OpenSpec 作为权威来源，固定以下新增约束：
 
@@ -148,8 +149,8 @@ POST /api/online/ocr/recognize
 | 规格能力 | 主要代码 | 自动测试 | 最低运行证据 | 当前结论 |
 | --- | --- | --- | --- | --- |
 | `unified-operator-capacity` | `packages/operator_registry_client/config.py`、八算子配置/入口、`deploy/docker-compose.operators.yml` | `test_operator_registry_client.py`、`test_operator_deployment_integration.py`、`test_milestone_2b_operator_configs.py`、八算子项目测试 | 根/部署 TOML、Compose 展开配置、真实推理、24 实例、精确镜像清理 | 本地配置/项目测试符合；最终镜像和清理待验证 |
-| `attributed-capacity-leases` | `platform_common/redis_operator_registry.py`、Control 租约 API、三个调用服务的容量客户端 | Redis 集成、Control API、dispatcher/executor、PPT 工作项和 VBas 客户端测试 | 真实 Redis 并发、跨 TTL 时序、PPT/ASR/VBas 跨服务链路 | Redis/API/客户端测试符合；完整泳道待验证 |
-| `online-ocr-routing` | `online_gateway_service/app/api/routes.py`、`request_validation.py`、`capacity.py` | `test_online_gateway.py`、OCR 项目测试 | 契约 OCR、真实 OCR、72/50 MiB 边界、在线/离线同池并发 | 契约和边界测试符合；真实 OCR 同池并发待验证 |
+| `attributed-capacity-leases` | `platform_common/redis_operator_registry.py`、Control 租约 API、三个调用服务的容量客户端 | Redis 集成、Control API、dispatcher/executor、PPT 工作项、VBas 客户端和 `test_unified_capacity_cross_service.py` | 真实 Redis 并发、跨 TTL 时序、PPT/ASR/VBas 跨服务链路 | 真实 Redis/Control/契约算子层符合；真实算子完整泳道待验证 |
+| `online-ocr-routing` | `online_gateway_service/app/api/routes.py`、`request_validation.py`、`capacity.py` | `test_online_gateway.py`、`test_unified_capacity_cross_service.py`、OCR 项目测试 | 契约 OCR、真实 OCR、72/50 MiB 边界、在线/离线同池并发 | 契约 OCR 与真实 Redis 同池符合；真实 OCR 跨服务待验证 |
 | 兼容与交付 | 八算子业务入口、四服务 README、总体设计、部署/Harness 脚本 | 路由合同、Harness 一致性、平台/算子全回归 | 四服务运行、全部泳道、最终 SHA 不可变报告 | 文档实施中；最终发布证据待验证 |
 
 任何矩阵行在只有静态代码、模拟成功响应或健康检查时都不得改为“符合”。真实 Redis、服务运行、
@@ -167,10 +168,18 @@ PPT OCR/关键词失败、取消、部分完成和恢复：4 passed
 Control 注册 API：37 passed
 Orchestrator 普通节点定向测试：18 passed
 GPU evidence 与报告聚合：657 passed
+统一容量跨服务 + Online Gateway：36 passed
+四个根服务独立运行：Control 21、Orchestrator 46、Vision Orchestrator 8、Online Gateway 9 passed
+里程碑 2A 四泳道完整运行与恢复回归：1 passed
 ```
 
-这些结果分别属于静态、单元和项目级验证；不替代四服务真实运行、真实 OCR 共享池、课程泳道
-和 `192.168.29.11` 最终 SHA 门禁。
+这些结果分别属于静态、单元、真实 Redis 跨服务和项目级验证；契约算子只替代模型推理，
+不替代真实 OCR/ASR/VBas 等算子、课程业务泳道和 `192.168.29.11` 最终 SHA 门禁。
+
+四个根服务的测试必须分别从 `control_service/`、`orchestrator_service/`、
+`vision_orchestrator_service/`、`online_gateway_service/` 根目录运行。把四个 `tests/` 一次性从
+平台目录收集会因服务使用各自顶层 `app` 包而产生 `ModuleNotFoundError: app`；这属于错误命令，
+不是服务实现失败。
 
 同一工作树还完成了下列本机运行验证；记录时的父 revision 为
 `bd59541`，最终提交后仍需用新的完整 SHA 生成不可变报告：
@@ -231,6 +240,7 @@ PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
   tests/test_ppt_text_pipeline.py \
   tests/test_vbas_batch_client.py \
   tests/test_online_gateway.py \
+  tests/integration/test_unified_capacity_cross_service.py \
   tests/test_operator_deployment_integration.py \
   tests/test_milestone_2b_operator_configs.py \
   tests/test_harness_consistency.py
