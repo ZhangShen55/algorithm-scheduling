@@ -1067,6 +1067,16 @@
 - 恢复复核：Canonical 输出 `restore: complete`；维护锁已释放，原 `ocr-v6-amd` 保持执行前的 Exited 状态，PostgreSQL、Redis、Kafka、MongoDB 和四个平台容器均为 healthy。
 - 结论：该 release 不得计入 OpenSpec 12.9/14.x；修复验证通过后必须以新 Git SHA、新不可变 release 重跑完整 8A.7。
 
+## 2026-08-20 8A.7 clean-clone JUnit 汇总失败与修复
+
+- 失败 release：`7df1c212dc219c1422b5ba857cbd426b1f3e1da5`。
+- 失败位置：阶段 1 clean-clone 已通过平台全量与四服务回归，在解析真实 PostgreSQL/Redis JUnit 时报告零用例；未进入镜像构建、容器替换或业务泳道。
+- 原因：pytest 的 JUnit 根节点为不带统计属性的 `<testsuites>`，实际统计位于直接子 `<testsuite>`；旧解析器允许该根节点，却仍只从根属性读取并把缺失字段默认为零。
+- 修复：根为 `testsuite` 时严格读取自身；根为 `testsuites` 时优先读取完整根汇总，否则严格汇总直接子 suite。缺失、部分汇总、非整数、负数、零用例、失败、错误和跳过继续失败关闭。
+- 验证：JUnit 聚焦测试 `10 passed`；真实 pytest XML 解析为 `tests=10/failures=0/errors=0/skipped=0`；平台全量 `2658 passed, 3 skipped`；Ruff、strict Mypy、compileall、OpenSpec strict 和 `git diff --check` 均通过。3 个本机 skip 仍只因未提供 canonical FaceRec 注册令牌，远端不得跳过。
+- 恢复复核：Canonical 输出 `restore: complete`；维护锁已释放，原 `ocr-v6-amd` 保持执行前的 Exited 状态，PostgreSQL、Redis、Kafka、MongoDB 和四个平台容器均为 healthy。
+- 结论：该 release 不得计入 OpenSpec 12.9/14.x；修复验证通过后必须以新 Git SHA、新不可变 release 重跑完整 8A.7。
+
 ## Record template
 
 - Date and scope:

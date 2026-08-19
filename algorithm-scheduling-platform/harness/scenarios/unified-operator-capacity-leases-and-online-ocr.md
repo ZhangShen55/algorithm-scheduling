@@ -274,6 +274,19 @@ Git SHA 和新不可变 release，旧失败 release 不得补写或计入 OpenSp
 strict 和 `git diff --check` 均通过。3 个本机 skip 只因未提供 canonical FaceRec 注册令牌，
 不得作为远端三卡证据。
 
+`7df1c212dc219c1422b5ba857cbd426b1f3e1da5` 随后的最终 8A.7 已越过上述平台全量失败，
+但在 clean-clone 的真实 PostgreSQL/Redis JUnit 统计门禁失败。pytest 生成的标准结构为
+`<testsuites><testsuite .../></testsuites>`，旧解析器只读取根节点属性，因而把实际成功执行的
+子 suite 误判为零用例。本轮仍在镜像构建、容器替换和业务泳道前终止，并输出
+`restore: complete`；维护锁释放、原 `ocr-v6-amd` 保持 Exited、基础设施和四个平台容器均为
+healthy。修复后的解析器必须支持根 `testsuite`、根带完整汇总的 `testsuites`，以及 pytest
+根无汇总属性时对子 suite 的严格求和；字段缺失、非整数、负数、零用例、失败、错误或跳过
+继续失败关闭。修复必须进入下一 Git SHA 和新不可变 release。
+修复后 JUnit 聚焦测试 `10 passed`，真实 pytest XML 解析得到
+`tests=10/failures=0/errors=0/skipped=0`，平台全量为 `2658 passed, 3 skipped`；Ruff、strict
+Mypy、compileall、OpenSpec strict 和 `git diff --check` 均通过。3 个 skip 的远端禁止复用边界
+保持不变。
+
 ## 2026-08-20 远端预验收失败与修复
 
 `192.168.29.11` 曾以父提交

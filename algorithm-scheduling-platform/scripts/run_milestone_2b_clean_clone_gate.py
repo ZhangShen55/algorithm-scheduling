@@ -169,22 +169,36 @@ def _junit_counts(path: Path, *, layer: str) -> dict[str, int]:
     if root.tag not in {"testsuite", "testsuites"}:
         raise RuntimeError(f"{layer} JUnit 根节点无效: {root.tag}")
 
-    def count(name: str) -> int:
-        raw = root.attrib.get(name, "0")
-        try:
-            value = int(raw)
-        except ValueError as error:
-            raise RuntimeError(f"{layer} JUnit {name} 不是整数") from error
-        if value < 0:
-            raise RuntimeError(f"{layer} JUnit {name} 不能为负数")
-        return value
+    count_names = ("tests", "failures", "errors", "skipped")
 
-    counts = {
-        "tests": count("tests"),
-        "failures": count("failures"),
-        "errors": count("errors"),
-        "skipped": count("skipped"),
-    }
+    def element_counts(element: ET.Element) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for name in count_names:
+            raw = element.attrib.get(name)
+            if raw is None:
+                raise RuntimeError(f"{layer} JUnit {element.tag} 缺少 {name}")
+            try:
+                value = int(raw)
+            except ValueError as error:
+                raise RuntimeError(f"{layer} JUnit {name} 不是整数") from error
+            if value < 0:
+                raise RuntimeError(f"{layer} JUnit {name} 不能为负数")
+            counts[name] = value
+        return counts
+
+    if root.tag == "testsuite" or all(name in root.attrib for name in count_names):
+        counts = element_counts(root)
+    else:
+        if any(name in root.attrib for name in count_names):
+            raise RuntimeError(f"{layer} JUnit testsuites 汇总字段不完整")
+        suites = tuple(child for child in root if child.tag == "testsuite")
+        if not suites:
+            raise RuntimeError(f"{layer} 没有实际执行任何测试")
+        counts = {name: 0 for name in count_names}
+        for suite in suites:
+            child_counts = element_counts(suite)
+            for name in count_names:
+                counts[name] += child_counts[name]
     if counts["tests"] <= 0:
         raise RuntimeError(f"{layer} 没有实际执行任何测试")
     if any(counts[name] != 0 for name in ("failures", "errors", "skipped")):

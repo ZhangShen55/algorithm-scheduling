@@ -120,3 +120,48 @@ def test_junit_gate_accepts_only_executed_zero_skip_layer(tmp_path: Path) -> Non
         "errors": 0,
         "skipped": 0,
     }
+
+
+def test_junit_gate_aggregates_pytest_testsuites_root(tmp_path: Path) -> None:
+    junit = tmp_path / "layer.xml"
+    junit.write_text(
+        "<testsuites>"
+        '<testsuite tests="2" failures="0" errors="0" skipped="0"></testsuite>'
+        '<testsuite tests="3" failures="0" errors="0" skipped="0"></testsuite>'
+        "</testsuites>",
+        encoding="utf-8",
+    )
+
+    assert gate._junit_counts(junit, layer="integration") == {
+        "tests": 5,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+    }
+
+
+def test_junit_gate_rejects_skipped_child_suite(tmp_path: Path) -> None:
+    junit = tmp_path / "layer.xml"
+    junit.write_text(
+        "<testsuites>"
+        '<testsuite tests="2" failures="0" errors="0" skipped="0"></testsuite>'
+        '<testsuite tests="1" failures="0" errors="0" skipped="1"></testsuite>'
+        "</testsuites>",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="零失败、零错误、零跳过"):
+        gate._junit_counts(junit, layer="integration")
+
+
+def test_junit_gate_rejects_partial_testsuites_summary(tmp_path: Path) -> None:
+    junit = tmp_path / "layer.xml"
+    junit.write_text(
+        '<testsuites tests="1">'
+        '<testsuite tests="1" failures="0" errors="0" skipped="0"></testsuite>'
+        "</testsuites>",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="汇总字段不完整"):
+        gate._junit_counts(junit, layer="integration")
