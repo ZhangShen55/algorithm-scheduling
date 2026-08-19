@@ -1359,6 +1359,7 @@ exit 0
         "FAILURE_STATUS": "41",
         "REAL_PYTHON": str(PYTHON),
         "OPERATOR_REGISTRY_TOKEN": "test-explicit-registry-token",
+        "PREVIOUS_RELEASE_ROOT": "",
     }
     return project_root, environment
 

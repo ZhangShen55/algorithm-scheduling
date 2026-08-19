@@ -1056,6 +1056,17 @@
 - 验证：镜像清理与 8A.7 定向 `15 passed`，Ruff、strict Mypy、`git diff --check` 和 OpenSpec strict 全部通过。
 - 结论：该 release 只是已记录的失败证据，不得计为 12.9 或 14.x 完成；修复后必须使用新 Git SHA 新建不可变 release。
 
+## 2026-08-20 8A.7 clean-clone 全量测试失败与修复
+
+- 失败 release：`448f6f3f21e748fc6f9ce5b05dbcdabae82b96b3`。
+- 失败位置：阶段 1 clean-clone 的平台全量 `pytest -q`；结果为 `2647 passed, 5 failed, 6 skipped`，未进入镜像构建、容器替换或业务泳道。
+- 原因 1：`run_milestone_2b_case_batch.py` 被测试和 Canonical 按文件路径直接执行时，`sys.path` 只有脚本目录，三个密封 release 反例在导入 `scripts.aggregate_milestone_2b_cases` 时失败。
+- 原因 2：两个早期失败测试从 Canonical 继承绝对 `PREVIOUS_RELEASE_ROOT`，临时项目中的场景脚本在目标失败命令之前被同 release tag 路径校验正确拒绝；该变量不是测试目标，夹具没有隔离外部运行环境。
+- 修复：批次 runner 在导入平台包前显式加入自身项目根；早期失败测试显式设置空前驱路径。新增/保留直接文件入口回归，继续要求密封 release 返回参数错误且证据树字节级不变。
+- 验证：聚焦失败用例 `5 passed`；平台全量 `2655 passed, 3 skipped`；四个根服务分别 `21/53/16/20 passed`；Ruff、strict Mypy、compileall、无 `PYTHONPATH` 文件入口、OpenSpec strict 和 `git diff --check` 均通过。3 个本机 skip 只因未提供 canonical FaceRec 注册令牌，远端不得跳过。
+- 恢复复核：Canonical 输出 `restore: complete`；维护锁已释放，原 `ocr-v6-amd` 保持执行前的 Exited 状态，PostgreSQL、Redis、Kafka、MongoDB 和四个平台容器均为 healthy。
+- 结论：该 release 不得计入 OpenSpec 12.9/14.x；修复验证通过后必须以新 Git SHA、新不可变 release 重跑完整 8A.7。
+
 ## Record template
 
 - Date and scope:

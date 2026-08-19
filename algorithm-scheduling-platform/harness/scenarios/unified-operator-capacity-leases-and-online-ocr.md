@@ -260,6 +260,20 @@ Smoke。当前实现改为：
 准备的 `.venv/bin/python -m deploy.scripts.release_image_cleanup`，并以新 SHA 重跑全部门禁；旧失败
 release 不得补写为通过。
 
+`448f6f3f21e748fc6f9ce5b05dbcdabae82b96b3` 的最终 8A.7 在阶段 1 clean-clone 全量测试失败，
+结果为 `2647 passed, 5 failed, 6 skipped`，因此同样未进入镜像构建、容器替换或业务泳道。
+其中三项失败证明 `run_milestone_2b_case_batch.py` 以文件路径直接执行时无法解析平台
+`scripts` 包；另外两项失败来自早期失败测试继承了 Canonical 的绝对
+`PREVIOUS_RELEASE_ROOT`，在临时项目中被正确的同 release tag 路径校验提前拒绝。修复要求是：
+批次 runner 在导入平台包前显式加入自身项目根；测试环境显式清空与测试目标无关的前驱变量。
+本轮 Canonical 输出 `restore: complete`；维护锁已释放，原 `ocr-v6-amd` 保持执行前的 Exited
+状态，PostgreSQL、Redis、Kafka、MongoDB 和四个平台容器均恢复为 healthy。修复必须进入新
+Git SHA 和新不可变 release，旧失败 release 不得补写或计入 OpenSpec 12.9/14.x 证据。
+修复后本机聚焦回归 `5 passed`，平台全量 `2655 passed, 3 skipped`，四个根服务分别为
+`21/53/16/20 passed`；Ruff、strict Mypy、compileall、无 `PYTHONPATH` 文件入口、OpenSpec
+strict 和 `git diff --check` 均通过。3 个本机 skip 只因未提供 canonical FaceRec 注册令牌，
+不得作为远端三卡证据。
+
 ## 2026-08-20 远端预验收失败与修复
 
 `192.168.29.11` 曾以父提交

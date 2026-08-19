@@ -22,7 +22,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from scripts.aggregate_milestone_2b_cases import (
+PLATFORM_ROOT = Path(__file__).resolve().parents[1]
+if str(PLATFORM_ROOT) not in sys.path:
+    sys.path.insert(0, str(PLATFORM_ROOT))
+
+from scripts.aggregate_milestone_2b_cases import (  # noqa: E402
     _load_release_json_with_metadata,
     _real_directory_entries,
     _release_root_lock,
@@ -30,38 +34,38 @@ from scripts.aggregate_milestone_2b_cases import (
     collect_case_executions,
     publish_json_once,
 )
-from scripts.milestone_2b_case_catalog import (
+from scripts.milestone_2b_case_catalog import (  # noqa: E402
     CASE_PHASES,
     CASE_SAFETY_LEVELS,
     CaseDefinition,
     load_case_catalog,
 )
-from scripts.milestone_2b_case_runners.base import (
+from scripts.milestone_2b_case_runners.base import (  # noqa: E402
     CaseContext,
     CaseOutcome,
     CaseRunner,
     CaseStatus,
 )
-from scripts.milestone_2b_case_runners.campaign import (
+from scripts.milestone_2b_case_runners.campaign import (  # noqa: E402
     CAMPAIGN_EVIDENCE_NAME,
     validate_campaign_source_evidence,
 )
-from scripts.milestone_2b_case_runners.evidence import (
+from scripts.milestone_2b_case_runners.evidence import (  # noqa: E402
     claim_case_once,
     publish_framework_failure_evidence,
     release_identity,
 )
-from scripts.milestone_2b_case_runners.process import (
+from scripts.milestone_2b_case_runners.process import (  # noqa: E402
     maximum_command_termination_budget_seconds,
 )
-from scripts.milestone_2b_case_runners.safety import (
+from scripts.milestone_2b_case_runners.safety import (  # noqa: E402
     CommandTaskTerminationError,
     DelegatedMaintenanceLockGuard,
     MaintenanceLock,
     MaintenanceLockGuard,
     _case_execution_scope,
 )
-from scripts.milestone_2b_report_contract import (
+from scripts.milestone_2b_report_contract import (  # noqa: E402
     DECLARATION_CATEGORY_BY_CASE_ID,
     EXECUTION_RECORD_FIELDS,
     validate_raw_execution_evidence,
