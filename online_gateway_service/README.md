@@ -28,6 +28,19 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 1
 实例。容量不足不排队，统一以 HTTP `200`、业务码 `50301` 返回；算子调用或响应格式错误使用
 业务码 `50000`。
 
+FaceRec 人物管理由 Online Gateway 代理以下接口：
+
+- `POST /api/online/face/persons`
+- `POST /api/online/face/persons/batch`
+- `GET /api/online/face/persons`
+- `POST /api/online/face/persons/search`
+- `DELETE /api/online/face/persons/delete`
+
+这些接口将请求原样转发到 `[face_persons].base_url` 对应的 FaceRec 管理接口，FaceRec 的
+`status_code/message/data` 响应对象原样放入 `BusinessResponse.data`。人物管理不申请推理容量
+租约、不进入 Kafka、也不由网关直连 MongoDB。人脸原图是否保存继续由 FaceRec
+`image.save_person_photo` 控制，当前默认值为 `false`。
+
 单图 OCR 接口为 `POST /api/online/ocr/recognize`：
 
 ```json

@@ -18,15 +18,17 @@ import uuid
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml  # type: ignore[import-untyped]
 
 SCRIPT_ROOT = Path(__file__).resolve().parent
-if str(SCRIPT_ROOT) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_ROOT))
-
-from deployment_contracts import validate_operator_toml_contract  # noqa: E402
+if TYPE_CHECKING:
+    from deploy.scripts.deployment_contracts import validate_operator_toml_contract
+else:
+    if str(SCRIPT_ROOT) not in sys.path:
+        sys.path.insert(0, str(SCRIPT_ROOT))
+    from deployment_contracts import validate_operator_toml_contract
 
 PLATFORM_ROOT = SCRIPT_ROOT.parents[1]
 COMPOSE_PATH = PLATFORM_ROOT / "deploy" / "docker-compose.operators.yml"

@@ -48,7 +48,7 @@ Python 运行环境，两者不是同一个概念。canonical 里程碑 2B 始�
 
 ```bash
 python3 -m venv "$PWD/.venv"
-"$PWD/.venv/bin/python" -m pip install .
+"$PWD/.venv/bin/python" -m pip install '.[dev]'
 ```
 
 `run-operator-smoke` 和 `verify-operator-registration` wrapper 的解释器选择顺序为
@@ -60,6 +60,10 @@ python3 -m venv "$PWD/.venv"
 导入，并将 Python/依赖版本原子记录到当前 release 的 `preflight/`
 证据中。完整可执行命令只以
 [`milestone-2b-deploy.md`](../harness/scenarios/milestone-2b-deploy.md) 为准。
+
+完整 8A.7 入口是 `deploy/scripts/run-milestone-2b-8a7`。它要求三路视频 URL 和当前 release
+的 B 级质量复核 JSON，并在同一维护锁下完成 clean-clone、24 实例、全部 243 条用例、报告、
+精确旧镜像清理和原业务恢复。不得单独提前调用 cleanup 模式绕过总控门禁。
 
 The platform Compose includes PostgreSQL, Kafka, Redis, MongoDB and all four platform
 services under the single `algorithm-scheduling-platform` project. They communicate

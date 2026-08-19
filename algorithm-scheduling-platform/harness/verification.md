@@ -32,6 +32,51 @@ MYPYPATH=.. .venv/bin/mypy --strict --explicit-package-bases \
   scripts/milestone_2b_case_runners/load.py
 ```
 
+八算子本地安全/受控部署 TOML 的进程级权威对照使用独立探针。它为每个算子的两类配置分别启动
+一个子进程，在子进程中确认五个已迁移旧环境变量确实存在后，通过显式 `CONFIG_PATH` 调用对应
+算子的正式配置加载入口；不导入 `app.main`，因此不会启动模型、连接数据库或占用 GPU。FaceRec、
+OCR 和 Text Analysis 使用受版本控制且不含真实凭据的安全模板，clean clone 不依赖被忽略的运行
+配置；OCR 仅在该配置探针中跳过模型目录存在性检查。最终 SHA 的 write-once 证据命令为：
+
+```bash
+EXPECTED_GIT_SHA="$(git -C .. rev-parse HEAD)"
+.venv/bin/python deploy/scripts/verify-operator-config-authority \
+  --workspace-root .. --git-sha "$EXPECTED_GIT_SHA" \
+  --output "$RELEASE_ROOT/preflight/operator-config-authority.json"
+
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/test_operator_config_authority.py \
+  tests/test_operator_deployment_integration.py \
+  tests/test_milestone_2b_operator_configs.py
+```
+
+通过条件为 `operator_count=8`、`process_count=16`、全部结果与确认容量一致，根配置均为
+`registration_enabled=false/require_gpu=false`，受控部署配置均为容器 Control URL、心跳
+`5`、已批准 GPU 要求，且 `legacy_environment_injected=true`。报告只记录旧变量名称，不记录
+继承环境、Token、密码或其他变量值。
+
+clean-clone 六层门禁不得从 pytest 返回码直接推断基础设施通过。以下入口会额外解析真实
+PostgreSQL/Redis 与 Kafka 测试的 JUnit；任何零用例或 skip 都失败：
+
+```bash
+deploy/scripts/run-milestone-2b-clean-clone-gate \
+  --release-root "$RELEASE_ROOT" \
+  --expected-git-sha "$EXPECTED_GIT_SHA"
+```
+
+最终 8A.7 使用：
+
+```bash
+deploy/scripts/run-milestone-2b-8a7 \
+  --teacher-video-url "$TEACHER_VIDEO_URL" \
+  --student-video-url "$STUDENT_VIDEO_URL" \
+  --slides-video-url "$SLIDES_VIDEO_URL" \
+  --manual-review-json "$RELEASE_ROOT/business/b-level-reviews.json"
+```
+
+`b-level-reviews.json` 必须覆盖 8 个 B 级质量复核 case，并让每项 `artifact` 指向当前 release
+内已存在的复核证据；它不能只写统一阶段结论。
+
 2026-08-20 首次 Canonical 在 `b0012b513cdb0548d9ff37b2b5da98f057a76859` 构建 ASR Online 时
 因构建期导入缺少 `/app/config.toml` 失败。代码审计同时发现 ScreenDet 的 Cython 构建层存在同类
 潜在失败；两处均改为使用构建层临时 TOML，且不把正式配置写入镜像。修复后先执行以下回归，
@@ -74,7 +119,7 @@ PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
 同步 HTTP 跨 TTL 续租以及 24 实例里程碑 2B 验收。任何 skipped 或只使用健康检查的结果都不能
 把 `DEC-025` 改为“符合”。
 
-实施后的证据还必须证明：八份根 TOML 与八份部署 TOML 使用已批准的不同注册/GPU默认值；
+实施后的证据还必须证明：八个项目的根配置或受版本控制的本地安全模板，与八份部署 TOML 使用已批准的不同注册/GPU默认值；
 Compose 源文件和 `docker compose config` 展开后的 24 实例都保留唯一身份、URL、Token、端口和
 GPU 绑定；未设置 `GPU_PROCESS_NAME` 时真实 GPU 进程名仍正确。OpenSpec 14.7 实现时必须把其
 精确镜像清理自动测试命令补入本节；在该命令、删除前后镜像清单和释放空间证据存在前，当前

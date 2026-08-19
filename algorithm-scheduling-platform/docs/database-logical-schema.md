@@ -36,6 +36,7 @@ erDiagram
     }
     course_task_types {
         bigint id PK
+        uuid submission_id
         text task_id FK
         text task_type
         smallint status
@@ -123,6 +124,8 @@ erDiagram
 `TEACHER_BEHAVIOR`、`STUDENT_BEHAVIOR`。
 
 - 唯一键为 `(task_id, task_type)`；`task_id` 直接外键关联课程，完整落实北向幂等键。
+- `submission_id` 是内部提交批次标识；同一次 HTTP 提交中新建的任务类型共享该值，后续提交新建
+  的任务类型使用新值，用于在同批次内共享媒体下载且禁止跨提交复用临时视频。
 - `status` 使用平台整数状态 10-80；未请求的 0 状态由查询层补齐，不写占位行。
 - `priority` 仅允许 `URGENT`、`NORMAL`，默认 `NORMAL`。
 - `reason` 保存面向 A 和运维人员的中文状态说明。

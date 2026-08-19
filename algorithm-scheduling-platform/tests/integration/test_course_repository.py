@@ -643,9 +643,68 @@ def test_combined_task_types_share_internal_submission_id(
                 """
             )
         ).scalars().all()
+        task_type_submission_ids = connection.execute(
+            text(
+                """
+                SELECT submission_id::text
+                FROM course_task_types
+                WHERE task_id = 'course-shared-submission'
+                ORDER BY task_type
+                """
+            )
+        ).scalars().all()
 
     assert len(payloads) == 2
     assert payloads[0]["submission_id"] == payloads[1]["submission_id"]
+    assert task_type_submission_ids == [
+        payloads[0]["submission_id"],
+        payloads[0]["submission_id"],
+    ]
+
+
+def test_later_task_type_submission_uses_a_new_persisted_submission_id(
+    repository: CourseRepository,
+) -> None:
+    asr = repository.create_task_types(
+        task_id="course-later-submission",
+        writes=[TaskTypeWrite(task_type=TaskType.ASR)],
+    )[0]
+    teacher = repository.create_task_types(
+        task_id="course-later-submission",
+        writes=[TaskTypeWrite(task_type=TaskType.TEACHER_BEHAVIOR)],
+    )[0]
+
+    assert asr.submission_id
+    assert teacher.submission_id
+    assert teacher.submission_id != asr.submission_id
+
+
+def test_pipeline_initialization_rejects_mismatched_submission_id(
+    repository: CourseRepository,
+) -> None:
+    task_type = repository.create_task_types(
+        task_id="course-submission-mismatch",
+        writes=[TaskTypeWrite(task_type=TaskType.ASR)],
+    )[0]
+
+    with pytest.raises(ValueError, match="submission_id 与持久化任务事实不一致"):
+        repository.initialize_pipeline(
+            task_type.task_id,
+            task_type.task_type,
+            pipeline_nodes(task_type.task_type, task_type.priority),
+            submission_id="00000000-0000-0000-0000-000000000000",
+        )
+
+    nodes = repository.initialize_pipeline(
+        task_type.task_id,
+        task_type.task_type,
+        pipeline_nodes(task_type.task_type, task_type.priority),
+        submission_id=task_type.submission_id,
+    )
+    assert [node.node_code for node in nodes] == [
+        "ASR_TRANSCRIPTION",
+        "COURSE_OVERVIEW",
+    ]
 
 
 def test_duplicate_pipeline_initialization_creates_each_node_once(

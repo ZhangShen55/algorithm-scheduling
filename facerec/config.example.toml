@@ -15,6 +15,20 @@ rec_min_face_hw = 50  # 识别阶段允许的最小人脸宽高
 [gpu]
 device = "cpu"  # 可选 cpu 或 cuda:N，例如 cuda:0
 
+[platform]
+# 本地安全模板默认不向调度平台注册。
+registration_enabled = false
+# 仅在 registration_enabled=true 时填写 Control Service 地址。
+control_service_url = ""
+# 注册心跳间隔秒数。
+heartbeat_interval_seconds = 5
+# 单实例向平台声明的请求容量，不等同于 Dlib 进程池大小。
+max_concurrent_requests = 128
+
+[runtime]
+# 本地安全模板允许在无 CUDA 环境加载配置。
+require_gpu = false
+
 [threading]
 max_workers = 2  # Dlib 人脸检测进程数
 

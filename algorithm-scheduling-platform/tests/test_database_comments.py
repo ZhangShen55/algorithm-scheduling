@@ -5,6 +5,9 @@ COMMENT_MIGRATION = PROJECT_ROOT / "migrations/0004_schema_comments.sql"
 FOUNDATION_FORWARD_MIGRATION = (
     PROJECT_ROOT / "migrations/0005_operator_audit_and_status_comments.sql"
 )
+SUBMISSION_FORWARD_MIGRATION = (
+    PROJECT_ROOT / "migrations/0006_course_task_type_submission.sql"
+)
 
 EXPECTED_COLUMNS = {
     "course_jobs": (
@@ -175,5 +178,18 @@ def test_0005_forward_migration_adds_operator_event_history_index() -> None:
         "create index idx_operator_instance_events_instance_time "
         "on operator_instance_events (instance_id, occurred_at desc, id desc);"
     ) in sql
+    for forbidden in ("drop table", "drop column", "delete from", "truncate"):
+        assert forbidden not in sql
+
+
+def test_0006_forward_migration_persists_and_documents_submission_id() -> None:
+    sql = " ".join(
+        SUBMISSION_FORWARD_MIGRATION.read_text(encoding="utf-8").lower().split()
+    )
+
+    assert "add column submission_id uuid" in sql
+    assert "set submission_id = gen_random_uuid()" in sql
+    assert "alter column submission_id set not null" in sql
+    assert "comment on column course_task_types.submission_id is '" in sql
     for forbidden in ("drop table", "drop column", "delete from", "truncate"):
         assert forbidden not in sql

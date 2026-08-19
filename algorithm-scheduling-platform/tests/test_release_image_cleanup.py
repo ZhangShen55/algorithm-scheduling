@@ -23,6 +23,56 @@ def _release_root(tmp_path: Path) -> Path:
     (root / "registration").mkdir(parents=True)
     (root / "smoke").mkdir()
     (root / "preflight").mkdir()
+    (root / "summary").mkdir()
+    clean_clone = {
+        "evidence_type": "milestone_2b_clean_clone_validation",
+        "release_tag": TAG,
+        "git_sha": SHA,
+        "layers": {
+            name: {
+                "status": "通过",
+                "junit": {"tests": 3, "failures": 0, "errors": 0, "skipped": 0},
+            }
+            for name in ("postgres_redis_integration", "kafka_integration")
+        },
+    }
+    (root / "preflight/clean-clone-validation.json").write_text(
+        json.dumps(clean_clone), encoding="utf-8"
+    )
+    config_authority = {
+        "evidence_type": "operator_config_authority",
+        "status": "PASS",
+        "git_sha": SHA,
+        "operator_count": 8,
+        "process_count": 16,
+        "results": [
+            {"operator_code": f"operator-{index // 2}", "mode": ("root", "controlled")[index % 2]}
+            for index in range(16)
+        ],
+    }
+    (root / "preflight/operator-config-authority.json").write_text(
+        json.dumps(config_authority), encoding="utf-8"
+    )
+    coverage = {
+        "negative_cases": {"expected": 217, "observed": 217, "passed": 217},
+        "load_cases": {"expected": 26, "observed": 26, "passed": 26},
+    }
+    (root / "summary/cases.json").write_text(
+        json.dumps({"release_tag": TAG, "git_sha": SHA, "coverage": coverage}),
+        encoding="utf-8",
+    )
+    (root / "summary/report.json").write_text(
+        json.dumps(
+            {
+                "release_tag": TAG,
+                "git_sha": SHA,
+                "overall_status": "通过",
+                "coverage": coverage,
+                "counts": {"通过": 300, "失败": 0, "未执行及原因": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
     registration = {
         "evidence_type": "operator_registration",
         "status": "通过",
@@ -139,7 +189,19 @@ def _patch_runtime(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(cleanup, "_run", fake_run)
+    monkeypatch.setattr(cleanup, "DelegatedMaintenanceLockGuard", _AcceptedLock)
     return commands
+
+
+class _AcceptedLock:
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        pass
+
+    def __enter__(self) -> _AcceptedLock:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
 
 
 def test_cleanup_executes_only_exact_unreferenced_proven_old_image(
@@ -148,7 +210,15 @@ def test_cleanup_executes_only_exact_unreferenced_proven_old_image(
     root = _release_root(tmp_path)
     commands = _patch_runtime(monkeypatch)
 
-    result = cleanup._cleanup(root, tmp_path, TAG, SHA, execute=True)
+    result = cleanup._cleanup(
+        root,
+        tmp_path,
+        TAG,
+        SHA,
+        execute=True,
+        lifecycle_lock_holder_pid=123,
+        lifecycle_lock_path=root.parent / ".operator-lifecycle.lock",
+    )
 
     assert result["status"] == "PASS"
     assert result["candidate_image_ids"] == [OLD_IMAGE]
@@ -191,9 +261,18 @@ def test_cleanup_rejects_incomplete_smoke_before_runtime_or_delete(
         return []
 
     monkeypatch.setattr(cleanup, "_controlled_containers", controlled)
+    monkeypatch.setattr(cleanup, "DelegatedMaintenanceLockGuard", _AcceptedLock)
 
     with pytest.raises(cleanup.ImageCleanupError, match="smoke"):
-        cleanup._cleanup(root, tmp_path, TAG, SHA, execute=True)
+        cleanup._cleanup(
+            root,
+            tmp_path,
+            TAG,
+            SHA,
+            execute=True,
+            lifecycle_lock_holder_pid=123,
+            lifecycle_lock_path=root.parent / ".operator-lifecycle.lock",
+        )
 
     assert called is False
 
@@ -348,3 +427,37 @@ def test_release_image_cleanup_source_has_no_force_or_broad_prune() -> None:
     assert '["docker", "image", "rm", image_id]' in source
     assert '"docker", "system", "prune"' not in source
     assert '"docker", "image", "rm", "-f"' not in source
+
+
+def test_execute_cleanup_requires_active_lifecycle_lock(tmp_path: Path) -> None:
+    root = _release_root(tmp_path)
+
+    with pytest.raises(cleanup.ImageCleanupError, match="active lifecycle lock"):
+        cleanup._cleanup(root, tmp_path, TAG, SHA, execute=True)
+
+
+def test_cleanup_rejects_incomplete_243_case_gate_before_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _release_root(tmp_path)
+    report = json.loads((root / "summary/cases.json").read_text(encoding="utf-8"))
+    report["coverage"]["negative_cases"]["passed"] = 216
+    (root / "summary/cases.json").write_text(json.dumps(report), encoding="utf-8")
+    monkeypatch.setattr(cleanup, "DelegatedMaintenanceLockGuard", _AcceptedLock)
+    monkeypatch.setattr(
+        cleanup,
+        "_controlled_containers",
+        lambda *_args, **_kwargs: pytest.fail("用例门禁失败后不得检查或删除容器"),
+    )
+
+    with pytest.raises(cleanup.ImageCleanupError, match="243-case"):
+        cleanup._cleanup(
+            root,
+            tmp_path,
+            TAG,
+            SHA,
+            execute=True,
+            lifecycle_lock_holder_pid=123,
+            lifecycle_lock_path=root.parent / ".operator-lifecycle.lock",
+        )

@@ -1,5 +1,6 @@
 from collections.abc import Iterable
 
+import pytest
 from vision_orchestrator_service.app.domain.adaptive_scan import (
     AdaptiveScanConfig,
     AdaptiveScanPlanner,
@@ -78,3 +79,22 @@ def test_adaptive_scan_returns_empty_when_coarse_scan_has_no_candidate() -> None
     assert result.intervals == ()
     assert result.candidate_windows == ()
     assert result.stages == ("coarse_10s",)
+
+
+@pytest.mark.asyncio
+async def test_async_adaptive_scan_preserves_sync_planning_semantics() -> None:
+    planner = AdaptiveScanPlanner(
+        AdaptiveScanConfig(
+            coarse_interval_seconds=10,
+            refinement_intervals_seconds=(5, 2),
+        )
+    )
+
+    async def detector(points: Iterable[float]) -> dict[float, bool]:
+        return {point: 9 <= point < 18 for point in points}
+
+    result = await planner.scan_async(duration_seconds=30, detector=detector)
+
+    assert result.stages == ("coarse_10s", "topology_5s", "topology_2s")
+    assert result.candidate_windows == ((0, 20),)
+    assert result.intervals == (BehaviorInterval(10, 18),)

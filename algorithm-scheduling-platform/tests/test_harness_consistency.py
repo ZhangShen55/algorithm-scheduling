@@ -51,7 +51,7 @@ def test_milestone_2b_bootstraps_clean_clone_harness_python_before_commands() ->
     )
     required_fragments = (
         'python3 -m venv "$PWD/.venv"',
-        '"$PWD/.venv/bin/python" -m pip install .',
+        "\"$PWD/.venv/bin/python\" -m pip install '.[dev]'",
         "import httpx",
         "import websockets",
         "import yaml",

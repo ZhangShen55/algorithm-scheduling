@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -65,8 +66,11 @@ class FFprobeMediaInspector:
             ),
             {},
         )
+        duration_seconds = float(format_data.get("duration", 0))
+        if not math.isfinite(duration_seconds) or duration_seconds <= 0:
+            raise MediaDownloadError("媒体时长必须是有限正数")
         return MediaMetadata(
-            duration_seconds=float(format_data.get("duration", 0)),
+            duration_seconds=duration_seconds,
             width=video_stream.get("width"),
             height=video_stream.get("height"),
             format_name=str(format_data.get("format_name", "unknown")),
@@ -111,10 +115,13 @@ class MediaDownloader:
             if download_group_id is None:
                 media_dir = course_dir / "media"
             else:
-                media_dir = task_workspace(
-                    course_dir / "submissions",
-                    download_group_id,
-                ) / "media"
+                media_dir = (
+                    task_workspace(
+                        course_dir / "submissions",
+                        download_group_id,
+                    )
+                    / "media"
+                )
         except ValueError as exc:
             raise MediaDownloadError(str(exc)) from exc
         media_dir.mkdir(parents=True, exist_ok=True)
@@ -137,6 +144,8 @@ class MediaDownloader:
 
         size_bytes, sha256 = await asyncio.to_thread(calculate_digest)
         metadata = await self._inspector.inspect(target)
+        if not math.isfinite(metadata.duration_seconds) or metadata.duration_seconds <= 0:
+            raise MediaDownloadError("媒体时长必须是有限正数")
         return DownloadedMedia(
             path=target,
             size_bytes=size_bytes,
@@ -171,11 +180,15 @@ class MediaDownloader:
                         output.write(chunk)
             partial.replace(target)
             metadata = await self._inspector.inspect(target)
+            if not math.isfinite(metadata.duration_seconds) or metadata.duration_seconds <= 0:
+                raise MediaDownloadError("媒体时长必须是有限正数")
         except MediaDownloadError:
             partial.unlink(missing_ok=True)
+            target.unlink(missing_ok=True)
             raise
         except (httpx.HTTPError, OSError, ValueError) as exc:
             partial.unlink(missing_ok=True)
+            target.unlink(missing_ok=True)
             raise MediaDownloadError(f"媒体下载失败: {exc}") from exc
 
         return DownloadedMedia(

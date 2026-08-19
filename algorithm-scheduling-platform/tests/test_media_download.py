@@ -17,6 +17,17 @@ class FakeInspector:
         return MediaMetadata(duration_seconds=120.5, width=1920, height=1080, format_name="mp4")
 
 
+class FailingInspector:
+    async def inspect(self, path: Path) -> MediaMetadata:
+        raise MediaDownloadError(f"无法解析媒体: {path.name}")
+
+
+class ZeroDurationInspector:
+    async def inspect(self, path: Path) -> MediaMetadata:
+        assert path.exists()
+        return MediaMetadata(duration_seconds=0, width=1920, height=1080, format_name="mp4")
+
+
 @pytest.mark.asyncio
 async def test_media_download_uses_task_workspace_and_returns_metadata(tmp_path: Path) -> None:
     transport = httpx.MockTransport(
@@ -78,6 +89,60 @@ async def test_oversized_download_removes_partial_file(tmp_path: Path) -> None:
             )
 
     assert not (tmp_path / "course-oversized/media/slides.mp4.part").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ("http", "transport", "inspect"))
+async def test_failed_download_does_not_publish_a_partial_or_final_media_file(
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        if failure == "http":
+            return httpx.Response(404)
+        if failure == "transport":
+            raise httpx.ConnectTimeout("连接超时")
+        return httpx.Response(200, content=b"not-a-video")
+
+    inspector = FailingInspector() if failure == "inspect" else FakeInspector()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        downloader = MediaDownloader(
+            course_root=tmp_path,
+            http_client=client,
+            inspector=inspector,
+            max_bytes=1024,
+        )
+        with pytest.raises(MediaDownloadError):
+            await downloader.download(
+                "course-failed",
+                "http://media/video.mp4",
+                "slides",
+            )
+
+    media_root = tmp_path / "course-failed/media"
+    assert not (media_root / "slides.mp4.part").exists()
+    assert not (media_root / "slides.mp4").exists()
+
+
+@pytest.mark.asyncio
+async def test_media_download_rejects_zero_duration_after_inspection(tmp_path: Path) -> None:
+    transport = httpx.MockTransport(lambda _: httpx.Response(200, content=b"video"))
+    async with httpx.AsyncClient(transport=transport) as client:
+        downloader = MediaDownloader(
+            course_root=tmp_path,
+            http_client=client,
+            inspector=ZeroDurationInspector(),
+            max_bytes=1024,
+        )
+        with pytest.raises(MediaDownloadError, match="时长"):
+            await downloader.download(
+                "course-zero-duration",
+                "http://media/video.mp4",
+                "slides",
+            )
+
+    assert not (tmp_path / "course-zero-duration/media/slides.mp4.part").exists()
+    assert not (tmp_path / "course-zero-duration/media/slides.mp4").exists()
 
 
 @pytest.mark.asyncio

@@ -9,15 +9,17 @@ from packages.platform_contracts.status import TaskType
 
 class RecordingPipelineRepository:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, TaskType, list[NodeWrite]]] = []
+        self.calls: list[tuple[str, TaskType, str, list[NodeWrite]]] = []
 
     def initialize_pipeline(
         self,
         task_id: str,
         task_type: TaskType,
         nodes: list[NodeWrite],
+        *,
+        submission_id: str,
     ) -> list[NodeRecord]:
-        self.calls.append((task_id, task_type, nodes))
+        self.calls.append((task_id, task_type, submission_id, nodes))
         return []
 
 
@@ -45,9 +47,10 @@ async def test_ppt_command_initializes_only_ppt_pipeline_nodes() -> None:
 
     await initializer.handle(command_bytes("PPT"))
 
-    task_id, task_type, nodes = repository.calls[0]
+    task_id, task_type, submission_id, nodes = repository.calls[0]
     assert task_id == "course-001"
     assert task_type is TaskType.PPT
+    assert submission_id == "submission-001"
     assert [node.node_code for node in nodes] == ["PPT_SLICE", "PPT_OCR", "PPT_KEYWORDS"]
 
 
@@ -58,7 +61,7 @@ async def test_asr_command_does_not_initialize_visual_or_ppt_nodes() -> None:
 
     await initializer.handle(command_bytes("ASR"))
 
-    _, _, nodes = repository.calls[0]
+    _, _, _, nodes = repository.calls[0]
     assert [node.node_code for node in nodes] == ["ASR_TRANSCRIPTION", "COURSE_OVERVIEW"]
 
 

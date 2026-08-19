@@ -119,6 +119,7 @@ class NodeExecutor:
                 node_id=node.id,
                 course_task_type_id=node.course_task_type_id,
                 task_id=task_type.task_id,
+                submission_id=task_type.submission_id,
                 task_type=task_type.task_type.value,
                 node_code=node.node_code,
                 request_payload=task_type.request_payload,

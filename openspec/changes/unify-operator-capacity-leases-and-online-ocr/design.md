@@ -36,7 +36,7 @@
 
 | 名称 | 权威来源 | 用途 |
 | --- | --- | --- |
-| `max_concurrent_requests` | 算子根目录 `config.toml` | 算子希望向平台注册的每实例总容量 |
+| `max_concurrent_requests` | 算子根配置或受版本控制的本地安全模板 | 算子希望向平台注册的每实例总容量 |
 | `declared_capacity` | 算子注册请求和 Redis 实例记录 | `max_concurrent_requests` 在平台注册协议中的字段名 |
 | 活跃租约数 | Control Service 管理的 Redis 租约集合 | 平台是否可以继续分发的唯一占用值 |
 | `reported_inflight` | 算子心跳 | 观测算子实际已接收请求数、发现绕过平台的调用或租约泄漏，不参与分配判定 |
@@ -47,7 +47,7 @@
 
 ### 2. 八个算子使用统一平台配置段，但实例事实留在 Compose
 
-每个项目根 `config.toml` 增加本地安全默认值；已有 `[runtime]` 的项目在同一段内追加字段，不得创建重复 TOML 表：
+每个项目在根配置或受版本控制的本地安全模板中增加本地安全默认值；已有 `[runtime]` 的项目在同一段内追加字段，不得创建重复 TOML 表。当前 FaceRec、OCR、Text Analysis 分别以 `config.example.toml`、`config.toml.example`、`config.example.toml` 作为 clean clone 可用且不含真实凭据的本地安全模板，其余五个项目使用根 `config.toml`：
 
 ```toml
 [platform]
@@ -65,7 +65,7 @@ max_concurrent_requests = 10
 require_gpu = false
 ```
 
-`registration_enabled` 和 `require_gpu` 只接受严格布尔值；启用注册时 `control_service_url` 必须是非空 HTTP(S) URL；`heartbeat_interval_seconds` 必须是有限正数；`max_concurrent_requests` 必须是正整数，并拒绝 `0`、负数、布尔值、浮点数和字符串。非法配置必须在应用开始接收请求和注册前失败。八个项目的代码默认值与提交的 `config.toml` 必须一致：
+`registration_enabled` 和 `require_gpu` 只接受严格布尔值；启用注册时 `control_service_url` 必须是非空 HTTP(S) URL；`heartbeat_interval_seconds` 必须是有限正数；`max_concurrent_requests` 必须是正整数，并拒绝 `0`、负数、布尔值、浮点数和字符串。非法配置必须在应用开始接收请求和注册前失败。八个项目的代码默认值必须与提交的根配置或本地安全模板一致：
 
 | 算子 | 默认值 | 平台计量单位 | 继续保留的本地约束 |
 | --- | ---: | --- | --- |
@@ -238,6 +238,8 @@ max_decoded_bytes = 52428800
 
 若新镜像构建、revision 校验、容器健康、注册或 Smoke 任一步失败，旧镜像不得删除。若旧镜像仍被运行中、暂停或停止容器引用，清理步骤必须报告并跳过，不能强制删除。清理后不再具备旧镜像的本机即时回滚能力；旧 Git SHA、配置和 Harness 证据继续保留，确需回滚时从旧 SHA 重新构建或从可信镜像源重新取得。
 
+若新镜像已构建或替换但后续门禁失败，Canonical 的 `EXIT` 恢复路径必须保留原退出码，先完整验证 baseline/new 账本和每个容器身份，再停止本轮精确 new ledger 并恢复已授权的原业务。账本或容器身份不可证明时必须失败关闭，不得执行宽泛停止或恢复。
+
 ## 风险 / 取舍
 
 - **高默认容量会让 OCR、ASR Offline 等串行算子形成更长的实例内等待** → 默认值是用户确认的平台准入上限，不是并行推理承诺；保留本地锁并增加租约/心跳差异、延迟和错误观测，后续可通过各算子 TOML 调整声明容量。
@@ -258,7 +260,7 @@ max_decoded_bytes = 52428800
 2. 更新各租约客户端，允许申请时携带上下文、申请后绑定上下文，并为可能超过单次 TTL 的同步 HTTP、后台任务和 WebSocket 调用提供续租；旧调用不传上下文时仍可工作。
 3. 更新 Orchestrator 与 Vision Orchestrator 的节点级/工作项级租约粒度，先通过 Stub 和真实 Redis 验证无重复占用，再接真实算子。
 4. 更新 Online Gateway 单图 OCR 路由和 72 MiB/50 MiB 可执行限制，完成与 OCR 契约替身和真实 OCR 的验证。
-5. 分别更新八个算子的配置模型、根 `config.toml`、显式注册参数、GPU 检查、测试和 README；PPT Slice 同步迁移本地任务上限。
+5. 分别更新八个算子的配置模型、根配置或受版本控制的本地安全模板、显式注册参数、GPU 检查、测试和 README；PPT Slice 同步迁移本地任务上限。
 6. 更新八份部署 TOML 和算子 Compose，删除已迁移的平台/GPU环境变量、增加 YAML anchors，并从实际挂载 TOML 与展开后的 Compose 双向预检注册值、实例身份和 GPU 标签。
 7. 执行分层验证和 24 实例 Harness 场景，确认在线/离线 OCR 同池竞争、容量释放及时、活跃任务可查询、既有路由和真实推理不回归。
 8. 在 `192.168.29.11` 记录新旧镜像清单；新镜像完成构建、revision、容器替换、健康、注册和 Smoke 后，按精确 ID 删除不再被引用的旧平台/算子镜像并记录释放空间。

@@ -22,6 +22,7 @@ import psycopg
 from scripts.milestone_2b_case_catalog import CaseDefinition
 
 from .base import RUN_ID_PATTERN, CaseContext, CaseOutcome
+from .campaign import CampaignCaseRunner
 from .evidence import publish_case_evidence
 from .process import (
     CommandResult,
@@ -72,6 +73,14 @@ _LEASE_EVIDENCE_FIELDS = frozenset(
         "capacity_mismatch",
     }
 )
+
+for _final_load_number in range(1, 10):
+    _final_load_case_id = f"LOAD-{_final_load_number:03d}"
+    globals()[f"load_{_final_load_number:03d}"] = CampaignCaseRunner(
+        "final", _final_load_case_id
+    )
+
+del _final_load_case_id, _final_load_number
 
 
 @dataclass(frozen=True, slots=True)

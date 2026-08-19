@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from scripts.milestone_2b_case_runners.safety import DelegatedMaintenanceLockGuard
+
 PLATFORM_SERVICES = (
     "control-service",
     "orchestrator-service",
@@ -431,6 +433,52 @@ def _validate_snapshot(payload: dict[str, Any], tag: str, sha: str) -> None:
 
 
 def _validate_release_gates(release_root: Path, tag: str, sha: str) -> None:
+    clean_clone = _read_json(release_root / "preflight" / "clean-clone-validation.json")
+    if (
+        clean_clone.get("evidence_type") != "milestone_2b_clean_clone_validation"
+        or clean_clone.get("release_tag") != tag
+        or clean_clone.get("git_sha") != sha
+    ):
+        raise ImageCleanupError("clean-clone evidence did not match this release")
+    layers = clean_clone.get("layers")
+    if not isinstance(layers, dict):
+        raise ImageCleanupError("clean-clone layer evidence is missing")
+    for layer in ("postgres_redis_integration", "kafka_integration"):
+        evidence = layers.get(layer)
+        junit = evidence.get("junit") if isinstance(evidence, dict) else None
+        if (
+            not isinstance(evidence, dict)
+            or evidence.get("status") != "通过"
+            or not isinstance(junit, dict)
+            or type(junit.get("tests")) is not int
+            or junit["tests"] <= 0
+            or any(junit.get(name) != 0 for name in ("failures", "errors", "skipped"))
+        ):
+            raise ImageCleanupError(f"clean-clone {layer} did not execute with zero skips")
+
+    config_authority = _read_json(
+        release_root / "preflight" / "operator-config-authority.json"
+    )
+    results = config_authority.get("results")
+    if (
+        config_authority.get("evidence_type") != "operator_config_authority"
+        or config_authority.get("status") != "PASS"
+        or config_authority.get("git_sha") != sha
+        or config_authority.get("operator_count") != 8
+        or config_authority.get("process_count") != 16
+        or not isinstance(results, list)
+        or len(results) != 16
+        or len(
+            {
+                (row.get("operator_code"), row.get("mode"))
+                for row in results
+                if isinstance(row, dict)
+            }
+        )
+        != 16
+    ):
+        raise ImageCleanupError("operator configuration authority evidence is incomplete")
+
     registration = _read_json(
         release_root / "registration" / "operator-registration.json"
     )
@@ -462,6 +510,33 @@ def _validate_release_gates(release_root: Path, tag: str, sha: str) -> None:
     if observed_smoke != SMOKE_OPERATORS:
         raise ImageCleanupError("eight-operator smoke evidence is incomplete")
 
+    cases = _read_json(release_root / "summary" / "cases.json")
+    coverage = cases.get("coverage")
+    expected_coverage = {
+        "negative_cases": {"expected": 217, "observed": 217, "passed": 217},
+        "load_cases": {"expected": 26, "observed": 26, "passed": 26},
+    }
+    if (
+        cases.get("release_tag") != tag
+        or cases.get("git_sha") != sha
+        or not isinstance(coverage, dict)
+        or any(coverage.get(name) != value for name, value in expected_coverage.items())
+    ):
+        raise ImageCleanupError("243-case aggregate evidence is not fully passed")
+
+    report = _read_json(release_root / "summary" / "report.json")
+    counts = report.get("counts")
+    if (
+        report.get("release_tag") != tag
+        or report.get("git_sha") != sha
+        or report.get("overall_status") != "通过"
+        or report.get("coverage") != coverage
+        or not isinstance(counts, dict)
+        or counts.get("失败") != 0
+        or counts.get("未执行及原因") != 0
+    ):
+        raise ImageCleanupError("final report did not pass for this release")
+
 
 def _snapshot(release_root: Path, deploy_root: Path, tag: str, sha: str) -> dict[str, Any]:
     references = _all_container_references()
@@ -480,6 +555,50 @@ def _snapshot(release_root: Path, deploy_root: Path, tag: str, sha: str) -> dict
 
 
 def _cleanup(
+    release_root: Path,
+    deploy_root: Path,
+    tag: str,
+    sha: str,
+    *,
+    execute: bool,
+    lifecycle_lock_holder_pid: int | None = None,
+    lifecycle_lock_path: Path | None = None,
+) -> dict[str, Any]:
+    if execute and (
+        lifecycle_lock_holder_pid is None or lifecycle_lock_path is None
+    ):
+        raise ImageCleanupError("execute cleanup requires the active lifecycle lock")
+    lock_guard: DelegatedMaintenanceLockGuard | None = None
+    if execute:
+        assert lifecycle_lock_holder_pid is not None
+        assert lifecycle_lock_path is not None
+        lock_guard = DelegatedMaintenanceLockGuard(
+            release_root,
+            lifecycle_lock_holder_pid,
+            lifecycle_lock_path,
+        )
+    if lock_guard is not None:
+        try:
+            lock_guard.__enter__()
+        except ValueError as error:
+            raise ImageCleanupError("operator lifecycle lock is not valid") from error
+    try:
+        return _cleanup_with_validated_lock(
+            release_root,
+            deploy_root,
+            tag,
+            sha,
+            execute=execute,
+        )
+    finally:
+        if lock_guard is not None:
+            try:
+                lock_guard.__exit__(None, None, None)
+            except ValueError as error:
+                raise ImageCleanupError("operator lifecycle lock was lost") from error
+
+
+def _cleanup_with_validated_lock(
     release_root: Path,
     deploy_root: Path,
     tag: str,
@@ -569,6 +688,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--release-root", required=True, type=Path)
     parser.add_argument("--deploy-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--lifecycle-lock-holder-pid", type=int)
+    parser.add_argument("--lifecycle-lock-path", type=Path)
     return parser.parse_args(argv)
 
 
@@ -599,6 +720,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 tag,
                 sha,
                 execute=arguments.execute,
+                lifecycle_lock_holder_pid=arguments.lifecycle_lock_holder_pid,
+                lifecycle_lock_path=arguments.lifecycle_lock_path,
             )
         _atomic_json(output, payload)
     except (ImageCleanupError, OSError) as error:

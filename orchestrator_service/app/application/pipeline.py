@@ -16,6 +16,8 @@ class PipelineRepository(Protocol):
         task_id: str,
         task_type: TaskType,
         nodes: list[NodeWrite],
+        *,
+        submission_id: str,
     ) -> list[NodeRecord]: ...
 
 
@@ -119,4 +121,5 @@ class PipelineInitializer:
             command.task_id,
             command.task_type,
             pipeline_nodes(command.task_type, command.priority),
+            submission_id=command.submission_id,
         )

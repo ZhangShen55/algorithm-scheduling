@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 
 Detector = Callable[[Iterable[float]], Mapping[float, bool]]
+AsyncDetector = Callable[[Iterable[float]], Awaitable[Mapping[float, bool]]]
 
 
 class AdaptiveScanError(RuntimeError):
@@ -117,6 +118,52 @@ class AdaptiveScanPlanner:
             stages=tuple(stages),
         )
 
+    async def scan_async(
+        self,
+        *,
+        duration_seconds: float,
+        detector: AsyncDetector,
+    ) -> AdaptiveScanResult:
+        """Run the same deterministic plan with an asynchronous detector."""
+        if not math.isfinite(duration_seconds) or duration_seconds <= 0:
+            raise ValueError("视频时长必须是大于 0 的有限值")
+
+        cache: dict[float, bool] = {}
+        stages = [f"coarse_{_stage_value(self._config.coarse_interval_seconds)}s"]
+        coarse_points = _time_grid(
+            0,
+            duration_seconds,
+            self._config.coarse_interval_seconds,
+        )
+        await self._evaluate_async(coarse_points, detector, cache)
+        candidate_windows = self._candidate_windows(coarse_points, cache)
+        if len(candidate_windows) > self._config.max_candidate_windows:
+            raise AdaptiveScanLimitError(
+                f"视觉候选窗口超过上限: {len(candidate_windows)}"
+            )
+        if not candidate_windows:
+            return AdaptiveScanResult((), (), len(cache), tuple(stages))
+
+        refinement_intervals = self._config.effective_refinement_intervals
+        for interval in refinement_intervals:
+            stages.append(f"topology_{_stage_value(interval)}s")
+            for start, end in candidate_windows:
+                await self._evaluate_async(
+                    _time_grid(start, end, interval), detector, cache
+                )
+
+        finest_interval = refinement_intervals[-1]
+        intervals: list[BehaviorInterval] = []
+        for start, end in candidate_windows:
+            finest_points = _time_grid(start, end, finest_interval)
+            intervals.extend(_positive_intervals(finest_points, cache))
+        return AdaptiveScanResult(
+            intervals=tuple(sorted(intervals, key=lambda item: item.start_seconds)),
+            candidate_windows=tuple(candidate_windows),
+            evaluated_point_count=len(cache),
+            stages=tuple(stages),
+        )
+
     def _evaluate(
         self,
         points: list[float],
@@ -131,6 +178,26 @@ class AdaptiveScanPlanner:
                 f"视觉检测点超过上限: {self._config.max_detection_points}"
             )
         detected = detector(missing)
+        for point in missing:
+            value = detected.get(point)
+            if not isinstance(value, bool):
+                raise AdaptiveScanError(f"检测器未返回有效布尔结果: {point}")
+            cache[point] = value
+
+    async def _evaluate_async(
+        self,
+        points: list[float],
+        detector: AsyncDetector,
+        cache: dict[float, bool],
+    ) -> None:
+        missing = [point for point in points if point not in cache]
+        if not missing:
+            return
+        if len(cache) + len(missing) > self._config.max_detection_points:
+            raise AdaptiveScanLimitError(
+                f"视觉检测点超过上限: {self._config.max_detection_points}"
+            )
+        detected = await detector(missing)
         for point in missing:
             value = detected.get(point)
             if not isinstance(value, bool):
@@ -172,9 +239,7 @@ def _positive_intervals(
         if values[point] and run_start_index is None:
             run_start_index = index
         if not values[point] and run_start_index is not None:
-            intervals.append(
-                BehaviorInterval(points[run_start_index], point)
-            )
+            intervals.append(BehaviorInterval(points[run_start_index], point))
             run_start_index = None
     if run_start_index is not None and points[-1] > points[run_start_index]:
         intervals.append(BehaviorInterval(points[run_start_index], points[-1]))
@@ -184,7 +249,7 @@ def _positive_intervals(
 def _time_grid(start: float, end: float, interval: float) -> list[float]:
     start = _point(start)
     end = _point(end)
-    count = int(math.floor((end - start) / interval))
+    count = math.floor((end - start) / interval)
     points = [_point(start + index * interval) for index in range(count + 1)]
     if points[-1] < end:
         points.append(end)

@@ -1313,7 +1313,7 @@ if [[ "$#" -eq 3 && "$1" == "-m" && "$2" == "venv" ]]; then
 set -euo pipefail
 printf 'venv-python:%s\\n' "$*" >>"$COMMAND_LOG"
 if [[ "$#" -eq 4 && "$1" == "-m" && "$2" == "pip" \
-  && "$3" == "install" && "$4" == "." ]]; then
+  && "$3" == "install" && "$4" == ".[dev]" ]]; then
   exit 0
 fi
 if [[ "$#" -eq 1 && "$1" == "-" ]]; then
@@ -1392,7 +1392,7 @@ def test_canonical_early_phases_stop_at_first_failure(
     assert completed.returncode == 41, completed.stderr
     commands = (tmp_path / "early-commands.log").read_text(encoding="utf-8").splitlines()
     assert any(command.startswith("python3:-m venv ") for command in commands)
-    assert "venv-python:-m pip install ." in commands
+    assert "venv-python:-m pip install .[dev]" in commands
     assert "venv-python:-" in commands
     assert failing_command in commands
     assert forbidden_later_command not in commands

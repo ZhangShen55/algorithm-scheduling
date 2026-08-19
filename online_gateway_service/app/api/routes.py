@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
@@ -25,6 +25,7 @@ from ..infrastructure.capacity import (
     OnlineCapacityLeaseError,
     OnlineWorkContext,
 )
+from ..infrastructure.persons import FacePersonClient, FacePersonClientError
 from ..infrastructure.websocket_proxy import (
     AsrWebSocketConnector,
     WebsocketsAsrConnector,
@@ -141,7 +142,24 @@ def create_online_gateway_app(
         http_client,
         control_service_url=platform_settings.control_service_url,
     )
+    app.state.face_person_client = FacePersonClient(
+        http_client,
+        base_url=service_settings.face_persons.base_url,
+        hard_timeout_seconds=service_settings.http.hard_timeout_seconds,
+    )
     app.state.asr_websocket_connector = WebsocketsAsrConnector()
+
+    original_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI):  # type: ignore[no-untyped-def]
+        async with original_lifespan(application):
+            try:
+                yield
+            finally:
+                await http_client.aclose()
+
+    app.router.lifespan_context = lifespan
 
     @app.middleware("http")
     async def enforce_online_image_body_limit(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -297,6 +315,76 @@ def create_online_gateway_app(
             body,
             message="人脸对比完成",
         )
+
+    async def call_face_persons(
+        request: Request,
+        operation: str,
+        request_body: JsonObject | None = None,
+        *,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> BusinessResponse[JsonObject]:
+        client = cast(FacePersonClient, request.app.state.face_person_client)
+        try:
+            if operation == "create":
+                body = await client.create(request_body or {})
+                message = "人物录入完成"
+            elif operation == "batch":
+                body = await client.create_batch(request_body or {})
+                message = "批量人物录入完成"
+            elif operation == "list":
+                body = await client.list(skip=skip, limit=limit)
+                message = "人物列表查询完成"
+            elif operation == "search":
+                body = await client.search(request_body or {})
+                message = "人物查询完成"
+            elif operation == "delete":
+                body = await client.delete(request_body or {})
+                message = "人物删除完成"
+            else:  # pragma: no cover - route wiring uses a closed operation set
+                raise FacePersonClientError("不支持的人物管理操作")
+        except FacePersonClientError:
+            return BusinessResponse[JsonObject].failure(
+                50000,
+                "人脸库管理调用失败",
+            )
+        return BusinessResponse[JsonObject].success(body, message=message)
+
+    @app.post("/api/online/face/persons")
+    async def create_face_person(
+        request_body: JsonObject,
+        request: Request,
+    ) -> BusinessResponse[JsonObject]:
+        return await call_face_persons(request, "create", request_body)
+
+    @app.post("/api/online/face/persons/batch")
+    async def create_face_persons_batch(
+        request_body: JsonObject,
+        request: Request,
+    ) -> BusinessResponse[JsonObject]:
+        return await call_face_persons(request, "batch", request_body)
+
+    @app.get("/api/online/face/persons")
+    async def list_face_persons(
+        request: Request,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> BusinessResponse[JsonObject]:
+        return await call_face_persons(request, "list", skip=skip, limit=limit)
+
+    @app.post("/api/online/face/persons/search")
+    async def search_face_persons(
+        request_body: JsonObject,
+        request: Request,
+    ) -> BusinessResponse[JsonObject]:
+        return await call_face_persons(request, "search", request_body)
+
+    @app.delete("/api/online/face/persons/delete")
+    async def delete_face_person(
+        request_body: JsonObject,
+        request: Request,
+    ) -> BusinessResponse[JsonObject]:
+        return await call_face_persons(request, "delete", request_body)
 
     @app.post("/api/online/image-quality/detect")
     async def detect_image_quality(

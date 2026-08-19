@@ -29,6 +29,10 @@ class ControlConfig(BaseModel):
     timeout_seconds: float = 10.0
 
 
+class FacePersonsConfig(BaseModel):
+    base_url: str = "http://127.0.0.1:8003"
+
+
 class HttpConfig(BaseModel):
     max_connections: int = 100
     max_keepalive_connections: int = 20
@@ -75,6 +79,7 @@ class OnlineGatewaySettings(BaseSettings):
 
     service: ServiceConfig = ServiceConfig()
     control: ControlConfig = ControlConfig()
+    face_persons: FacePersonsConfig = FacePersonsConfig()
     http: HttpConfig = HttpConfig()
     leases: LeaseConfig = LeaseConfig()
     base64: Base64Config = Base64Config()

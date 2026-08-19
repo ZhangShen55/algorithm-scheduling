@@ -153,7 +153,7 @@ POST /api/online/ocr/recognize
 
 | 规格能力 | 主要代码 | 自动测试 | 最低运行证据 | 当前结论 |
 | --- | --- | --- | --- | --- |
-| `unified-operator-capacity` | `packages/operator_registry_client/config.py`、八算子配置/入口、`deploy/docker-compose.operators.yml` | `test_operator_registry_client.py`、`test_operator_deployment_integration.py`、`test_milestone_2b_operator_configs.py`、八算子项目测试 | 根/部署 TOML、Compose 展开配置、真实推理、24 实例、精确镜像清理 | 本地配置/项目测试符合；最终镜像和清理待验证 |
+| `unified-operator-capacity` | `packages/operator_registry_client/config.py`、八算子配置/入口、`deploy/docker-compose.operators.yml` | `test_operator_registry_client.py`、`test_operator_deployment_integration.py`、`test_milestone_2b_operator_configs.py`、`test_operator_config_authority.py`、八算子项目测试 | 16 个独立进程的根/部署 TOML 权威对照、Compose 展开配置、真实推理、24 实例、精确镜像清理 | 本地配置/项目测试和进程级权威探针符合；最终镜像和清理待验证 |
 | `attributed-capacity-leases` | `platform_common/redis_operator_registry.py`、Control 租约 API、三个调用服务的容量客户端 | Redis 集成、Control API、dispatcher/executor、PPT 工作项、VBas 客户端和 `test_unified_capacity_cross_service.py` | 真实 Redis 并发、跨 TTL 时序、PPT/ASR/VBas 跨服务链路 | 真实 Redis/Control/契约算子层符合；真实算子完整泳道待验证 |
 | `online-ocr-routing` | `online_gateway_service/app/api/routes.py`、`request_validation.py`、`capacity.py` | `test_online_gateway.py`、`test_unified_capacity_cross_service.py`、OCR 项目测试 | 契约 OCR、真实 OCR、72/50 MiB 边界、在线/离线同池并发 | 契约 OCR 与真实 Redis 同池符合；真实 OCR 跨服务待验证 |
 | 兼容与交付 | 八算子业务入口、四服务 README、总体设计、部署/Harness 脚本 | 路由合同、Harness 一致性、平台/算子全回归 | 四服务运行、全部泳道、最终 SHA 不可变报告 | 文档实施中；最终发布证据待验证 |
@@ -221,8 +221,38 @@ Text Analysis：从既有 Python 3.11 `openai` 环境克隆规范名 `ai_report`
   均返回 200 和结构化结果；两个平台注册能力共享 declared_capacity=256。
 ```
 
-未完成项保持未勾选：八算子尚未逐一以根 TOML 和受控部署 TOML 启动并注入旧环境变量完成
-进程级对照；远端最终 SHA 镜像、24 实例、业务泳道、压力/回滚和精确镜像清理均尚未执行。
+八算子配置权威探针通过 16 个独立 Python 子进程逐一加载受版本控制的本地安全 TOML 和受控部署
+TOML；每个子进程都先确认五个已迁移旧环境变量已经注入，再通过显式 `CONFIG_PATH` 调用对应
+算子的正式配置加载入口。FaceRec、OCR 和 Text Analysis 使用不含真实凭据的安全模板，探针不依赖
+被 `.gitignore` 排除的运行配置；OCR 仅跳过与配置权威无关的模型目录存在性检查。本地配置必须解析为“不注册、不强制 GPU”，部署配置必须解析为
+“启用注册、容器 Control URL、心跳 5 秒、确认容量和对应 GPU 要求”，旧环境变量不得覆盖任何值。
+最终提交后仍须以完整 Git SHA 重跑并原子保存证据；远端业务泳道、压力/回滚和精确镜像清理
+继续按各自门禁执行。
+
+## 2026-08-20 最终门禁真实性修正
+
+复审发现三类证据可能产生伪阳性：clean-clone 曾把依赖不可用导致的 skip 仍写成集成通过；
+业务 Campaign 曾用一个阶段结果批量生成 `79/28/34/9` 条通过记录；旧镜像清理只校验注册和
+Smoke。当前实现改为：
+
+- PostgreSQL/Redis 与 Kafka 各自输出 JUnit 统计，必须 `tests>0` 且
+  `failures=errors=skipped=0`；clean clone 统一安装 `.[dev]`。
+- 16 进程配置权威证据固定写入 release `preflight/operator-config-authority.json`；同 SHA 续跑
+  只复用权限、字段、SHA、配置矩阵和 16 条结果全部严格匹配的已有证据。
+- 150 条业务用例逐案保存 `check_id`、真实泳道探针和显式 case-to-test 语义映射；
+  映射指定的每个测试模式都必须在当期 JUnit 中实际通过，禁止按 `JOB/FILE/PPT/...`
+  前缀机械复用整组结论。8 个质量项还必须提供当前 release 的独立 B 级复核。
+- 新增 `run-milestone-2b-8a7` 总控。镜像删除前强制校验 clean-clone、配置权威、217 条反例、
+  26 条压力、最终报告“通过”、28 个健康容器最终 SHA 及仍有效的维护锁。
+- Canonical 异常退出不只释放维护锁：在安全账本可证明时，停止本轮精确算子集合并恢复
+  已授权的原业务；账本或身份异常时失败关闭，不停止未证明容器。算子精确恢复 trap
+  只在所有账本/容器核验函数定义后替换外层 trap，以保证阶段 3 早期失败仍能恢复原业务。
+- `LOAD-007` 不再把“请求偏向排序靠前实例”当作错误；测试必须证明偏向可以存在，但排序靠前实例满容量后会选择下一可用实例，且总容量不超卖。
+
+本轮本地定向验证为：配置/clean-clone/清理门禁 `23 passed`，业务逐案与 8A.7 总控
+原回归 `27 passed`，媒体失败关闭、显式映射和总控定向 `30 passed`；四阶段映射 JUnit
+分别为 `99/57/36/138`，零失败、零错误、零跳过且无缺失映射；Ruff 通过。最终 SHA 的远端业务、容量、恢复、243 条汇总及镜像删除尚未执行，
+因此 OpenSpec 12.9、14.1、14.3-14.7 仍保持未完成。
 
 ## 2026-08-20 远端预验收失败与修复
 

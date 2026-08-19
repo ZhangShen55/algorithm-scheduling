@@ -33,12 +33,17 @@ class PostgresConfig(BaseModel):
 
 class KafkaConfig(BaseModel):
     bootstrap_servers: str = "127.0.0.1:9092"
+    client_id: str = "vision-orchestrator"
     command_topic: str = "algorithm.visual.commands"
     event_topic: str = "algorithm.visual.events"
     consumer_group: str = "vision-orchestrator"
     enable_auto_commit: bool = False
     auto_offset_reset: str = "earliest"
     max_poll_records: int = 2
+    poll_timeout_seconds: float = 1.0
+    ensure_topics: bool = False
+    topic_partitions: int = 1
+    topic_replication_factor: int = 1
 
 
 class ControlConfig(BaseModel):
@@ -61,14 +66,24 @@ class StorageConfig(BaseModel):
 class ScanConfig(BaseModel):
     batch_size: int = 8
     default_interval_seconds: float = 10.0
+    refinement_intervals_seconds: tuple[float, ...] = (5.0, 2.0)
     min_interval_seconds: float = 2.0
     max_interval_seconds: float = 60.0
+    max_candidate_windows: int = 20
+    max_detection_points: int = 10_000
+
+
+class MediaConfig(BaseModel):
+    ffmpeg_binary: str = "ffmpeg"
+    ffprobe_binary: str = "ffprobe"
+    command_timeout_seconds: float = 60.0
 
 
 class VbasConfig(BaseModel):
     request_timeout_seconds: float = 60.0
     max_batch_size: int = 8
     max_concurrency: int = 2
+    lease_ttl_seconds: int = 30
 
 
 class CacheConfig(BaseModel):
@@ -109,6 +124,7 @@ class VisionSettings(BaseSettings):
     worker: WorkerConfig = WorkerConfig()
     storage: StorageConfig = StorageConfig()
     scan: ScanConfig = ScanConfig()
+    media: MediaConfig = MediaConfig()
     vbas: VbasConfig = VbasConfig()
     cache: CacheConfig = CacheConfig()
     teacher_behavior: BehaviorConfig = BehaviorConfig()

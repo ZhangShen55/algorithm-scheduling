@@ -27,6 +27,8 @@ pool_timeout_seconds = 30.0
 [kafka]
 # Kafka 集群引导服务器地址。
 bootstrap_servers = "127.0.0.1:9092"
+# Kafka 客户端标识。
+client_id = "vision-orchestrator"
 # 视觉分析命令主题。
 command_topic = "algorithm.visual.commands"
 # 视觉分析事件主题。
@@ -39,6 +41,14 @@ enable_auto_commit = false
 auto_offset_reset = "earliest"
 # 单次 poll 最多领取的课程级视觉命令数。
 max_poll_records = 2
+# Kafka 单次 poll 的最长等待秒数。
+poll_timeout_seconds = 1.0
+# 是否由本服务创建缺失的视觉主题；默认只校验主题存在。
+ensure_topics = false
+# 自动创建主题时使用的分区数。
+topic_partitions = 1
+# 自动创建主题时使用的副本数。
+topic_replication_factor = 1
 
 [control]
 # 控制服务基础地址。
@@ -67,10 +77,24 @@ evidence_root = "/data/result/evidence"
 batch_size = 8
 # 默认帧扫描间隔秒数。
 default_interval_seconds = 10.0
+# 命中教师板书或坐姿后依次使用的加密检测间隔秒数。
+refinement_intervals_seconds = [5.0, 2.0]
 # 自适应扫描最小间隔秒数。
 min_interval_seconds = 2.0
 # 自适应扫描最大间隔秒数。
 max_interval_seconds = 60.0
+# 单次教师分析允许的候选窗口上限。
+max_candidate_windows = 20
+# 单次教师分析允许的检测点总上限。
+max_detection_points = 10000
+
+[media]
+# 视频抽帧使用的 ffmpeg 可执行文件。
+ffmpeg_binary = "ffmpeg"
+# 视频时长探测使用的 ffprobe 可执行文件。
+ffprobe_binary = "ffprobe"
+# 单条视频命令的硬超时秒数。
+command_timeout_seconds = 60.0
 
 [vbas]
 # VBas 单次请求超时秒数。
@@ -79,6 +103,8 @@ request_timeout_seconds = 60.0
 max_batch_size = 8
 # VBas 请求最大并发数。
 max_concurrency = 2
+# 单个 VBas 批次容量租约的时长秒数，长调用会自动续租。
+lease_ttl_seconds = 30
 
 [cache]
 # 内存推理结果最大条目数。

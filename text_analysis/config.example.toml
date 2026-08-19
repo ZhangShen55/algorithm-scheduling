@@ -1,0 +1,117 @@
+# 本地安全模板不包含真实 API Key 或访问令牌。
+api_key = ""
+base_url = "http://127.0.0.1:8000/v1"
+model = "local-model"
+
+mt_api_key = ""
+mt_base_url = "http://127.0.0.1:8000/v1"
+mt_model = "local-mt-model"
+segment_size = 1
+mt_max_concurrency = 256
+mt_queue_timeout = 90
+
+[platform]
+# 本地安全模板默认不向调度平台注册。
+registration_enabled = false
+# 仅在 registration_enabled=true 时填写 Control Service 地址。
+control_service_url = ""
+# 注册心跳间隔秒数。
+heartbeat_interval_seconds = 5
+# 课程脑图与关键词提取共享的单实例平台容量。
+max_concurrent_requests = 256
+
+[runtime]
+# 文本分析服务不要求 CUDA。
+require_gpu = false
+
+[eval_weight]
+base_score = 16.0
+knob = 0.9
+politics = 0.1
+content = 0.25
+attitude = 0.25
+method = 0.15
+effect = 0.25
+
+[course_overview]
+segment_count = 10
+concurrency = 4
+
+[course_time_analysis]
+enable_llm_validation = true
+llm_concurrency = 4
+llm_retry_attempts = 2
+candidate_context_before_sec = 120
+candidate_context_after_sec = 120
+fallback_window_sec = 300
+max_fallback_windows = 12
+max_llm_candidates = 24
+min_break_duration_sec = 600
+max_break_duration_sec = 2400
+boundary_semantic_window_sec = 1800
+boundary_semantic_chunk_sec = 300
+boundary_semantic_overlap_sec = 60
+break_end_search_min_sec = 300
+break_end_search_max_sec = 1800
+course_start_candidate_budget = 8
+course_end_candidate_budget = 8
+break_start_candidate_budget = 12
+break_end_candidate_budget = 12
+weak_candidate_budget = 8
+
+[language_expression_analysis]
+chunk_chars = 3000
+chunk_overlap_chars = 300
+max_chunks = 20
+chunk_concurrency = 4
+chunk_retry_attempts = 2
+final_retry_attempts = 2
+min_effective_chars = 800
+min_advantages_per_dimension = 2
+min_problems_per_dimension = 0
+max_items_per_dimension = 4
+default_temperature = 0.6
+overall_score_min = 0
+overall_score_max = 100
+enable_auto_course_time_analysis = true
+enable_final_llm_polish = true
+
+[course_knowledge_corpus_analysis]
+chunk_chars = 500
+chunk_overlap_chars = 60
+max_chunks = 40
+chunk_concurrency = 4
+chunk_retry_attempts = 2
+final_retry_attempts = 2
+chunk_max_knowledge_points = 3
+chunk_max_corpus = 3
+final_max_knowledge_points = 20
+final_max_corpus = 20
+max_description_chars = 120
+max_corpus_content_chars = 240
+
+[student_interaction_analysis]
+chunk_chars = 2000
+chunk_overlap_chars = 150
+chunk_concurrency = 4
+chunk_retry_attempts = 2
+verify_context_seconds = 30
+verify_retry_attempts = 2
+merge_gap_seconds = 30
+max_chunks = 80
+max_candidates_per_chunk = 3
+
+[question_classification]
+llm_concurrency = 4
+
+[extract_knowledge_v2]
+enable_segmentation = true
+max_text_chars = 12000
+segment_chars = 6000
+segment_overlap_chars = 300
+max_segments = 16
+concurrency = 4
+retry_attempts = 3
+segment_retry_attempts = 2
+fallback_split = true
+min_true_per_module = 2

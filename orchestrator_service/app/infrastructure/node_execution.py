@@ -308,9 +308,9 @@ class NodeExecutionRouter:
 
     @staticmethod
     def _download_group_id(context: NodeExecutionContext) -> str:
-        if context.course_task_type_id is None:
-            raise RuntimeError(f"节点执行上下文缺少 course_task_type_id: {context.node_code}")
-        return f"{context.task_type.lower()}-{context.course_task_type_id}"
+        if not context.submission_id:
+            raise RuntimeError(f"节点执行上下文缺少 submission_id: {context.node_code}")
+        return context.submission_id
 
     @staticmethod
     def _require_node_id(context: NodeExecutionContext) -> int:

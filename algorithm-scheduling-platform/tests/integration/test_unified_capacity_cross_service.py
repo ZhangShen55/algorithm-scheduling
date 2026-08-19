@@ -454,6 +454,37 @@ async def test_online_and_ppt_ocr_share_one_pool_without_losing_offline_work(
         ).active_lease_count == 0
 
 
+def test_deterministic_instance_preference_is_allowed_until_capacity_is_full(
+    redis_registry: RedisOperatorRegistry,
+) -> None:
+    _register_ready(
+        redis_registry,
+        instance_id="ocr-gpu0",
+        operator_code=OperatorCode.OCR,
+        capabilities=["ocr"],
+        service_url="http://ocr-gpu0.test",
+        capacity=2,
+    )
+    _register_ready(
+        redis_registry,
+        instance_id="ocr-gpu1",
+        operator_code=OperatorCode.OCR,
+        capabilities=["ocr"],
+        service_url="http://ocr-gpu1.test",
+        capacity=1,
+    )
+
+    first = redis_registry.lease("ocr", 30)
+    second = redis_registry.lease("ocr", 30)
+    third = redis_registry.lease("ocr", 30)
+
+    assert [first.instance_id, second.instance_id, third.instance_id] == [
+        "ocr-gpu0",
+        "ocr-gpu0",
+        "ocr-gpu1",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_ppt_items_use_independent_leases_and_multiple_instances(
     redis_registry: RedisOperatorRegistry,

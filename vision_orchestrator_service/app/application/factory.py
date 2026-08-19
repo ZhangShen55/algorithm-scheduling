@@ -5,10 +5,16 @@ from packages.platform_common.config import PlatformSettings
 
 from ..api import router
 from ..core.config import VisionSettings
+from ..infrastructure.runtime import VisionOrchestratorRuntime
 
 
-def create_vision_orchestrator_app(settings: VisionSettings | None = None) -> FastAPI:
+def create_vision_orchestrator_app(
+    settings: VisionSettings | None = None,
+    *,
+    runtime: VisionOrchestratorRuntime | None = None,
+) -> FastAPI:
     resolved = settings or VisionSettings()
+    resolved_runtime = runtime or VisionOrchestratorRuntime(resolved)
     platform_settings = PlatformSettings(
         service_name=resolved.service.name,
         environment=resolved.service.environment,
@@ -20,7 +26,11 @@ def create_vision_orchestrator_app(settings: VisionSettings | None = None) -> Fa
         course_root=resolved.storage.course_root,
         result_root=resolved.storage.result_root,
     )
-    app = create_service_app(platform_settings)
+    app = create_service_app(
+        platform_settings,
+        service_lifespan=resolved_runtime.lifespan,
+    )
     app.state.service_settings = resolved
+    resolved_runtime.attach(app)
     app.include_router(router)
     return app

@@ -38,6 +38,7 @@ class TaskTypeRecord:
     effective_params: JsonObject | None
     created: bool
     updated_at: datetime
+    submission_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +145,7 @@ def _json(value: Any) -> str:
 def _task_type_record(row: RowMapping, *, created: bool) -> TaskTypeRecord:
     return TaskTypeRecord(
         id=row["id"],
+        submission_id=str(row["submission_id"]),
         task_id=row["task_id"],
         task_type=TaskType(row["task_type"]),
         status=NodeStatus(row["status"]),
@@ -209,20 +211,22 @@ class CourseRepository:
                     text(
                         """
                         INSERT INTO course_task_types (
-                            task_id, task_type, status, priority, reason,
+                            submission_id, task_id, task_type, status, priority, reason,
                             request_payload, effective_params
                         )
                         VALUES (
+                            CAST(:submission_id AS uuid),
                             :task_id, :task_type, :status, :priority, :reason,
                             CAST(:request_payload AS jsonb), CAST(:effective_params AS jsonb)
                         )
                         ON CONFLICT (task_id, task_type) DO NOTHING
-                        RETURNING id, task_id, task_type, status, priority, reason,
+                        RETURNING id, submission_id, task_id, task_type, status, priority, reason,
                                   request_payload, effective_params, updated_at
                         """
                     ),
                     {
                         "task_id": task_id,
+                        "submission_id": submission_id,
                         "task_type": write.task_type.value,
                         "status": NodeStatus.PENDING.value,
                         "priority": write.priority.value,
@@ -263,7 +267,7 @@ class CourseRepository:
                     row = connection.execute(
                         text(
                             """
-                            SELECT id, task_id, task_type, status, priority, reason,
+                            SELECT id, submission_id, task_id, task_type, status, priority, reason,
                                    request_payload, effective_params, updated_at
                             FROM course_task_types
                             WHERE task_id = :task_id AND task_type = :task_type
@@ -365,7 +369,7 @@ class CourseRepository:
             rows = connection.execute(
                 text(
                     """
-                    SELECT id, task_id, task_type, status, priority, reason,
+                    SELECT id, submission_id, task_id, task_type, status, priority, reason,
                            request_payload, effective_params, updated_at
                     FROM course_task_types
                     WHERE task_id = :task_id
@@ -381,7 +385,7 @@ class CourseRepository:
             row = connection.execute(
                 text(
                     """
-                    SELECT id, task_id, task_type, status, priority, reason,
+                    SELECT id, submission_id, task_id, task_type, status, priority, reason,
                            request_payload, effective_params, updated_at
                     FROM course_task_types
                     WHERE id = :course_task_type_id
@@ -413,7 +417,7 @@ class CourseRepository:
             task_type_row = connection.execute(
                 text(
                     """
-                    SELECT id, task_id, task_type, status, priority, reason,
+                    SELECT id, submission_id, task_id, task_type, status, priority, reason,
                            request_payload, effective_params, updated_at
                     FROM course_task_types
                     WHERE id = :course_task_type_id
@@ -462,7 +466,7 @@ class CourseRepository:
                             ELSE updated_at
                         END
                     WHERE id = :course_task_type_id
-                    RETURNING id, task_id, task_type, status, priority, reason,
+                    RETURNING id, submission_id, task_id, task_type, status, priority, reason,
                               request_payload, effective_params, updated_at
                     """
                 ),
@@ -567,7 +571,7 @@ class CourseRepository:
                         END,
                         updated_at = now()
                     WHERE id = :course_task_type_id
-                    RETURNING id, task_id, task_type, status, priority, reason,
+                    RETURNING id, submission_id, task_id, task_type, status, priority, reason,
                               request_payload, effective_params, updated_at
                     """
                 ),
@@ -623,21 +627,33 @@ class CourseRepository:
         task_id: str,
         task_type: TaskType,
         nodes: list[NodeWrite],
+        *,
+        submission_id: str | None = None,
     ) -> list[NodeRecord]:
         with self._engine.begin() as connection:
-            course_task_type_id = connection.execute(
+            task_type_row = connection.execute(
                 text(
                     """
-                    SELECT id
+                    SELECT id, submission_id
                     FROM course_task_types
                     WHERE task_id = :task_id AND task_type = :task_type
                     FOR UPDATE
                     """
                 ),
                 {"task_id": task_id, "task_type": task_type.value},
-            ).scalar_one_or_none()
-            if course_task_type_id is None:
+            ).mappings().one_or_none()
+            if task_type_row is None:
                 raise RepositoryNotFoundError(f"任务类型不存在: {task_id}/{task_type.value}")
+            persisted_submission_id = str(task_type_row["submission_id"])
+            if (
+                submission_id is not None
+                and persisted_submission_id != submission_id
+            ):
+                raise ValueError(
+                    "课程任务事件 submission_id 与持久化任务事实不一致: "
+                    f"{task_id}/{task_type.value}"
+                )
+            course_task_type_id = int(task_type_row["id"])
 
             for node in nodes:
                 connection.execute(
@@ -773,6 +789,68 @@ class CourseRepository:
         if node_id is None:
             return None
         return self.get_node(node_id)
+
+    def claim_ready_visual_node(self, worker_id: str) -> NodeRecord | None:
+        claim_token = uuid4()
+        with self._engine.begin() as connection:
+            node_id = connection.execute(
+                text(
+                    """
+                    WITH candidate AS (
+                        SELECT id
+                        FROM task_nodes
+                        WHERE status = 10
+                          AND required_capability IS NULL
+                          AND node_code IN (
+                              'TEACHER_BEHAVIOR_ANALYSIS',
+                              'STUDENT_BEHAVIOR_ANALYSIS'
+                          )
+                        ORDER BY
+                            CASE priority WHEN 'URGENT' THEN 0 ELSE 1 END,
+                            ready_at,
+                            id
+                        FOR UPDATE SKIP LOCKED
+                        LIMIT 1
+                    )
+                    UPDATE task_nodes AS node
+                    SET status = 40,
+                        reason = '视觉节点已领取，正在准备本地视频',
+                        claimed_by = :worker_id,
+                        claim_token = :claim_token,
+                        claimed_at = now(),
+                        attempt = attempt + 1,
+                        updated_at = now()
+                    FROM candidate
+                    WHERE node.id = candidate.id
+                    RETURNING node.id
+                    """
+                ),
+                {"worker_id": worker_id, "claim_token": claim_token},
+            ).scalar_one_or_none()
+        if node_id is None:
+            return None
+        return self.get_node(node_id)
+
+    def resume_visual_nodes(self) -> int:
+        with self._engine.begin() as connection:
+            updated = connection.execute(
+                text(
+                    """
+                    UPDATE task_nodes
+                    SET status = 10,
+                        reason = '视觉编排已恢复，等待重新发布命令',
+                        ready_at = now(),
+                        updated_at = now()
+                    WHERE status = 30
+                      AND required_capability IS NULL
+                      AND node_code IN (
+                          'TEACHER_BEHAVIOR_ANALYSIS',
+                          'STUDENT_BEHAVIOR_ANALYSIS'
+                      )
+                    """
+                )
+            ).rowcount
+        return int(updated or 0)
 
     def defer_capability_nodes(self, capability: str) -> int:
         with self._engine.begin() as connection:
@@ -1106,6 +1184,29 @@ class CourseRepository:
                     LEFT JOIN node_results AS r ON r.task_node_id = n.id
                     WHERE n.node_code = 'PPT_SLICE'
                       AND n.status = 50
+                    ORDER BY n.updated_at, n.id
+                    """
+                )
+            ).mappings()
+            return [_node_record(row) for row in rows]
+
+    def list_running_visual_nodes(self) -> list[NodeRecord]:
+        with self._engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT n.id, n.course_task_type_id, n.node_code, n.status, n.priority,
+                           n.reason, n.required_capability, n.updated_at,
+                           r.result, r.artifact_path, r.artifact_count, r.progress,
+                           r.effective_params AS result_effective_params
+                    FROM task_nodes AS n
+                    LEFT JOIN node_results AS r ON r.task_node_id = n.id
+                    WHERE n.status = 50
+                      AND n.required_capability IS NULL
+                      AND n.node_code IN (
+                          'TEACHER_BEHAVIOR_ANALYSIS',
+                          'STUDENT_BEHAVIOR_ANALYSIS'
+                      )
                     ORDER BY n.updated_at, n.id
                     """
                 )

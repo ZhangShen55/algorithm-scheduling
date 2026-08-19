@@ -20,6 +20,10 @@ base_url = "http://127.0.0.1:18100"
 # 控制服务请求超时秒数。
 timeout_seconds = 10.0
 
+[face_persons]
+# FaceRec 人物管理接口基础地址；该管理链路不申请推理容量租约。
+base_url = "http://127.0.0.1:8003"
+
 [http]
 # 下游 HTTP 连接池最大连接数。
 max_connections = 100

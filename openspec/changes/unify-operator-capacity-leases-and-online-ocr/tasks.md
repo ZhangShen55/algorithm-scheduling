@@ -68,7 +68,7 @@
 - [x] 8.6 改造 PPT Slice 配置模型、任务管理器构造和注册逻辑，显式传入完整 `[platform]` 和 `runtime.require_gpu=false`，使用默认 `10` 同时驱动本地任务上限和平台容量，移除 `task.max_concurrent_tasks` 的读取与冲突测试。
 - [x] 8.7 改造 VBas 配置和 `app.main`，显式传入完整 `[platform]`，将 GPU 强制检查迁移到 `[runtime].require_gpu`，默认 `128` 作为学生/教师/头部姿态相关能力的共享平台注册容量；保留 `MaxConcurrentBatches`、`MaxQueueSize` 和模型安全控制。
 - [x] 8.8 改造 Text Analysis 配置和 `app.main`，显式传入完整 `[platform]` 和 `runtime.require_gpu=false`，默认 `256` 并仅为 `course_overviews/extract_keywords` 共享注册；保留所有历史路由与内部 LLM 并发字段并增加路由基线测试。
-- [x] 8.9 在八份根 `config.toml` 中加入带中文注释的 `[platform]` 四字段和 `[runtime].require_gpu=false`，同步代码默认值；严格测试布尔、URL、有限正心跳、正整数容量、`CONFIG_PATH` 及 ScreenDet 现有 `[runtime]` 合并，确认不存在同义环境变量覆盖。
+- [x] 8.9 在八个项目的根配置或受版本控制的本地安全模板中加入带中文注释的 `[platform]` 四字段和 `[runtime].require_gpu=false`，同步代码默认值；严格测试布尔、URL、有限正心跳、正整数容量、`CONFIG_PATH` 及 ScreenDet 现有 `[runtime]` 合并，确认不存在同义环境变量覆盖。
 - [x] 8.10 扩充公共算子 ops 契约测试，确认八个实例 `/ops/status` 与注册请求均暴露 TOML 容量，注册开关/地址/心跳来自 TOML，`reported_inflight` 继续上报实际已接收请求且本地 admission 只处理排空、不按声明容量拒绝请求。
 
 ## 9. 部署配置、镜像与预检
@@ -77,7 +77,7 @@
 - [x] 9.2 从 `docker-compose.operators.yml` 的全部 24 个算子实例删除 `PLATFORM_REGISTRATION_ENABLED`、`PLATFORM_CONTROL_SERVICE_URL`、`PLATFORM_HEARTBEAT_INTERVAL_SECONDS`、`PLATFORM_DECLARED_CAPACITY`、`REQUIRE_GPU`，并从 18 个 GPU 实例删除 `GPU_PROCESS_NAME`；保留 Token、实例 ID、服务 URL、GPU ID/可见设备、配置挂载、端口和单 worker 约束。
 - [x] 9.3 使用 YAML mapping anchors 收敛公共 Token、worker 以及每类算子的 `CONFIG_PATH`、容器端口等重复映射；更新部署合同与静态测试，同时校验 Compose 源文件和 `docker compose config` 展开结果，确保 24 个实例身份、URL、端口、Token、GPU reservation/ID/可见设备完整且唯一。
 - [x] 9.4 更新注册预检脚本，从实际挂载 TOML 校验注册开关、Control URL、心跳、正整数容量和 `require_gpu`，再与 24 个实例的实际注册容量、能力共享关系、心跳/模型就绪和 GPU 绑定对账；把非法配置和源/展开配置漂移纳入失败关闭检查。
-- [ ] 9.5 重建并验证 `operator_registry_client` wheel 被八个算子镜像安装，镜像中不保留五个已迁移环境变量的读取代码；验证六类 GPU 入口脚本在未设置 `GPU_PROCESS_NAME` 时仍使用确认名称，版本/`EXPECTED_GIT_SHA` attestation 仍通过。
+- [x] 9.5 重建并验证 `operator_registry_client` wheel 被八个算子镜像安装，镜像中不保留五个已迁移环境变量的读取代码；验证六类 GPU 入口脚本在未设置 `GPU_PROCESS_NAME` 时仍使用确认名称，版本/`EXPECTED_GIT_SHA` attestation 仍通过。
 - [x] 9.6 更新 Online Gateway 配置/部署文档和 Smoke 清单，纳入单图 OCR、72 MiB 正文与 50 MiB 解码限制；若存在反向代理，验证其请求体上限不小于 72 MiB，但不开放新的算子宿主机端口或改变 2B 外部暴露边界。
 
 ## 10. 文档与 Harness
@@ -106,7 +106,7 @@
 - [x] 12.6 在 `ppt_slice` 环境对 PPT Slice 执行 `compileall`、导入、项目测试、9001 启动/版本检查和文档化视频任务/终态回调，确认本地与注册容量都为 `10`、共享目录和原子 manifest 不变。
 - [x] 12.7 在 `jy-tias` 环境对 VBas 执行 `compileall`、导入、项目测试、8981 启动/健康检查，并直接调用学生和教师真实图片接口，确认共享注册 `128` 不破坏本地批次保护和可选头部姿态。
 - [x] 12.8 在 `ai_report` 环境对 Text Analysis 执行 `compileall`、导入、项目测试、8000 启动和完整路由基线对比，并分别真实调用 `/v1/extract_keywords` 与 `/v1/course_overviews`，确认共享注册 `256` 且内部 LLM 并发不派生租约。
-- [ ] 12.9 对八个项目分别以根 TOML 验证“不主动注册且不强制 GPU”，再以受控部署 TOML/契约环境验证注册开关、Control URL、心跳、容量和 GPU 要求生效；同时注入已删除的旧环境变量，确认其不能覆盖 TOML。
+- [ ] 12.9 对八个项目分别以根配置或受版本控制的本地安全模板验证“不主动注册且不强制 GPU”，再以受控部署 TOML/契约环境验证注册开关、Control URL、心跳、容量和 GPU 要求生效；同时注入已删除的旧环境变量，确认其不能覆盖 TOML，并将最终 SHA 的 16 进程结果原子写入 release `preflight/operator-config-authority.json`，同 SHA 续跑只复用经严格校验的已有证据。
 
 ## 13. 跨服务容量与在线 OCR 验收
 
@@ -121,7 +121,7 @@
 ## 14. 里程碑 2B 部署门禁与交付
 
 - [ ] 14.1 在 clean clone 环境按 Harness 准备 `.venv` 和依赖，执行静态、单元、真实 Redis/PostgreSQL、服务运行、算子契约六层验证并原子记录 revision 与环境证据。
-- [ ] 14.2 对八种 profile 及全 24 实例执行镜像 preflight、启动、注册核验和 operator Smoke，确认每个实例从实际挂载 TOML 取得注册开关、Control URL、心跳、容量和 GPU 要求，Compose 展开后的实例身份、GPU 标签、单 worker、端口绑定和模型 revision 正确。
+- [x] 14.2 对八种 profile 及全 24 实例执行镜像 preflight、启动、注册核验和 operator Smoke，确认每个实例从实际挂载 TOML 取得注册开关、Control URL、心跳、容量和 GPU 要求，Compose 展开后的实例身份、GPU 标签、单 worker、端口绑定和模型 revision 正确。
 - [ ] 14.3 运行里程碑 2B 的 PPT、ASR、教师/学生视觉及在线链路回归，确认新增 OCR 不破坏当前 `ppt-ocr-关键字` 泳道和既有 A 服务接口。
 - [ ] 14.4 执行容量并发/释放稳定性观察，确认短 OCR/关键词租约可快速复用、跨 TTL 的同步 HTTP 与长 WebSocket/PPT 租约持续续期、无 Redis 孤立租约和无新增 PostgreSQL 写放大。
 - [ ] 14.5 演练排空、服务重启和回滚顺序，确认新格式租约在回滚前已释放/过期，旧部署容量配置能成套恢复且不执行破坏性清理。

@@ -90,3 +90,28 @@ def test_standalone_stub_records_complete_calls_and_returns_structured_result() 
             "effective_params": {"showEmotion": True},
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_contract_adapter_propagates_persisted_submission_id() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={"result": {}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = ContractStubAdapter(client)
+        await adapter.execute(
+            "http://stub.local",
+            NodeExecutionContext(
+                task_id="course-003",
+                task_type="ASR",
+                node_code="ASR_TRANSCRIPTION",
+                request_payload={"teacher_video_path": "http://media/teacher.mp4"},
+                effective_params={},
+                submission_id="submission-real-001",
+            ),
+        )
+
+    assert captured["submission_id"] == "submission-real-001"

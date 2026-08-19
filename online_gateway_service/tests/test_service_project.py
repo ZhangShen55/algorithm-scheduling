@@ -35,6 +35,10 @@ def test_canonical_entrypoint_exposes_online_routes() -> None:
         "/ready",
         "/api/online/vbas/analyze",
         "/api/online/face/recognize",
+        "/api/online/face/persons",
+        "/api/online/face/persons/batch",
+        "/api/online/face/persons/search",
+        "/api/online/face/persons/delete",
         "/api/online/image-quality/detect",
         "/api/online/ocr/recognize",
     }
@@ -74,6 +78,7 @@ def test_config_has_only_online_gateway_concerns() -> None:
     assert set(parsed) == {
         "service",
         "control",
+        "face_persons",
         "http",
         "leases",
         "base64",
@@ -133,3 +138,4 @@ def test_gateway_defaults_target_the_control_service_port() -> None:
     from app.core.config import OnlineGatewaySettings
 
     assert OnlineGatewaySettings().control.base_url == "http://127.0.0.1:18100"
+    assert OnlineGatewaySettings().face_persons.base_url == "http://127.0.0.1:8003"

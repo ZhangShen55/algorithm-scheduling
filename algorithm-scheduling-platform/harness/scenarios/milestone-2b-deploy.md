@@ -74,6 +74,7 @@ PLATFORM_WAIT_TIMEOUT_SECONDS="${PLATFORM_WAIT_TIMEOUT_SECONDS:-180}"
 OPERATOR_LIFECYCLE_LOCK_PID=
 OPERATOR_LIFECYCLE_LOCK_CONTROL_FD=
 OPERATOR_LIFECYCLE_LOCK_READY_FD=
+MILESTONE_2B_RESTORE_COMPLETED=0
 
 if ! [[ "$PLATFORM_WAIT_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] ||
   ((${#PLATFORM_WAIT_TIMEOUT_SECONDS} > 4)) ||
@@ -172,7 +173,38 @@ release_operator_lifecycle_lock() {
   return 0
 }
 
-trap release_operator_lifecycle_lock EXIT
+restore_existing_business_after_failure() {
+  local recovery_status=0
+  if ((${MILESTONE_2B_RESTORE_COMPLETED:-0} == 1)); then
+    return 0
+  fi
+  if [[ -z "${SNAPSHOT:-}" || -z "${PAUSED_LEDGER:-}" || \
+    ! -f "$SNAPSHOT" || -L "$SNAPSHOT" || \
+    ! -f "$PAUSED_LEDGER" || -L "$PAUSED_LEDGER" ]]; then
+    return 0
+  fi
+  deploy/scripts/restore-existing-containers \
+    "$SNAPSHOT" "$PAUSED_LEDGER" || recovery_status=$?
+  if ((recovery_status == 0)); then
+    MILESTONE_2B_RESTORE_COMPLETED=1
+  fi
+  return "$recovery_status"
+}
+
+cleanup_milestone_2b_runtime() {
+  local original_status=$? recovery_status=0
+  trap - EXIT
+  if ((original_status != 0)); then
+    restore_existing_business_after_failure || recovery_status=$?
+  fi
+  release_operator_lifecycle_lock || true
+  if ((original_status != 0)); then
+    return "$original_status"
+  fi
+  return "$recovery_status"
+}
+
+trap cleanup_milestone_2b_runtime EXIT
 ```
 
 首次发布保持 `PREVIOUS_RELEASE_ROOT` 为空。同一 release tag 换 SHA 续跑时，
@@ -194,7 +226,7 @@ deploy/scripts/prepare-report-directory \
 
 clean clone 不携带项目 Python 环境。完成 release 目录初始化后、执行任何
 `preflight`、`verify-operator-registration` 或 `run-operator-smoke` 前，必须使用服务器
-`python3` 创建项目根 `.venv`，并只安装 `pyproject.toml` 的基础依赖。不得把“不使用
+`python3` 创建项目根 `.venv`，并安装 `pyproject.toml` 的基础及 `dev` 依赖。不得把“不使用
 `.env` 配置文件”误解为“不需要 `.venv` Python 环境”。
 
 版本证据先写入当前 release `preflight/` 下的同目录临时文件；只有 Python 和
@@ -203,7 +235,7 @@ mode 中止后续 preflight、profile 和 Smoke：
 
 ```bash
 python3 -m venv "$PWD/.venv"
-"$PWD/.venv/bin/python" -m pip install .
+"$PWD/.venv/bin/python" -m pip install '.[dev]'
 
 HARNESS_RUNTIME_EVIDENCE="$RELEASE_ROOT/preflight/harness-python-runtime.json"
 HARNESS_RUNTIME_TMP="$(
@@ -494,12 +526,44 @@ cleanup_operator_ledger_temps() {
   fi
 }
 cleanup_operator_lifecycle() {
-  local original_status=$?
+  local original_status=$? recovery_status=0 container_id
+  trap - EXIT
   cleanup_operator_ledger_temps || true
+  if ((original_status != 0)) && \
+    [[ -n "${BASELINE_OPERATOR_IDS:-}" && -n "${NEW_OPERATOR_IDS:-}" ]] && \
+    [[ -f "$BASELINE_OPERATOR_IDS" && ! -L "$BASELINE_OPERATOR_IDS" ]] && \
+    [[ -f "$NEW_OPERATOR_IDS" && ! -L "$NEW_OPERATOR_IDS" ]]; then
+    if validate_operator_ledger_file "$BASELINE_OPERATOR_IDS" && \
+      validate_operator_ledger_file "$NEW_OPERATOR_IDS"; then
+      while IFS= read -r container_id || [[ -n "$container_id" ]]
+      do
+        if ! validate_operator_identity "$container_id" || \
+          ! assert_not_in_baseline "$container_id"; then
+          recovery_status=1
+          break
+        fi
+      done <"$NEW_OPERATOR_IDS"
+      if ((recovery_status == 0)); then
+        while IFS= read -r container_id || [[ -n "$container_id" ]]
+        do
+          docker stop "$container_id" || recovery_status=$?
+        done <"$NEW_OPERATOR_IDS"
+      fi
+    else
+      recovery_status=1
+    fi
+    if ((recovery_status == 0)); then
+      restore_existing_business_after_failure || recovery_status=$?
+    fi
+  elif ((original_status != 0)); then
+    restore_existing_business_after_failure || recovery_status=$?
+  fi
   release_operator_lifecycle_lock || true
-  return "$original_status"
+  if ((original_status != 0)); then
+    return "$original_status"
+  fi
+  return "$recovery_status"
 }
-trap cleanup_operator_lifecycle EXIT
 
 if ! OPERATOR_SERVICE_ALLOWLIST_TMP="$(
   mktemp "$LEDGER_DIR/.operator-service-allowlist.XXXXXX"
@@ -708,6 +772,10 @@ start_operator_profile() {
   fi
   return 0
 }
+
+# 只有依赖的账本、容器身份和恢复函数全部定义后，才替换外层 EXIT trap。
+# 在此之前发生的失败仍由 cleanup_milestone_2b_runtime 恢复已暂停业务。
+trap cleanup_operator_lifecycle EXIT
 
 if ((BASELINE_LEDGER_PRESENT == 1)); then
   validate_operator_ledger_file "$BASELINE_OPERATOR_IDS"
@@ -1086,6 +1154,7 @@ do
   docker stop "$container_id"
 done <"$NEW_OPERATOR_IDS"
 deploy/scripts/restore-existing-containers "$SNAPSHOT" "$PAUSED_LEDGER"
+MILESTONE_2B_RESTORE_COMPLETED=1
 release_operator_lifecycle_lock
 ```
 
@@ -1100,6 +1169,10 @@ previous 续跑不得把 active paused ledger 复制成另一份可变账本。r
 清理后确认原 `ocr-v6-amd` 恢复到快照状态。平台与四类基础设施继续运行；不得 prune、
 不得删除卷、不得删除 `/data/result`。whole-stack `down` 只允许出现在与本服务器隔离的
 本地开发环境，不属于本场景。
+任意阶段异常退出时，`EXIT` trap 必须保留原退出码并尝试恢复：阶段 3 之前只在
+snapshot/paused ledger 均为安全普通文件时恢复原业务；阶段 3 之后先完整校验
+baseline/new 和全部容器身份，再停止精确 new ledger，最后恢复原业务。
+账本或容器身份不可证明时继续失败关闭，不执行宽泛停止。
 
 `run_milestone_2b_8a3.py` 在 stage45 结束时先输出
 `CODEX_STAGE45_COMPLETE failures=0`；上述恢复完成后再输出
@@ -1114,6 +1187,14 @@ deployment 状态均为 0，随后结束。以下聚合块不得在 8A.3 release
 243 条声明，并以 write-once 方式生成 `summary/cases.json`；renderer 要求通过用例有
 证据文件、未执行用例有中文原因、所有用例使用同一 release/SHA，并拒绝跨目录或包含
 敏感 token：
+
+Canonical 总控入口为 `deploy/scripts/run-milestone-2b-8a7`。它在同一维护锁生命周期内依次执行
+clean-clone、16 进程配置权威、镜像/24 实例、deployment、offline、vision、online、final、
+聚合、renderer 和精确镜像清理，最后才停止本轮算子并恢复原业务。业务 Campaign 必须为每个
+case 生成独立检查记录，并且显式绑定到当期 JUnit 中实际通过的测试语义；
+PPT/关键词/ASR/视觉的 8 个 B 级质量项还必须通过
+`--manual-review-json` 引用当前 release 内的独立复核证据。缺少逐案记录、JUnit 有 skip、
+`overall_status` 不是“通过”或维护锁失效时，总控和镜像清理均失败关闭。
 
 ```bash
 .venv/bin/python scripts/aggregate_milestone_2b_cases.py \

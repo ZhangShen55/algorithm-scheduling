@@ -206,10 +206,10 @@ def _assert_platform_dockerfile_contract(
         "RUN",
     ], service
     expected_runtime_names = ["FROM"]
-    if service == "orchestrator_service":
+    if service in {"orchestrator_service", "vision_orchestrator_service"}:
         expected_runtime_names.extend(["ARG", "ARG"])
     expected_runtime_names.extend(["ARG", "LABEL", "ENV", "WORKDIR", "RUN"])
-    if service == "orchestrator_service":
+    if service in {"orchestrator_service", "vision_orchestrator_service"}:
         expected_runtime_names.append("RUN")
     expected_runtime_names.extend(["COPY", "COPY", "EXPOSE", "CMD"])
     assert _instruction_names(runtime) == expected_runtime_names, service
@@ -230,7 +230,7 @@ def _assert_platform_dockerfile_contract(
     assert _instructions_named(builder, "RUN") == [WHEEL_BUILD_RUN], service
 
     expected_runtime_args: list[str] = []
-    if service == "orchestrator_service":
+    if service in {"orchestrator_service", "vision_orchestrator_service"}:
         expected_runtime_args = [
             "ARG DEBIAN_MIRROR=https://mirrors.aliyun.com/debian",
             "ARG DEBIAN_SECURITY_MIRROR=https://mirrors.aliyun.com/debian-security",
@@ -251,7 +251,7 @@ def _assert_platform_dockerfile_contract(
     ], service
 
     expected_runs = [OFFLINE_INSTALL_RUN]
-    if service == "orchestrator_service":
+    if service in {"orchestrator_service", "vision_orchestrator_service"}:
         expected_runs.insert(0, FFMPEG_INSTALL_RUN)
     assert _instructions_named(runtime, "RUN") == expected_runs, service
 

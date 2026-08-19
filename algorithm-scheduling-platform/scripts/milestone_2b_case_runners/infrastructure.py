@@ -1251,11 +1251,14 @@ async def _poll_messages(
     return messages[:count]
 
 
-def _create_asr_task(repository: CourseRepository, task_id: str) -> None:
-    repository.create_task_types(
+def _create_asr_task(repository: CourseRepository, task_id: str) -> str:
+    records = repository.create_task_types(
         task_id=task_id,
         writes=[TaskTypeWrite(TaskType.ASR)],
     )
+    if len(records) != 1 or not records[0].submission_id:
+        raise ValueError("ASR 测试任务没有生成唯一 submission_id")
+    return records[0].submission_id
 
 
 def _initialize_asr_nodes(repository: CourseRepository, task_id: str) -> tuple[int, ...]:
@@ -1308,7 +1311,7 @@ def _outbox_envelope(record: OutboxRecord) -> bytes:
     ).encode()
 
 
-def _course_event(task_id: str, event_id: UUID) -> bytes:
+def _course_event(task_id: str, event_id: UUID, submission_id: str) -> bytes:
     return json.dumps(
         {
             "event_id": str(event_id),
@@ -1316,7 +1319,7 @@ def _course_event(task_id: str, event_id: UUID) -> bytes:
             "aggregate_id": f"{task_id}:ASR",
             "event_type": "COURSE_TASK_REQUESTED",
             "payload": {
-                "submission_id": f"submission-{event_id.hex[:12]}",
+                "submission_id": submission_id,
                 "task_id": task_id,
                 "task_type": "ASR",
                 "priority": "NORMAL",
@@ -1412,8 +1415,8 @@ async def _real_pipeline_duplicate(
     group = str(scenario["kafka_group"])
     task_id = f"{scenario['component']}-task"
     event_id = uuid4()
-    _create_asr_task(repository, task_id)
-    envelope = _course_event(task_id, event_id)
+    submission_id = _create_asr_task(repository, task_id)
+    envelope = _course_event(task_id, event_id, submission_id)
     producer = AioKafkaProducerAdapter(
         bootstrap_servers=_KAFKA_BOOTSTRAP,
         client_id=f"m2b-inf008-producer-{uuid4().hex[:8]}",
@@ -1472,7 +1475,7 @@ async def _real_pipeline_duplicate(
 
 
 async def _real_consumer_failure_replay(
-    scenario: Mapping[str, Any], repository: CourseRepository
+    scenario: Mapping[str, Any], repository: CourseRepository, engine: Engine
 ) -> dict[str, Any]:
     from orchestrator_service.app.application.pipeline import PipelineInitializer
     from orchestrator_service.app.infrastructure.runtime import (
@@ -1484,7 +1487,8 @@ async def _real_consumer_failure_replay(
     group = str(scenario["kafka_group"])
     task_id = f"{scenario['component']}-task"
     event_id = uuid4()
-    envelope = _course_event(task_id, event_id)
+    submission_id = str(uuid4())
+    envelope = _course_event(task_id, event_id, submission_id)
     producer = AioKafkaProducerAdapter(
         bootstrap_servers=_KAFKA_BOOTSTRAP,
         client_id=f"m2b-inf009-producer-{uuid4().hex[:8]}",
@@ -1527,6 +1531,15 @@ async def _real_consumer_failure_replay(
         raise ValueError("消费处理失败后 offset 被错误提交")
 
     _create_asr_task(repository, task_id)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE course_task_types "
+                "SET submission_id = CAST(:submission_id AS uuid) "
+                "WHERE task_id = :task_id AND task_type = 'ASR'"
+            ),
+            {"submission_id": submission_id, "task_id": task_id},
+        )
     replay_consumer = AioKafkaConsumerAdapter(
         topics=[topic],
         bootstrap_servers=_KAFKA_BOOTSTRAP,
@@ -1776,8 +1789,8 @@ async def _real_consumer_commit_exit(
     group = str(scenario["kafka_group"])
     task_id = f"{scenario['component']}-task"
     event_id = uuid4()
-    _create_asr_task(repository, task_id)
-    envelope = _course_event(task_id, event_id)
+    submission_id = _create_asr_task(repository, task_id)
+    envelope = _course_event(task_id, event_id, submission_id)
     producer = AioKafkaProducerAdapter(
         bootstrap_servers=_KAFKA_BOOTSTRAP,
         client_id=f"m2b-inf012-producer-{uuid4().hex[:8]}",
@@ -1862,7 +1875,11 @@ async def _execute_real_flow_probe(
             if name == "pipeline_duplicate":
                 return await _real_pipeline_duplicate(scenario, repository)
             if name == "consumer_failure_replay":
-                return await _real_consumer_failure_replay(scenario, repository)
+                return await _real_consumer_failure_replay(
+                    scenario,
+                    repository,
+                    engine,
+                )
             if name == "outbox_failure":
                 return await _real_outbox_failure(scenario, repository, engine)
             if name == "publisher_duplicate":

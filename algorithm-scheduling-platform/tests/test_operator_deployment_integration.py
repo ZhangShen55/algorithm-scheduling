@@ -13,6 +13,16 @@ CAPACITY_BASELINE = (
     / "algorithm-scheduling-platform/harness/baselines/"
     "unified-operator-capacity-leases-and-online-ocr.json"
 )
+LOCAL_CONFIGS = {
+    "asr_online": "config.toml",
+    "asr_offline": "config.toml",
+    "facerec": "config.example.toml",
+    "ocr": "config.toml.example",
+    "screen_det": "config.toml",
+    "ppt_slice": "config.toml",
+    "vbas": "config.toml",
+    "text_analysis": "config.example.toml",
+}
 
 
 def _declared_routes(project: str) -> set[tuple[str, str]]:
@@ -61,7 +71,9 @@ def test_unified_capacity_change_has_machine_readable_compatibility_baseline() -
         assert expected_routes.issubset(current_routes), project
 
         root_config = tomllib.loads(
-            (WORKSPACE_ROOT / project / "config.toml").read_text(encoding="utf-8")
+            (WORKSPACE_ROOT / project / LOCAL_CONFIGS[project]).read_text(
+                encoding="utf-8"
+            )
         )
         assert root_config["platform"] == {
             "registration_enabled": False,

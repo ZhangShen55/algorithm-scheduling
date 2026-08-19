@@ -5,7 +5,7 @@
 ## 变更内容
 
 - 八个算子统一从 TOML 的 `[platform]` 读取 `registration_enabled`、`control_service_url`、`heartbeat_interval_seconds` 和 `max_concurrent_requests`，其中容量在注册时映射为 `declared_capacity`；容量只允许正整数，其他字段也采用严格类型和启动期校验。
-- 八个算子的 GPU 强制检查统一从 TOML 的 `[runtime].require_gpu` 读取；项目根 `config.toml` 使用本地安全默认值，里程碑 2B 的 `deploy/config/operators/*.toml` 使用容器注册地址并为六类 GPU 算子显式启用 GPU 检查。
+- 八个算子的 GPU 强制检查统一从 TOML 的 `[runtime].require_gpu` 读取；项目根配置或受版本控制的本地安全模板使用本地安全默认值，里程碑 2B 的 `deploy/config/operators/*.toml` 使用容器注册地址并为六类 GPU 算子显式启用 GPU 检查。
 - 固定每实例默认值：ASR Online `10`、ASR Offline `4`、FaceRec `128`、OCR `256`、ScreenDet `128`、PPT Slice `10`、VBas `128`、Text Analysis `256`。
 - 明确同一实例的全部能力共享一个总容量池：VBas 的学生、教师及头部姿态能力共享 `128`，Text Analysis 的 `course_overviews` 与 `extract_keywords` 共享 `256`，不拆分能力配额。
 - 明确平台容量与算子内部保护机制相互独立：保留 ASR Offline 的本地排队和串行模型锁、OCR 的单路引擎锁、FaceRec 的线程池、ScreenDet 的单请求批量限制及其他模型安全约束；PPT Slice 改用统一字段同时作为平台声明容量和本地任务上限。

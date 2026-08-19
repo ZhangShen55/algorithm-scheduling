@@ -37,6 +37,16 @@ class FakeRepository:
     def list_running_ppt_slice_nodes(self) -> list[Any]:
         return []
 
+    def list_running_visual_nodes(self) -> list[Any]:
+        return []
+
+    def resume_visual_nodes(self) -> int:
+        return 0
+
+    def claim_ready_visual_node(self, worker_id: str) -> None:
+        assert worker_id
+        return None
+
     def count_courses(self) -> int:
         return 0
 
@@ -199,6 +209,7 @@ def _runtime(
         http_client=FakeHttpClient(events),
         producer=FakeProducer(events),
         consumer=consumer,
+        visual_event_consumer=FakeConsumer(events),
         topic_manager=FakeTopicManager(events),
     )
     runtime = OrchestratorRuntime(
@@ -226,6 +237,8 @@ def test_lifespan_starts_required_loops_reports_ready_and_closes_resources(
             "outbox_publisher",
             "course_consumer",
             "node_executor",
+            "visual_dispatcher",
+            "visual_event_consumer",
             "ppt_reconcile",
         }
         assert app.state.ppt_terminal_handler is not None

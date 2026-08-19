@@ -40,6 +40,7 @@ CONTROL_SCHEMA_COLUMNS = {
     ),
     "course_task_types": (
         "id",
+        "submission_id",
         "task_id",
         "task_type",
         "status",

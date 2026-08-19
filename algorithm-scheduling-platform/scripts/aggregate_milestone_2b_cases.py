@@ -970,9 +970,18 @@ def publish_json_once(
 def _is_canonical_publication_path(relative_path: Path) -> bool:
     if relative_path in PUBLISH_PATHS:
         return True
+    if relative_path == Path("preflight/clean-clone-validation.json"):
+        return True
     if relative_path.is_absolute() or ".." in relative_path.parts:
         return False
     parts = relative_path.parts
+    if len(parts) == 2 and parts[0] == "business":
+        return parts[1] in {
+            "offline-campaign.json",
+            "vision-campaign.json",
+            "online-campaign.json",
+            "final-campaign.json",
+        }
     if len(parts) == 4 and parts[1] == "evidence":
         category, _, case_id, evidence_name = parts
         return (

@@ -42,6 +42,10 @@ from scripts.milestone_2b_case_runners.base import (
     CaseRunner,
     CaseStatus,
 )
+from scripts.milestone_2b_case_runners.campaign import (
+    CAMPAIGN_EVIDENCE_NAME,
+    validate_campaign_source_evidence,
+)
 from scripts.milestone_2b_case_runners.evidence import (
     claim_case_once,
     publish_framework_failure_evidence,
@@ -492,12 +496,29 @@ def _resolve_selected_runners(
 def _case_evidence_path_exists(release_root: Path, case: CaseDefinition) -> bool:
     path = release_root / case.category / "evidence" / case.case_id
     try:
-        os.lstat(path)
+        metadata = os.lstat(path)
     except FileNotFoundError:
         return False
     except OSError:
         return True
-    return True
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        return True
+    try:
+        entries = list(os.scandir(path))
+    except OSError:
+        return True
+    if len(entries) != 1 or entries[0].name != "campaign.json":
+        return True
+    try:
+        campaign = entries[0].stat(follow_symlinks=False)
+    except OSError:
+        return True
+    return not (
+        stat.S_ISREG(campaign.st_mode)
+        and campaign.st_uid == os.getuid()
+        and campaign.st_nlink == 1
+        and stat.S_IMODE(campaign.st_mode) == 0o600
+    )
 
 
 async def _run_selected_case(
@@ -714,11 +735,18 @@ def _validate_outcome_evidence(
             or metadata.st_nlink != 1
         ):
             raise ValueError(f"case evidence has unsafe ownership or mode: {path}")
-        validate_raw_execution_evidence(
-            document,
-            path.as_posix(),
-            expected_case_id=case.case_id,
-        )
+        if path.name == CAMPAIGN_EVIDENCE_NAME:
+            validate_campaign_source_evidence(
+                release_root=release_root,
+                case=case,
+                source_path=path,
+            )
+        else:
+            validate_raw_execution_evidence(
+                document,
+                path.as_posix(),
+                expected_case_id=case.case_id,
+            )
         if (
             document.get("release_tag") != release_tag
             or document.get("git_sha") != git_sha

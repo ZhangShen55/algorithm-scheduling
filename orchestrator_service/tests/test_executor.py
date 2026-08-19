@@ -43,6 +43,7 @@ def _node(*, status: NodeStatus = NodeStatus.PENDING) -> NodeRecord:
 def _task_type(*, status: NodeStatus = NodeStatus.PENDING) -> TaskTypeRecord:
     return TaskTypeRecord(
         id=7,
+        submission_id="submission-001",
         task_id="course-001",
         task_type=TaskType.ASR,
         status=status,

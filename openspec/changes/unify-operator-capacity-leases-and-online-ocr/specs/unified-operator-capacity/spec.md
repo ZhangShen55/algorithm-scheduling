@@ -3,8 +3,8 @@
 ### Requirement: 八个算子使用统一平台配置段
 ASR Online、ASR Offline、FaceRec、OCR、ScreenDet、PPT Slice、VBas 和 Text Analysis SHALL 从所选 TOML 的 `[platform]` 读取 `registration_enabled`、`control_service_url`、`heartbeat_interval_seconds` 和 `max_concurrent_requests`，并 SHALL 在启用注册时把容量原样映射为 `declared_capacity`。
 
-#### Scenario: 使用项目根本地默认配置
-- **WHEN** 八个算子分别使用仓库提交的项目根 `config.toml` 启动
+#### Scenario: 使用项目本地安全配置
+- **WHEN** 八个算子分别使用仓库提交的根配置或受版本控制的本地安全模板启动
 - **THEN** `registration_enabled` SHALL 为 `false`、`control_service_url` SHALL 为空、`heartbeat_interval_seconds` SHALL 为 `5`，算子 SHALL 不发起注册，且运行时容量 SHALL 依次为 ASR Online `10`、ASR Offline `4`、FaceRec `128`、OCR `256`、ScreenDet `128`、PPT Slice `10`、VBas `128` 和 Text Analysis `256`
 
 #### Scenario: 使用里程碑 2B 部署配置
@@ -124,6 +124,10 @@ ASR Online、ASR Offline、FaceRec、OCR、ScreenDet、PPT Slice、VBas 和 Text
 #### Scenario: 新版本验证失败
 - **WHEN** 新镜像构建、revision、容器健康、注册或 Smoke 任一步失败
 - **THEN** 部署流程 SHALL 保留全部旧镜像且 SHALL NOT 执行旧版本清理
+
+#### Scenario: 替换后的后续门禁失败
+- **WHEN** 本轮算子容器已按 new ledger 创建，但业务、容量、报告或镜像清理前置门禁失败
+- **THEN** Canonical SHALL 保留原退出码，在完整验证 baseline/new 账本及全部容器身份后，只停止 new ledger 中的精确容器并恢复已授权的原业务；身份不可证明时 SHALL 失败关闭且 SHALL NOT 执行宽泛停止
 
 #### Scenario: 旧镜像仍被容器引用
 - **WHEN** 候选旧镜像仍被运行中、暂停或停止容器引用

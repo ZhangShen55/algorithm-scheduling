@@ -116,6 +116,7 @@ class PptAdapter:
 def _context(node_code: str) -> NodeExecutionContext:
     return NodeExecutionContext(
         task_id="course-001",
+        submission_id="submission-001",
         task_type="ASR",
         node_code=node_code,
         request_payload={"teacher_video_path": "http://media/teacher.mp4"},
@@ -173,9 +174,9 @@ async def test_asr_node_downloads_extracts_and_calls_one_real_adapter(tmp_path: 
     assert result.result == asr_response
     assert result.effective_params == _context("ASR_TRANSCRIPTION").effective_params
     assert downloader.calls == [
-        ("course-001", "http://media/teacher.mp4", "teacher", "asr-7")
+        ("course-001", "http://media/teacher.mp4", "teacher", "submission-001")
     ]
-    assert extractor.calls == [("course-001", video_path, "asr-7")]
+    assert extractor.calls == [("course-001", video_path, "submission-001")]
     assert asr.calls == [
         ("http://asr-gpu0:8083", audio_path, _context("ASR_TRANSCRIPTION").effective_params)
     ]
@@ -226,6 +227,7 @@ async def test_ppt_slice_downloads_local_video_and_returns_async_acceptance(
     )
     context = NodeExecutionContext(
         task_id="course-001",
+        submission_id="submission-ppt-001",
         task_type="PPT",
         node_code="PPT_SLICE",
         request_payload={"slides_video_path": "http://media/slides.mp4"},
@@ -240,7 +242,7 @@ async def test_ppt_slice_downloads_local_video_and_returns_async_acceptance(
     assert accepted.operator_task_id == "ppt-node-11"
     assert accepted.progress == {"source_video_path": str(local_video)}
     assert downloader.calls == [
-        ("course-001", "http://media/slides.mp4", "slides", "ppt-7")
+        ("course-001", "http://media/slides.mp4", "slides", "submission-ppt-001")
     ]
     assert ppt.calls == [
         {
@@ -254,3 +256,35 @@ async def test_ppt_slice_downloads_local_video_and_returns_async_acceptance(
             "threshold": 0.97,
         }
     ]
+
+
+def test_download_group_uses_real_submission_for_asr_and_teacher_behavior() -> None:
+    asr_context = _context("ASR_TRANSCRIPTION")
+    teacher_context = NodeExecutionContext(
+        task_id="course-001",
+        submission_id="submission-001",
+        task_type="TEACHER_BEHAVIOR",
+        node_code="TEACHER_BEHAVIOR_ANALYSIS",
+        request_payload={"teacher_video_path": "http://media/teacher.mp4"},
+        effective_params=None,
+        node_id=12,
+        course_task_type_id=8,
+    )
+
+    assert NodeExecutionRouter._download_group_id(asr_context) == "submission-001"
+    assert NodeExecutionRouter._download_group_id(teacher_context) == "submission-001"
+
+
+def test_download_group_rejects_missing_submission_instead_of_faking_task_type_id() -> None:
+    context = NodeExecutionContext(
+        task_id="course-001",
+        task_type="ASR",
+        node_code="ASR_TRANSCRIPTION",
+        request_payload={"teacher_video_path": "http://media/teacher.mp4"},
+        effective_params={},
+        node_id=11,
+        course_task_type_id=7,
+    )
+
+    with pytest.raises(RuntimeError, match="缺少 submission_id"):
+        NodeExecutionRouter._download_group_id(context)

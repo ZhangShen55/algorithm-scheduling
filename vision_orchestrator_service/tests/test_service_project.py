@@ -59,6 +59,7 @@ def test_config_has_only_the_required_top_level_sections() -> None:
         "worker",
         "storage",
         "scan",
+        "media",
         "vbas",
         "cache",
         "teacher_behavior",
@@ -123,4 +124,6 @@ def test_runtime_contract_defaults_match_platform_topics_and_control_port() -> N
     assert settings.kafka.event_topic == "algorithm.visual.events"
     assert settings.kafka.enable_auto_commit is False
     assert settings.kafka.max_poll_records >= 1
+    assert settings.kafka.poll_timeout_seconds > 0
     assert settings.control.base_url == "http://127.0.0.1:18100"
+    assert settings.media.ffmpeg_binary == "ffmpeg"

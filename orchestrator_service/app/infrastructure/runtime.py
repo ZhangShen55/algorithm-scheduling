@@ -25,6 +25,12 @@ from ..application.dispatcher import LeaseAwareDispatcher
 from ..application.executor import NodeExecutor
 from ..application.outbox import OutboxPublisher
 from ..application.pipeline import PipelineInitializer
+from ..application.vision_events import (
+    VisualCommandPublisher,
+    VisualEventConsumerLoop,
+    VisualEventProcessor,
+    VisualNodeCoordinator,
+)
 from ..core.config import OrchestratorSettings
 from ..domain.ppt_work import PptWorkLimits
 from .asr import OfflineAsrAdapter
@@ -87,6 +93,7 @@ class OrchestratorResources:
     http_client: Any
     producer: Any
     consumer: Any
+    visual_event_consumer: Any
     topic_manager: Any
     operator_http_client: Any | None = None
 
@@ -99,6 +106,8 @@ class OrchestratorRuntime:
         "outbox_publisher",
         "course_consumer",
         "node_executor",
+        "visual_dispatcher",
+        "visual_event_consumer",
         "ppt_reconcile",
     )
 
@@ -117,6 +126,7 @@ class OrchestratorRuntime:
         self._started = False
         self._producer_started = False
         self._consumer_started = False
+        self._visual_event_consumer_started = False
         self._app: FastAPI | None = None
         self._ppt_coordinator: PptRuntimeCoordinator | None = None
 
@@ -165,6 +175,14 @@ class OrchestratorRuntime:
             max_poll_records=settings.kafka.max_poll_records,
             auto_offset_reset=settings.kafka.auto_offset_reset,
         )
+        visual_event_consumer = AioKafkaConsumerAdapter(
+            topics=[settings.kafka.visual_event_topic],
+            bootstrap_servers=settings.kafka.bootstrap_servers,
+            group_id=settings.kafka.visual_event_consumer_group,
+            client_id=f"{settings.kafka.client_id}-visual-events",
+            max_poll_records=settings.kafka.max_poll_records,
+            auto_offset_reset=settings.kafka.auto_offset_reset,
+        )
         topic_manager = KafkaTopicManager(
             bootstrap_servers=settings.kafka.bootstrap_servers,
             client_id=f"{settings.kafka.client_id}-topic-admin",
@@ -182,6 +200,7 @@ class OrchestratorRuntime:
             http_client=http_client,
             producer=producer,
             consumer=consumer,
+            visual_event_consumer=visual_event_consumer,
             topic_manager=topic_manager,
             operator_http_client=operator_http_client,
         )
@@ -201,6 +220,8 @@ class OrchestratorRuntime:
             self._producer_started = True
             await self.resources.consumer.start()
             self._consumer_started = True
+            await self.resources.visual_event_consumer.start()
+            self._visual_event_consumer_started = True
             await self._start_loops()
             self._started = True
             self.attach(app)
@@ -230,6 +251,12 @@ class OrchestratorRuntime:
         dispatcher = LeaseAwareDispatcher(repository, lease_client)
         operator_http_client = (
             self.resources.operator_http_client or self.resources.http_client
+        )
+        media_downloader = MediaDownloader(
+            course_root=self.settings.storage.course_root,
+            http_client=operator_http_client,
+            inspector=FFprobeMediaInspector(),
+            max_bytes=self.settings.storage.max_video_bytes,
         )
         ocr_pipeline = PptTextPipeline(
             repository,
@@ -279,12 +306,7 @@ class OrchestratorRuntime:
             ocr_pipeline=ocr_pipeline,
             keyword_pipeline=keyword_pipeline,
             fallback=ContractStubAdapter(operator_http_client),
-            media_downloader=MediaDownloader(
-                course_root=self.settings.storage.course_root,
-                http_client=operator_http_client,
-                inspector=FFprobeMediaInspector(),
-                max_bytes=self.settings.storage.max_video_bytes,
-            ),
+            media_downloader=media_downloader,
             audio_extractor=FFmpegAudioExtractor(
                 course_root=self.settings.storage.course_root,
             ),
@@ -308,6 +330,24 @@ class OrchestratorRuntime:
             ),
             async_node_coordinator=ppt_coordinator,
         )
+        visual_coordinator = VisualNodeCoordinator(
+            repository,
+            media_downloader,
+            VisualCommandPublisher(
+                self.resources.producer,
+                topic=self.settings.kafka.visual_command_topic,
+            ),
+            worker_id=(
+                self.settings.worker.worker_id
+                or f"orchestrator-visual-{uuid4().hex[:12]}"
+            ),
+        )
+        await visual_coordinator.recover()
+        visual_event_loop = VisualEventConsumerLoop(
+            self.resources.visual_event_consumer,
+            VisualEventProcessor(repository),
+            poll_timeout_seconds=self.settings.kafka.poll_timeout_seconds,
+        )
         self.tasks = {
             "outbox_publisher": asyncio.create_task(
                 outbox.run(self.stop_event),
@@ -320,6 +360,14 @@ class OrchestratorRuntime:
             "node_executor": asyncio.create_task(
                 self._run_executor(executor),
                 name="orchestrator-node-executor",
+            ),
+            "visual_dispatcher": asyncio.create_task(
+                self._run_visual_dispatcher(visual_coordinator),
+                name="orchestrator-visual-dispatcher",
+            ),
+            "visual_event_consumer": asyncio.create_task(
+                visual_event_loop.run(self.stop_event),
+                name="orchestrator-visual-event-consumer",
             ),
             "ppt_reconcile": asyncio.create_task(
                 ppt_coordinator.run(self.stop_event),
@@ -334,6 +382,25 @@ class OrchestratorRuntime:
             try:
                 executed = await executor.run_once()
             except (httpx.NetworkError, httpx.TimeoutException):
+                executed = 0
+            if executed > 0:
+                continue
+            try:
+                await asyncio.wait_for(
+                    self.stop_event.wait(),
+                    timeout=self.settings.worker.claim_poll_interval_seconds,
+                )
+            except TimeoutError:
+                continue
+
+    async def _run_visual_dispatcher(
+        self,
+        coordinator: VisualNodeCoordinator,
+    ) -> None:
+        while not self.stop_event.is_set():
+            try:
+                executed = await coordinator.run_once()
+            except (httpx.NetworkError, httpx.TimeoutException, OSError, RuntimeError):
                 executed = 0
             if executed > 0:
                 continue
@@ -372,8 +439,12 @@ class OrchestratorRuntime:
             await self._ppt_coordinator.shutdown()
         if self.resources is not None:
             try:
-                if self._consumer_started:
-                    await self.resources.consumer.stop()
+                try:
+                    if self._visual_event_consumer_started:
+                        await self.resources.visual_event_consumer.stop()
+                finally:
+                    if self._consumer_started:
+                        await self.resources.consumer.stop()
             finally:
                 try:
                     if self._producer_started:
@@ -393,6 +464,7 @@ class OrchestratorRuntime:
         self.resources = None
         self._producer_started = False
         self._consumer_started = False
+        self._visual_event_consumer_started = False
         self._started = False
         self._ppt_coordinator = None
         self.attach(app)

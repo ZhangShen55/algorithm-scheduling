@@ -133,6 +133,7 @@ services:
     environment:
       CONFIG_PATH: /config/config.toml
       ONLINE_CONTROL__BASE_URL: http://control-service:18100
+      ONLINE_FACE_PERSONS__BASE_URL: http://facerec-gpu0:8000
     volumes:
       - ../../online_gateway_service/config.toml:/config/config.toml:ro
     depends_on:

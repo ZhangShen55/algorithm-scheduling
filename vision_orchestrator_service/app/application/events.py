@@ -3,6 +3,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
 from packages.platform_common.repository import NodeResultWrite
+from packages.platform_contracts.status import NodeStatus
 from packages.platform_contracts.vision import (
     VisualAnalysisCommand,
     VisualAnalysisEvent,
@@ -17,7 +18,7 @@ class VisualAnalyzer(Protocol):
         self,
         command: VisualAnalysisCommand,
         progress: ProgressCallback,
-    ) -> dict[str, Any]: ...
+    ) -> dict[str, Any] | NodeResultWrite: ...
 
 
 class VisualResultRepository(Protocol):
@@ -36,6 +37,10 @@ class VisualResultRepository(Protocol):
         *,
         reason: str,
     ) -> object: ...
+
+    def get_node(self, node_id: int) -> object: ...
+
+    def aggregate_task_type_state(self, course_task_type_id: int) -> object: ...
 
 
 class AsyncKafkaProducer(Protocol):
@@ -58,6 +63,23 @@ class VisualCommandProcessor:
 
     async def handle(self, value: bytes) -> None:
         command = VisualAnalysisCommand.from_bytes(value)
+        get_node = getattr(self._repository, "get_node", None)
+        existing = (
+            await asyncio.to_thread(get_node, command.node_id)
+            if callable(get_node)
+            else None
+        )
+        if getattr(existing, "status", None) is NodeStatus.COMPLETED:
+            await self._publish(
+                VisualAnalysisEvent.create(
+                    command,
+                    event_type=VisualEventType.COMPLETED,
+                    progress=100,
+                    stage="完成",
+                    reason="视觉分析已完成，重复发布终态事件",
+                )
+            )
+            return
 
         async def report(progress: int, stage: str, reason: str) -> None:
             await asyncio.to_thread(
@@ -76,16 +98,34 @@ class VisualCommandProcessor:
                 )
             )
 
-        result = await self._analyzer.analyze(command, report)
+        analyzed = await self._analyzer.analyze(command, report)
+        if isinstance(analyzed, NodeResultWrite):
+            result = NodeResultWrite(
+                result=analyzed.result,
+                artifact_path=analyzed.artifact_path,
+                artifact_count=analyzed.artifact_count,
+                progress={"percent": 100, "stage": "完成"},
+                effective_params=analyzed.effective_params,
+            )
+        else:
+            result = NodeResultWrite(
+                result=analyzed,
+                progress={"percent": 100, "stage": "完成"},
+            )
         await asyncio.to_thread(
             self._repository.complete_node,
             command.node_id,
-            NodeResultWrite(
-                result=result,
-                progress={"percent": 100, "stage": "完成"},
-            ),
+            result,
             reason="视觉分析完成",
         )
+        aggregate = getattr(self._repository, "aggregate_task_type_state", None)
+        if callable(aggregate):
+            course_task_type_id = getattr(existing, "course_task_type_id", None)
+            if course_task_type_id is None and callable(get_node):
+                completed = await asyncio.to_thread(get_node, command.node_id)
+                course_task_type_id = getattr(completed, "course_task_type_id", None)
+            if isinstance(course_task_type_id, int):
+                await asyncio.to_thread(aggregate, course_task_type_id)
         await self._publish(
             VisualAnalysisEvent.create(
                 command,

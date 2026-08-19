@@ -23,7 +23,7 @@ enable_hpi = false
 # 单引擎串行推理的准入上限；保持 1 时并发请求会排队，增大不会产生多引擎并行
 max_concurrency = 1
 # 单张图片解码前允许的最大文件大小，单位：字节
-image_max_bytes = 20971520
+image_max_bytes = 52428800
 
 [ocr.detection]
 # 检测前图像缩放的边长限制；值越大越利于小字检测，但推理耗时和资源占用也越高
@@ -51,3 +51,17 @@ directory = "logs"
 max_size_mb = 100
 # 应用日志历史文件数量；Docker JSON 日志轮转由 docker run 参数单独控制
 backup_count = 3
+
+[platform]
+# 本地安全模板默认不向调度平台注册。
+registration_enabled = false
+# 仅在 registration_enabled=true 时填写 Control Service 地址。
+control_service_url = ""
+# 注册心跳间隔秒数。
+heartbeat_interval_seconds = 5
+# 单实例向平台声明的请求容量；OCR 引擎仍由 max_concurrency 独立保护。
+max_concurrent_requests = 256
+
+[runtime]
+# 本地安全模板允许在无 CUDA 环境加载配置。
+require_gpu = false

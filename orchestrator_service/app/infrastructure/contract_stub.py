@@ -16,6 +16,7 @@ class NodeExecutionContext:
     node_code: str
     request_payload: dict[str, Any]
     effective_params: dict[str, Any] | None
+    submission_id: str | None = None
     node_id: int | None = None
     course_task_type_id: int | None = None
 
@@ -42,6 +43,8 @@ class ContractStubAdapter:
         request = asdict(context)
         request.pop("node_id", None)
         request.pop("course_task_type_id", None)
+        if request["submission_id"] is None:
+            request.pop("submission_id")
         response = await self._http_client.post(
             f"{service_url.rstrip('/')}/execute",
             json=request,
