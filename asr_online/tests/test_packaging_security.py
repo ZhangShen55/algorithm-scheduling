@@ -154,7 +154,17 @@ class PackagingSecurityTests(unittest.TestCase):
     def test_release_dockerfile_imports_application_during_build(self):
         dockerfile = Path("docker/Dockerfile").read_text(encoding="utf-8")
 
-        self.assertIn('RUN python -c "from app.main import app"', dockerfile)
+        self.assertIn(
+            "RUN touch /tmp/asr-online-build-config.toml",
+            dockerfile,
+        )
+        self.assertIn(
+            "CONFIG_PATH=/tmp/asr-online-build-config.toml "
+            'python -c "from app.main import app"',
+            dockerfile,
+        )
+        self.assertIn("rm -f /tmp/asr-online-build-config.toml", dockerfile)
+        self.assertNotIn("COPY config.toml ", dockerfile)
 
     def test_cython_dockerfile_removes_bytecode_caches(self):
         dockerfile = Path("docker/Dockerfile.cython").read_text(encoding="utf-8")

@@ -219,6 +219,28 @@ Text Analysis：从既有 Python 3.11 `openai` 环境克隆规范名 `ai_report`
 未完成项保持未勾选：八算子尚未逐一以根 TOML 和受控部署 TOML 启动并注入旧环境变量完成
 进程级对照；远端最终 SHA 镜像、24 实例、业务泳道、压力/回滚和精确镜像清理均尚未执行。
 
+## 2026-08-20 远端预验收失败与修复
+
+`192.168.29.11` 曾以父提交
+`b0012b513cdb0548d9ff37b2b5da98f057a76859` 启动 Canonical 预验收。ASR Offline
+镜像构建完成后，ASR Online 在 Dockerfile 的构建期应用导入门禁失败：镜像声明正式
+`config.toml` 仅由 Compose 在运行时挂载，但 `RUN python -c "from app.main import app"` 在
+构建阶段仍按默认路径读取 `/app/config.toml`。该文件不存在，因此 runner 在替换 ASR Online
+tag 前退出；这次执行不得计入 OpenSpec `9.5` 或 `14.x` 完成证据。
+
+修复后的 ASR Online Dockerfile 在同一个 `RUN` 层创建空的临时 TOML，以显式
+`CONFIG_PATH` 完成导入后立即删除；根配置仍不进入镜像，运行时仍使用 Compose 的只读挂载。
+本机取得以下回归证据：
+
+```text
+ASR Online 打包合同：15 tests OK
+临时普通 TOML 下 from app.main import app：通过
+平台镜像配置排除与 Miniconda 合同：3 passed
+```
+
+远端必须改用包含此修复的后续完整 Git SHA 重新执行 Canonical 门禁；父提交的失败 release
+只作为诊断证据保留，不得覆盖或伪装为成功报告。
+
 ## 实施后验证入口
 
 从工作区根目录执行 OpenSpec 门禁：

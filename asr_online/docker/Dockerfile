@@ -58,7 +58,10 @@ WORKDIR /app
 COPY app /app/app
 COPY model /app/model
 COPY docker/start.sh /app/start.sh
-RUN python -c "from app.main import app"
+# 构建期只验证应用可导入；正式配置仍由 Compose 只读挂载。
+RUN touch /tmp/asr-online-build-config.toml && \
+    CONFIG_PATH=/tmp/asr-online-build-config.toml python -c "from app.main import app" && \
+    rm -f /tmp/asr-online-build-config.toml
 
 # 权限
 RUN chmod +x ./start.sh
