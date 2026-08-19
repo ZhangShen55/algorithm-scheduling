@@ -46,6 +46,12 @@ class DockerLayoutTests(unittest.TestCase):
         self.assertNotIn("pyarmor", lower)
         self.assertIn("COPY model/ ./model/", dockerfile)
         self.assertNotIn("COPY config.toml", dockerfile)
+        self.assertIn("touch /tmp/screen-det-build-config.toml", dockerfile)
+        self.assertIn(
+            "CONFIG_PATH=/tmp/screen-det-build-config.toml",
+            dockerfile,
+        )
+        self.assertIn("rm -f /tmp/screen-det-build-config.toml", dockerfile)
 
     def test_runtime_image_never_copies_requirements_or_build_materials(self) -> None:
         path = ROOT / "docker" / "Dockerfile"

@@ -1,5 +1,25 @@
 # Change Ledger
 
+## 2026-08-20 - 统一容量发布首次 Canonical 构建失败与构建期配置修复
+
+- 失败 release：Git SHA `b0012b513cdb0548d9ff37b2b5da98f057a76859`，证据目录为
+  `/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/reports/milestone-2b/releases/v1.0_260812/b0012b513cdb0548d9ff37b2b5da98f057a76859`。
+  预检、模型清单、旧镜像快照和 registry wheel `0.2.0` 分发通过；
+  `seacraft-asr-offline:v1.0_260812` 完成构建并取得目标 revision。
+- 失败点：ASR Online Dockerfile 在运行层执行构建期 `from app.main import app`，但该镜像按部署
+  合同不内置本地 `config.toml`，运行配置只由 Compose 挂载到 `/config.toml`，因此导入时以
+  `ValueError: 算子配置文件不存在: /app/config.toml` 失败。该错误发生在容器替换、24 实例注册、
+  GPU/Smoke 和 deployment 用例之前，不能完成 OpenSpec `9.5/12.9/14.2/14.7`。
+- 修复：构建期导入检查在同一 `RUN` 层创建并删除临时空 TOML，通过 `CONFIG_PATH` 显式使用；
+  不复制、重包含或持久化本地运行配置，Compose 运行时只读挂载合同不变。ASR Online 项目测试和
+  平台镜像合同测试同时约束临时配置、显式 `CONFIG_PATH`、清理和禁止复制本地配置。
+- 同类审计：ScreenDet 的 Cython 构建层也会在正式配置尚未挂载时导入 `app.main`。该问题尚未在
+  Canonical 中实际触发，因为构建在 ASR Online 阶段已经停止；现已采用相同的临时配置边界修复，
+  并由 ScreenDet 项目测试和平台镜像合同测试覆盖，避免重跑时在后续 profile 重复失败。
+- 恢复与安全：Canonical 失败后维护锁已释放，PostgreSQL、Redis、Kafka、MongoDB 和四个平台服务
+  均恢复 healthy；未启动 24 个新算子容器，未执行旧镜像清理，`/data/course`、`/data/result`、
+  模型和历史证据未修改。修复必须以新的完整 Git SHA 建立另一不可变 release 重跑。
+
 ## 2026-08-19 - 统一容量租约与在线 OCR apply 中间收口
 
 - 公共注册包统一严格解析八算子 `[platform]` 和 `[runtime].require_gpu`，容量只接受正整数；
@@ -16,8 +36,8 @@
   3 个跳过项仅因本地未提供 canonical FaceRec 集成所需的 `OPERATOR_REGISTRY_TOKEN`，不是功能
   失败。Ruff、目标范围 strict Mypy（106 个源文件）、变更部署脚本 strict Mypy、compileall、
   Harness 一致性、OpenSpec strict 与 `git diff --check` 均通过。
-- `docs/运维可视化平台详细设计文档-v1.md` 是用户未跟踪且明确排除的草稿，本轮未修改；因此
-  OpenSpec `10.3` 在总体设计已更新后仍保持未完成。
+- `docs/运维可视化平台详细设计文档-v1.md` 是用户未跟踪且明确排除的草稿，不属于本变更的
+  提交或验收对象；OpenSpec `10.3` 已收敛为只核对受版本控制的当前总体设计并完成。
 
 ## 2026-08-19 - 统一算子容量、可归属租约与在线 OCR Harness 规划基线
 

@@ -11,6 +11,11 @@ platform tests:
 单元、真实 Redis 和算子项目测试证据；最终提交后仍必须从相应目录重跑，并把完整输出保存到
 `harness/reports/unified-operator-capacity-leases-and-online-ocr/{完整GitSHA}/`。
 
+2026-08-20 首次 Canonical 在 `b0012b513cdb0548d9ff37b2b5da98f057a76859` 构建 ASR Online 时
+因构建期导入缺少 `/app/config.toml` 失败。代码审计同时发现 ScreenDet 的 Cython 构建层存在同类
+潜在失败；两处均改为使用构建层临时 TOML，且不把正式配置写入镜像。修复后先执行以下回归，
+再以新 SHA 重跑 Canonical；旧 release 不覆盖，失败结果不计为镜像或 24 实例通过证据。
+
 ```bash
 # 工作区根目录
 openspec validate unify-operator-capacity-leases-and-online-ocr \
@@ -31,6 +36,10 @@ PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
   tests/test_operator_deployment_integration.py \
   tests/test_milestone_2b_operator_configs.py \
   tests/test_harness_consistency.py
+
+.venv/bin/python -m pytest -q \
+  tests/test_milestone_2b_image_build.py \
+  tests/test_milestone_2b_scripts.py
 
 # 四个根服务必须分别在自己的项目目录执行，不能从平台目录一次性收集。
 (cd ../control_service && ../algorithm-scheduling-platform/.venv/bin/python -m pytest -q)

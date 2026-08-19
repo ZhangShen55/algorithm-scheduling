@@ -897,6 +897,30 @@ def test_asr_images_use_the_reachable_configurable_miniconda_mirror(
     assert "https://repo.anaconda.com/miniconda/${MINICONDA_INSTALLER}" not in dockerfile
 
 
+def test_asr_online_build_import_uses_an_ephemeral_config() -> None:
+    dockerfile = (
+        PLATFORM_ROOT.parent / "asr_online/docker/Dockerfile"
+    ).read_text(encoding="utf-8")
+
+    assert "RUN touch /tmp/asr-online-build-config.toml" in dockerfile
+    assert (
+        "CONFIG_PATH=/tmp/asr-online-build-config.toml "
+        'python -c "from app.main import app"'
+        in dockerfile
+    )
+    assert "rm -f /tmp/asr-online-build-config.toml" in dockerfile
+
+
+def test_screen_det_build_import_uses_an_ephemeral_config() -> None:
+    dockerfile = (
+        PLATFORM_ROOT.parent / "screen_det/docker/Dockerfile"
+    ).read_text(encoding="utf-8")
+
+    assert "touch /tmp/screen-det-build-config.toml" in dockerfile
+    assert "CONFIG_PATH=/tmp/screen-det-build-config.toml" in dockerfile
+    assert "rm -f /tmp/screen-det-build-config.toml" in dockerfile
+
+
 def test_facerec_image_uses_a_configurable_resilient_pypi_source() -> None:
     dockerfile = (
         PLATFORM_ROOT.parent / "facerec/docker/Dockerfile"

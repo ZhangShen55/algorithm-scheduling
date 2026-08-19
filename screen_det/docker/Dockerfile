@@ -41,7 +41,10 @@ RUN python build_cython_modules.py \
       --remove-sources \
     && rm -rf build build_cython_modules.py \
     && find /build/app -type d -name '__pycache__' -prune -exec rm -rf {} + \
-    && python -c "from app.main import app; assert app.openapi(); print('cython app smoke ok')"
+    && touch /tmp/screen-det-build-config.toml \
+    && CONFIG_PATH=/tmp/screen-det-build-config.toml \
+      python -c "from app.main import app; assert app.openapi(); print('cython app smoke ok')" \
+    && rm -f /tmp/screen-det-build-config.toml
 
 
 FROM runtime-base
