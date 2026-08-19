@@ -5,6 +5,44 @@ platform root, use the explicit workspace import path below; this prevents a
 bare top-level `tests` package from another checkout from shadowing the
 platform tests:
 
+## 2026-08-19 统一算子配置、容量租约、在线 OCR 与镜像清理待实施门禁
+
+本节对应 `scenarios/unified-operator-capacity-leases-and-online-ocr.md`。当前只有规划和 Harness
+合同，以下命令尚未形成实现通过证据；实施完成后必须从相应目录执行并把完整输出保存到
+`harness/reports/unified-operator-capacity-leases-and-online-ocr/{完整GitSHA}/`。
+
+```bash
+# 工作区根目录
+openspec validate unify-operator-capacity-leases-and-online-ocr \
+  --type change --strict --no-interactive
+
+# algorithm-scheduling-platform 目录
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/test_operator_registry_client.py \
+  tests/test_redis_operator_registry_unit.py \
+  tests/integration/test_redis_operator_registry.py \
+  tests/test_operator_registry_api.py \
+  tests/test_operations_api.py \
+  tests/test_node_dispatcher.py \
+  tests/test_ppt_text_pipeline.py \
+  tests/test_vbas_batch_client.py \
+  tests/test_online_gateway.py \
+  tests/test_operator_deployment_integration.py \
+  tests/test_milestone_2b_operator_configs.py \
+  tests/test_harness_consistency.py
+```
+
+上述定向门禁不能替代八个算子各自 `AGENTS.md` 要求的 compileall、导入、项目测试、服务启动、
+路由检查和真实推理，也不能替代真实 Redis/PostgreSQL、四服务运行、在线/离线 OCR 并发、
+同步 HTTP 跨 TTL 续租以及 24 实例里程碑 2B 验收。任何 skipped 或只使用健康检查的结果都不能
+把 `DEC-025` 改为“符合”。
+
+实施后的证据还必须证明：八份根 TOML 与八份部署 TOML 使用已批准的不同注册/GPU默认值；
+Compose 源文件和 `docker compose config` 展开后的 24 实例都保留唯一身份、URL、Token、端口和
+GPU 绑定；未设置 `GPU_PROCESS_NAME` 时真实 GPU 进程名仍正确。OpenSpec 14.7 实现时必须把其
+精确镜像清理自动测试命令补入本节；在该命令、删除前后镜像清单和释放空间证据存在前，当前
+定向测试全部通过也不能完成 `DEC-025`。
+
 ## 2026-08-19 8A.3 第三轮远端正式验证
 
 正式服务器 `192.168.29.11` 使用 x86 Docker 镜像、NVIDIA Container Runtime 和 release

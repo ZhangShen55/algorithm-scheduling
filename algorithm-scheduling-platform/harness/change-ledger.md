@@ -1,5 +1,28 @@
 # Change Ledger
 
+## 2026-08-19 - 统一算子容量、可归属租约与在线 OCR Harness 规划基线
+
+- 新增独立 Harness 场景 `scenarios/unified-operator-capacity-leases-and-online-ocr.md`，对应
+  OpenSpec `unify-operator-capacity-leases-and-online-ocr`。当前 proposal、design、三份规格和
+  tasks 为 `4/4` 完整，严格校验通过；88 项实施任务均保持未勾选。
+- 本记录以用户修改后的规格为准：`max_concurrent_requests/declared_capacity` 只允许正整数，
+  不再保留 `-1`；八算子默认值仍为 `10/4/128/256/128/10/128/256`。
+- 增补配置归属门禁：八算子从 TOML `[platform]` 读取注册开关、Control Service 地址、心跳和
+  容量，从 `[runtime].require_gpu` 读取 GPU 强制检查；根 TOML 使用本地安全默认值，部署 TOML
+  启用注册。Compose 只保留 Token、实例身份、服务 URL、物理 GPU/可见设备、启动和资源事实，
+  并用 YAML anchors 收敛重复项；源文件和 `docker compose config` 展开结果都必须验证。
+- 增补同步 HTTP 生命周期门禁：Orchestrator、Vision Orchestrator 和 Online Gateway 的调用必须
+  使用有限硬超时；可能跨越单次 TTL 时周期续租同一个租约，完成、失败、超时或取消后释放，
+  调用方失联后由 TTL 回收。
+- 增补图片边界门禁：Online Gateway 请求体上限 72 MiB、Base64 解码图片上限 50 MiB，OCR
+  `image_max_bytes` 同步为 50 MiB；超限请求必须在网关申请租约前或 OCR 推理前失败。
+- 增补 2B 存储门禁：最终 SHA 新镜像完成 revision、容器替换、健康、24 实例注册和 Smoke 后，
+  只按精确 ID 删除无容器引用且身份可证明的旧平台/算子镜像；禁止强制删除、宽泛 prune，以及
+  删除基础/基础设施/原业务镜像、模型、数据和历史证据。当前尚无删除运行证据。
+- 新场景固定规格到证据矩阵、证据目录、脱敏规则和完成门禁；`architecture-review.md` 新增
+  `DEC-025`，当前结论为“待验证”。本条没有业务实现或运行证据，不完成 OpenSpec 10.4，
+  也不改变既有 `DEC-022/DEC-024` 和里程碑 2B 结论。
+
 ## 2026-08-19 - 8A.3 `1aa5da67` 第三轮正式通过
 
 - 正式 release：Git SHA 为 `1aa5da672f75adfa7aea5f767bc91e9ac4889cce`，不可变证据目录为
