@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib
 import inspect
 import json
@@ -19,6 +20,22 @@ CATALOG_PATH = PLATFORM_ROOT / "deploy/milestone-2b-case-catalog.yaml"
 LOAD_CASE_IDS = tuple(f"LOAD-{number:03d}" for number in range(10, 27))
 CANONICAL_CASE_IDS = frozenset(f"LOAD-{number:03d}" for number in range(10, 17))
 ISOLATED_CASE_IDS = frozenset(f"LOAD-{number:03d}" for number in range(17, 27))
+
+
+def _registered_facerec_capabilities() -> tuple[str, ...]:
+    workspace_root = PLATFORM_ROOT.parent
+    tree = ast.parse(
+        (workspace_root / "facerec/app/main.py").read_text(encoding="utf-8")
+    )
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id != "install_operator_runtime":
+            continue
+        keywords = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg}
+        if ast.literal_eval(keywords["operator_code"]) == "facerec":
+            return tuple(ast.literal_eval(keywords["capabilities"]))
+    raise AssertionError("FaceRec operator registration was not found")
 
 
 def _database_snapshot(*, incomplete: int = 1) -> dict[str, Any]:
@@ -51,7 +68,7 @@ def _canonical_scenario(load: Any, case_id: str) -> dict[str, Any]:
         scenario["course_task_id"] = f"m2b-run-1-{case_id.lower()}"
         scenario["database_scope"] = f"algorithm:course-task:m2b-run-1-{case_id.lower()}"
     if case_id == "LOAD-015":
-        scenario["lease_capability"] = "facerec"
+        scenario["lease_capability"] = "recognize"
         scenario["redis_scope"] = "algorithm:operator-lease:facerec"
     return scenario
 
@@ -106,6 +123,26 @@ def test_load_catalog_resolves_all_17_explicit_runner_functions() -> None:
         resolved.append(runner)
 
     assert len({id(runner) for runner in resolved}) == len(LOAD_CASE_IDS)
+
+
+def test_load_013_waits_for_control_and_orchestrator_readiness() -> None:
+    load = importlib.import_module("scripts.milestone_2b_case_runners.load")
+
+    assert load._RUNTIME_TARGETS["LOAD-013"].readiness_urls == (
+        "http://127.0.0.1:18100/ops/readiness",
+        "http://127.0.0.1:18101/ops/readiness",
+    )
+
+
+def test_load_015_uses_the_registered_facerec_capability() -> None:
+    load = importlib.import_module("scripts.milestone_2b_case_runners.load")
+    case = next(case for case in _load_cases() if case.case_id == "LOAD-015")
+    context = CaseContext(PLATFORM_ROOT.resolve(), "run-1", "local")
+
+    scenario = load._scenario(context, case)
+
+    assert _registered_facerec_capabilities() == ("recognize",)
+    assert scenario["lease_capability"] == "recognize"
 
 
 def test_load_resources_are_bound_to_canonical_or_current_case_namespace(
@@ -1360,7 +1397,7 @@ def test_load_015_requires_real_lease_before_restart_and_zero_after(
         lambda case_id, scenario: {
             "lease_id": "lease-1",
             "instance_id": "facerec-gpu0",
-            "capability": "facerec",
+            "capability": "recognize",
         },
     )
     monkeypatch.setattr(load, "_release_case_lease", lambda lease_id: 404)
@@ -1404,7 +1441,7 @@ def test_load_015_retries_capacity_503_before_receipt_and_redis_restart(
         return status, {
             "lease_id": "lease-1",
             "instance_id": "facerec-gpu0",
-            "capability": "facerec",
+            "capability": "recognize",
         }
 
     monkeypatch.setattr(load, "_operator_instances", lambda: instances)
@@ -1571,7 +1608,7 @@ def test_load_015_releases_exact_lease_when_first_post_acquire_snapshot_fails(
         lambda case_id, scenario: {
             "lease_id": "lease-exact",
             "instance_id": "facerec-gpu0",
-            "capability": "facerec",
+            "capability": "recognize",
         },
     )
     monkeypatch.setattr(
@@ -1605,7 +1642,7 @@ async def test_load_015_outer_cleanup_releases_only_receipted_exact_lease(
                 "run_id": "run-1",
                 "lease_id": "lease-exact",
                 "instance_id": "facerec-gpu0",
-                "capability": "facerec",
+                "capability": "recognize",
             }
         ),
         encoding="utf-8",
@@ -1645,7 +1682,7 @@ async def test_load_015_outer_cleanup_preserves_lease_receipt_when_release_fails
                 "run_id": "run-1",
                 "lease_id": "lease-exact",
                 "instance_id": "facerec-gpu0",
-                "capability": "facerec",
+                "capability": "recognize",
             }
         ),
         encoding="utf-8",
@@ -1697,7 +1734,7 @@ def test_load_015_acquires_a_real_lease_when_capacity_starts_at_zero(
             or {
                 "lease_id": "lease-1",
                 "instance_id": "facerec-gpu0",
-                "capability": "facerec",
+                "capability": "recognize",
             },
         ),
     )
@@ -1708,7 +1745,7 @@ def test_load_015_acquires_a_real_lease_when_capacity_starts_at_zero(
     assert requests == [
         (
             "http://127.0.0.1:18100/internal/operator-instances/lease",
-            {"capability": "facerec", "ttl_seconds": 3600},
+            {"capability": "recognize", "ttl_seconds": 3600},
         )
     ]
 

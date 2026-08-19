@@ -460,9 +460,10 @@ from collections.abc import Mapping, Sequence
 from pymongo.errors import OperationFailure
 
 
-def mongodb_authentication_failure_facts(error):
+def mongodb_authentication_failure_facts(error, *, related_errors=()):
     outer_error_type = type(error).__name__
     pending = [error]
+    pending.extend(related_errors)
     visited = set()
     while pending:
         current = pending.pop()
@@ -615,7 +616,18 @@ elif probe == "mongodb_auth":
                     {"number": "m2b-empty-record-probe"},
                 )
             except (OperationFailure, ServerSelectionTimeoutError) as exc:
-                authentication_facts = mongodb_authentication_failure_facts(exc)
+                server_descriptions = (
+                    invalid_client.topology_description.server_descriptions()
+                )
+                topology_errors = [
+                    description.error
+                    for description in server_descriptions.values()
+                    if description.error is not None
+                ]
+                authentication_facts = mongodb_authentication_failure_facts(
+                    exc,
+                    related_errors=topology_errors,
+                )
                 if authentication_facts is None:
                     raise
                 persistence_error = f"MongoDB 认证失败: {exc}"

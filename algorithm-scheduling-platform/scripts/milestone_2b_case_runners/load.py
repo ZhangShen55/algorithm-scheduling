@@ -57,6 +57,7 @@ _RUNTIME_RECOVERY_OVERHEAD_SECONDS = 30.0
 _RUNTIME_RECOVERY_MAX_TIMEOUT_SECONDS = 1200.0
 _LOAD_015_LEASE_ACQUIRE_TIMEOUT_SECONDS = 30.0
 _LOAD_015_LEASE_RETRY_INTERVAL_SECONDS = 1.0
+_LOAD_015_LEASE_CAPABILITY = "recognize"
 _LEASE_EVIDENCE_FIELDS = frozenset(
     {
         "instance_id",
@@ -239,7 +240,10 @@ _RUNTIME_TARGETS: Mapping[str, _RuntimeTarget] = {
         "algorithm-scheduling-platform",
         "control-service",
         "control-service",
-        ("http://127.0.0.1:18100/ops/readiness",),
+        (
+            "http://127.0.0.1:18100/ops/readiness",
+            "http://127.0.0.1:18101/ops/readiness",
+        ),
     ),
     "LOAD-014": _RuntimeTarget(
         "deploy/docker-compose.infrastructure.yml",
@@ -453,7 +457,7 @@ def _scenario(context: CaseContext, case: CaseDefinition) -> dict[str, Any]:
                 )
                 document["support_service"] = _LOAD_016_ORCHESTRATOR_TARGET.service
         elif case.case_id == "LOAD-015":
-            document["lease_capability"] = "facerec"
+            document["lease_capability"] = _LOAD_015_LEASE_CAPABILITY
             document["redis_scope"] = "algorithm:operator-lease:facerec"
             document["lease_receipt_path"] = str(_lease_receipt_path(context, case))
     else:
@@ -1438,7 +1442,7 @@ def _cleanup_case_lease_receipts(run_id: str) -> tuple[str, ...]:
             document.get("schema_version") != 1
             or document.get("case_id") != "LOAD-015"
             or document.get("run_id") != run_id
-            or document.get("capability") != "facerec"
+            or document.get("capability") != _LOAD_015_LEASE_CAPABILITY
             or not isinstance(document.get("instance_id"), str)
             or not document["instance_id"]
             or not isinstance(lease_id, str)
@@ -1488,12 +1492,12 @@ def _lease_availability_evidence() -> dict[str, Any]:
 def _acquire_case_lease(case_id: str, scenario: Mapping[str, Any]) -> dict[str, str]:
     if (
         case_id != "LOAD-015"
-        or scenario.get("lease_capability") != "facerec"
+        or scenario.get("lease_capability") != _LOAD_015_LEASE_CAPABILITY
         or scenario.get("redis_scope") != "algorithm:operator-lease:facerec"
     ):
         raise ValueError("LOAD-015 lease scope does not match the fixed contract")
     url = f"{_CONTROL_URL}/internal/operator-instances/lease"
-    payload = {"capability": "facerec", "ttl_seconds": 3600}
+    payload = {"capability": _LOAD_015_LEASE_CAPABILITY, "ttl_seconds": 3600}
     deadline = time.monotonic() + _LOAD_015_LEASE_ACQUIRE_TIMEOUT_SECONDS
     while True:
         status_code, document = _post_json_status(url, payload)
@@ -1524,7 +1528,7 @@ def _acquire_case_lease(case_id: str, scenario: Mapping[str, Any]) -> dict[str, 
     }
     if any(not isinstance(value, str) or not value for value in lease.values()):
         raise ValueError("LOAD-015 lease response is incomplete")
-    if lease["capability"] != "facerec":
+    if lease["capability"] != _LOAD_015_LEASE_CAPABILITY:
         raise ValueError("LOAD-015 lease capability does not match")
     return cast(dict[str, str], lease)
 

@@ -1,5 +1,46 @@
 # Change Ledger
 
+## 2026-08-18 - 8A.3 `f79d0632` 首轮终态与三项部署缺陷修复
+
+- 首轮 release：Git SHA 为 `f79d0632ad86b103a85ad7f46128a9d48830692a`，不可变目录为
+  `/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/reports/milestone-2b/releases/v1.0_260812/f79d0632ad86b103a85ad7f46128a9d48830692a`。
+  该目录保持只读证据边界，不在修复后原地覆盖。该轮终态为
+  `CODEX_STAGE45_COMPLETE failures=0` 和
+  `CODEX_8A3_TERMINAL stage45_failures=0 deployment_status=1`，因此 `8A.3` 仍未完成。
+- 已通过事实：FaceRec 三卡真实人物创建/识别通过；18 个 GPU 算子实例均完成真实推理、
+  停止、CUDA PID 消失、重启和注册恢复；24 个实例注册、PPT Slice/Text Analysis 六个 CPU
+  实例 Smoke 以及八算子 full Smoke 均通过。FaceRec 使用 x86 Docker 镜像与 NVIDIA
+  Container Runtime 完成验证，不依赖 `192.168.29.11` 上的 Conda 环境。
+- deployment 结果：93 项中 90 项通过，失败项仅为 `INF-014`、`LOAD-014` 和 `LOAD-015`。
+  阶段 6 已停止本轮 24 个测试算子并释放 GPU，平台与 PostgreSQL/Redis/Kafka/MongoDB 保持健康；
+  原业务容器按 snapshot 恢复，canonical paused ledger 归档为唯一终态 audit，维护锁释放。
+- `INF-014` 根因：MongoDB readiness 首次认证失败后，PyMongo 外层
+  `ServerSelectionTimeoutError` 只保留格式化消息，结构化
+  `OperationFailure(code=18, codeName=AuthenticationFailed)` 保留在 topology server
+  description 中。分类器现在显式读取 `topology_description.server_descriptions()` 的结构化错误，
+  仍只接受 code 18 与 `AuthenticationFailed` 的组合；不解析异常字符串，普通网络错误继续
+  fail closed。
+- `LOAD-014` 根因：前一项 `LOAD-013` 重启 control-service 时，节点执行器的瞬时
+  `httpx.ConnectError` 逃逸并触发共享 `stop_event`，Outbox Publisher 与 Consumer 随后退出；
+  `LOAD-013` 又只等待 control readiness，直到 `LOAD-014` 才暴露。执行轮询现在只对
+  `httpx.NetworkError` 和 `httpx.TimeoutException` 按既有轮询间隔重试；
+  `UnsupportedProtocol` 与普通运行时错误仍 fail-stop。`LOAD-013` 同时等待 control 和
+  orchestrator readiness。
+- `LOAD-015` 根因：FaceRec 的 `operator_code` 是 `facerec`，但注册 capability 是
+  `recognize`；原 runner 错把 `facerec` 用作租约能力，Redis 能力集合查询为空并返回 503。
+  scenario、租约请求、响应校验和恢复 receipt 已统一使用 `recognize`，算子编码及 Redis
+  资源范围继续保持 `facerec`。
+- TDD 与本地门禁：三项缺陷均有对应 RED/GREEN；额外代码复审发现并修复过宽的
+  `TransportError` 捕获，`UnsupportedProtocol` 回归在旧实现上以 timeout 失败，收窄后
+  orchestrator runtime 为 `10 passed`。部署组合回归为 `1260 passed, 3 skipped`；3 个 skip
+  仅因本机没有远端注册令牌和 Canonical FaceRec GPU 容器。Ruff、3 个生产文件 strict
+  Mypy、compileall、Harness 一致性 `5 passed`、OpenSpec strict 和 `git diff --check` 均通过。
+- 重跑门禁：修复必须进入新 Git SHA 和新不可变 release；`PREVIOUS_RELEASE_ROOT` 必须精确指向
+  上述 `f79d0632...` release。只有新 release 同时得到
+  `CODEX_STAGE45_COMPLETE failures=0` 与
+  `CODEX_8A3_TERMINAL stage45_failures=0 deployment_status=0`，且报告通过、测试算子清理、
+  原业务恢复和维护锁释放全部有证据后，才允许勾选 OpenSpec `8A.3` 和更新 `DEC-022`。
+
 ## 2026-08-19 - 8A.3 deployment runner 现场失败收敛与重跑门禁
 
 - 失败 release：`fd079383f507a5d7d16cd20209874deeab1cfd79` 保持只读。该轮 18 个 GPU

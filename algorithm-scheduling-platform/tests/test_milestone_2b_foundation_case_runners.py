@@ -1730,6 +1730,8 @@ def test_facerec_container_probes_use_real_mongo_and_production_recognition_wiri
     assert "update_or_create_person" in auth_source
     assert "count_documents" in auth_source
     assert "drop_database" in auth_source
+    assert "invalid_client.topology_description.server_descriptions()" in auth_source
+    assert "related_errors=topology_errors" in auth_source
     assert "insert_many" in embedding_source
     assert "get_targets_embeddings" in embedding_source
     assert "find_best_match_embedding" in embedding_source
@@ -1792,14 +1794,48 @@ def test_facerec_auth_classifier_rejects_plain_server_selection_timeout() -> Non
     exec(infrastructure._FACEREC_MONGO_AUTH_FAILURE_HELPER, namespace)
     classify = namespace["mongodb_authentication_failure_facts"]
 
+    network_error = TimeoutError("connection timed out")
     observed = classify(
         ServerSelectionTimeoutError(
             "No servers found yet",
-            errors={"mongodb:27017": TimeoutError("connection timed out")},
-        )
+            errors={"mongodb:27017": network_error},
+        ),
+        related_errors=[network_error],
     )
 
     assert observed is None
+
+
+def test_facerec_auth_classifier_accepts_structured_topology_authentication_failure() -> None:
+    from pymongo.errors import OperationFailure, ServerSelectionTimeoutError
+
+    infrastructure = importlib.import_module(
+        "scripts.milestone_2b_case_runners.infrastructure"
+    )
+    namespace: dict[str, object] = {}
+    exec(infrastructure._FACEREC_MONGO_AUTH_FAILURE_HELPER, namespace)
+    classify = namespace["mongodb_authentication_failure_facts"]
+    outer_error = ServerSelectionTimeoutError("Authentication failed.")
+    topology_error = OperationFailure(
+        "Authentication failed.",
+        code=18,
+        details={
+            "ok": 0.0,
+            "errmsg": "Authentication failed.",
+            "code": 18,
+            "codeName": "AuthenticationFailed",
+        },
+    )
+
+    observed = classify(outer_error, related_errors=[topology_error])
+
+    assert observed == {
+        "authentication_error_type": "ServerSelectionTimeoutError",
+        "authentication_cause_type": "OperationFailure",
+        "authentication_error_code": 18,
+        "authentication_error_code_name": "AuthenticationFailed",
+        "authentication_error_wrapped": True,
+    }
 
 
 def test_mongodb_down_probe_decodes_one_strict_marker_frame(

@@ -149,6 +149,20 @@ class RecordingInitializer:
         return []
 
 
+class ScriptedExecutor:
+    def __init__(self, first_error: Exception) -> None:
+        self.first_error = first_error
+        self.calls = 0
+        self.retried = asyncio.Event()
+
+    async def run_once(self) -> int:
+        self.calls += 1
+        if self.calls == 1:
+            raise self.first_error
+        self.retried.set()
+        return 0
+
+
 def _settings(tmp_path: Path) -> OrchestratorSettings:
     return OrchestratorSettings.model_validate(
         {
@@ -243,6 +257,75 @@ def test_readiness_reports_required_loop_failure(tmp_path: Path) -> None:
 
         assert readiness.status_code == 503
         assert "Kafka 消费循环异常" in str(readiness.json())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("acquire", "release"))
+async def test_executor_polling_retries_transient_control_transport_errors(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    runtime, _, _ = _runtime(tmp_path)
+    request = httpx.Request(
+        "POST",
+        f"http://control/internal/operator-instances/{operation}",
+    )
+    executor = ScriptedExecutor(
+        httpx.ConnectError(f"{operation} 暂时不可用", request=request)
+    )
+
+    task = asyncio.create_task(runtime._run_executor(executor))
+    await asyncio.wait_for(executor.retried.wait(), timeout=0.5)
+
+    assert executor.calls >= 2
+    assert runtime.stop_event.is_set() is False
+    assert task.done() is False
+
+    runtime.stop_event.set()
+    await asyncio.wait_for(task, timeout=0.5)
+
+
+@pytest.mark.asyncio
+async def test_executor_polling_keeps_fail_stop_for_non_transport_errors(
+    tmp_path: Path,
+) -> None:
+    runtime, _, _ = _runtime(tmp_path)
+    executor = ScriptedExecutor(RuntimeError("节点执行不变量损坏"))
+    task = asyncio.create_task(runtime._run_executor(executor))
+    task.add_done_callback(
+        lambda completed: runtime._record_loop_exit("node_executor", completed)
+    )
+
+    with pytest.raises(RuntimeError, match="节点执行不变量损坏"):
+        await task
+    await asyncio.sleep(0)
+
+    assert executor.calls == 1
+    assert runtime.stop_event.is_set() is True
+    assert runtime.loop_errors == {"node_executor": "节点执行不变量损坏"}
+
+
+@pytest.mark.asyncio
+async def test_executor_polling_keeps_fail_stop_for_non_retryable_transport_errors(
+    tmp_path: Path,
+) -> None:
+    runtime, _, _ = _runtime(tmp_path)
+    request = httpx.Request("POST", "ftp://control/internal/operator-instances/lease")
+    executor = ScriptedExecutor(
+        httpx.UnsupportedProtocol("不支持的控制面协议", request=request)
+    )
+    task = asyncio.create_task(runtime._run_executor(executor))
+    task.add_done_callback(
+        lambda completed: runtime._record_loop_exit("node_executor", completed)
+    )
+
+    with pytest.raises(httpx.UnsupportedProtocol, match="不支持的控制面协议"):
+        await asyncio.wait_for(task, timeout=0.1)
+    await asyncio.sleep(0)
+
+    assert executor.calls == 1
+    assert runtime.stop_event.is_set() is True
+    assert runtime.loop_errors == {"node_executor": "不支持的控制面协议"}
 
 
 def test_readiness_reports_kafka_dependency_failure(tmp_path: Path) -> None:

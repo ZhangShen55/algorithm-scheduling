@@ -5,6 +5,74 @@ platform root, use the explicit workspace import path below; this prevents a
 bare top-level `tests` package from another checkout from shadowing the
 platform tests:
 
+## 2026-08-18 8A.3 三项缺陷修复与新 SHA 正式重跑门禁
+
+本地修复回归：
+
+```bash
+.venv/bin/python -m pytest -q \
+  tests/test_milestone_2b_gpu_evidence.py \
+  tests/test_milestone_2b_foundation_case_runners.py \
+  tests/test_milestone_2b_load_case_runners.py \
+  tests/test_milestone_2b_scripts.py \
+  tests/test_milestone_2b_task9.py \
+  tests/test_run_8a3.py
+# 1260 passed, 3 skipped in 436.09s
+
+../algorithm-scheduling-platform/.venv/bin/python -m pytest -q tests/test_runtime.py
+# 从 orchestrator_service 根目录执行：10 passed
+
+.venv/bin/python -m pytest -q \
+  'tests/test_milestone_2b_gpu_evidence.py::test_helper_commands_have_a_bounded_timeout_and_write_failure_report'
+# 3 passed；证明并发运行时的一次 0.3 秒本机抖动不可复现
+```
+
+其中 3 个 skip 只要求本机不存在的显式注册令牌和 Canonical FaceRec GPU 容器；正式远端
+Canonical 运行不得保留这些跳过。提交前还必须执行以下门禁，并把实际输出保留在 Git/Harness
+记录中：
+
+```bash
+.venv/bin/ruff check \
+  scripts/milestone_2b_case_runners/infrastructure.py \
+  scripts/milestone_2b_case_runners/load.py \
+  tests/test_milestone_2b_foundation_case_runners.py \
+  tests/test_milestone_2b_load_case_runners.py \
+  ../orchestrator_service/app/infrastructure/runtime.py \
+  ../orchestrator_service/tests/test_runtime.py
+
+MYPYPATH=.. .venv/bin/mypy --strict --explicit-package-bases \
+  scripts/milestone_2b_case_runners/infrastructure.py \
+  scripts/milestone_2b_case_runners/load.py \
+  ../orchestrator_service/app/infrastructure/runtime.py
+
+.venv/bin/python -m compileall -q \
+  scripts/milestone_2b_case_runners \
+  ../orchestrator_service/app \
+  ../orchestrator_service/tests
+.venv/bin/python -m pytest -q tests/test_harness_consistency.py
+openspec validate close-platform-runtime-and-harness-gaps --strict
+git diff --check
+# Ruff：All checks passed
+# strict Mypy：Success: no issues found in 3 source files
+# compileall：退出码 0
+# Harness 一致性：5 passed
+# OpenSpec strict 与 git diff --check：退出码 0
+```
+
+新 SHA 的远端唯一执行入口：
+
+```bash
+cd /root/workspace/algorithm-scheduling/algorithm-scheduling-platform
+export PREVIOUS_RELEASE_ROOT="$PWD/deploy/reports/milestone-2b/releases/v1.0_260812/f79d0632ad86b103a85ad7f46128a9d48830692a"
+python3 deploy/scripts/run_milestone_2b_8a3.py
+```
+
+`OPERATOR_REGISTRY_TOKEN` 必须通过受限环境静默提供，不得进入命令行、普通日志或 Markdown。
+只有进程退出码为 0、同一受限 run log 恰有
+`CODEX_STAGE45_COMPLETE failures=0` 和
+`CODEX_8A3_TERMINAL stage45_failures=0 deployment_status=0`，新 release 的 summary 为“通过”，
+并且 24 个测试算子完成清理、原业务按 snapshot 恢复、维护锁释放，才构成 `8A.3` 完成证据。
+
 ## 2026-08-19 8A.3 deployment runner 重跑前验证
 
 ```bash

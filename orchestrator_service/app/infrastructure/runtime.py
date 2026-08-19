@@ -223,7 +223,10 @@ class OrchestratorRuntime:
 
     async def _run_executor(self, executor: NodeExecutor) -> None:
         while not self.stop_event.is_set():
-            executed = await executor.run_once()
+            try:
+                executed = await executor.run_once()
+            except (httpx.NetworkError, httpx.TimeoutException):
+                executed = 0
             if executed > 0:
                 continue
             try:
