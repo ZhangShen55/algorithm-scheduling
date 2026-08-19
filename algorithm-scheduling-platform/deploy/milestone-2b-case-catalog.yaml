@@ -59,7 +59,7 @@ cases:
   - {case_id: REG-017, category: negative, phase: deployment, title: "同能力全部实例离线", expected: "离线节点进入状态 30，在线返回容量错误", runner: registry.reg_017, timeout_seconds: 120, safety: isolated_mutation}
   - {case_id: REG-018, category: negative, phase: deployment, title: "control-service 暂时不可用", expected: "算子继续运行但注册和心跳重试，不能伪报成功", runner: registry.reg_018, timeout_seconds: 120, safety: isolated_mutation}
   - {case_id: REG-019, category: negative, phase: deployment, title: "心跳上报 inflight 与租约数持续矛盾", expected: "运维证据标记异常", runner: registry.reg_019, timeout_seconds: 120, safety: isolated_mutation}
-  - {case_id: REG-020, category: negative, phase: deployment, title: "租约 TTL 小于真实长任务且无续约", expected: "验证不会发生并发容量超卖", runner: registry.reg_020, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: REG-020, category: negative, phase: deployment, title: "调用方停止续租后 TTL 回收", expected: "旧租约失效并释放容量，心跳差异只用于观测", runner: registry.reg_020, timeout_seconds: 120, safety: isolated_mutation}
   - {case_id: INF-001, category: negative, phase: deployment, title: "PostgreSQL 未启动", expected: "control 和 orchestrator readiness 失败", runner: infrastructure.inf_001, timeout_seconds: 300, safety: isolated_mutation}
   - {case_id: INF-002, category: negative, phase: deployment, title: "PostgreSQL 账号或密码错误", expected: "readiness 显示中文依赖原因", runner: infrastructure.inf_002, timeout_seconds: 300, safety: isolated_mutation}
   - {case_id: INF-003, category: negative, phase: deployment, title: "数据库迁移缺失", expected: "readiness 失败，不接受课程任务", runner: infrastructure.inf_003, timeout_seconds: 300, safety: isolated_mutation}

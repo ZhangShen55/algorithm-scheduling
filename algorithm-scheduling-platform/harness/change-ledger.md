@@ -1,5 +1,25 @@
 # Change Ledger
 
+## 2026-08-20 - `bfee34e` Canonical REG-020 规格漂移与 TTL 回收门禁修正
+
+- 失败 release：Git SHA `bfee34e82cddcf5d635b2cb009d1d6e3ef03e114`，证据目录为
+  `/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/reports/milestone-2b/releases/v1.0_260812/bfee34e82cddcf5d635b2cb009d1d6e3ef03e114`。
+  八类算子和四平台镜像已完成构建/revision 校验与替换，24 个算子实例已注册；
+  18/18 GPU 真实推理和 CUDA PID/cgroup 归属、6/6 CPU Smoke、8/8 算子 full Smoke
+  以及 PPT 三实例真实长视频切片均通过，阶段 4/5 终态为
+  `CODEX_STAGE45_COMPLETE failures=0`。
+- 部署用例在第 76 条 `REG-020` 停止；前 75 条为 `75 passed`。旧 checker 在 1 秒
+  租约 TTL 过期后仍要求 `reported_inflight=1` 阻止新租约，这与本变更已确认的
+  “活跃租约是分发占用唯一权威，心跳只观测”直接矛盾。若心跳能阻止 TTL 回收，
+  调用方崩溃后将无法释放容量。
+- 修正后 `REG-020` 验证调用方停止续租时：旧租约不可续租、活跃租约数清零、
+  `reported_inflight` 差异仍可观测、新工作可取得回收的槽位。真实长调用不重叠由调用方
+  持续续租，以及续租失败后终止本次调用来保证；已有跨 TTL 调用回归继续覆盖该边界。
+- 本机回归：真实 Redis Registry `22 passed`，Foundation runner `511 passed, 3 skipped`，
+  catalog `12 passed`，Ruff 通过。3 个 skip 仅因本机未提供 Canonical FaceRec Token。
+  `bfee34e...` 不满足部署终态，本轮未删除旧镜像；新 SHA 必须以该 release 作为
+  `PREVIOUS_RELEASE_ROOT` 建立新的不可变 Canonical 证据。
+
 ## 2026-08-20 - 算子账本在 direct maintenance 中断窗口的只读恢复
 
 - 现场失败：`2009d7b8ffc9ad8be06dbbbfeda28a6e8782ad90` 已完成八类镜像构建，但阶段 3 的

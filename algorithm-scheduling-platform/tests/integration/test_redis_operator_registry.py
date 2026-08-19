@@ -301,6 +301,26 @@ def test_reported_inflight_is_observation_and_does_not_hold_released_capacity(
     assert snapshot.attribution_difference == 1
 
 
+def test_expired_lease_releases_capacity_despite_reported_inflight(
+    redis_registry: RedisOperatorRegistry,
+) -> None:
+    _register_ready(redis_registry, vbas_instance(capacity=1))
+    expired = redis_registry.lease("teacher_behavior", 1)
+
+    time.sleep(1.1)
+    redis_registry.heartbeat("vbas-gpu0", inflight=1, model_ready=True)
+    expired_snapshot = redis_registry.list_active_leases("vbas-gpu0")
+
+    assert expired_snapshot.active_lease_count == 0
+    assert expired_snapshot.reported_inflight == 1
+    assert expired_snapshot.attribution_difference == 1
+    with pytest.raises(CapacityLeaseNotFoundError):
+        redis_registry.renew(expired.lease_id, 30)
+
+    replacement = redis_registry.lease("teacher_behavior", 30)
+    assert replacement.instance_id == "vbas-gpu0"
+
+
 def test_multi_capability_instance_uses_one_shared_capacity_pool(
     redis_registry: RedisOperatorRegistry,
 ) -> None:

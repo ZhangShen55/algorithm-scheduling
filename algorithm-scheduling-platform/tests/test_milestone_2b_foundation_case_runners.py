@@ -2308,7 +2308,7 @@ def test_registry_api_rejection_does_not_accept_a_missing_stable_route(
         )
 
 
-def test_reg_020_uses_reported_active_work_to_prevent_lease_oversubscription(
+def test_reg_020_recovers_expired_capacity_without_treating_heartbeat_as_a_lease(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry = importlib.import_module(
@@ -2333,9 +2333,19 @@ def test_reg_020_uses_reported_active_work_to_prevent_lease_oversubscription(
         def lease(self, capability: str, ttl_seconds: int) -> object:
             del capability, ttl_seconds
             self.lease_calls += 1
-            if self.lease_calls == 2 and self.heartbeats[-1] == 1:
-                raise registry.CapacityUnavailableError("teacher_behavior")
             return SimpleNamespace(lease_id=f"lease-{self.lease_calls}")
+
+        def list_active_leases(self, instance_id: str) -> object:
+            del instance_id
+            return SimpleNamespace(
+                active_lease_count=0,
+                reported_inflight=self.heartbeats[-1],
+                attribution_difference=self.heartbeats[-1],
+            )
+
+        def renew(self, lease_id: str, ttl_seconds: int) -> object:
+            del ttl_seconds
+            raise registry.CapacityLeaseNotFoundError(lease_id)
 
     fake = ActiveWorkRegistry()
     monkeypatch.setattr(registry.time, "sleep", lambda _: None)
@@ -2349,8 +2359,11 @@ def test_reg_020_uses_reported_active_work_to_prevent_lease_oversubscription(
     assert fake.heartbeats == [0, 1]
     assert observed == {
         "first_lease": "lease-1",
-        "active_inflight": 1,
-        "second_lease_rejection": "CapacityUnavailableError",
+        "expired_lease_renewal_rejection": "CapacityLeaseNotFoundError",
+        "reported_inflight": 1,
+        "expired_active_lease_count": 0,
+        "capacity_mismatch": True,
+        "replacement_lease": "lease-2",
     }
 
 

@@ -101,8 +101,8 @@ CASE_SPECS: Mapping[str, FoundationCaseSpec] = {
     ),
     "REG-019": _registry_spec("心跳上报 inflight 与租约数持续矛盾", "运维证据标记异常"),
     "REG-020": _registry_spec(
-        "租约 TTL 小于真实长任务且无续约",
-        "验证不会发生并发容量超卖",
+        "调用方停止续租后 TTL 回收",
+        "旧租约失效并释放容量，心跳差异只用于观测",
     ),
 }
 _POSTGRES_AUDIT_CASES = frozenset({"REG-014", "REG-015"})
@@ -1055,15 +1055,29 @@ def _check_reg_020(
     first = registry.lease("teacher_behavior", 1)
     time.sleep(1.1)
     heartbeat = registry.heartbeat(instance_id, inflight=1, model_ready=True)
+    expired_snapshot = registry.list_active_leases(instance_id)
+    capacity_mismatch = expired_snapshot.attribution_difference != 0
     try:
-        registry.lease("teacher_behavior", 30)
-    except CapacityUnavailableError as exc:
-        return {
-            "first_lease": first.lease_id,
-            "active_inflight": heartbeat.inflight,
-            "second_lease_rejection": type(exc).__name__,
-        }
-    raise ValueError("无续约长任务在 TTL 后发生容量超卖")
+        registry.renew(first.lease_id, 30)
+    except CapacityLeaseNotFoundError as exc:
+        renewal_rejection = type(exc).__name__
+    else:
+        raise ValueError("已过期旧租约仍可续租")
+    replacement = registry.lease("teacher_behavior", 30)
+    if (
+        expired_snapshot.active_lease_count != 0
+        or expired_snapshot.reported_inflight != 1
+        or not capacity_mismatch
+    ):
+        raise ValueError("过期租约清理后未正确暴露心跳差异")
+    return {
+        "first_lease": first.lease_id,
+        "expired_lease_renewal_rejection": renewal_rejection,
+        "reported_inflight": heartbeat.inflight,
+        "expired_active_lease_count": expired_snapshot.active_lease_count,
+        "capacity_mismatch": capacity_mismatch,
+        "replacement_lease": replacement.lease_id,
+    }
 
 
 RegistryChecker = Callable[[RedisOperatorRegistry, str, str], dict[str, Any]]

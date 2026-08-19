@@ -5,8 +5,11 @@
 本场景对应 OpenSpec `unify-operator-capacity-leases-and-online-ocr`。2026-08-19 已进入 apply：
 公共租约模型、Redis 原子容量、Control API、普通/工作项/VBas/在线租约客户端、在线单图 OCR、
 八算子 TOML 配置和 Compose 静态合同已经实现。真实 Redis 下的跨服务容量、逐图 PPT、在线
-容量耗尽、心跳差异和三类调用客户端跨 TTL 已取得自动化证据。当前结论是“本地实现和契约
-跨服务层符合，真实八算子泳道与最终三卡发布待验证”，不得据此宣称整个变更完成。
+容量耗尽、心跳差异和三类调用客户端跨 TTL 已取得自动化证据。`bfee34e...`
+远端预验收已证明 24 实例注册、18/18 GPU 真实推理、6/6 CPU Smoke、8/8 算子
+full Smoke 和 PPT 三实例长视频切片通过，但 deployment 用例在旧 `REG-020`
+checker 与新租约规格相矛盾时停止。当前结论仍是“实现和已执行层级符合，新 SHA 的完整
+Canonical、全部业务泳道与精确旧镜像清理待验证”，不得据此宣称整个变更完成。
 
 本记录使用用户修改后的 OpenSpec 作为权威来源，固定以下新增约束：
 
