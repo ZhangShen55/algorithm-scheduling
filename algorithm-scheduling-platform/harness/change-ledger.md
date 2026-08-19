@@ -1047,6 +1047,15 @@
 - 证据等级与结论：本地静态/单元门禁实现完成；最终 SHA 的 16 进程 release 证据、真实基础设施零 skip、业务泳道、容量/恢复和远端镜像清理仍待执行。
 - 剩余风险：8 个 B 级质量项需要基于当前 release 真实产物生成独立复核证据；未取得该文件时 8A.7 按设计失败关闭。
 
+## 2026-08-20 8A.7 首次最终 SHA 入口失败与修复
+
+- 失败 release：`b0f5ae68cae4d50349d85b43f851bb4eb47e3424`。
+- 失败位置：模型清单验证和 release 目录准备完成后，阶段 1 调用 `release-image-cleanup snapshot` 时失败；未进入镜像构建、容器替换或业务泳道。
+- 原因：旧 `release-image-cleanup` 包装器用宿主机 `python3` 按文件路径启动，新增的 `scripts.milestone_2b_case_runners.safety` 包导入无法从脚本目录解析，报 `ModuleNotFoundError: scripts`。
+- 修复：包装器改为可执行 Bash，固定调用平台 `.venv/bin/python -m deploy.scripts.release_image_cleanup`；新增 clean-clone 直接执行/`--help` 回归。
+- 验证：镜像清理与 8A.7 定向 `15 passed`，Ruff、strict Mypy、`git diff --check` 和 OpenSpec strict 全部通过。
+- 结论：该 release 只是已记录的失败证据，不得计为 12.9 或 14.x 完成；修复后必须使用新 Git SHA 新建不可变 release。
+
 ## Record template
 
 - Date and scope:

@@ -254,6 +254,12 @@ Smoke。当前实现改为：
 分别为 `99/57/36/138`，零失败、零错误、零跳过且无缺失映射；Ruff 通过。最终 SHA 的远端业务、容量、恢复、243 条汇总及镜像删除尚未执行，
 因此 OpenSpec 12.9、14.1、14.3-14.7 仍保持未完成。
 
+`b0f5ae68cae4d50349d85b43f851bb4eb47e3424` 的首次最终 8A.7 在阶段 1 调用
+`release-image-cleanup snapshot` 时因包装器以文件路径启动 Python、无法解析平台 `scripts`
+包而失败；该轮已在构建/替换算子前终止。修复后包装器必须使用 clean-clone
+准备的 `.venv/bin/python -m deploy.scripts.release_image_cleanup`，并以新 SHA 重跑全部门禁；旧失败
+release 不得补写为通过。
+
 ## 2026-08-20 远端预验收失败与修复
 
 `192.168.29.11` 曾以父提交

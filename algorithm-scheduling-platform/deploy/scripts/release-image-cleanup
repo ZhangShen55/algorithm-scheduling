@@ -1,6 +1,8 @@
-#!/usr/bin/env python3
-from release_image_cleanup import main
+#!/usr/bin/env bash
+set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PLATFORM_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+exec "$PLATFORM_ROOT/.venv/bin/python" \
+  -m deploy.scripts.release_image_cleanup "$@"

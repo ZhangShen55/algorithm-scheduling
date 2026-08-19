@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,21 @@ OLD_IMAGE = "sha256:" + "1" * 64
 CURRENT_IMAGE = "sha256:" + "2" * 64
 REFERENCED_IMAGE = "sha256:" + "3" * 64
 UNPROVEN_IMAGE = "sha256:" + "4" * 64
+
+
+def test_release_image_cleanup_entrypoint_is_executable() -> None:
+    path = Path(__file__).resolve().parents[1] / "deploy/scripts/release-image-cleanup"
+
+    assert path.is_file()
+    assert os.access(path, os.X_OK)
+    completed = subprocess.run(
+        [str(path), "--help"],
+        cwd=path.parents[2],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def _release_root(tmp_path: Path) -> Path:
