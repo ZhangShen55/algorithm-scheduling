@@ -187,6 +187,52 @@ def _controlled_containers(deploy_root: Path, *, require_healthy: bool) -> list[
     return [observed[name] for name in (*PLATFORM_SERVICES, *OPERATOR_SERVICES)]
 
 
+def _compose_service_images(
+    deploy_root: Path,
+    compose_name: str,
+    services: tuple[str, ...],
+) -> dict[str, str]:
+    command = [
+        "docker",
+        "compose",
+        "--project-directory",
+        str(deploy_root),
+        "-f",
+        str(deploy_root / compose_name),
+    ]
+    if compose_name == "docker-compose.operators.yml":
+        command.extend(["--profile", "*"])
+    command.extend(["config", "--format", "json"])
+    payload = _json_command(command)
+    definitions = payload.get("services") if isinstance(payload, dict) else None
+    if not isinstance(definitions, dict):
+        raise ImageCleanupError(f"{compose_name}: Compose service definitions are invalid")
+    result: dict[str, str] = {}
+    for service in services:
+        definition = definitions.get(service)
+        image = definition.get("image") if isinstance(definition, dict) else None
+        if not isinstance(image, str) or not image.strip():
+            raise ImageCleanupError(f"{compose_name}: image is missing for {service}")
+        result[service] = image
+    return result
+
+
+def _controlled_image_slots(deploy_root: Path) -> dict[str, str]:
+    platform = _compose_service_images(
+        deploy_root,
+        "docker-compose.platform.yml",
+        PLATFORM_SERVICES,
+    )
+    operators = _compose_service_images(
+        deploy_root,
+        "docker-compose.operators.yml",
+        OPERATOR_SERVICES,
+    )
+    if set(platform) & set(operators):
+        raise ImageCleanupError("controlled Compose service names overlap")
+    return platform | operators
+
+
 def _inspect_images(ids: Sequence[str], *, check: bool = True) -> list[dict[str, Any]]:
     if not ids:
         return []
@@ -253,6 +299,51 @@ def _inventory(
     return result
 
 
+def _inventory_image_slots(
+    service_images: dict[str, str], references: dict[str, list[str]]
+) -> list[dict[str, Any]]:
+    slots_by_reference: dict[str, list[str]] = {}
+    for service, image_reference in service_images.items():
+        slots_by_reference.setdefault(image_reference, []).append(service)
+    records_by_id: dict[str, dict[str, Any]] = {}
+    slots_by_id: dict[str, list[str]] = {}
+    for image_reference in sorted(slots_by_reference):
+        records = _inspect_images([image_reference])
+        if len(records) != 1:
+            raise ImageCleanupError(
+                f"controlled image is not uniquely inspectable: {image_reference}"
+            )
+        record = records[0]
+        image_id = record.get("Id")
+        if IMAGE_ID_PATTERN.fullmatch(str(image_id)) is None:
+            raise ImageCleanupError(f"controlled image ID is invalid: {image_reference}")
+        image_id = str(image_id)
+        existing = records_by_id.get(image_id)
+        if existing is not None and existing != record:
+            raise ImageCleanupError(f"controlled image metadata changed: {image_id}")
+        records_by_id[image_id] = record
+        slots_by_id.setdefault(image_id, []).extend(slots_by_reference[image_reference])
+    result: list[dict[str, Any]] = []
+    for image_id in sorted(records_by_id):
+        record = records_by_id[image_id]
+        labels = (record.get("Config") or {}).get("Labels") or {}
+        size = record.get("Size")
+        tags = record.get("RepoTags") or []
+        if not isinstance(size, int) or size < 0 or not all(isinstance(tag, str) for tag in tags):
+            raise ImageCleanupError(f"image metadata is invalid: {image_id}")
+        result.append(
+            {
+                "image_id": image_id,
+                "revision": labels.get(REVISION_LABEL),
+                "size_bytes": size,
+                "repo_tags": sorted(tags),
+                "compose_slots": sorted(slots_by_id[image_id]),
+                "container_references": sorted(references.get(image_id, [])),
+            }
+        )
+    return result
+
+
 def _read_json(path: Path) -> dict[str, Any]:
     if path.is_symlink() or not path.is_file():
         raise ImageCleanupError(f"required evidence is missing or unsafe: {path}")
@@ -299,7 +390,6 @@ def _validate_release_gates(release_root: Path, tag: str, sha: str) -> None:
 
 
 def _snapshot(release_root: Path, deploy_root: Path, tag: str, sha: str) -> dict[str, Any]:
-    containers = _controlled_containers(deploy_root, require_healthy=False)
     references = _all_container_references()
     return {
         "schema_version": 1,
@@ -308,7 +398,10 @@ def _snapshot(release_root: Path, deploy_root: Path, tag: str, sha: str) -> dict
         "release_tag": tag,
         "git_sha": sha,
         "created_at": datetime.now(UTC).isoformat(),
-        "images": _inventory(containers, references),
+        "images": _inventory_image_slots(
+            _controlled_image_slots(deploy_root),
+            references,
+        ),
     }
 
 

@@ -197,6 +197,59 @@ def test_cleanup_rejects_incomplete_smoke_before_runtime_or_delete(
     assert called is False
 
 
+def test_snapshot_uses_compose_image_slots_without_running_operator_containers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _release_root(tmp_path)
+    platform_image = "sha256:" + "5" * 64
+    operator_image = "sha256:" + "6" * 64
+    monkeypatch.setattr(
+        cleanup,
+        "_controlled_image_slots",
+        lambda _root: {
+            "control-service": "algorithm-control:old",
+            "ocr-gpu0": "algorithm-ocr:old",
+            "ocr-gpu1": "algorithm-ocr:old",
+        },
+    )
+    monkeypatch.setattr(
+        cleanup,
+        "_controlled_containers",
+        lambda *_args, **_kwargs: pytest.fail(
+            "构建前快照不得要求旧算子容器正在运行"
+        ),
+    )
+    monkeypatch.setattr(
+        cleanup,
+        "_all_container_references",
+        lambda: {platform_image: ["d" * 64]},
+    )
+
+    def inspect(images: list[str], *, check: bool = True) -> list[dict[str, Any]]:
+        del check
+        assert len(images) == 1
+        image_id = platform_image if images[0].endswith("control:old") else operator_image
+        return [
+            {
+                "Id": image_id,
+                "Size": 100 if image_id == platform_image else 200,
+                "RepoTags": [images[0]],
+                "Config": {"Labels": {cleanup.REVISION_LABEL: OLD_SHA}},
+            }
+        ]
+
+    monkeypatch.setattr(cleanup, "_inspect_images", inspect)
+
+    result = cleanup._snapshot(root, tmp_path, TAG, SHA)
+
+    assert result["status"] == "PASS"
+    by_id = {item["image_id"]: item for item in result["images"]}
+    assert by_id[platform_image]["compose_slots"] == ["control-service"]
+    assert by_id[platform_image]["container_references"] == ["d" * 64]
+    assert by_id[operator_image]["compose_slots"] == ["ocr-gpu0", "ocr-gpu1"]
+    assert by_id[operator_image]["container_references"] == []
+
+
 def test_release_image_cleanup_source_has_no_force_or_broad_prune() -> None:
     source = Path(cleanup.__file__).read_text(encoding="utf-8")
 
