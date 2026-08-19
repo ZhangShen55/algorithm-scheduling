@@ -88,6 +88,12 @@ class LoadCaseSpec:
         return f"{prefix}：{self.expected}"
 
 
+@dataclass(frozen=True, slots=True)
+class LeaseReleaseResult:
+    http_status: int
+    status: Literal["RELEASED", "ALREADY_RELEASED"]
+
+
 def _spec(
     title: str,
     expected: str,
@@ -1533,16 +1539,32 @@ def _acquire_case_lease(case_id: str, scenario: Mapping[str, Any]) -> dict[str, 
     return cast(dict[str, str], lease)
 
 
-def _release_case_lease(lease_id: str) -> int:
+def _release_case_lease(lease_id: str) -> LeaseReleaseResult:
     if not lease_id:
         raise ValueError("LOAD-015 lease_id is empty")
-    status_code, _ = _post_json_status(
+    status_code, document = _post_json_status(
         f"{_CONTROL_URL}/internal/operator-instances/release",
         {"lease_id": lease_id},
     )
-    if status_code not in {200, 404}:
+    if status_code == 404:
+        return LeaseReleaseResult(
+            http_status=status_code,
+            status="ALREADY_RELEASED",
+        )
+    if status_code != 200:
         raise ValueError(f"LOAD-015 lease release returned HTTP {status_code}")
-    return status_code
+    if not isinstance(document, dict):
+        raise ValueError("LOAD-015 lease release response is not an object")
+    release_status = document.get("status")
+    if document.get("lease_id") != lease_id or release_status not in {
+        "RELEASED",
+        "ALREADY_RELEASED",
+    }:
+        raise ValueError("LOAD-015 lease release response is invalid")
+    return LeaseReleaseResult(
+        http_status=status_code,
+        status=cast(Literal["RELEASED", "ALREADY_RELEASED"], release_status),
+    )
 
 
 def _restart_and_recover(case_id: str, scenario: Mapping[str, Any]) -> dict[str, Any]:
@@ -1608,7 +1630,7 @@ def _restart_and_recover(case_id: str, scenario: Mapping[str, Any]) -> dict[str,
     )
     before_active_lease_count: int | None = None
     lease: dict[str, str] | None = None
-    lease_release_status: int | None = None
+    lease_release_result: LeaseReleaseResult | None = None
     if case_id == "LOAD-015":
         initial_active = _active_lease_count(_http_json(_CAPACITY_SNAPSHOT_URL))
         if initial_active != 0:
@@ -1816,8 +1838,8 @@ def _restart_and_recover(case_id: str, scenario: Mapping[str, Any]) -> dict[str,
             )
             if case_id == "LOAD-015":
                 assert lease is not None
-                lease_release_status = _release_case_lease(lease["lease_id"])
-                if lease_release_status != 404:
+                lease_release_result = _release_case_lease(lease["lease_id"])
+                if lease_release_result.status != "ALREADY_RELEASED":
                     lease = None
                     raise ValueError("Redis restart incorrectly preserved the old active lease")
                 lease = None
@@ -1850,7 +1872,14 @@ def _restart_and_recover(case_id: str, scenario: Mapping[str, Any]) -> dict[str,
             "before_instance_count": len(before_instances or ()),
             "after_instance_count": len(after_instances or ()),
             "before_active_lease_count": before_active_lease_count,
-            "lease_release_status": lease_release_status,
+            "lease_release_http_status": (
+                lease_release_result.http_status
+                if lease_release_result is not None
+                else None
+            ),
+            "lease_release_status": (
+                lease_release_result.status if lease_release_result is not None else None
+            ),
             "restored_running": True,
         }
     finally:

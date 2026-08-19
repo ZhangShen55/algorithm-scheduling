@@ -11,6 +11,27 @@ platform tests:
 单元、真实 Redis 和算子项目测试证据；最终提交后仍必须从相应目录重跑，并把完整输出保存到
 `harness/reports/unified-operator-capacity-leases-and-online-ocr/{完整GitSHA}/`。
 
+2026-08-20 release `7111d7dd2557222db111a9d6bb912cc9dae35947` 的阶段 4/5 全部通过，
+但 93 条 deployment 用例中的 `LOAD-015` 因 checker 把幂等释放接口的
+HTTP `200 + ALREADY_RELEASED` 错当成“旧租约仍存活”而失败。远端独立 key 前缀复现确认
+Redis 重启后 `run_id` 已变化、旧租约被原子清除，生产世代隔离正确。修复后的门禁必须校验
+业务状态：`ALREADY_RELEASED` 通过，`RELEASED`、正文异常或身份不匹配失败关闭，并分别记录
+HTTP 与业务状态。重跑必须使用上述 release 作为 `PREVIOUS_RELEASE_ROOT`；旧 release 不覆盖。
+
+本次 checker 回归命令：
+
+```bash
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/test_milestone_2b_load_case_runners.py -k load_015
+
+.venv/bin/ruff check \
+  scripts/milestone_2b_case_runners/load.py \
+  tests/test_milestone_2b_load_case_runners.py
+
+MYPYPATH=.. .venv/bin/mypy --strict --explicit-package-bases \
+  scripts/milestone_2b_case_runners/load.py
+```
+
 2026-08-20 首次 Canonical 在 `b0012b513cdb0548d9ff37b2b5da98f057a76859` 构建 ASR Online 时
 因构建期导入缺少 `/app/config.toml` 失败。代码审计同时发现 ScreenDet 的 Cython 构建层存在同类
 潜在失败；两处均改为使用构建层临时 TOML，且不把正式配置写入镜像。修复后先执行以下回归，

@@ -1,5 +1,31 @@
 # Change Ledger
 
+## 2026-08-20 - `7111d7d` Canonical LOAD-015 幂等释放契约漂移修正
+
+- 失败 release：Git SHA `7111d7dd2557222db111a9d6bb912cc9dae35947`，证据目录为
+  `/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/reports/milestone-2b/releases/v1.0_260812/7111d7dd2557222db111a9d6bb912cc9dae35947`。
+  八类算子与四个平台镜像构建、revision 校验、替换和运行预检通过，24 个实例完成注册；
+  18/18 GPU 真实推理及 CUDA PID/cgroup 归属、6/6 CPU Smoke、8/8 算子 full Smoke 和
+  PPT 三实例真实长视频切片均通过，阶段 4/5 终态为 `CODEX_STAGE45_COMPLETE failures=0`。
+- 93 条 deployment 用例均生成结构化记录，唯一失败为 `LOAD-015`，最终终态为
+  `CODEX_8A3_TERMINAL stage45_failures=0 deployment_status=1`。阶段 6 已完成安全恢复：
+  24 个测试算子均停止、GPU 无残留计算进程，原业务状态恢复，四个平台服务与
+  PostgreSQL、Redis、Kafka、MongoDB 均健康，维护锁已释放；本轮未执行旧镜像清理。
+- 根因是 checker 只读取释放接口的 HTTP 状态码并要求 `404`。当前 Control Service 的正式幂等
+  契约对已释放/失效租约返回 HTTP `200` 和业务状态 `ALREADY_RELEASED`，因此 checker 把
+  正确响应误判为旧租约仍存活。生产 Redis 世代隔离没有回归：远端使用独立 key 前缀建立
+  真实旧世代租约并重启 Redis，`run_id` 从
+  `0d72f0d21ecb617887133d738046c5295172326f` 变为
+  `2acd6d42ccfad60c7a964e90764a01a94f1572e0`，释放 Lua 返回 `0`，租约 hash 和 ZSET
+  活跃计数均清零；测试前缀随后被精确删除，四个平台和基础设施恢复健康。
+- 修正后 `_release_case_lease` 同时校验 HTTP 与白名单业务正文：只有
+  `ALREADY_RELEASED` 证明重启前租约已失效，`RELEASED` 必须继续失败关闭；正文类型、
+  `lease_id` 或业务状态异常也必须失败。兼容旧实现的 HTTP `404`，并在结构化证据中分别记录
+  `lease_release_http_status` 和 `lease_release_status`。本机 LOAD runner 为 `101 passed`，
+  部署脚本与 8A.3 控制器组合为 `305 passed`，Harness/catalog 为 `17 passed`；Ruff、strict
+  Mypy、compileall、OpenSpec strict 和 `git diff --check` 均通过。新 SHA 必须以本 release
+  作为 `PREVIOUS_RELEASE_ROOT` 建立新的不可变 Canonical 证据。
+
 ## 2026-08-20 - `bfee34e` Canonical REG-020 规格漂移与 TTL 回收门禁修正
 
 - 失败 release：Git SHA `bfee34e82cddcf5d635b2cb009d1d6e3ef03e114`，证据目录为

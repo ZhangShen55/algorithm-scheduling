@@ -1400,11 +1400,58 @@ def test_load_015_requires_real_lease_before_restart_and_zero_after(
             "capability": "recognize",
         },
     )
-    monkeypatch.setattr(load, "_release_case_lease", lambda lease_id: 404)
+    monkeypatch.setattr(
+        load,
+        "_release_case_lease",
+        lambda lease_id: load.LeaseReleaseResult(
+            http_status=200,
+            status="ALREADY_RELEASED",
+        ),
+    )
 
     observed = load._restart_and_recover("LOAD-015", _canonical_scenario(load, "LOAD-015"))
 
     assert observed["before_active_lease_count"] == 1
+    assert observed["lease_release_http_status"] == 200
+    assert observed["lease_release_status"] == "ALREADY_RELEASED"
+
+
+def test_load_015_rejects_release_that_reports_lease_was_still_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load = importlib.import_module("scripts.milestone_2b_case_runners.load")
+    _stub_canonical_runtime(monkeypatch, load)
+    instances = [{"instance_id": "facerec-gpu0", "lifecycle": "ONLINE"}]
+    capacity = iter(
+        (
+            [{"instance_id": "facerec-gpu0", "active_lease_count": 0}],
+            [{"instance_id": "facerec-gpu0", "active_lease_count": 1}],
+        )
+    )
+    monkeypatch.setattr(load, "_operator_instances", lambda: instances)
+    monkeypatch.setattr(load, "_require_online_ids", lambda expected_ids: instances)
+    monkeypatch.setattr(load, "_http_json", lambda url: next(capacity))
+    monkeypatch.setattr(load, "_write_lease_receipt", lambda scenario, lease: None)
+    monkeypatch.setattr(
+        load,
+        "_acquire_case_lease",
+        lambda case_id, scenario: {
+            "lease_id": "lease-1",
+            "instance_id": "facerec-gpu0",
+            "capability": "recognize",
+        },
+    )
+    monkeypatch.setattr(
+        load,
+        "_release_case_lease",
+        lambda lease_id: load.LeaseReleaseResult(
+            http_status=200,
+            status="RELEASED",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="incorrectly preserved"):
+        load._restart_and_recover("LOAD-015", _canonical_scenario(load, "LOAD-015"))
 
 
 def test_load_015_retries_capacity_503_before_receipt_and_redis_restart(
@@ -1433,7 +1480,7 @@ def test_load_015_retries_capacity_503_before_receipt_and_redis_restart(
     def post_status(url: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         if url.endswith("/release"):
             events.append("release")
-            return 404, {"detail": "expired"}
+            return 200, {"lease_id": "lease-1", "status": "ALREADY_RELEASED"}
         status = next(lease_attempts)
         events.append(f"lease:{status}")
         if status == 503:
@@ -1468,6 +1515,68 @@ def test_load_015_retries_capacity_503_before_receipt_and_redis_restart(
     load._restart_and_recover("LOAD-015", _canonical_scenario(load, "LOAD-015"))
 
     assert events[:4] == ["lease:503", "lease:200", "lease-receipt", "docker:restart"]
+
+
+@pytest.mark.parametrize(
+    ("status_code", "document", "expected_http_status", "expected_status"),
+    (
+        (
+            200,
+            {"lease_id": "lease-1", "status": "RELEASED"},
+            200,
+            "RELEASED",
+        ),
+        (
+            200,
+            {"lease_id": "lease-1", "status": "ALREADY_RELEASED"},
+            200,
+            "ALREADY_RELEASED",
+        ),
+        (404, {"detail": "legacy not found"}, 404, "ALREADY_RELEASED"),
+    ),
+)
+def test_load_015_release_uses_business_status_from_idempotent_api(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    document: dict[str, str],
+    expected_http_status: int,
+    expected_status: str,
+) -> None:
+    load = importlib.import_module("scripts.milestone_2b_case_runners.load")
+    monkeypatch.setattr(
+        load,
+        "_post_json_status",
+        lambda url, payload: (status_code, document),
+    )
+
+    observed = load._release_case_lease("lease-1")
+
+    assert observed.http_status == expected_http_status
+    assert observed.status == expected_status
+
+
+@pytest.mark.parametrize(
+    "document",
+    (
+        None,
+        {},
+        {"lease_id": "other-lease", "status": "ALREADY_RELEASED"},
+        {"lease_id": "lease-1", "status": "UNKNOWN"},
+    ),
+)
+def test_load_015_release_rejects_invalid_success_response(
+    monkeypatch: pytest.MonkeyPatch,
+    document: Any,
+) -> None:
+    load = importlib.import_module("scripts.milestone_2b_case_runners.load")
+    monkeypatch.setattr(
+        load,
+        "_post_json_status",
+        lambda url, payload: (200, document),
+    )
+
+    with pytest.raises(ValueError, match="release response"):
+        load._release_case_lease("lease-1")
 
 
 def test_load_015_persistent_capacity_503_fails_closed_with_sanitized_evidence(
