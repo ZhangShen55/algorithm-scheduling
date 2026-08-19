@@ -1290,6 +1290,7 @@ exit 0
         "verify-model-assets",
         "prepare-report-directory",
         "preflight",
+        "release-image-cleanup",
         "snapshot-existing-containers",
         "pause-existing-containers",
         "stage-model-assets",
@@ -1513,6 +1514,13 @@ if [[ -n "${FAKE_UNAUTHORIZED_OCCUPIED_ENDPOINT:-}" && \
   " ${AUTHORIZED_OCCUPIED_ENDPOINTS:-} " != *" $FAKE_UNAUTHORIZED_OCCUPIED_ENDPOINT "* ]]; then
   exit 75
 fi
+exit 0
+""",
+    )
+    _write_executable(
+        scripts / "release-image-cleanup",
+        """#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_DOCKER_STATE/image-cleanup.log"
 exit 0
 """,
     )

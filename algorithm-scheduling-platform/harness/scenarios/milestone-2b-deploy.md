@@ -305,6 +305,9 @@ AUTHORIZED_OCCUPIED_ENDPOINTS="$AUTHORIZED_OCCUPIED_ENDPOINTS" \
   EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" deploy/scripts/preflight host \
   >"$RELEASE_ROOT/preflight/preflight.log" 2>&1
 
+deploy/scripts/release-image-cleanup snapshot \
+  --release-root "$RELEASE_ROOT" --deploy-root "$PWD/deploy"
+
 if [[ "$MAINTENANCE_ACTION" == "inherit" ]]; then
   "$DEPLOY_PYTHON" deploy/scripts/operator_lifecycle.py publish-provenance \
     --report-root "$REPORT_ROOT" --release-tag "$RELEASE_TAG" \
@@ -338,6 +341,11 @@ predecessor marker 和 snapshot，只补做尚未完成的 pause，禁止再次�
 精确派生已占用的“监听地址+端口”端点。同端口的任何额外地址或地址族监听仍由
 preflight 逐条拒绝。预检失败时停止
 后续阶段，并将原因写入 `preflight` 报告，不得强行继续。
+
+镜像构建前快照从当前运行的四个平台容器取得平台镜像 ID，并从算子 Compose 取得 24 个
+算子槽位的旧镜像引用；因此不要求上一轮已经按合同清理的算子容器仍然存在。首次运行原子
+写入 `preflight/image-inventory-before.json`，同 SHA 续跑只校验既有文件覆盖 28 个唯一槽位，
+不得覆盖或重新归因旧镜像。
 
 ## 阶段 2：基础设施、模型资产和八镜像
 

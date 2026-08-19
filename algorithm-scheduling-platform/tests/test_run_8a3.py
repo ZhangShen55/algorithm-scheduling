@@ -52,3 +52,8 @@ def test_runtime_starts_case_batch_as_project_module() -> None:
         ".venv/bin/python scripts/run_milestone_2b_case_batch.py"
         not in captured["runtime"]
     )
+    image_snapshot = "deploy/scripts/release-image-cleanup snapshot"
+    assert image_snapshot in captured["runtime"]
+    assert captured["runtime"].index(image_snapshot) < captured["runtime"].index(
+        "deploy/scripts/build-images"
+    )

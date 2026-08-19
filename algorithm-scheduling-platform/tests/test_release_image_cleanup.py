@@ -49,6 +49,7 @@ def _release_root(tmp_path: Path) -> Path:
             ),
             encoding="utf-8",
         )
+    controlled_slots = [*cleanup.PLATFORM_SERVICES, *cleanup.OPERATOR_SERVICES]
     snapshot = {
         "evidence_type": "release_image_inventory_before",
         "status": "PASS",
@@ -60,7 +61,7 @@ def _release_root(tmp_path: Path) -> Path:
                 "revision": OLD_SHA,
                 "size_bytes": 100,
                 "repo_tags": ["algorithm-old:v1"],
-                "compose_slots": ["ocr-gpu0"],
+                "compose_slots": [controlled_slots[0]],
                 "container_references": [],
             },
             {
@@ -68,7 +69,7 @@ def _release_root(tmp_path: Path) -> Path:
                 "revision": SHA,
                 "size_bytes": 200,
                 "repo_tags": ["algorithm-current:v1"],
-                "compose_slots": ["ocr-gpu1"],
+                "compose_slots": controlled_slots[1:-2],
                 "container_references": [],
             },
             {
@@ -76,7 +77,7 @@ def _release_root(tmp_path: Path) -> Path:
                 "revision": OLD_SHA,
                 "size_bytes": 300,
                 "repo_tags": ["algorithm-referenced:v1"],
-                "compose_slots": ["ocr-gpu2"],
+                "compose_slots": [controlled_slots[-2]],
                 "container_references": [],
             },
             {
@@ -84,7 +85,7 @@ def _release_root(tmp_path: Path) -> Path:
                 "revision": None,
                 "size_bytes": 400,
                 "repo_tags": [],
-                "compose_slots": ["vbas-gpu0"],
+                "compose_slots": [controlled_slots[-1]],
                 "container_references": [],
             },
         ],
@@ -289,6 +290,55 @@ def test_controlled_image_slots_use_running_platform_and_compose_operators(
     assert result == platform | operators
     assert len(result) == len(cleanup.PLATFORM_SERVICES) + len(
         cleanup.OPERATOR_SERVICES
+    )
+
+
+def test_snapshot_mode_reuses_valid_existing_evidence_without_rewriting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _release_root(tmp_path)
+    path = root / "preflight/image-inventory-before.json"
+    original = path.read_bytes()
+    monkeypatch.setattr(
+        cleanup,
+        "_snapshot",
+        lambda *_args, **_kwargs: pytest.fail("已有快照不得重新采集或覆盖"),
+    )
+
+    result = cleanup.main(
+        [
+            "snapshot",
+            "--release-root",
+            str(root),
+            "--deploy-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert result == 0
+    assert path.read_bytes() == original
+
+
+def test_snapshot_validation_rejects_duplicate_compose_slot(tmp_path: Path) -> None:
+    root = _release_root(tmp_path)
+    path = root / "preflight/image-inventory-before.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["images"][1]["compose_slots"].append(
+        payload["images"][0]["compose_slots"][0]
+    )
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert (
+        cleanup.main(
+            [
+                "snapshot",
+                "--release-root",
+                str(root),
+                "--deploy-root",
+                str(tmp_path),
+            ]
+        )
+        == 2
     )
 
 

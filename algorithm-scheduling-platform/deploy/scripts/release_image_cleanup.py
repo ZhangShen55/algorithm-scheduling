@@ -380,6 +380,56 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _validate_snapshot(payload: dict[str, Any], tag: str, sha: str) -> None:
+    images = payload.get("images")
+    if (
+        payload.get("evidence_type") != "release_image_inventory_before"
+        or payload.get("status") != "PASS"
+        or payload.get("release_tag") != tag
+        or payload.get("git_sha") != sha
+        or not isinstance(images, list)
+    ):
+        raise ImageCleanupError("pre-build image snapshot does not match this release")
+    expected_slots = set(PLATFORM_SERVICES) | set(OPERATOR_SERVICES)
+    observed_slots: set[str] = set()
+    observed_ids: set[str] = set()
+    for raw in images:
+        if not isinstance(raw, dict):
+            raise ImageCleanupError("pre-build image snapshot contains an invalid row")
+        image_id = raw.get("image_id")
+        revision = raw.get("revision")
+        size = raw.get("size_bytes")
+        slots = raw.get("compose_slots")
+        references = raw.get("container_references")
+        tags = raw.get("repo_tags")
+        if (
+            IMAGE_ID_PATTERN.fullmatch(str(image_id)) is None
+            or image_id in observed_ids
+            or (revision is not None and SHA_PATTERN.fullmatch(str(revision)) is None)
+            or not isinstance(size, int)
+            or size < 0
+            or not isinstance(slots, list)
+            or not slots
+            or not all(isinstance(slot, str) for slot in slots)
+            or len(slots) != len(set(slots))
+            or not isinstance(references, list)
+            or not all(
+                isinstance(reference, str)
+                and CONTAINER_ID_PATTERN.fullmatch(reference) is not None
+                for reference in references
+            )
+            or not isinstance(tags, list)
+            or not all(isinstance(image_tag, str) for image_tag in tags)
+        ):
+            raise ImageCleanupError("pre-build image snapshot contains invalid metadata")
+        if observed_slots & set(slots):
+            raise ImageCleanupError("pre-build image snapshot repeats a Compose slot")
+        observed_ids.add(str(image_id))
+        observed_slots.update(slots)
+    if observed_slots != expected_slots:
+        raise ImageCleanupError("pre-build image snapshot does not cover 28 controlled slots")
+
+
 def _validate_release_gates(release_root: Path, tag: str, sha: str) -> None:
     registration = _read_json(
         release_root / "registration" / "operator-registration.json"
@@ -438,14 +488,7 @@ def _cleanup(
     execute: bool,
 ) -> dict[str, Any]:
     snapshot = _read_json(release_root / "preflight" / "image-inventory-before.json")
-    if (
-        snapshot.get("evidence_type") != "release_image_inventory_before"
-        or snapshot.get("status") != "PASS"
-        or snapshot.get("release_tag") != tag
-        or snapshot.get("git_sha") != sha
-        or not isinstance(snapshot.get("images"), list)
-    ):
-        raise ImageCleanupError("pre-build image snapshot does not match this release")
+    _validate_snapshot(snapshot, tag, sha)
     _validate_release_gates(release_root, tag, sha)
     current_containers = _controlled_containers(deploy_root, require_healthy=True)
     current_inventory = _inventory(current_containers, _all_container_references())
@@ -537,9 +580,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             if arguments.execute:
                 raise ImageCleanupError("snapshot mode does not accept --execute")
             output = arguments.release_root / "preflight" / "image-inventory-before.json"
-            payload = _snapshot(
-                arguments.release_root, arguments.deploy_root.absolute(), tag, sha
-            )
+            if output.exists() or output.is_symlink():
+                payload = _read_json(output)
+                _validate_snapshot(payload, tag, sha)
+                print(output)
+                return 0
+            payload = _snapshot(arguments.release_root, arguments.deploy_root.absolute(), tag, sha)
         else:
             output_name = (
                 "image-cleanup-result.json"
