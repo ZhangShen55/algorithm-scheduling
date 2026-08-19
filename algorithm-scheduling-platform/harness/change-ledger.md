@@ -1,5 +1,32 @@
 # Change Ledger
 
+## 2026-08-19 - 8A.3 `1aa5da67` 第三轮正式通过
+
+- 正式 release：Git SHA 为 `1aa5da672f75adfa7aea5f767bc91e9ac4889cce`，不可变证据目录为
+  `/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/reports/milestone-2b/releases/v1.0_260812/1aa5da672f75adfa7aea5f767bc91e9ac4889cce`。唯一入口
+  `python3 deploy/scripts/run_milestone_2b_8a3.py` 退出码为 0，并同时产生
+  `CODEX_STAGE45_COMPLETE failures=0` 与
+  `CODEX_8A3_TERMINAL stage45_failures=0 deployment_status=0`。
+- FaceRec 继续使用 x86 Docker 镜像和 NVIDIA Container Runtime，不依赖服务器 Conda。
+  `facerec-gpu0/1/2` 均完成真实人物创建、识别、`save_person_photo=false` 和人物清理；三份
+  GPU evidence 均为 `PASS`，停止后 CUDA PID 残留证据也均为 `PASS`。
+- 18/18 个 GPU 实例完成真实推理、精确容器/CUDA PID 归属、停止、PID 消失、重启和注册恢复；
+  18 份 running evidence 与 18 份 stopped evidence 全为 `PASS`。PPT Slice 与 Text Analysis
+  的 6/6 CPU 实例 Smoke 通过，ASR Offline/Online、OCR、VBas、FaceRec、ScreenDet、PPT Slice、
+  Text Analysis 的 8/8 full Smoke 全为真实 `PASS`。
+- catalog 中 `phase=deployment` 的 93 条用例全部生成结构化执行记录：93/93 状态为“通过”、
+  `mock=false`、Git SHA 一致。`INF-014` MongoDB 认证分类通过；`LOAD-014` Kafka 重连通过；
+  `LOAD-015` 证明 Redis 重启后旧世代租约 release 返回 404、24 个实例重新注册且 readiness
+  恢复；`LOAD-016` PostgreSQL 重启恢复通过。
+- 终态复核：24 个本轮算子容器全部停止，`nvidia-smi` 无计算进程；原 `ocr-v6-amd` 恢复为
+  snapshot 中的已停止状态；PostgreSQL、Redis、Kafka、MongoDB 与四个平台服务均健康；
+  无 runner/holder 进程且 release-tag 锁可由 `flock -n` 立即获取，终端记录
+  `restore: complete`。`/data/result` 未删除。
+- 报告边界：8A.3 只关闭 deployment 阶段，不生成覆盖全部 243 条的 `summary/report.json`。
+  93 条阶段执行记录和双终态是本阶段权威结果；完整 `overall_status=通过` 只在 `8A.7` 的
+  217 条反例与 26 条压力用例总验收后生成。因此本轮完成 OpenSpec `8A.3` 和 `DEC-022`，
+  `DEC-024`、PPT/ASR、视觉、在线业务泳道及 243 条最终验收继续保持未完成。
+
 ## 2026-08-19 - 8A.3 `4af04c69` 第二轮终态与 Redis 租约 epoch 修复
 
 - 第二轮 release：Git SHA 为 `4af04c69a50048ab8995a4fd436d54b88051bb05`，不可变目录为

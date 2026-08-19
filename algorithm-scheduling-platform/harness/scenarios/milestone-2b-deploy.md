@@ -3,23 +3,28 @@
 ## 目标与证据边界
 
 本场景是里程碑 2B 的部署验证入口，目标是验证 x86_64、三张 NVIDIA GPU
-服务器上的八类算子、24 个容器实例、四个平台服务和四类基础设施。执行顺序
-固定为：
+服务器上的八类算子、24 个容器实例、四个平台服务和四类基础设施。OpenSpec `8A.3`
+的 Canonical 执行顺序固定为：
 
 ```text
 report init + Harness .venv -> preflight -> snapshot/pause -> infrastructure -> model staging/verify
 -> build 8 images + platform images -> runtime attestation
 -> compose gpu0/gpu1/gpu2/cpu + profile attestation
 -> GPU UUID/PID/cgroup -> restart/ONLINE -> 24 instance registration
--> 8 operator smoke -> negative/load/recovery
--> stop only newly-added operators -> restore ocr-v6-amd -> render report
+-> 8 operator smoke -> 93 deployment negative/load/recovery
+-> stop only newly-added operators -> restore ocr-v6-amd -> 8A.3 双终态
 ```
 
-测试状态只能是 `通过`、`失败` 或 `未执行及原因`。Task 7B-9 的本地代码门禁和历史
-八镜像构建通过不表示真实部署通过：当前仍未取得最终 SHA 对应的平台/算子运行
-attestation、24 实例同时 ONLINE、18 个 GPU 实例活动、真实媒体全量推理或完整离线/
-在线泳道证据。ScreenDet 是在线网关调用的
-图像质量算子，不属于离线课程 DAG。
+本文件后部保留的 243 条聚合与 `summary/report.json` renderer 只属于 OpenSpec `8A.7`
+最终总验收，不是 `8A.3` runner 的步骤。`8A.3` 不得提前生成包含未执行业务泳道的最终报告，
+也不得用最终报告缺失否定已经完整执行的 93 条 deployment 阶段证据。
+
+测试状态只能是 `通过`、`失败` 或 `未执行及原因`。release
+`v1.0_260812/1aa5da672f75adfa7aea5f767bc91e9ac4889cce` 已取得 24 实例注册、18 个 GPU
+实例活动、8 类算子 Smoke、93/93 deployment 用例以及清理恢复证据，完成 OpenSpec `8A.3`。
+这些证据不等于真实 PPT/ASR、视觉、在线业务泳道或最终 243 条总验收完成；后续实现变更也
+必须使用新的 SHA/release 重新取证。ScreenDet 是在线网关调用的图像质量算子，不属于离线
+课程 DAG。
 
 ## 服务器前提和安全边界
 
@@ -49,8 +54,10 @@ attestation、24 实例同时 ONLINE、18 个 GPU 实例活动、真实媒体全
 以下命令在 `algorithm-scheduling-platform` 目录执行。`OPERATOR_REGISTRY_TOKEN`
 必须由调用环境显式传入，不使用 `.env` 或仓库内默认值。`EXPECTED_GIT_SHA` 必须是
 工作树当前 HEAD 的完整 40 位 SHA；模型源必须位于 Git 工作树外、目录权限 `0700`。
-从本节发布变量开始到阶段 6 结束，全部 Bash 代码块必须复制到同一 Bash 会话中按文档
-顺序连续执行，不得为每个阶段另开 shell；这样变量、trap、函数和 strict mode 才能持续生效。
+执行 `8A.3` 时，从本节发布变量开始到阶段 6 的“deployment 用例与恢复”结束，相关 Bash
+代码块必须在同一 Bash 会话中按文档顺序连续执行，不得为每个阶段另开 shell；这样变量、
+trap、函数和 strict mode 才能持续生效。后部 `8A.7` 聚合块不属于该会话，也不得由
+`run_milestone_2b_8a3.py` 执行。
 
 ```bash
 set -euo pipefail
@@ -1016,6 +1023,8 @@ WebSocket 会话粘性。该阶段仍是算子直接调用证据，不得通过 
 
 ## 阶段 6：反例、压力、恢复和报告渲染
 
+### 8A.3：deployment 用例与恢复
+
 至少执行以下类别，并将每条用例写入 `negative/`、`load/` 或 `recovery/`：缺失模型、
 manifest hash 漂移、错误 GPU 标签、双可见 GPU、重复 instance_id、注册未心跳、
 OFFLINE/DRAINING 路由、容量耗尽、HTTP 429/503、超时、错误输入、PPT 无终态、Kafka
@@ -1029,7 +1038,7 @@ OFFLINE/DRAINING 路由、容量耗尽、HTTP 429/503、超时、错误输入、
 不得继续生成汇总冒充已执行：
 
 ```bash
-.venv/bin/python scripts/run_milestone_2b_case_batch.py \
+.venv/bin/python -m scripts.run_milestone_2b_case_batch \
   --catalog deploy/milestone-2b-case-catalog.yaml \
   --release-root "$RELEASE_ROOT" \
   --phase deployment \
@@ -1081,7 +1090,15 @@ previous 续跑不得把 active paused ledger 复制成另一份可变账本。r
 不得删除卷、不得删除 `/data/result`。whole-stack `down` 只允许出现在与本服务器隔离的
 本地开发环境，不属于本场景。
 
-最后先聚合当前 release 的 canonical 输入，再渲染 JSON/Markdown 汇总。aggregator 校验
+`run_milestone_2b_8a3.py` 在 stage45 结束时先输出
+`CODEX_STAGE45_COMPLETE failures=0`；上述恢复完成后再输出
+`CODEX_8A3_TERMINAL stage45_failures=0 deployment_status=0`，并断言保存的 stage45 与
+deployment 状态均为 0，随后结束。以下聚合块不得在 8A.3 release 中执行。
+
+### 8A.7：243 条最终聚合与报告渲染
+
+仅在 PPT/ASR、视觉、在线业务泳道和各自分期用例完成后，先重新执行全部 217 条反例与
+26 条压力用例，再聚合当前 release 的 canonical 输入并渲染 JSON/Markdown 汇总。aggregator 校验
 完整注册、GPU、Smoke 和声明输入，展开 `negative/cases.json` 与 `load/cases.json` 中的
 243 条声明，并以 write-once 方式生成 `summary/cases.json`；renderer 要求通过用例有
 证据文件、未执行用例有中文原因、所有用例使用同一 release/SHA，并拒绝跨目录或包含
@@ -1136,7 +1153,7 @@ PY
 esac
 ```
 
-返回码 `0` 且 `overall_status` 为“通过”才表示验收通过；返回码 `3` 表示报告已生成但
+该块的返回码 `0` 且 `overall_status` 为“通过”才表示 8A.7 最终验收通过；返回码 `3` 表示报告已生成但
 验收未通过，其他返回码表示校验或发布错误。生成报告不等于验收通过。终端只输出
 `overall_status` 和返回码说明，不打印证据原文；证据摘要只保存在报告索引中。
 

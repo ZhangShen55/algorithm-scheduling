@@ -5,6 +5,43 @@ platform root, use the explicit workspace import path below; this prevents a
 bare top-level `tests` package from another checkout from shadowing the
 platform tests:
 
+## 2026-08-19 8A.3 第三轮远端正式验证
+
+正式服务器 `192.168.29.11` 使用 x86 Docker 镜像、NVIDIA Container Runtime 和 release
+`v1.0_260812/1aa5da672f75adfa7aea5f767bc91e9ac4889cce` 执行唯一 Canonical 入口。受限日志为
+`/root/workspace/.algorithm-scheduling-restricted-reports/8a3-1aa5da672f75adfa7aea5f767bc91e9ac4889cce.log`。
+
+权威终态：
+
+```text
+CODEX_STAGE45_COMPLETE failures=0
+restore: complete
+CODEX_8A3_TERMINAL stage45_failures=0 deployment_status=0
+```
+
+结构化证据复核：
+
+```text
+FaceRec gpu0/gpu1/gpu2: create=true, recognized=true,
+  photo_saved=false, cleanup=true, status=PASS, mock=false
+GPU running evidence: 18 PASS, release SHA mismatch=0
+GPU stopped evidence: 18 PASS, residual CUDA process=0
+Operator full Smoke: 8 PASS, mock=false
+Deployment catalog: 93 expected
+Deployment executions: 93 passed, mock=false, SHA mismatch=0
+LOAD-015: status=通过, before_active_lease_count=1,
+  lease_release_status=404, after_instance_count=24, control readiness=ready
+```
+
+终态现场复核：24 个 `algorithm-operators` 容器均为 Exited，`nvidia-smi` 无 compute app；
+原 `ocr-v6-amd` 与 snapshot 一致为 Exited；PostgreSQL、Redis、Kafka、MongoDB 和四个平台
+容器均为 healthy，control/orchestrator readiness 为 ready，vision/online health 为 ok；
+release-tag 维护锁已释放。
+
+8A.3 只选择 catalog 中 93 条 `phase=deployment` 用例。它不生成覆盖全部 243 条用例的
+`summary/report.json`；总报告及 `overall_status=通过` 是 `8A.7` 的完成门槛。此前本文件中
+将 summary 作为 8A.3 门槛的表述由本次分期口径取代，不改变 8A.7 的最终报告要求。
+
 ## 2026-08-19 8A.3 Redis 租约 epoch 修复与第三轮重跑门禁
 
 第二轮不可变 release `4af04c69a50048ab8995a4fd436d54b88051bb05` 已得到

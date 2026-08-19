@@ -204,6 +204,13 @@ harness/scenarios/*.md
 继续使用本 OpenSpec，不创建重复变更。阶段可以在无依赖时继续推进，但前序失败不得标记完成。
 历史 release 只读；修复后必须使用新的 Git SHA 和不可变报告目录。
 
+第 1 阶段只执行 catalog 中 `phase=deployment` 的 93 条用例，其完成证据是同一新 SHA/release 下
+FaceRec 三实例、18 个 GPU 实例、8 类算子 Smoke、93/93 结构化执行记录、清理恢复事实以及
+`CODEX_STAGE45_COMPLETE failures=0`、
+`CODEX_8A3_TERMINAL stage45_failures=0 deployment_status=0` 双终态。该阶段不生成或要求覆盖
+全部 243 条用例的 `summary/report.json`；完整聚合、renderer 的 `overall_status=通过` 和“不允许
+未执行及原因”只属于第 5 阶段（OpenSpec `8A.7`）。
+
 ### 13. 243 条用例是最终门槛，不是前置假设
 
 217 条反例和 26 条压力用例中包含依赖真实泳道的场景，因此不能在泳道实现前伪造执行。
