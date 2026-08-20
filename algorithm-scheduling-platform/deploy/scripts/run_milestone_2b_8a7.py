@@ -125,6 +125,15 @@ set +e
 stage45_status="$STAGE45_FAILURES"
 set -e
 test "$stage45_status" = 0
+if ! curl --fail --silent --show-error --max-time 10 \\
+  http://127.0.0.1:18101/ops/readiness >/dev/null
+then
+  printf 'Orchestrator 在部署用例前未就绪，执行精确服务重启后重新验收\n' >&2
+  docker compose -f deploy/docker-compose.platform.yml restart orchestrator-service
+  docker compose -f deploy/docker-compose.platform.yml up -d \\
+    --wait --wait-timeout 300 orchestrator-service
+fi
+deploy/scripts/preflight runtime --git-sha "$EXPECTED_GIT_SHA"
 {stage6[0]}
 """
     business = "\n\n".join(

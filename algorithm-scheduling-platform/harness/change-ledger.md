@@ -1,5 +1,31 @@
 # Change Ledger
 
+## 2026-08-20 - `ea39759` Canonical LOAD-011 平台运行时稳定门禁修正
+
+- 失败 release：Git SHA `ea39759ad8abb7d970bef386d1f1de0dd0391c71`，证据目录为
+  `/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/reports/milestone-2b/releases/v1.0_260812/ea39759ad8abb7d970bef386d1f1de0dd0391c71`。
+  clean-clone 六层门禁、16 进程配置权威、八类镜像/revision、PostgreSQL `0006`、
+  四个平台服务、24 实例注册、18/18 GPU 真实推理、3 个 PPT Slice 完整 P 视频切片、
+  3 个 Text Analysis 真实 Smoke 及全 24 实例综合 Smoke 均通过；阶段 4/5 明确终态为
+  `CODEX_STAGE45_COMPLETE failures=0`。
+- 217 条反例和 26 条压力用例均实际执行；唯一失败为 `LOAD-011 scoped task has no DAG`。
+  现场时间线显示 Orchestrator 自 `2026-08-20T08:15:02Z` 起持续
+  `/ops/readiness=503`。用例停止三个 ASR Offline 实例后提交的课程任务已经写入任务事实和
+  Outbox，但后台运行时未就绪，因而没有消费命令并初始化 DAG。该失败不是 ASR 容器未恢复，
+  而是 Stage45 与 deployment 用例之间缺少平台运行时重新稳定门禁。
+- Canonical 已按精确 24 项 new ledger 停止本轮算子并完成 `restore: complete`。原业务恢复事实
+  由唯一 `0400`、当前 UID、单硬链接 audit
+  `existing-containers.jsonl.paused.jsonl.audit.8e0f6170b42e4b75817da9b8a373b07d.jsonl`
+  固化；旧镜像未删除，offline/vision/online Campaign 和 B 级复核均未开始，因此本 release
+  不能完成 OpenSpec `12.9` 或 `14.1/14.3-14.7`。
+- 修正后 8A.7 在 Stage45 成功后、deployment 用例开始前检查 Orchestrator readiness；仅在
+  未就绪时精确重启 `orchestrator-service`，等待其健康，再执行绑定当前 SHA 的 runtime
+  preflight。Control、Vision、Online、PostgreSQL、Redis、Kafka、MongoDB 均不得随之重启；
+  readiness、精确重启、健康等待和 preflight 任一步失败都必须在用例前失败关闭。
+- 新 SHA 必须把本 release 作为立即前驱完整重跑 Canonical。只有 deployment、四类业务
+  Campaign、8 项 B 级复核、容量/恢复门禁、最终报告和精确旧镜像清理全部通过，才允许完成
+  剩余 OpenSpec 任务。
+
 ## 2026-08-20 - `7111d7d` Canonical LOAD-015 幂等释放契约漂移修正
 
 - 失败 release：Git SHA `7111d7dd2557222db111a9d6bb912cc9dae35947`，证据目录为

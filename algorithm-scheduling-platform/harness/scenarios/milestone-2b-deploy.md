@@ -1198,6 +1198,13 @@ PPT/关键词/ASR/视觉的 8 个 B 级质量项还必须通过
 `--manual-review-json` 引用当前 release 内的独立复核证据。缺少逐案记录、JUnit 有 skip、
 `overall_status` 不是“通过”或维护锁失效时，总控和镜像清理均失败关闭。
 
+Stage45 会执行大量实例停止、恢复、Smoke 与 GPU 生命周期检查。进入 deployment mutation 前，
+总控必须重新检查 Orchestrator 的 `/ops/readiness`。仅当它未就绪时，允许精确重启
+`orchestrator-service` 并等待其健康；之后无条件重新运行当前 SHA 的 runtime preflight，成功后
+才执行 deployment 用例。该步骤不得扩大为平台整体重启，也不得重启 PostgreSQL、Redis、Kafka
+或 MongoDB。此门禁来自 `ea39759ad8abb7d970bef386d1f1de0dd0391c71` 的真实 `LOAD-011`
+失败：任务事实和 Outbox 已创建，但 readiness 503 的 Orchestrator 没有生成 DAG。
+
 复核索引不能在真实任务完成前预制。offline Campaign 完成四条真实课程任务后发布
 `business/review-requests/offline.json`，有界等待 7 个离线质量项；vision Campaign 完成后发布
 `business/review-requests/vision.json`，再等待 `VIS-025`。复核发布入口为

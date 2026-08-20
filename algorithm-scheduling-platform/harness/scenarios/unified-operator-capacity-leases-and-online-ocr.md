@@ -5,13 +5,14 @@
 本场景对应 OpenSpec `unify-operator-capacity-leases-and-online-ocr`。2026-08-19 已进入 apply：
 公共租约模型、Redis 原子容量、Control API、普通/工作项/VBas/在线租约客户端、在线单图 OCR、
 八算子 TOML 配置和 Compose 静态合同已经实现。真实 Redis 下的跨服务容量、逐图 PPT、在线
-容量耗尽、心跳差异和三类调用客户端跨 TTL 已取得自动化证据。`7111d7d...`
-远端预验收已证明 24 实例注册、18/18 GPU 真实推理、6/6 CPU Smoke、8/8 算子
-full Smoke 和 PPT 三实例长视频切片通过；93 条 deployment 用例仅 `LOAD-015` 失败。
-该失败已定位为 checker 忽略幂等释放正文，把 HTTP `200 + ALREADY_RELEASED` 误判为旧租约
-仍存活；独立 Redis 前缀重启复现已证明生产 `run_id` 世代隔离正确。当前结论仍是“实现和
-已执行层级符合，新 SHA 的完整 Canonical、全部业务泳道与精确旧镜像清理待验证”，不得据此
-宣称整个变更完成。
+容量耗尽、心跳差异和三类调用客户端跨 TTL 已取得自动化证据。最新失败 release
+`ea39759ad8abb7d970bef386d1f1de0dd0391c71` 已通过 clean-clone 六层门禁、16 进程配置权威、
+24 实例注册、18/18 GPU 真实推理、6/6 CPU Smoke、8/8 算子 full Smoke 和 PPT 三实例长视频
+切片；217 条反例和 26 条压力用例也均实际执行，唯一失败为 `LOAD-011`。失败时任务事实和
+Outbox 已创建，但 Orchestrator 从 Stage45 后持续 readiness 503，未生成 DAG。该 release 已
+完成精确恢复且未清理旧镜像；新的 Stage45→deployment 稳定门禁仍须进入新 SHA 并完整重跑。
+当前结论仍是“实现和已执行层级部分符合，最终 Canonical、全部业务泳道、B 级复核与精确旧镜像
+清理待验证”，不得据此宣称整个变更完成。
 
 本记录使用用户修改后的 OpenSpec 作为权威来源，固定以下新增约束：
 
@@ -433,6 +434,28 @@ write-once 复核请求，并有界等待 Git 外受限索引。逐项证据必�
 `case_id/git_sha/task_id/status/reviewer/observed`，索引和证据必须为当前 UID、`0600`、单硬链接
 且祖先无符号链接；普通 release 不保存课程图片、联系表或识别全文。只有 8 项全部由当前 release
 独立产生后，243 项聚合才允许继续。
+
+## 2026-08-20 Stage45 到 deployment 的运行时稳定门禁
+
+`ea39759ad8abb7d970bef386d1f1de0dd0391c71` 在 Stage45 结束前已经完成四平台健康、24 实例
+注册与全实例 Smoke，并输出 `CODEX_STAGE45_COMPLETE failures=0`；但 deployment 用例开始时
+Orchestrator 已持续 `/ops/readiness=503`。`LOAD-011` 随后停止三个 ASR Offline 实例并提交
+课程任务，任务事实和 Outbox 成功落库，却因后台运行时未消费而没有 DAG。该链路证明
+“此前健康”不能替代 mutation 阶段之间的即时稳定门禁。
+
+8A.7 总控因此固定以下顺序：
+
+1. Stage45 必须以零失败结束。
+2. 查询 `http://127.0.0.1:18101/ops/readiness`。
+3. 仅当查询失败时精确执行 `restart orchestrator-service`，随后以 Compose `--wait` 等待该
+   服务健康；不得重启其他三个平台服务或四类基础设施。
+4. 无论是否发生重启，都重新执行绑定当前完整 Git SHA 的 `preflight runtime`。
+5. 以上全部成功后，才允许启动 deployment 用例。
+
+该门禁只恢复通用调度后台运行时，不把业务失败隐藏为重试。精确重启、健康等待或 runtime
+preflight 任一步失败时，Canonical 必须保留非零状态并走既有精确 new ledger 恢复。失败
+release 的唯一 `0400` restore audit 和未执行业务 Campaign 的事实保持不可变；新 SHA 的完整
+Canonical 通过前，OpenSpec `12.9`、`14.1`、`14.3-14.7` 继续为未完成。
 
 ## 实施后验证入口
 
