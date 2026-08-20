@@ -3253,6 +3253,45 @@ def test_new_sha_resolves_operator_ledgers_through_direct_predecessor_marker(
     ) == expected_new
 
 
+def test_operator_ledger_resolver_follows_completed_direct_predecessor_marker(
+    tmp_path: Path,
+) -> None:
+    _, _, environment, baseline_id, _ = _prepare_fake_lifecycle(tmp_path)
+    ledger_root = _release_root_for_sha(environment, "c" * 40)
+    _write_operator_ledgers(ledger_root, [baseline_id], [])
+    completed_root = _previous_release_root(environment)
+    _archive_completed_maintenance(completed_root)
+    _write_predecessor_marker(completed_root, ledger_root)
+    snapshot, _, _ = _maintenance_paths(completed_root)
+    marker = _predecessor_marker_path(completed_root)
+    snapshot_before = snapshot.read_bytes()
+    marker_before = marker.read_bytes()
+
+    completed = _run_operator_ledger_resolver(environment, completed_root)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.splitlines() == [
+        str(ledger_root),
+        str(ledger_root / "container-maintenance/baseline-operator-container-ids.txt"),
+        str(ledger_root / "container-maintenance/new-operator-container-ids.txt"),
+    ]
+    assert snapshot.read_bytes() == snapshot_before
+    assert marker.read_bytes() == marker_before
+
+
+def test_operator_ledger_resolver_rejects_completed_direct_without_marker(
+    tmp_path: Path,
+) -> None:
+    _, _, environment, _, _ = _prepare_fake_lifecycle(tmp_path)
+    completed_root = _previous_release_root(environment)
+    _archive_completed_maintenance(completed_root)
+
+    completed = _run_operator_ledger_resolver(environment, completed_root)
+
+    assert completed.returncode != 0
+    assert "direct maintenance state" in completed.stderr
+
+
 def test_operator_ledger_resolver_rejects_direct_state_without_predecessor_marker(
     tmp_path: Path,
 ) -> None:

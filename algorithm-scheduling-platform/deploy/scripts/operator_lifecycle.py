@@ -900,7 +900,7 @@ def resolve_operator_ledgers(args: argparse.Namespace) -> None:
             assert maintenance_state is not None
             release_root = Path(maintenance_state["source_release_root"])
             continue
-        if maintenance_kind == "direct":
+        if maintenance_kind in {"direct", "completed"}:
             predecessor_marker = (
                 layout.validate_maintenance_directory(release_root)
                 / PREDECESSOR_NAME

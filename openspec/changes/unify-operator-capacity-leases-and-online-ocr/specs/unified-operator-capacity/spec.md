@@ -117,6 +117,10 @@ ASR Online、ASR Offline、FaceRec、OCR、ScreenDet、PPT Slice、VBas 和 Text
 - **WHEN** 立即前驱没有完整 `baseline/new`，其 maintenance provenance 到达一个合法 direct maintenance release，且该 release 具有当前 UID 所有、单链接、`0400` 的同 tag predecessor marker
 - **THEN** 只读 resolver SHALL 可沿 marker 查找更早的完整算子账本，但 SHALL NOT 改写历史 marker/provenance，并 SHALL 仅在 `current - resolved baseline == resolved new` 精确成立后继承账本
 
+#### Scenario: 已恢复的 direct 前驱尚无算子账本
+- **WHEN** 候选 release 的 direct maintenance 已通过唯一 `0400` 终态 audit 完成 restore、没有完整 `baseline/new`，且具有合法的同 tag predecessor marker
+- **THEN** 只读 resolver SHALL 在重新校验 snapshot、终态 audit、当前恢复事实和 marker 后沿 marker 查找更早的完整算子账本，且 SHALL NOT 把 completed maintenance 本身当作算子账本
+
 #### Scenario: 新版本通过替换门禁
 - **WHEN** 新平台与算子镜像通过构建、revision、健康、注册和 Smoke，且旧镜像不再被任何运行中、暂停或停止容器引用
 - **THEN** 部署流程 SHALL 只对能够由本工作区 Compose 槽位和旧 release revision 共同证明身份的旧版本按精确镜像 ID 删除、记录删除对象和释放空间，且 SHALL NOT 删除基础设施/基础镜像、服务器原有业务镜像、模型资产、数据卷、课程结果或历史 Harness 证据

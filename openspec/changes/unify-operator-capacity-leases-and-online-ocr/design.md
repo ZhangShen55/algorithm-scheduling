@@ -234,6 +234,8 @@ max_decoded_bytes = 52428800
 
 维护事务和算子容器账本具有不同生命周期。若一个 release 已建立合法 direct maintenance，但在发布 `baseline/new` 前中断，后续 release 的只读账本 resolver 可在严格验证 maintenance 后，沿该 release 当前 UID 所有、单链接、`0400` 的 predecessor marker 查找同 tag 的更早完整账本对。该路径不得创建或改写历史 marker/provenance，也不得只凭 marker 继承；仍须验证账本排序、完整容器 ID、Docker/Compose 身份，并证明当前容器集合减去 resolved baseline 与 resolved new 字节级一致。direct 状态缺 marker、marker 非法、partial、环或容器集合不一致时必须失败关闭。
 
+这里的合法 direct maintenance 同时包括仍有活动 paused ledger 的状态，以及已经通过唯一 `0400` 终态 audit 完成 restore 的 completed direct 状态。后者仍必须重新校验 snapshot、终态 audit、当前容器恢复事实和 predecessor marker；completed 状态本身不能作为缺失算子账本的替代证据。
+
 新版本通过上述门禁后，允许删除已经不被任何容器引用、且能够由本次工作区 Compose 镜像槽位和旧 release revision 同时证明身份的旧平台/算子镜像。删除必须使用清单中的精确镜像引用或镜像 ID，禁止使用 `docker image rm -f`、未解析变量、宽泛名称匹配、`docker system prune` 或删除 Docker 数据目录。基础 CUDA/Python 镜像、PostgreSQL、Redis、Kafka、MongoDB 镜像、服务器原有业务镜像（包括原 `ocr-v6-amd`）、模型资产、数据卷、`/data/course`、`/data/result` 和历史 release/Harness 证据不属于清理范围。
 
 若新镜像构建、revision 校验、容器健康、注册或 Smoke 任一步失败，旧镜像不得删除。若旧镜像仍被运行中、暂停或停止容器引用，清理步骤必须报告并跳过，不能强制删除。清理后不再具备旧镜像的本机即时回滚能力；旧 Git SHA、配置和 Harness 证据继续保留，确需回滚时从旧 SHA 重新构建或从可信镜像源重新取得。

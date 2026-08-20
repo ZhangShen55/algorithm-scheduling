@@ -287,6 +287,19 @@ healthy。修复后的解析器必须支持根 `testsuite`、根带完整汇总�
 Mypy、compileall、OpenSpec strict 和 `git diff --check` 均通过。3 个 skip 的远端禁止复用边界
 保持不变。
 
+`7b7d135cc042b81da45000df4297d4f993723d54` 的最终 8A.7 已通过 clean-clone 与 16 进程配置
+权威门禁，并成功构建、检查当前 SHA 的八类算子镜像；随后在启动任何新算子容器前，
+`resolve-operator-ledgers` 报告 `no complete operator ledger ancestor`。现场只读审计证明合法链为
+`7df1c21 -> 448f6f3 -> b6706fc`，`b6706fc` 保存完整 baseline/new；前两个候选均为已经通过
+唯一 `0400` 终态 audit 的 completed direct maintenance，并具有合法 predecessor marker。
+resolver 只允许活动 `direct` 沿 marker，却没有处理同样经过严格验证的 `completed` direct，
+因此错误停止。修复必须允许两类合法 direct 状态沿 marker 只读回溯，同时继续拒绝缺 marker、
+partial、环和账本不一致。该轮没有替换任何平台/算子容器，没有清理旧镜像，退出时
+`restore: complete`、维护锁释放、原 `ocr-v6-amd` 保持 Exited，基础设施和四平台服务 healthy。
+修复后 resolver 聚焦测试 `10 passed`、完整阶段 3/task9 合同 `248 passed`、平台全量
+`2660 passed, 3 skipped`；Ruff、strict Mypy、compileall、OpenSpec strict 和
+`git diff --check` 均通过。3 个本机 skip 仍只因未提供 canonical FaceRec 注册令牌。
+
 ## 2026-08-20 远端预验收失败与修复
 
 `192.168.29.11` 曾以父提交

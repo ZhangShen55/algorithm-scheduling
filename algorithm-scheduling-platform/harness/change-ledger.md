@@ -1077,6 +1077,18 @@
 - 恢复复核：Canonical 输出 `restore: complete`；维护锁已释放，原 `ocr-v6-amd` 保持执行前的 Exited 状态，PostgreSQL、Redis、Kafka、MongoDB 和四个平台容器均为 healthy。
 - 结论：该 release 不得计入 OpenSpec 12.9/14.x；修复验证通过后必须以新 Git SHA、新不可变 release 重跑完整 8A.7。
 
+## 2026-08-20 8A.7 completed direct 算子账本回溯失败与修复
+
+- 失败 release：`7b7d135cc042b81da45000df4297d4f993723d54`。
+- 已通过门禁：clean-clone、真实 PostgreSQL/Redis/Kafka JUnit、16 进程配置权威、八类算子镜像构建与最终 SHA 检查。
+- 失败位置：启动任何新算子容器前解析 baseline/new 祖先，返回 `no complete operator ledger ancestor`；平台/算子容器未替换，旧镜像未清理。
+- 现场事实：前驱链 `7df1c21 -> 448f6f3 -> b6706fc` 的 marker 均为当前 UID、单链接、`0400`；前两个 release 是已通过唯一 `0400` 终态 audit 的 completed direct maintenance，`b6706fc` 具有完整空 baseline 和 24 项 new ledger。
+- 原因：resolver 只允许活动 `direct` 状态沿 predecessor marker，未允许已经通过同等严格终态验证的 `completed` direct 状态继续只读回溯。
+- 修复：合法的 `direct` 与 `completed` direct 都可在存在严格 marker 时继续回溯；completed 候选仍先校验 snapshot、终态 audit 与当前恢复事实，缺 marker、partial、环、无账本祖先和 `current - baseline != new` 继续失败关闭。新增 completed 成功链、历史文件不变与缺 marker 反例。
+- 验证：resolver 聚焦测试 `10 passed`；完整阶段 3/task9 合同 `248 passed`；平台全量 `2660 passed, 3 skipped`；Ruff、strict Mypy、compileall、OpenSpec strict 和 `git diff --check` 均通过。3 个本机 skip 仍只因未提供 canonical FaceRec 注册令牌，远端不得跳过。
+- 恢复复核：Canonical 输出 `restore: complete`；维护锁已释放，原 `ocr-v6-amd` 保持 Exited，PostgreSQL、Redis、Kafka、MongoDB 和四个平台容器均为 healthy。
+- 结论：该 release 不得计入 OpenSpec 14.x 完成；修复验证通过后必须以新 Git SHA、新不可变 release 重跑完整 8A.7。
+
 ## Record template
 
 - Date and scope:
