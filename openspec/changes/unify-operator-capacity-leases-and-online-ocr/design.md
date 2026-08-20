@@ -242,6 +242,8 @@ max_decoded_bytes = 52428800
 
 部署 runtime preflight 的 PostgreSQL 权威列集合必须与 Control Service readiness 使用的 `CONTROL_SCHEMA_COLUMNS` 保持完全一致，并由跨边界自动测试锁定；前向迁移增加必需列时，两处对账合同必须在同一提交中同步更新。
 
+Canonical 总控生成业务 Campaign 命令时必须逐项忠实传递既定选项和值，不得把格式字符、补丁标记或其他未声明 token 注入 argv。该合同必须由真实 shell 执行生成命令并捕获 argv 的自动测试覆盖，不能只检查命令字符串包含阶段名称。
+
 若新镜像构建、revision 校验、容器健康、注册或 Smoke 任一步失败，旧镜像不得删除。若旧镜像仍被运行中、暂停或停止容器引用，清理步骤必须报告并跳过，不能强制删除。清理后不再具备旧镜像的本机即时回滚能力；旧 Git SHA、配置和 Harness 证据继续保留，确需回滚时从旧 SHA 重新构建或从可信镜像源重新取得。
 
 若新镜像已构建或替换但后续门禁失败，Canonical 的 `EXIT` 恢复路径必须保留原退出码，先完整验证 baseline/new 账本和每个容器身份，再停止本轮精确 new ledger 并恢复已授权的原业务。账本或容器身份不可证明时必须失败关闭，不得执行宽泛停止或恢复。

@@ -44,7 +44,7 @@ def _campaign_command(args: argparse.Namespace, phase: str) -> str:
                 _quoted(args.slides_video_url),
             ]
         )
-    return " \\\n+  ".join(parts)
+    return " \\\n  ".join(parts)
 
 
 def _case_batch(phase: str) -> str:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -125,3 +127,46 @@ def test_8a7_campaign_requires_manual_review_evidence(tmp_path: Path) -> None:
 
     assert runtime.count("--manual-review-json") == 4
     assert str(arguments.manual_review_json) in runtime
+
+
+def test_8a7_campaign_command_passes_only_declared_arguments(tmp_path: Path) -> None:
+    arguments = _arguments(tmp_path)
+    executable = tmp_path / "deploy/scripts/run-milestone-2b-business-campaign"
+    executable.parent.mkdir(parents=True)
+    executable.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "import sys\n"
+        "print(json.dumps(sys.argv[1:]))\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o700)
+
+    completed = subprocess.run(
+        ["bash", "-c", runner._campaign_command(arguments, "offline")],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={**os.environ, "RELEASE_ROOT": "$RELEASE_ROOT"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == [
+        "--phase",
+        "offline",
+        "--release-root",
+        "$RELEASE_ROOT",
+        "--manual-review-json",
+        str(arguments.manual_review_json),
+        "--course-timeout-seconds",
+        "14400.0",
+        "--online-timeout-seconds",
+        "300.0",
+        "--teacher-video-url",
+        arguments.teacher_video_url,
+        "--student-video-url",
+        arguments.student_video_url,
+        "--slides-video-url",
+        arguments.slides_video_url,
+    ]

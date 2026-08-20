@@ -1112,6 +1112,17 @@
 - 修复：把 `submission_id` 纳入 runtime preflight 权威列目录和测试夹具；新增跨边界断言，要求部署 preflight 的列集合始终与 Control Service readiness 的 `CONTROL_SCHEMA_COLUMNS` 完全一致，避免后续迁移再次双写漂移。
 - 结论：该 release 不得计入 OpenSpec 12.9/14.x 完成证据；修复验证通过后必须以新 Git SHA 和本失败 release 作为立即前驱重跑完整 8A.7。
 
+## 2026-08-20 8A.7 业务 Campaign 参数拼接预检失败
+
+- 失败 release：`97b9b079325505d8858cfd8dc5649d0a2f2f342d`。
+- 已通过门禁：模型资产、不可变 release 目录、宿主机预检、现有容器快照和基础设施健康；clean-clone 全量测试正在运行时终止，未构建新镜像、替换平台/算子容器或进入业务 Campaign。
+- 发现位置：复核总控展开命令时，四个 `run-milestone-2b-business-campaign` 命令的每个参数前均存在字面量 `+`；本地最小复现确认该字符会成为非法命令行参数。
+- 原因：`_campaign_command` 的续行连接符误包含补丁标记字符，既有测试只检查阶段文本存在和顺序，没有真实执行生成命令并核对 argv。
+- 恢复：主动终止耗时但必然失败的运行；由于 SSH 中断早于外层 trap 归档，随后使用本 release 的精确 snapshot/paused ledger 执行 Canonical restore，输出 `restore: complete`，24 个算子和原 `ocr-v6-amd` 均保持 Exited。
+- 修复：删除续行中的字面量 `+`；新增 shell 真实执行回归，以捕获器核对离线 Campaign 收到的完整 argv，禁止任何未声明参数混入。
+- 验证：argv 聚焦回归 `5 passed`；8A.7 总控、部署脚本和 Task 9 完整回归 `558 passed`；Ruff、strict Mypy、OpenSpec strict 和 `git diff --check` 通过。
+- 结论：该 release 不得计入 OpenSpec 12.9/14.x；修复验证通过后必须以新 Git SHA 和本失败 release 作为立即前驱重跑完整 8A.7。
+
 ## Record template
 
 - Date and scope:

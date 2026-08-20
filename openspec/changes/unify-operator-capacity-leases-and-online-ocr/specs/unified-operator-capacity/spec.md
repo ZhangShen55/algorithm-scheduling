@@ -117,6 +117,10 @@ ASR Online、ASR Offline、FaceRec、OCR、ScreenDet、PPT Slice、VBas 和 Text
 - **WHEN** 最终发布准备替换四个平台容器
 - **THEN** Canonical SHALL 先幂等应用并核验当前 `0006` 前向迁移，且后续 runtime preflight 的 PostgreSQL 必需列集合 SHALL 与 Control Service readiness 的权威列集合完全一致
 
+#### Scenario: 业务 Campaign 参数由总控生成
+- **WHEN** Canonical 为离线、视觉、在线和最终阶段生成业务 Campaign 命令
+- **THEN** 生成命令 SHALL 只向 Campaign 传入已声明的选项和值，且 SHALL NOT 注入格式字符、补丁标记或其他额外 argv
+
 #### Scenario: 前驱在算子账本初始化前中断
 - **WHEN** 立即前驱没有完整 `baseline/new`，其 maintenance provenance 到达一个合法 direct maintenance release，且该 release 具有当前 UID 所有、单链接、`0400` 的同 tag predecessor marker
 - **THEN** 只读 resolver SHALL 可沿 marker 查找更早的完整算子账本，但 SHALL NOT 改写历史 marker/provenance，并 SHALL 仅在 `current - resolved baseline == resolved new` 精确成立后继承账本

@@ -347,6 +347,19 @@ revision、`0006` 幂等迁移和四平台健康门禁，但 runtime preflight �
 `CONTROL_SCHEMA_COLUMNS` 的集合一致性回归，防止后续前向迁移再次只更新服务健康检查而遗漏
 部署门禁。仍需用新 SHA、以本 release 为立即前驱重跑完整 8A.7。
 
+## 2026-08-20 最终门禁业务 Campaign 参数污染
+
+`97b9b079325505d8858cfd8dc5649d0a2f2f342d` 完成模型资产、不可变目录、宿主机预检、容器快照和
+基础设施健康后，在总控展开命令中发现四个业务 Campaign 的每个参数前存在字面量 `+`。最小
+执行复现证明这些字符会作为未声明 argv 传入，而不是无害的日志格式。为避免完成八镜像构建后
+才确定性失败，本轮在 clean-clone 测试期间终止；随后以精确 snapshot/paused ledger 执行
+Canonical restore 并输出 `restore: complete`，没有替换平台或算子容器。
+
+修复应删除连接符中的补丁标记字符，并通过真实 shell 执行生成的离线 Campaign 命令、捕获和
+逐项比较 argv。仅搜索阶段名称或执行 `bash -n` 不足以关闭该回归。仍需用新 SHA、以本失败
+release 为立即前驱重跑完整 8A.7。修复后的 argv 聚焦回归为 `5 passed`，8A.7 总控、部署脚本
+和 Task 9 完整回归为 `558 passed`；Ruff、strict Mypy、OpenSpec strict 与差异检查均通过。
+
 ## 实施后验证入口
 
 从工作区根目录执行 OpenSpec 门禁：
