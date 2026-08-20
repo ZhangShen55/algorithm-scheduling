@@ -106,7 +106,7 @@
 - [x] 12.6 在 `ppt_slice` 环境对 PPT Slice 执行 `compileall`、导入、项目测试、9001 启动/版本检查和文档化视频任务/终态回调，确认本地与注册容量都为 `10`、共享目录和原子 manifest 不变。
 - [x] 12.7 在 `jy-tias` 环境对 VBas 执行 `compileall`、导入、项目测试、8981 启动/健康检查，并直接调用学生和教师真实图片接口，确认共享注册 `128` 不破坏本地批次保护和可选头部姿态。
 - [x] 12.8 在 `ai_report` 环境对 Text Analysis 执行 `compileall`、导入、项目测试、8000 启动和完整路由基线对比，并分别真实调用 `/v1/extract_keywords` 与 `/v1/course_overviews`，确认共享注册 `256` 且内部 LLM 并发不派生租约。
-- [ ] 12.9 对八个项目分别以根配置或受版本控制的本地安全模板验证“不主动注册且不强制 GPU”，再以受控部署 TOML/契约环境验证注册开关、Control URL、心跳、容量和 GPU 要求生效；同时注入已删除的旧环境变量，确认其不能覆盖 TOML，并将最终 SHA 的 16 进程结果原子写入 release `preflight/operator-config-authority.json`，同 SHA 续跑只复用经严格校验的已有证据。
+- [x] 12.9 对八个项目分别以根配置或受版本控制的本地安全模板验证“不主动注册且不强制 GPU”，再以受控部署 TOML/契约环境验证注册开关、Control URL、心跳、容量和 GPU 要求生效；同时注入已删除的旧环境变量，确认其不能覆盖 TOML，并将最终 SHA 的 16 进程结果原子写入 release `preflight/operator-config-authority.json`，同 SHA 续跑只复用经严格校验的已有证据。
 
 ## 13. 跨服务容量与在线 OCR 验收
 
@@ -120,7 +120,7 @@
 
 ## 14. 里程碑 2B 部署门禁与交付
 
-- [ ] 14.1 在 clean clone 环境按 Harness 准备 `.venv` 和依赖，执行静态、单元、真实 Redis/PostgreSQL、服务运行、算子契约六层验证并原子记录 revision 与环境证据。
+- [x] 14.1 在 clean clone 环境按 Harness 准备 `.venv` 和依赖，执行静态、单元、真实 Redis/PostgreSQL、服务运行、算子契约六层验证并原子记录 revision 与环境证据。
 - [x] 14.2 对八种 profile 及全 24 实例执行镜像 preflight、启动、注册核验和 operator Smoke，确认每个实例从实际挂载 TOML 取得注册开关、Control URL、心跳、容量和 GPU 要求，Compose 展开后的实例身份、GPU 标签、单 worker、端口绑定和模型 revision 正确。
 - [ ] 14.3 运行里程碑 2B 的 PPT、ASR、教师/学生视觉及在线链路回归，确认新增 OCR 不破坏当前 `ppt-ocr-关键字` 泳道和既有 A 服务接口；真实长 ASR 推理即使短暂阻塞算子心跳也必须持续续租同一在途租约、心跳缺失期间不得接收新租约；教师/学生长视频粗扫还必须证明 ffmpeg/ffprobe 进程受 `media.max_concurrent_processes` 约束，Vision Orchestrator 的 `4G` cgroup 无 OOM 且 `/ready` 保持就绪；平台先于 VBas 启动时，已取得命令必须不提交 offset 地等待容量，VBas 实例本地 `429` 必须释放当前尝试租约、仅重试失败批次并保留成功批次，非容量致命错误必须取消和收割兄弟批次，关闭时立即打断等待，Consumer 和 `/ready` 不得因两类容量等待失败；Kafka 重启用例必须同时恢复 Orchestrator 和 Vision Orchestrator readiness，deployment 结束后还须通过只重启不健康离线服务的精确门禁；真实长课程产生 `31` 个候选窗口时必须全部进入加密检测，超过可配置上限时仍失败关闭；offline/vision 结果产生后还必须分别发布当前 SHA 与课程 `task_id` 的 B 级复核请求，8 项独立证据全部通过安全索引校验后才允许聚合。
 - [ ] 14.4 执行容量并发/释放稳定性观察，确认短 OCR/关键词租约可快速复用、跨 TTL 的同步 HTTP 与长 WebSocket/PPT 租约持续续期、无 Redis 孤立租约和无新增 PostgreSQL 写放大。
