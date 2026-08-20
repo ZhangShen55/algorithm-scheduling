@@ -137,3 +137,14 @@ Control Service SHALL 提供 `GET /ops/operator-instances/{instance_id}/active-l
 #### Scenario: 高频 OCR 和关键词请求
 - **WHEN** 多节课程产生大量短周期 OCR 与关键词租约
 - **THEN** 活跃详情 SHALL 可从 Redis 查询，PostgreSQL SHALL NOT 因每个租约生命周期产生对应高频记录
+
+### Requirement: 视觉抽帧进程并发必须有界
+Vision Orchestrator SHALL 使用一个服务进程级可配置正整数上限约束 ffmpeg/ffprobe 子进程并发；教师和学生任务 SHALL 共享该上限，且该本地资源保护 SHALL NOT 改变扫描时间点、VBas 批次租约或平台注册容量。
+
+#### Scenario: 长视频产生大量粗扫时间点
+- **WHEN** 一条 T 或 S 长视频一次生成的待抽帧时间点数量大于 `media.max_concurrent_processes`
+- **THEN** 同一 Vision Orchestrator 容器内同时运行的抽帧/探测进程 SHALL 不超过该配置，其余时间点 SHALL 等待本地槽位且 SHALL NOT 被丢弃
+
+#### Scenario: 教师与学生任务同时抽帧
+- **WHEN** 同一服务进程同时执行教师和学生视频抽帧
+- **THEN** 两类任务 SHALL 竞争同一个本地进程上限，且 SHALL NOT 各自获得一份独立上限

@@ -183,6 +183,7 @@ class VisionOrchestratorRuntime:
             ffmpeg_binary=settings.media.ffmpeg_binary,
             ffprobe_binary=settings.media.ffprobe_binary,
             command_timeout_seconds=settings.media.command_timeout_seconds,
+            max_concurrent_processes=settings.media.max_concurrent_processes,
         )
         evidence = VisionEvidencePublisher(
             result_root=settings.storage.result_root,

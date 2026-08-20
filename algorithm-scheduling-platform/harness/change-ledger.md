@@ -1123,6 +1123,17 @@
 - 验证：argv 聚焦回归 `5 passed`；8A.7 总控、部署脚本和 Task 9 完整回归 `558 passed`；Ruff、strict Mypy、OpenSpec strict 和 `git diff --check` 通过。
 - 结论：该 release 不得计入 OpenSpec 12.9/14.x；修复验证通过后必须以新 Git SHA 和本失败 release 作为立即前驱重跑完整 8A.7。
 
+## 2026-08-20 8A.7 视觉抽帧 cgroup OOM 与运行时就绪缺口
+
+- 失败 release：`ecadb0cb1e884f24c18aa77965d5695101931d2f`。
+- 已通过门禁：clean-clone 七组验证、最终 SHA 的 16 进程配置权威、八类镜像 revision、`0006` 幂等迁移、四平台健康、24 实例注册、18 个 GPU 实例真实推理与进程归属、6 个 CPU 实例 Smoke、8 类算子 full Smoke、deployment 反例和 26 条压力用例。
+- 失败位置：真实 full-course offline Campaign。ASR 转写与课程脑图已完成；PPT Slice 正在执行；教师/学生视觉节点开始粗粒度扫描后不再推进。
+- 根因证据：Vision Orchestrator `/ready` 返回 `visual_command_consumer` 已因 ffmpeg `SIGKILL` 退出；宿主机 dmesg 明确记录容器 cgroup OOM。`FFmpegFrameExtractor.extract()` 对全部粗扫时间点使用无界 `asyncio.gather(asyncio.to_thread(...))`，单条长视频同时创建大量 ffmpeg；宿主机尚有约 `92 GiB` available，但该容器 `HostConfig.Memory=4 GiB`，证明是容器内并发峰值而非宿主机容量不足。Compose 当时只探测 `/health`，后台循环退出后仍显示 healthy。
+- 恢复：确认 Campaign 不可能进入终态后终止运行。SSH 退出没有触发远端 `EXIT` trap，随后使用本 release 已发布的排序 baseline/new 账本、完整容器 ID、`algorithm-operators` project 和权威 24 项 service allowlist 逐项核验，精确停止 24 个 new ledger 容器，再调用既有 `restore-existing-containers`；终态输出 `restore: complete` 与 `MANUAL_CANONICAL_RECOVERY status=complete stopped=24`，`new_running=0`，原 `ocr-v6-amd` 按基线保持 Exited。
+- 修复边界：新增 `media.max_concurrent_processes=2`，时长探测及 T/S 抽帧共享同一信号量；不改变扫描点、VBas 批次或平台注册容量。Vision Compose 健康检查改用 `/ready`。新增跨 T/S 并发单元测试、非法配置测试和 Compose 就绪探针合同。
+- 本地验证：Vision Orchestrator 全项目 `23 passed`，平台 Compose 合同 `18 passed`，Harness 一致性 `5 passed`；Compose 展开、Ruff、strict Mypy、compileall、`app.main` 导入、OpenSpec strict 和 `git diff --check` 全部通过。本地结果只证明并发/配置/探针合同，不能替代下一 release 的真实长视频和 cgroup 证据。
+- 结论：该 release 可作为失败诊断证据，但不得计入 OpenSpec 14.3-14.7；修复验证通过后必须用新 SHA、以本 release 为立即前驱重跑完整 8A.7。
+
 ## Record template
 
 - Date and scope:

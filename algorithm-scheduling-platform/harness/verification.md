@@ -32,6 +32,21 @@ MYPYPATH=.. .venv/bin/mypy --strict --explicit-package-bases \
   scripts/milestone_2b_case_runners/load.py
 ```
 
+真实 full-course Campaign 暴露 Vision Orchestrator 无界 ffmpeg 抽帧并发会在 `4G` cgroup 内
+触发 OOM。修复后的本地门禁为：
+
+```bash
+(cd ../vision_orchestrator_service && \
+  ../algorithm-scheduling-platform/.venv/bin/python -m pytest -q \
+    tests/test_media.py tests/test_service_project.py tests/test_runtime.py)
+
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/test_platform_compose.py
+```
+
+该命令只证明配置、跨 T/S 共享并发上限和 Compose `/ready` 探针；最终仍需在远端 `4G`
+Vision 容器内重跑真实 T/S 长视频，并确认任务完成、`/ready` 持续成功且 dmesg 没有新 cgroup OOM。
+
 八算子本地安全/受控部署 TOML 的进程级权威对照使用独立探针。它为每个算子的两类配置分别启动
 一个子进程，在子进程中确认五个已迁移旧环境变量确实存在后，通过显式 `CONFIG_PATH` 调用对应
 算子的正式配置加载入口；不导入 `app.main`，因此不会启动模型、连接数据库或占用 GPU。FaceRec、

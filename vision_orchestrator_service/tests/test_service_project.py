@@ -6,7 +6,12 @@ import sys
 import tomllib
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
+
+
 def test_service_has_complete_fastapi_project_layout() -> None:
     for relative_path in (
         "app/__init__.py",
@@ -70,6 +75,7 @@ def test_config_has_only_the_required_top_level_sections() -> None:
     lowered = raw.lower()
     assert "redis" not in lowered
     assert "mysql" not in lowered
+    assert parsed["media"]["max_concurrent_processes"] == 2
 
 
 def test_service_code_does_not_depend_on_the_shared_registry_module() -> None:
@@ -127,3 +133,11 @@ def test_runtime_contract_defaults_match_platform_topics_and_control_port() -> N
     assert settings.kafka.poll_timeout_seconds > 0
     assert settings.control.base_url == "http://127.0.0.1:18100"
     assert settings.media.ffmpeg_binary == "ffmpeg"
+
+
+@pytest.mark.parametrize("value", (0, -1, True, 1.5, "2"))
+def test_media_process_limit_must_be_strictly_positive(value: object) -> None:
+    from app.core.config import VisionSettings
+
+    with pytest.raises(ValidationError, match="max_concurrent_processes"):
+        VisionSettings(media={"max_concurrent_processes": value})

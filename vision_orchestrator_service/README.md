@@ -26,7 +26,9 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8010 --workers 1
 `/data/course/{task_id}` 下的绝对本地视频路径和元数据，不携带媒体字节。服务使用
 `ffprobe` 读取时长、`ffmpeg` 抽取 JPEG 帧，再通过 Control Service 租约调用 VBas；
 不接入 RTSP，也不重新下载上游视频。抽帧缓存保留在课程临时目录，筛选出的少量证据图
-复制到 `/data/result/{task_id}/vision`。
+复制到 `/data/result/{task_id}/vision`。`media.max_concurrent_processes` 限制单个服务容器
+同时运行的 ffmpeg/ffprobe 进程数，默认 `2`；该字段只保护本地 CPU/内存，不改变扫描点、
+VBas 批次或平台注册容量。
 
 教师泳道先按可配置粗粒度扫描，命中板书或坐姿后按
 `scan.refinement_intervals_seconds` 逐级加密；教师行为区间和学生人数结果写入现有

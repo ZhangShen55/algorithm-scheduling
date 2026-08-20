@@ -30,17 +30,26 @@ class FFmpegFrameExtractor:
         ffmpeg_binary: str = "ffmpeg",
         ffprobe_binary: str = "ffprobe",
         command_timeout_seconds: float = 60.0,
+        max_concurrent_processes: int = 2,
     ) -> None:
         if command_timeout_seconds <= 0:
             raise ValueError("视频命令超时必须大于 0")
+        if (
+            isinstance(max_concurrent_processes, bool)
+            or not isinstance(max_concurrent_processes, int)
+            or max_concurrent_processes <= 0
+        ):
+            raise ValueError("视频命令最大并发数必须为正整数")
         self._course_root = course_root
         self._ffmpeg_binary = ffmpeg_binary
         self._ffprobe_binary = ffprobe_binary
         self._command_timeout_seconds = command_timeout_seconds
+        self._process_slots = asyncio.Semaphore(max_concurrent_processes)
 
     async def duration_seconds(self, video_path: Path) -> float:
         resolved = self._validated_video(video_path)
-        return await asyncio.to_thread(self._probe_duration, resolved)
+        async with self._process_slots:
+            return await asyncio.to_thread(self._probe_duration, resolved)
 
     async def extract(
         self,
@@ -60,8 +69,7 @@ class FFmpegFrameExtractor:
             raise ValueError("视觉抽帧时间点必须是非负有限值")
         return await asyncio.gather(
             *(
-                asyncio.to_thread(
-                    self._extract_one,
+                self._extract_one_limited(
                     resolved,
                     output_root,
                     point,
@@ -69,6 +77,20 @@ class FFmpegFrameExtractor:
                 for point in unique_points
             )
         )
+
+    async def _extract_one_limited(
+        self,
+        video_path: Path,
+        output_root: Path,
+        timestamp_seconds: float,
+    ) -> ExtractedFrame:
+        async with self._process_slots:
+            return await asyncio.to_thread(
+                self._extract_one,
+                video_path,
+                output_root,
+                timestamp_seconds,
+            )
 
     def _validated_video(self, video_path: Path) -> Path:
         if not video_path.is_absolute():

@@ -95,6 +95,8 @@ ffmpeg_binary = "ffmpeg"
 ffprobe_binary = "ffprobe"
 # 单条视频命令的硬超时秒数。
 command_timeout_seconds = 60.0
+# 单个服务容器内同时运行的 ffmpeg/ffprobe 进程上限，防止密集抽帧触发内存峰值。
+max_concurrent_processes = 2
 
 [vbas]
 # VBas 单次请求超时秒数。

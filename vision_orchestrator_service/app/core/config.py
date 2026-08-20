@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Annotated
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictInt
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -77,6 +78,7 @@ class MediaConfig(BaseModel):
     ffmpeg_binary: str = "ffmpeg"
     ffprobe_binary: str = "ffprobe"
     command_timeout_seconds: float = 60.0
+    max_concurrent_processes: Annotated[StrictInt, Field(gt=0)] = 2
 
 
 class VbasConfig(BaseModel):

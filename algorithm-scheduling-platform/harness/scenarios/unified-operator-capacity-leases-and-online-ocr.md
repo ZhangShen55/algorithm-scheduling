@@ -360,6 +360,19 @@ Canonical restore 并输出 `restore: complete`，没有替换平台或算子容
 release 为立即前驱重跑完整 8A.7。修复后的 argv 聚焦回归为 `5 passed`，8A.7 总控、部署脚本
 和 Task 9 完整回归为 `558 passed`；Ruff、strict Mypy、OpenSpec strict 与差异检查均通过。
 
+## 2026-08-20 视觉长视频抽帧资源门禁
+
+最终 SHA `ecadb0cb1e884f24c18aa77965d5695101931d2f` 已越过八算子 full Smoke、deployment 反例和
+26 条压力用例，并在真实 full-course offline Campaign 中完成 ASR 与课程脑图。教师/学生视觉
+粗扫随后触发 Vision Orchestrator 的 `4G` cgroup OOM：dmesg 记录多个 ffmpeg 被 SIGKILL，
+`/ready` 明确报告 consumer 后台循环退出，而旧 Compose `/health` 探针仍返回成功。
+
+修复必须同时满足：`media.max_concurrent_processes` 为正整数且默认 `2`；T/S 两类抽帧共享同一
+服务进程级信号量；全部时间点最终都被处理；Compose 使用 `/ready`。本地单元测试只证明并发
+上限和配置/探针合同，最终结论还必须由下一不可变 release 在相同 T/S 长视频、`4G` 内存限制下
+运行并核对 dmesg、任务终态和 `/ready`。失败 release 已按 baseline/new 和权威 Compose 身份
+精确停止 24 个新算子并输出 `restore: complete`；不得把该轮写成 14.3 完成。
+
 ## 实施后验证入口
 
 从工作区根目录执行 OpenSpec 门禁：

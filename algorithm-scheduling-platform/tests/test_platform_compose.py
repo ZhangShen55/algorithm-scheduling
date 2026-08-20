@@ -139,6 +139,16 @@ def test_orchestrator_healthcheck_uses_runtime_readiness() -> None:
     assert "http://127.0.0.1:18101/health" not in orchestrator
 
 
+def test_vision_orchestrator_healthcheck_uses_runtime_readiness() -> None:
+    compose = COMPOSE_PATH.read_text(encoding="utf-8")
+    vision = compose.split("  vision-orchestrator-service:", 1)[1].split(
+        "  online-gateway-service:", 1
+    )[0]
+
+    assert "http://127.0.0.1:8010/ready" in vision
+    assert "http://127.0.0.1:8010/health" not in vision
+
+
 def _dockerfile_instructions(dockerfile: str) -> list[str]:
     instructions: list[str] = []
     continuation: list[str] = []

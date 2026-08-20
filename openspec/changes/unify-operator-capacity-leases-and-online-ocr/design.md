@@ -250,6 +250,12 @@ Canonical 总控生成业务 Campaign 命令时必须逐项忠实传递既定选
 
 算子身份校验依赖从权威 Compose 生成的 24 项 service allowlist。该 allowlist 和其他验证临时文件必须保留到失败恢复完成；只能在精确 new ledger 核验、停止和原业务 restore 之后清理，不能在 `EXIT` trap 入口提前删除。
 
+### 10. Vision Orchestrator 对本地抽帧进程执行独立限流
+
+视觉粗粒度扫描可能一次生成数百个时间点。`FFmpegFrameExtractor` 不得把全部时间点无界提交给 `asyncio.to_thread`，否则单个课程就会同时启动大量 ffmpeg 进程，并在服务容器的内存 cgroup 内触发 OOM。根 `config.toml` 的 `[media]` 增加正整数 `max_concurrent_processes`，默认值为 `2`；同一个服务进程中的时长探测、教师抽帧和学生抽帧共享一个信号量。
+
+该配置只限制本地 ffmpeg/ffprobe 子进程数，不减少扫描时间点，不改变 `scan.batch_size`、`vbas.max_concurrency`、VBas 租约粒度或任何算子的 `declared_capacity`。里程碑 2B 的 Vision Orchestrator 容器继续使用 `4G` 默认内存限制，并必须在真实 T/S 长视频粗扫期间证明没有 cgroup OOM。Compose 健康检查使用 `/ready` 而不是仅表示进程存活的 `/health`，使 Kafka consumer 后台循环退出或依赖失效能够进入部署健康事实。
+
 ## 风险 / 取舍
 
 - **高默认容量会让 OCR、ASR Offline 等串行算子形成更长的实例内等待** → 默认值是用户确认的平台准入上限，不是并行推理承诺；保留本地锁并增加租约/心跳差异、延迟和错误观测，后续可通过各算子 TOML 调整声明容量。
@@ -263,6 +269,7 @@ Canonical 总控生成业务 Campaign 命令时必须逐项忠实传递既定选
 - **把类型级配置移入 TOML 后，根配置和部署配置可能漂移** → 对八组根/部署 TOML 建立字段完整性、严格类型和确认值对比测试；部署预检从实际挂载 TOML 读取注册与 GPU 要求，不再从已删除环境变量猜测。
 - **YAML anchors 可能让源文件易读但展开结果发生意外覆盖** → 所有部署合同和 Harness 同时校验源文件与 `docker compose config` 展开后的 24 实例，确认实例 ID、服务 URL、Token、端口和 GPU 绑定没有丢失。
 - **删除旧平台/算子镜像会失去本机即时回滚能力** → 只在新版本完成 revision、健康、注册和 Smoke 门禁后按精确 ID 删除，保留旧 Git SHA、配置和不可变 Harness 证据；失败时不执行清理。
+- **长视频粗扫的抽帧时间点可能形成进程峰值** → 所有 ffmpeg/ffprobe 调用共享 `media.max_concurrent_processes` 信号量；通过并发单元测试和 4 GiB 容器内真实 T/S 视频运行共同验证，禁止仅提高容器内存掩盖无界并发。
 
 ## 迁移计划
 
