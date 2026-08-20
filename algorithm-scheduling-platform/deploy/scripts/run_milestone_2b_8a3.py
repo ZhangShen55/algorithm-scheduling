@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import re
+import signal
 import subprocess
 from pathlib import Path
+from types import FrameType
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 SCENARIO = ROOT / "harness/scenarios/milestone-2b-deploy.md"
@@ -18,6 +22,63 @@ def section(document: str, heading: str, next_heading: str) -> str:
     return document.split(heading, 1)[1].split(next_heading, 1)[0]
 
 
+def _terminate_runtime_children(root_pid: int) -> None:
+    """Stop runtime work while preserving the release lock holder for EXIT cleanup."""
+    completed = subprocess.run(
+        ["ps", "-axo", "pid=,ppid=,command="],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return
+
+    children: dict[int, list[int]] = {}
+    commands: dict[int, str] = {}
+    for line in completed.stdout.splitlines():
+        fields = line.strip().split(None, 2)
+        if len(fields) < 2:
+            continue
+        try:
+            pid = int(fields[0])
+            parent_pid = int(fields[1])
+        except ValueError:
+            continue
+        children.setdefault(parent_pid, []).append(pid)
+        commands[pid] = fields[2] if len(fields) == 3 else ""
+
+    descendants: list[int] = []
+    pending = list(children.get(root_pid, ()))
+    while pending:
+        pid = pending.pop()
+        descendants.append(pid)
+        pending.extend(children.get(pid, ()))
+
+    protected = {
+        pid
+        for pid in descendants
+        if "operator_lifecycle.py" in commands.get(pid, "")
+        and "hold-lock" in commands.get(pid, "")
+    }
+    pending = list(protected)
+    while pending:
+        pid = pending.pop()
+        for child_pid in children.get(pid, ()):
+            if child_pid not in protected:
+                protected.add(child_pid)
+                pending.append(child_pid)
+
+    for pid in reversed(descendants):
+        if pid in protected:
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        except PermissionError:
+            continue
+
+
 def execute_runtime(
     runtime: str,
     *,
@@ -25,11 +86,48 @@ def execute_runtime(
     capture_output: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     # Keep the script out of stdin because deployment subprocesses may consume it.
-    return subprocess.run(
+    process = subprocess.Popen(
         ["bash", "-c", runtime],
         cwd=cwd,
         text=True,
-        capture_output=capture_output,
+        stdout=subprocess.PIPE if capture_output else None,
+        stderr=subprocess.PIPE if capture_output else None,
+        # Do not let a terminal signal kill the release lock holder before Bash can
+        # run its EXIT recovery trap. The controller translates HUP/INT/TERM to TERM
+        # for the outer Bash and waits for recovery to finish.
+        start_new_session=True,
+    )
+    forwarded_signal: int | None = None
+    previous_handlers: dict[signal.Signals, Any] = {}
+
+    def terminate_outer_shell(signum: int, _frame: FrameType | None) -> None:
+        nonlocal forwarded_signal
+        if forwarded_signal is not None:
+            return
+        forwarded_signal = signum
+        if process.poll() is None:
+            _terminate_runtime_children(process.pid)
+            process.terminate()
+
+    try:
+        for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+            previous_handlers[signum] = signal.getsignal(signum)
+            signal.signal(signum, terminate_outer_shell)
+        stdout, stderr = process.communicate()
+    except KeyboardInterrupt:
+        # Keep the same safe recovery behavior if signal delivery races with
+        # handler installation.
+        terminate_outer_shell(signal.SIGINT, None)
+        stdout, stderr = process.communicate()
+    finally:
+        for registered_signal, handler in previous_handlers.items():
+            signal.signal(registered_signal, handler)
+
+    return subprocess.CompletedProcess(
+        process.args,
+        process.returncode,
+        stdout,
+        stderr,
     )
 
 

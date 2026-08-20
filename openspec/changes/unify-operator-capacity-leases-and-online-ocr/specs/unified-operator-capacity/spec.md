@@ -141,6 +141,10 @@ ASR Online、ASR Offline、FaceRec、OCR、ScreenDet、PPT Slice、VBas 和 Text
 - **WHEN** 本轮算子容器已按 new ledger 创建，但业务、容量、报告或镜像清理前置门禁失败
 - **THEN** Canonical SHALL 保留原退出码，在完整验证 baseline/new 账本及全部容器身份后，只停止 new ledger 中的精确容器并恢复已授权的原业务；用于身份核验的权威 Compose allowlist SHALL 保留到恢复结束，身份不可证明时 SHALL 失败关闭且 SHALL NOT 执行宽泛停止
 
+#### Scenario: Canonical 在长子进程运行时被中断
+- **WHEN** Python 总控在外层 Bash 等待长时间子进程时收到 `SIGHUP`、`SIGINT` 或 `SIGTERM`
+- **THEN** 总控 SHALL 保留 release-tag 锁持有进程，终止其他运行工作进程和外层 Bash，并 SHALL 等待 `EXIT` trap 完成精确恢复后才返回非零结果
+
 #### Scenario: 旧镜像仍被容器引用
 - **WHEN** 候选旧镜像仍被运行中、暂停或停止容器引用
 - **THEN** 清理流程 SHALL 报告并跳过该镜像，且 SHALL NOT 使用强制删除、宽泛 prune 或删除 Docker 数据目录绕过引用保护

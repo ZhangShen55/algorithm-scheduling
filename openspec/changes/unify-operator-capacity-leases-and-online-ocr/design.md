@@ -250,6 +250,8 @@ Canonical 总控生成业务 Campaign 命令时必须逐项忠实传递既定选
 
 若新镜像已构建或替换但后续门禁失败，Canonical 的 `EXIT` 恢复路径必须保留原退出码，先完整验证 baseline/new 账本和每个容器身份，再停止本轮精确 new ledger 并恢复已授权的原业务。账本或容器身份不可证明时必须失败关闭，不得执行宽泛停止或恢复。
 
+Python 总控必须把外层 Bash 放入独立 session，并在收到 `SIGHUP/SIGINT/SIGTERM` 时先枚举其子进程树：`operator_lifecycle.py hold-lock` 及其后代必须保留，其他运行工作进程收到 `SIGTERM`，随后再终止外层 Bash 并等待 `EXIT` trap 完成。不得对整个进程组广播信号，否则会在恢复前释放 release-tag 锁；也不得在 Bash 仍等待长子进程时只发送信号后立即返回。
+
 算子身份校验依赖从权威 Compose 生成的 24 项 service allowlist。该 allowlist 和其他验证临时文件必须保留到失败恢复完成；只能在精确 new ledger 核验、停止和原业务 restore 之后清理，不能在 `EXIT` trap 入口提前删除。
 
 ### 10. Vision Orchestrator 对本地抽帧进程执行独立限流
@@ -257,6 +259,8 @@ Canonical 总控生成业务 Campaign 命令时必须逐项忠实传递既定选
 视觉粗粒度扫描可能一次生成数百个时间点。`FFmpegFrameExtractor` 不得把全部时间点无界提交给 `asyncio.to_thread`，否则单个课程就会同时启动大量 ffmpeg 进程，并在服务容器的内存 cgroup 内触发 OOM。根 `config.toml` 的 `[media]` 增加正整数 `max_concurrent_processes`，默认值为 `2`；同一个服务进程中的时长探测、教师抽帧和学生抽帧共享一个信号量。
 
 该配置只限制本地 ffmpeg/ffprobe 子进程数，不减少扫描时间点，不改变 `scan.batch_size`、`vbas.max_concurrency`、VBas 租约粒度或任何算子的 `declared_capacity`。里程碑 2B 的 Vision Orchestrator 容器继续使用 `4G` 默认内存限制，并必须在真实 T/S 长视频粗扫期间证明没有 cgroup OOM。Compose 健康检查使用 `/ready` 而不是仅表示进程存活的 `/health`，使 Kafka consumer 后台循环退出或依赖失效能够进入部署健康事实。
+
+候选窗口数与抽帧子进程并发是两个独立的保护维度。真实长课程可以合理产生超过 `20` 个不连续行为候选窗口；这不等于无界执行。`scan.max_candidate_windows` 因此保留为正整数上限，默认调整为 `128`，并继续与 `scan.max_detection_points=10000` 共同失败关闭。验收必须覆盖 `31` 个窗口正常进入加密检测，以及第 `129` 个窗口被确定拒绝。
 
 ## 风险 / 取舍
 
@@ -272,6 +276,7 @@ Canonical 总控生成业务 Campaign 命令时必须逐项忠实传递既定选
 - **YAML anchors 可能让源文件易读但展开结果发生意外覆盖** → 所有部署合同和 Harness 同时校验源文件与 `docker compose config` 展开后的 24 实例，确认实例 ID、服务 URL、Token、端口和 GPU 绑定没有丢失。
 - **删除旧平台/算子镜像会失去本机即时回滚能力** → 只在新版本完成 revision、健康、注册和 Smoke 门禁后按精确 ID 删除，保留旧 Git SHA、配置和不可变 Harness 证据；失败时不执行清理。
 - **长视频粗扫的抽帧时间点可能形成进程峰值** → 所有 ffmpeg/ffprobe 调用共享 `media.max_concurrent_processes` 信号量；通过并发单元测试和 4 GiB 容器内真实 T/S 视频运行共同验证，禁止仅提高容器内存掩盖无界并发。
+- **长课程可以产生超过旧默认值 `20` 的合理候选窗口** → 不删除上限，而是将可配置默认值收敛为 `128`，并保留 `max_detection_points` 第二道保护；真实长课程和 31/129 窗口边界测试共同验证。
 
 ## 迁移计划
 
@@ -283,6 +288,7 @@ Canonical 总控生成业务 Campaign 命令时必须逐项忠实传递既定选
 6. 更新八份部署 TOML 和算子 Compose，删除已迁移的平台/GPU环境变量、增加 YAML anchors，并从实际挂载 TOML 与展开后的 Compose 双向预检注册值、实例身份和 GPU 标签。
 7. 执行分层验证和 24 实例 Harness 场景，确认在线/离线 OCR 同池竞争、容量释放及时、活跃任务可查询、既有路由和真实推理不回归。
 8. 在 `192.168.29.11` 记录新旧镜像清单；新镜像完成构建、revision、容器替换、健康、注册和 Smoke 后，按精确 ID 删除不再被引用的旧平台/算子镜像并记录释放空间。
+9. 以真实长课程复核候选窗口上限；允许已观测的 `31` 个窗口进入加密检测，超过配置的窗口仍失败关闭。
 
 Redis 租约都是有 TTL 的临时状态，不需要数据迁移。删除旧镜像前的回滚演练应先停止新分发并等待或释放新格式租约，再回滚编排和算子；旧版 Control Service 不应在仍有新格式长租约时直接接管。配置回滚需要恢复与旧二进制匹配的 Compose 环境变量和 PPT 旧字段，不能只回滚单个文件。旧镜像清理完成后，回滚还需要从旧 Git SHA 重新构建或从可信镜像源重新取得对应镜像。
 

@@ -3,7 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 from deploy.scripts import run_milestone_2b_8a7 as runner
@@ -170,3 +173,48 @@ def test_8a7_campaign_command_passes_only_declared_arguments(tmp_path: Path) -> 
         "--slides-video-url",
         arguments.slides_video_url,
     ]
+
+
+def test_execute_runtime_waits_for_exit_recovery_after_sigint(tmp_path: Path) -> None:
+    ready = tmp_path / "ready"
+    recovered = tmp_path / "recovered"
+    lock_held_during_recovery = tmp_path / "lock-held-during-recovery"
+    runtime = (
+        "set -euo pipefail\n"
+        "python -c 'import time; time.sleep(60)' "
+        "operator_lifecycle.py hold-lock &\n"
+        "holder=$!\n"
+        "trap 'kill -0 \"$holder\" && "
+        f"printf held >{runner._quoted(lock_held_during_recovery)}; "
+        "kill \"$holder\"; wait \"$holder\" 2>/dev/null || true; "
+        f"printf recovered >{runner._quoted(recovered)}' EXIT\n"
+        f"printf ready >{runner._quoted(ready)}\n"
+        "sleep 60\n"
+    )
+    child_code = (
+        "from pathlib import Path\n"
+        "from deploy.scripts.run_milestone_2b_8a3 import execute_runtime\n"
+        f"result = execute_runtime({runtime!r}, cwd=Path({str(runner.ROOT)!r}))\n"
+        "raise SystemExit(result.returncode)\n"
+    )
+    worker = subprocess.Popen(
+        [sys.executable, "-c", child_code],
+        cwd=runner.ROOT,
+        env={**os.environ, "PYTHONPATH": f"{runner.ROOT}:{runner.ROOT.parent}"},
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready.exists()
+
+        worker.send_signal(signal.SIGINT)
+        returncode = worker.wait(timeout=10)
+    finally:
+        if worker.poll() is None:
+            worker.terminate()
+            worker.wait(timeout=10)
+
+    assert returncode != 0
+    assert lock_held_during_recovery.read_text(encoding="utf-8") == "held"
+    assert recovered.read_text(encoding="utf-8") == "recovered"

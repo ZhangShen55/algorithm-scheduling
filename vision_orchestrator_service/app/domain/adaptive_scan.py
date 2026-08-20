@@ -20,7 +20,7 @@ class AdaptiveScanLimitError(AdaptiveScanError):
 class AdaptiveScanConfig:
     coarse_interval_seconds: float = 30
     refinement_intervals_seconds: tuple[float, ...] = (10, 5, 2, 1)
-    max_candidate_windows: int = 20
+    max_candidate_windows: int = 128
     max_detection_points: int = 10_000
 
     def __post_init__(self) -> None:

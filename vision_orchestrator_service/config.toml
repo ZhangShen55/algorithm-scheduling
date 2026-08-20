@@ -83,8 +83,8 @@ refinement_intervals_seconds = [5.0, 2.0]
 min_interval_seconds = 2.0
 # 自适应扫描最大间隔秒数。
 max_interval_seconds = 60.0
-# 单次教师分析允许的候选窗口上限。
-max_candidate_windows = 20
+# 单次教师分析允许的候选窗口上限，超限时失败关闭以防止无界加密检测。
+max_candidate_windows = 128
 # 单次教师分析允许的检测点总上限。
 max_detection_points = 10000
 

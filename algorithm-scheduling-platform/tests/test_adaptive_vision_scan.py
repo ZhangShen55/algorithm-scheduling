@@ -3,6 +3,7 @@ from collections.abc import Iterable
 import pytest
 from vision_orchestrator_service.app.domain.adaptive_scan import (
     AdaptiveScanConfig,
+    AdaptiveScanLimitError,
     AdaptiveScanPlanner,
     BehaviorInterval,
 )
@@ -98,3 +99,41 @@ async def test_async_adaptive_scan_preserves_sync_planning_semantics() -> None:
     assert result.stages == ("coarse_10s", "topology_5s", "topology_2s")
     assert result.candidate_windows == ((0, 20),)
     assert result.intervals == (BehaviorInterval(10, 18),)
+
+
+def test_default_candidate_limit_accepts_real_course_with_31_windows() -> None:
+    planner = AdaptiveScanPlanner(
+        AdaptiveScanConfig(
+            coarse_interval_seconds=10,
+            refinement_intervals_seconds=(5,),
+            max_detection_points=1_000,
+        )
+    )
+
+    result = planner.scan(
+        duration_seconds=620,
+        detector=lambda points: {
+            point: int(point / 10) % 2 == 1 for point in points
+        },
+    )
+
+    assert AdaptiveScanConfig().max_candidate_windows == 128
+    assert len(result.candidate_windows) == 31
+
+
+def test_candidate_limit_remains_bounded_above_128_windows() -> None:
+    planner = AdaptiveScanPlanner(
+        AdaptiveScanConfig(
+            coarse_interval_seconds=10,
+            refinement_intervals_seconds=(5,),
+            max_detection_points=1_000,
+        )
+    )
+
+    with pytest.raises(AdaptiveScanLimitError, match="视觉候选窗口超过上限: 129"):
+        planner.scan(
+            duration_seconds=2_580,
+            detector=lambda points: {
+                point: int(point / 10) % 2 == 1 for point in points
+            },
+        )

@@ -156,3 +156,14 @@ Vision Orchestrator SHALL 使用一个服务进程级可配置正整数上限约
 #### Scenario: 教师与学生任务同时抽帧
 - **WHEN** 同一服务进程同时执行教师和学生视频抽帧
 - **THEN** 两类任务 SHALL 竞争同一个本地进程上限，且 SHALL NOT 各自获得一份独立上限
+
+### Requirement: 视觉候选窗口保护必须有界且覆盖真实长课程
+Vision Orchestrator SHALL 使用 `scan.max_candidate_windows` 限制单课程候选窗口数，默认值 SHALL 为 `128`；该上限 SHALL 与 `scan.max_detection_points` 同时生效，且 SHALL NOT 改变粗扫或加密间隔。
+
+#### Scenario: 真实长课程产生 31 个候选窗口
+- **WHEN** 粗扫结果产生 `31` 个独立候选窗口且检测点总数未超限
+- **THEN** Vision Orchestrator SHALL 继续对全部窗口执行加密检测，且 SHALL NOT 因旧默认值 `20` 终止 Consumer
+
+#### Scenario: 候选窗口超过配置上限
+- **WHEN** 候选窗口数大于 `scan.max_candidate_windows`
+- **THEN** Vision Orchestrator SHALL 在派生新的加密检测工作前失败关闭，且 SHALL NOT 将上限解释为无限

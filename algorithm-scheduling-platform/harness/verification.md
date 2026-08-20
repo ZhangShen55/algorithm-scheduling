@@ -61,6 +61,19 @@ Vision 容器内重跑真实 T/S 长视频，并确认任务完成、`/ready` �
 以及关闭信号终止等待且不提交消息。最终 SHA 的远端 8A.7 还必须验证：先启动四个平台服务、
 后启动 VBas 的固定顺序不会让 Vision 变为 unhealthy，且保留命令在 VBas 注册后继续处理。
 
+`bec262b46bd7f570e43dc1a74b5f7e336f935084` 的真实课程粗扫生成 31 个候选窗口，
+超过旧默认 `20`，因此该 release 不得计入 14.3。候选窗口与中断恢复本地门禁为：
+
+```bash
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/test_adaptive_vision_scan.py \
+  tests/test_run_8a7.py
+```
+
+测试必须证明默认 `128` 可处理 31 个候选窗口、第 129 个仍失败关闭；并向总控发送
+`SIGINT`，确认长子进程已终止、锁持有进程在外层 Bash `EXIT` trap 开始时仍存活，且 Python 等待 trap 完成后才返回。最终远端结论仍必须来自
+新 SHA 的完整 8A.7，旧 release 仅是诊断与精确恢复证据。
+
 八算子本地安全/受控部署 TOML 的进程级权威对照使用独立探针。它为每个算子的两类配置分别启动
 一个子进程，在子进程中确认五个已迁移旧环境变量确实存在后，通过显式 `CONFIG_PATH` 调用对应
 算子的正式配置加载入口；不导入 `app.main`，因此不会启动模型、连接数据库或占用 GPU。FaceRec、

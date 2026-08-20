@@ -386,6 +386,34 @@ Vision Consumer 申请租约得到 HTTP `503`。旧实现让后台循环退出�
 `restore: complete`，24 个新算子容器均未运行，非阻塞 `flock` 确认维护锁已释放；仍需在新 SHA
 的完整 8A.7 中重新取得运行证据。
 
+## 2026-08-20 视觉候选窗口与 Canonical 中断恢复门禁
+
+`bec262b46bd7f570e43dc1a74b5f7e336f935084` 已完成 clean-clone、16 进程配置权威、
+八类算子/四平台镜像、24 实例注册、18 个 GPU 实例逐一真实推理、6 个 CPU
+Smoke、八算子综合 Smoke，以及 PPT/ASR 两条真实泳道。视觉泳道粗扫产生
+`31` 个候选窗口，超过旧默认值 `20`，Consumer 因此退出。该 release 不得计入
+OpenSpec 14.3 完成。
+
+默认 `scan.max_candidate_windows` 调整为 `128`，但不删除上限；
+`scan.max_detection_points=10000` 继续独立失败关闭。本地至少要求：
+
+```bash
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/test_adaptive_vision_scan.py \
+  tests/test_run_8a7.py
+```
+
+候选窗口回归必须证明 31 个窗口可完整进入加密扫描、129 个窗口仍被有界保护拒绝。
+Canonical 中断回归必须向 Python 总控发送 `SIGINT`，并证明 release-tag 锁持有进程
+在外层 Bash `EXIT` trap 开始时仍存活、其他长子进程已终止，且 trap 在总控退出前完成；
+不得仅检查字符串中存在 trap。
+
+现场已按 `bec262b...` 的精确 `baseline=0/new=24` 账本、Docker 完整 ID、
+`algorithm-operators` project 和权威 24 项 service allowlist 停止本轮容器，并以唯一
+`0400` audit 完成 restore。终态为 24 算子均未运行、原 `ocr-v6-amd` 保持
+`Exited(143)`、维护锁释放；未清理镜像。修复后必须用新 SHA，并将该失败
+release 作为 `PREVIOUS_RELEASE_ROOT` 完整重跑 8A.7。
+
 ## 实施后验证入口
 
 从工作区根目录执行 OpenSpec 门禁：

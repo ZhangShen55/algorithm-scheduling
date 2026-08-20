@@ -13,6 +13,7 @@
 - 扩展租约记录，保存 `work_context`、`acquired_at` 和 `expires_at`，支持在先取租约后领取节点的流程中补绑上下文，并可按实例查询当前活跃租约及对应任务、节点、工作项和追踪标识。
 - 编排端改为一个真实工作单元占用一个租约：单次离线 ASR、单个 PPT Slice 后台任务、单次课程脑图请求、每张图片的 OCR、每张图片的关键词提取，以及每次 VBas 推理调用分别申请、续期和释放租约；Text Analysis 内部对大模型的多路请求不额外计租约。HTTP 请求使用有限硬超时，租约 TTL 与请求超时相互独立，所有可能超过单次 TTL 的同步 HTTP 调用均周期续租。
 - Vision Orchestrator 使用可配置的本地进程上限约束 ffmpeg/ffprobe 抽帧并发，避免一条长视频的全部粗扫时间点同时创建进程；该本地资源保护不改变扫描点、VBas 批次或平台注册容量。
+- Vision Orchestrator 将单课程候选窗口上限保留为可配置有界保护，默认由 `20` 调整为 `128`，以覆盖真实长课程的 `31` 个候选窗口；同时保留检测点总上限，不改变扫描粒度或 VBas 调用契约。
 - Vision Orchestrator 将 VBas 尚未注册或暂无容量视为离线等待：保持 Consumer 存活、不提交当前 Kafka offset，并按可配置调度间隔重试，因此平台服务可以先于 VBas 实例启动。
 - Online Gateway 新增单图 OCR 同步接口，请求中的 `enable_formula` 可省略且默认 `false`；在线与离线 OCR 请求平等竞争同一实例池，不设置固定实例偏好，也不进入 Kafka 或离线任务队列。
 - Online Gateway 在申请算子租约前执行统一图片入口限制：`body.max_bytes=75497472`（72 MiB），`base64.max_decoded_bytes=52428800`（50 MiB）；OCR 算子及受控部署配置同步使用 `ocr.image_max_bytes=52428800`（50 MiB）。

@@ -1145,6 +1145,17 @@
 - 本地验证：Vision Orchestrator 完整套件 `32 passed`，Ruff 和 strict Mypy 通过；最终数量以本修复提交前重跑记录为准。
 - 结论：该 release 只能作为启动顺序缺口证据，不得计入 OpenSpec 12.9/14.x；必须用包含修复的新 SHA、以本 release 为立即前驱重跑完整 8A.7。
 
+## 2026-08-20 8A.7 真实课程候选窗口上限与中断恢复缺口
+
+- 失败 release：`bec262b46bd7f570e43dc1a74b5f7e336f935084`；立即前驱为 `c07df67910558716985941bb2feff73b637bd844`。
+- 已通过门禁：clean-clone、最终 SHA 的 16 进程配置权威、四平台/八类算子镜像 revision、PostgreSQL `0006`、24 实例注册与首心跳、18 个 GPU 实例逐实例真实推理、6 个 CPU 实例 Smoke、八算子综合 Smoke，以及 PPT→OCR→关键词和 ASR→课程脑图真实泳道。
+- 失败位置：Kafka 中的教师视觉命令粗扫产生 `31` 个候选窗口，超过 `scan.max_candidate_windows=20`；`/ready` 明确返回 `视觉候选窗口超过上限: 31`。该故障不是 VBas 容量、GPU OOM、FaceRec 或 Kafka 连通性问题。
+- 设计修复：保留可配置有界保护，将默认候选窗口上限调整为 `128`，并继续使用 `max_detection_points=10000` 作为第二道保护；增加 31 个窗口通过和 129 个窗口失败关闭回归。
+- 中断缺口：主动终止 Canonical 后，Python 总控没有等待远端 Bash `EXIT` trap 完成，24 个本轮算子容器仍在运行。修复后总控将 Bash 放入独立 session；收到 `SIGHUP/SIGINT/SIGTERM` 时保留 `operator_lifecycle.py hold-lock` 及其后代，只终止其他运行子进程和外层 Bash，并持续等待 trap 恢复结束。
+- 现场恢复：在同 release-tag 非阻塞维护锁下，验证 `baseline=0`、`new=24`、账本按字节序唯一、全部 ID 为 64 位且 Docker inspect/`algorithm-operators`/24 项 service allowlist 一致后，只停止该 24 个容器并执行权威 restore。终态为 `operator_running=0`、原 `ocr-v6-amd=Exited(143)`、四平台与四基础设施继续运行、维护锁已释放；生成唯一 `0400` 恢复 audit，未执行 prune 或镜像删除。
+- 本地验证：候选窗口/中断恢复定向 `12 passed`，Vision Orchestrator 全套 `32 passed`，平台全量 `2667 passed, 3 skipped`；3 个 skip 仅为需要远端 canonical FaceRec 注册 Token/容器的本机条件，远端不得跳过。Vision 严格 Mypy、Ruff、OpenSpec strict 和 `git diff --check` 均通过。
+- 结论：该 release 的已通过证据可作为故障诊断，但不得计入 OpenSpec 12.9/14.1/14.3-14.7 的最终 SHA 证据；必须以本 release 为立即前驱重跑完整 8A.7。
+
 ## Record template
 
 - Date and scope:

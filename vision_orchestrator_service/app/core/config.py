@@ -70,7 +70,7 @@ class ScanConfig(BaseModel):
     refinement_intervals_seconds: tuple[float, ...] = (5.0, 2.0)
     min_interval_seconds: float = 2.0
     max_interval_seconds: float = 60.0
-    max_candidate_windows: int = 20
+    max_candidate_windows: int = 128
     max_detection_points: int = 10_000
 
 
