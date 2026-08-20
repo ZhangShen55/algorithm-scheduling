@@ -198,6 +198,38 @@ def test_expired_heartbeat_excludes_instance_from_routing() -> None:
         _cleanup_redis_client(client, key_prefix)
 
 
+def test_existing_lease_can_renew_during_transient_heartbeat_expiry() -> None:
+    client = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
+    key_prefix = _unique_key_prefix()
+    try:
+        client.ping()
+    except Exception as exc:
+        client.close()
+        pytest.skip(f"Redis 集成测试环境不可用: {exc}")
+    try:
+        registry = RedisOperatorRegistry(
+            client,
+            heartbeat_ttl_seconds=1,
+            key_prefix=key_prefix,
+        )
+        _register_ready(registry, vbas_instance(capacity=1))
+        lease = registry.lease("teacher_behavior", 3)
+
+        time.sleep(1.1)
+
+        renewed = registry.renew(lease.lease_id, 3)
+        assert renewed.lease_id == lease.lease_id
+        assert registry.list_instances()[0].lifecycle is OperatorLifecycle.OFFLINE
+        with pytest.raises(CapacityUnavailableError):
+            registry.lease("teacher_behavior", 30)
+
+        registry.heartbeat("vbas-gpu0", inflight=1, model_ready=True)
+        with pytest.raises(CapacityUnavailableError):
+            registry.lease("teacher_behavior", 30)
+    finally:
+        _cleanup_redis_client(client, key_prefix)
+
+
 def test_draining_instance_keeps_visibility_but_rejects_new_leases(
     redis_registry: RedisOperatorRegistry,
 ) -> None:

@@ -1203,6 +1203,17 @@
 - 本地验证：Vision Orchestrator `33 passed`；VBas/运行时/部署定向 `135 passed`；平台全量 `2681 passed, 3 skipped`，3 个 skip 仅因本机缺 canonical FaceRec Token/容器，远端不得跳过。Ruff、Mypy 139 个源码文件、OpenSpec strict、Bash 语法和 `git diff --check` 通过。
 - 验证边界：修复需提交新 SHA，然后以 `580263d8...` 为立即前驱重跑远端完整 Canonical；旧 release 不得补写通过。
 
+## 2026-08-20 - 8A.7 长 ASR 推理心跳间隙导致在途租约误失效
+
+- 失败 release：`702dba67613e3b7c0f14fb5f67c7d24ce1b4c2da`；立即前驱为 `580263d8e516675fa931151138ac6e3bb1483396`。
+- 已通过门禁：clean-clone 七组/六层验证、最终 SHA 的 16 进程配置权威、四平台与八类算子镜像、PostgreSQL `0006`、24 实例注册/首心跳、18 个 GPU 逐实例真实推理、6 个 CPU Smoke、八算子综合 Smoke、deployment 用例与事后 runtime preflight。
+- 失败位置：真实 full-course offline Campaign。教师和学生视觉任务已完成，PPT Slice 正常执行；ASR 在长音频推理期间失败为“算子容量租约续租失败”。
+- 根因证据：`asr-offline-gpu0` 从 `13:48:14.505Z` 到 `13:48:46.653Z` 出现约 32 秒心跳间隙，但推理继续并于 `13:48:46.115Z` 产出 1293 段；Orchestrator 在 `13:48:43.084Z` 按时续租得到 HTTP 404。Redis 续租 Lua 将短暂缺失的 heartbeat key 当成租约终止条件，误删了仍在执行且未过期的租约。
+- 修复边界：新租约申请仍要求有效心跳、`ONLINE` 和模型就绪；既有未过期租约续期不再仅因 heartbeat key 短暂缺失而失败。心跳缺失期间实例仍拒绝新租约，旧租约继续占用容量；实例注销、同 ID 重注册、显式 `OFFLINE`、Redis 运行标识变化和租约自身到期仍保持失败关闭。
+- 本地验证：真实 Redis 注册表 `23 passed`，Control/租约跨服务定向 `59 passed`。新增用例明确覆盖“心跳过期后旧租约可续期、新租约被拒绝、心跳恢复后旧租约仍占满容量”。
+- 失败现场恢复：向 Canonical Controller 发送 `SIGINT`，保留 release-tag 锁直到精确停止本轮 24 个算子容器完成。原 `ocr-v6-amd` 基线状态为 `exited + unless-stopped`，恢复后身份和状态一致；空暂停账本已归档为唯一 `0400` 终态审计 `existing-containers.jsonl.paused.jsonl.audit.4e076eac00d844b0818b80e4fba3ecc2.jsonl`，release-tag 锁可非阻塞重新获取；未执行 prune、`down -v`、卷/数据/证据删除。
+- 验证边界：本地测试不能替代真实长 ASR；当前失败 release 不得计入 OpenSpec 14.3-14.7，必须用包含修复的新 SHA 重跑完整 Canonical。
+
 ## Record template
 
 - Date and scope:

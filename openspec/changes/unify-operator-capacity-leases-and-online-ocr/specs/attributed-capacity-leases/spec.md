@@ -93,6 +93,10 @@ Control Service SHALL 提供 `GET /ops/operator-instances/{instance_id}/active-l
 - **WHEN** 离线 ASR、FaceRec、ScreenDet、OCR、Text Analysis 或 VBas 的同步 HTTP 调用仍未完成且租约接近过期
 - **THEN** 对应调用方 SHALL 在保持有限 HTTP 硬超时的同时续租同一个租约，且 SHALL NOT 申请第二个租约替代
 
+#### Scenario: 模型推理期间算子心跳短暂过期
+- **WHEN** 一个尚未过期的在途 HTTP 租约由调用方按时续期，但算子单 Worker 推理暂时阻塞心跳并使心跳 TTL 过期
+- **THEN** Control Service SHALL 允许该既有租约续期并继续计入活跃容量，同时 SHALL 因心跳无效拒绝向该实例发放任何新租约
+
 #### Scenario: HTTP 调用正常或异常结束
 - **WHEN** 算子返回结果、返回错误、请求超时或调用被取消
 - **THEN** 调用方 SHALL 停止续租并立即释放租约，释放操作 SHALL 允许幂等重试

@@ -200,11 +200,9 @@ local now_ms = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2
 local leases_key = ARGV[2] .. instance_id
 local current_expiry = redis.call('ZSCORE', leases_key, ARGV[3])
 local instance_key = ARGV[4] .. instance_id
-local heartbeat_key = ARGV[5] .. instance_id
 if not current_expiry
     or tonumber(current_expiry) <= now_ms
     or redis.call('EXISTS', instance_key) == 0
-    or redis.call('EXISTS', heartbeat_key) == 0
     or redis.call('HGET', instance_key, 'lifecycle') == 'OFFLINE' then
     redis.call('ZREM', leases_key, ARGV[3])
     redis.call('DEL', KEYS[1])
@@ -620,7 +618,6 @@ class RedisOperatorRegistry:
                 f"{self._prefix}leases:",
                 lease_id,
                 f"{self._prefix}instance:",
-                f"{self._prefix}heartbeat:",
             ),
         )
         if not result:
