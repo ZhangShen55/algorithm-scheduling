@@ -537,6 +537,7 @@ Harness 报告。当前明文模式不要求 runtime secret。未来启用加密
 EXPECTED_GIT_SHA="$(git -C .. rev-parse HEAD)"
 RELEASE_TAG=v1.0_260812
 REPORT_ROOT="$PWD/deploy/reports"
+deploy/scripts/apply-course-task-submission-migration
 EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" \
   docker compose -f deploy/docker-compose.platform.yml up -d --build --wait --wait-timeout "${PLATFORM_WAIT_TIMEOUT_SECONDS:-180}"
 deploy/scripts/preflight runtime --git-sha "$EXPECTED_GIT_SHA"

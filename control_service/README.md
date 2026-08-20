@@ -51,6 +51,12 @@ Control Service 是算子实例注册和平台容量租约的唯一权威。平�
 `algorithm-scheduling-platform/scripts/check_migrations.py` 只校验迁移文件的编号和命名，
 不会连接数据库或自动执行迁移。`control-service` 启动时也不会自动迁移 schema。
 
+里程碑 2B 的 Canonical 部署会在替换平台容器前执行
+`algorithm-scheduling-platform/deploy/scripts/apply-course-task-submission-migration`。
+该脚本仅负责当前待发布的 `0006`：字段缺失时在 PostgreSQL 事务中应用迁移，已正确应用时
+幂等返回；表不存在或字段类型、非空约束、中文说明不一致时失败关闭。`0001-0005` 仍必须
+先按顺序完成，脚本不会猜测或修复未知的历史 schema。
+
 ## 健康检查
 
 - `GET /health` 仅表示进程存活。即使 PostgreSQL 或 Redis 暂时不可用，该接口仍返回成功。

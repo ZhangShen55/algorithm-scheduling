@@ -322,6 +322,20 @@ ASR Online 打包合同：15 tests OK
 远端必须改用包含此修复的后续完整 Git SHA 重新执行 Canonical 门禁；父提交的失败 release
 只作为诊断证据保留，不得覆盖或伪装为成功报告。
 
+## 2026-08-20 最终门禁平台迁移与恢复缺陷
+
+`76aa93a37a5e801aadcdd46a47e6e1bb76bf8f8c` 已通过 clean-clone、真实依赖 JUnit、16 进程配置
+权威和八类算子镜像 revision 门禁，但平台替换时 Control readiness 报告缺少
+`course_task_types.submission_id`。Canonical 未在平台启动前应用 `0006` 是第一原因；随后
+异常恢复又因 `EXIT` trap 过早删除 Compose service allowlist，无法验证 new ledger 身份，
+暴露第二个失败恢复缺陷。本轮没有启动 24 个新算子或进入业务 Campaign，旧镜像未清理。
+
+现场先按完整 ID、Compose project/service、权威 24 项清单和 Exited 状态核验 new ledger，
+再使用 canonical restore 完成唯一只读 audit；终态为 `restore: complete`，维护锁释放，原
+`ocr-v6-amd` 仍为 Exited。修复后平台启动前必须幂等执行并严格核验 `0006`；临时 allowlist
+必须保留到精确停止和 restore 完成后才能清理。聚焦回归为 `5 passed` 且迁移脚本 Bash 语法
+检查通过；仍需用新 SHA、以本 release 为立即前驱重跑完整 8A.7。
+
 ## 实施后验证入口
 
 从工作区根目录执行 OpenSpec 门禁：

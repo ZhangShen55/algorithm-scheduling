@@ -528,7 +528,6 @@ cleanup_operator_ledger_temps() {
 cleanup_operator_lifecycle() {
   local original_status=$? recovery_status=0 container_id
   trap - EXIT
-  cleanup_operator_ledger_temps || true
   if ((original_status != 0)) && \
     [[ -n "${BASELINE_OPERATOR_IDS:-}" && -n "${NEW_OPERATOR_IDS:-}" ]] && \
     [[ -f "$BASELINE_OPERATOR_IDS" && ! -L "$BASELINE_OPERATOR_IDS" ]] && \
@@ -558,6 +557,8 @@ cleanup_operator_lifecycle() {
   elif ((original_status != 0)); then
     restore_existing_business_after_failure || recovery_status=$?
   fi
+  # 身份核验依赖临时 allowlist；只能在精确停止和原业务恢复之后清理。
+  cleanup_operator_ledger_temps || true
   release_operator_lifecycle_lock || true
   if ((original_status != 0)); then
     return "$original_status"
@@ -846,6 +847,7 @@ else
   mv -f -- "$NEW_TMP" "$NEW_OPERATOR_IDS"
 fi
 
+deploy/scripts/apply-course-task-submission-migration
 EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" \
   docker compose -f deploy/docker-compose.platform.yml up -d --build --wait --wait-timeout "${PLATFORM_WAIT_TIMEOUT_SECONDS:-180}"
 docker compose -f deploy/docker-compose.platform.yml ps

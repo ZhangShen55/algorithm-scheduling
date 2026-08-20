@@ -25,6 +25,7 @@ the repository must not yet be treated as an end-to-end production runtime.
 
 ```bash
 docker compose -f deploy/docker-compose.platform.yml config --quiet
+deploy/scripts/apply-course-task-submission-migration
 docker compose -f deploy/docker-compose.platform.yml up -d --build --wait --wait-timeout "${PLATFORM_WAIT_TIMEOUT_SECONDS:-180}"
 ```
 

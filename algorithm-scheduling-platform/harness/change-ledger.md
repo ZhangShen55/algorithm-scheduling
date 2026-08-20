@@ -1089,6 +1089,18 @@
 - 恢复复核：Canonical 输出 `restore: complete`；维护锁已释放，原 `ocr-v6-amd` 保持 Exited，PostgreSQL、Redis、Kafka、MongoDB 和四个平台容器均为 healthy。
 - 结论：该 release 不得计入 OpenSpec 14.x 完成；修复验证通过后必须以新 Git SHA、新不可变 release 重跑完整 8A.7。
 
+## 2026-08-20 8A.7 平台迁移遗漏与失败恢复临时文件缺陷
+
+- 失败 release：`76aa93a37a5e801aadcdd46a47e6e1bb76bf8f8c`。
+- 已通过门禁：clean-clone 7 组命令、真实 PostgreSQL/Redis/Kafka JUnit、最终 SHA 的 16 进程配置权威证据，以及八类算子镜像构建/revision 校验。
+- 失败位置：四个平台镜像完成构建后，`control-service` readiness 持续返回 HTTP 503，Compose 健康等待失败，尚未启动 24 个新算子实例或进入业务 Campaign。
+- 原因 1：持久 PostgreSQL 已执行到 `0005`，但 Canonical 在替换平台容器前没有应用当前 `0006_course_task_type_submission.sql`；readiness 明确报告缺少 `course_task_types.submission_id`。
+- 原因 2：异常退出时 `cleanup_operator_lifecycle` 在验证 new ledger 容器身份之前先删除了临时 Compose service allowlist，导致精确恢复核验报“无法读取权威算子 service allowlist”，未自动输出 `restore: complete`。
+- 现场恢复：先核验 new ledger 精确包含 24 个 `algorithm-operators` Compose 容器、service 均属于权威 24 项清单且状态均为 Exited，再调用 canonical `restore-existing-containers`；终态输出 `restore: complete`，生成唯一只读 audit，维护锁释放，原 `ocr-v6-amd` 保持 Exited。
+- 修复：新增幂等 `apply-course-task-submission-migration`，在平台替换前应用/核验 `0006`，未知前置 schema 失败关闭；把临时 allowlist 清理移动到 new ledger 核验、精确停止和原业务恢复之后。同步部署文档、OpenSpec 设计与回归用例。
+- 聚焦验证：迁移首次执行/重复执行/异常 schema、平台启动顺序、partial-up 精确停止与完整 cleanup 共 `5 passed`，脚本 `bash -n` 通过。
+- 结论：该 release 仍不得计入 OpenSpec 12.9/14.x 完成证据；修复必须以新 Git SHA 和本失败 release 作为立即前驱重跑完整 8A.7。
+
 ## Record template
 
 - Date and scope:

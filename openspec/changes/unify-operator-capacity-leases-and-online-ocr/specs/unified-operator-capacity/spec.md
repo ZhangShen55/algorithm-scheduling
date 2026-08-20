@@ -131,7 +131,7 @@ ASR Online、ASR Offline、FaceRec、OCR、ScreenDet、PPT Slice、VBas 和 Text
 
 #### Scenario: 替换后的后续门禁失败
 - **WHEN** 本轮算子容器已按 new ledger 创建，但业务、容量、报告或镜像清理前置门禁失败
-- **THEN** Canonical SHALL 保留原退出码，在完整验证 baseline/new 账本及全部容器身份后，只停止 new ledger 中的精确容器并恢复已授权的原业务；身份不可证明时 SHALL 失败关闭且 SHALL NOT 执行宽泛停止
+- **THEN** Canonical SHALL 保留原退出码，在完整验证 baseline/new 账本及全部容器身份后，只停止 new ledger 中的精确容器并恢复已授权的原业务；用于身份核验的权威 Compose allowlist SHALL 保留到恢复结束，身份不可证明时 SHALL 失败关闭且 SHALL NOT 执行宽泛停止
 
 #### Scenario: 旧镜像仍被容器引用
 - **WHEN** 候选旧镜像仍被运行中、暂停或停止容器引用

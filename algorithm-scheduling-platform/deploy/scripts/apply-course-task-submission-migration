@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+platform_root="$(cd "$script_directory/../.." && pwd)"
+compose_file="$platform_root/deploy/docker-compose.infrastructure.yml"
+migration_file="$platform_root/migrations/0006_course_task_type_submission.sql"
+
+read_schema_state() {
+  docker compose --project-directory "$platform_root/deploy" -f "$compose_file" \
+    exec -T postgres psql \
+    --username algorithm --dbname algorithm --no-psqlrc \
+    --set=ON_ERROR_STOP=1 --tuples-only --no-align \
+    --command "
+SELECT CASE
+  WHEN to_regclass('public.course_task_types') IS NULL THEN 'missing_table'
+  WHEN NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'course_task_types'
+      AND column_name = 'submission_id'
+  ) THEN 'pending'
+  WHEN EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'course_task_types'
+      AND column_name = 'submission_id'
+      AND data_type = 'uuid'
+      AND is_nullable = 'NO'
+  ) AND col_description(
+    'public.course_task_types'::regclass,
+    (
+      SELECT attnum
+      FROM pg_attribute
+      WHERE attrelid = 'public.course_task_types'::regclass
+        AND attname = 'submission_id'
+        AND NOT attisdropped
+    )
+  ) = '创建该任务类型的课程提交批次标识，同一次提交新增的任务类型共享该值，后续提交使用新值'
+  THEN 'applied'
+  ELSE 'invalid'
+END;
+" | tr -d '[:space:]'
+}
+
+test -f "$migration_file"
+state="$(read_schema_state)"
+case "$state" in
+  applied)
+    printf 'control-schema-migration: already applied: %s\n' "${migration_file##*/}"
+    ;;
+  pending)
+    docker compose --project-directory "$platform_root/deploy" -f "$compose_file" \
+      exec -T postgres psql \
+      --username algorithm --dbname algorithm --no-psqlrc \
+      --set=ON_ERROR_STOP=1 <"$migration_file"
+    if [[ "$(read_schema_state)" != "applied" ]]; then
+      echo "control-schema-migration: 迁移执行后 schema 校验失败" >&2
+      exit 1
+    fi
+    printf 'control-schema-migration: applied: %s\n' "${migration_file##*/}"
+    ;;
+  missing_table)
+    echo "control-schema-migration: 缺少 course_task_types；必须先按顺序执行 0001-0005" >&2
+    exit 1
+    ;;
+  *)
+    echo "control-schema-migration: submission_id 已存在但类型、非空约束或中文说明不符合 0006" >&2
+    exit 1
+    ;;
+esac

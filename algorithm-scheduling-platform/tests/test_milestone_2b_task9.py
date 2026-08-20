@@ -1142,6 +1142,15 @@ def test_canonical_scenario_uses_atomic_stop_only_operator_ledger() -> None:
     assert refresh_body.index("validate_operator_identity") < refresh_body.index(
         'mv -f -- "$NEW_TMP" "$NEW_OPERATOR_IDS"'
     )
+    cleanup_body = scenario.split("cleanup_operator_lifecycle()", 1)[1].split(
+        "if ! OPERATOR_SERVICE_ALLOWLIST_TMP", 1
+    )[0]
+    assert cleanup_body.index("validate_operator_identity") < cleanup_body.index(
+        "cleanup_operator_ledger_temps"
+    )
+    assert cleanup_body.index("restore_existing_business_after_failure") < (
+        cleanup_body.index("cleanup_operator_ledger_temps")
+    )
 
 
 def _extract_scenario_bash_block(heading: str) -> str:
@@ -1206,14 +1215,84 @@ def test_platform_compose_waits_for_health_before_runtime_preflight() -> None:
     runtime_preflight = (
         'deploy/scripts/preflight runtime --git-sha "$EXPECTED_GIT_SHA"'
     )
+    migration = "deploy/scripts/apply-course-task-submission-migration"
 
     assert platform_up in stage_three
+    assert migration in stage_three
+    assert stage_three.index(migration) < stage_three.index(platform_up)
     assert stage_three.index(platform_up) < stage_three.index(runtime_preflight)
     assert (
         'PLATFORM_WAIT_TIMEOUT_SECONDS="${PLATFORM_WAIT_TIMEOUT_SECONDS:-180}"'
         in scenario
     )
     assert '[[ "$PLATFORM_WAIT_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]' in scenario
+
+
+def test_course_task_submission_migration_is_idempotent_and_fail_closed(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    state_file = tmp_path / "schema-state"
+    applied_sql = tmp_path / "applied.sql"
+    _write_executable(
+        fake_bin / "docker",
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ " $* " == *" --command "* ]]; then
+  if [[ -f "$FAKE_SCHEMA_STATE" ]]; then
+    cat "$FAKE_SCHEMA_STATE"
+  else
+    printf 'pending\n'
+  fi
+  exit 0
+fi
+cat >"$FAKE_APPLIED_SQL"
+printf 'applied\n' >"$FAKE_SCHEMA_STATE"
+""",
+    )
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_SCHEMA_STATE": str(state_file),
+        "FAKE_APPLIED_SQL": str(applied_sql),
+    }
+    script = DEPLOY / "scripts/apply-course-task-submission-migration"
+
+    first = subprocess.run(
+        [str(script)],
+        cwd=PLATFORM_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert first.returncode == 0, first.stderr
+    assert "control-schema-migration: applied" in first.stdout
+    assert "ADD COLUMN submission_id uuid" in applied_sql.read_text(encoding="utf-8")
+
+    second = subprocess.run(
+        [str(script)],
+        cwd=PLATFORM_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert second.returncode == 0, second.stderr
+    assert "control-schema-migration: already applied" in second.stdout
+
+    state_file.write_text("invalid\n", encoding="utf-8")
+    invalid = subprocess.run(
+        [str(script)],
+        cwd=PLATFORM_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert invalid.returncode != 0
+    assert "类型、非空约束或中文说明不符合" in invalid.stderr
 
 
 def test_platform_health_wait_is_consistent_in_operational_docs() -> None:
@@ -1529,6 +1608,13 @@ exit 0
         scripts / "activate-operator-instances",
         """#!/usr/bin/env bash
 printf '%s\n' "$*" >>"$FAKE_DOCKER_STATE/activations.log"
+exit 0
+""",
+    )
+    _write_executable(
+        scripts / "apply-course-task-submission-migration",
+        """#!/usr/bin/env bash
+printf '%s\n' "migration" >>"$FAKE_DOCKER_STATE/cleanup-order.log"
 exit 0
 """,
     )
@@ -3876,6 +3962,16 @@ def test_operator_profile_partial_up_publishes_difference_then_returns_original_
     assert _ledger_ids(release_root, "new-operator-container-ids.txt") == sorted(
         profiles["gpu0"]
     )
+    expected_new = sorted(profiles["gpu0"])
+    assert (tmp_path / "docker-state/stops.log").read_text(
+        encoding="utf-8"
+    ).splitlines() == expected_new
+    assert (tmp_path / "docker-state/cleanup-order.log").read_text(
+        encoding="utf-8"
+    ).splitlines() == [
+        "migration",
+        *(f"stop:{container_id}" for container_id in expected_new),
+    ]
 
 
 @pytest.mark.parametrize("mutation", ("inspect", "project", "service"))
@@ -3966,6 +4062,7 @@ def test_operator_cleanup_stops_exact_valid_new_set_without_removing_containers(
     assert (tmp_path / "docker-state/cleanup-order.log").read_text(
         encoding="utf-8"
     ).splitlines() == [
+        "migration",
         "case-batch",
         *(f"stop:{container_id}" for container_id in expected_new),
         "restore",
