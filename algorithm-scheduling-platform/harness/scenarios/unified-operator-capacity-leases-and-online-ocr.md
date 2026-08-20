@@ -526,6 +526,32 @@ summary.json
 
 ## 完成门禁
 
+### 2026-08-20 真实 deployment 变异后的离线运行时缺口
+
+- 受影响 release：`580263d8e516675fa931151138ac6e3bb1483396`；直接前驱为
+  `ea39759ad8abb7d970bef386d1f1de0dd0391c71`。
+- 已通过事实：clean-clone 六层门禁、16 进程配置权威、四平台/八类算子镜像、24 实例
+  注册、18/18 GPU 真实推理、3/3 PPT CPU 切片、3/3 Text Analysis Smoke、24 实例
+  综合 Smoke 和 deployment `93/93`。这些阶段事实不等于最终业务验收通过。
+- 暴露问题：deployment 用例后 Orchestrator 和 Vision Orchestrator readiness 均为 `503`。
+  Vision 的直接原因是旧未提交视觉命令中 VBas 本地保护返回 HTTP `429`，却被包装为
+  致命调用错误；同时 `LOAD-014` 只验证了 Orchestrator readiness，漏掉了 Vision Consumer。
+- 进一步复审：Vision `vbas.max_concurrency=2`，受控 VBas 本地
+  `MaxConcurrentBatches=1/MaxQueueSize=0`，平台租约又允许对 `vbas-gpu0` 确定性偏向。
+  如果 `429` 后重做整条命令，会每轮重复“一批成功、一批过载”并形成活锁。
+- 修复合同：VBas `429` 释放当前尝试租约并仅重试该批次，保留已成功批次；
+  非容量致命异常取消并收割全部兄弟；服务关闭立即打断重试等待。`LOAD-014` 同时验证两个
+  Consumer，deployment 后再执行只重启不健康离线服务的精确门禁。
+- 恢复：向 Canonical 主进程发送 `SIGINT` 后等待既有信号/账本恢复完成；日志终态为
+  `restore: complete`，24 个本轮算子已停止，生成唯一当前 UID、单链接、`0400` 恢复
+  audit，未执行镜像清理、prune、卷删除或 `/data/result` 删除。
+- 本地修复验证：Vision Orchestrator 完整套件 `33 passed`；VBas/运行时/部署门禁定向
+  `135 passed`；平台全量 `2681 passed, 3 skipped`，3 个 skip 仅因本机没有 canonical
+  FaceRec Token/容器，远端不得跳过。Ruff、Mypy 139 个源码文件、OpenSpec strict、
+  Bash 语法和 `git diff --check` 通过。
+- 结论：该 release 是运行时缺口证据，不得计入 OpenSpec 12.9/14.1/14.3-14.7；修复后必须
+  用新完整 SHA、以该 release 为立即前驱重跑完整 Canonical。
+
 只有同时满足以下条件，本场景和 `DEC-025` 才能从“待验证”改为“符合”：
 
 1. OpenSpec 88 项任务均由对应代码和可复现证据关闭，严格校验通过。

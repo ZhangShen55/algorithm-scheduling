@@ -265,7 +265,10 @@ _RUNTIME_TARGETS: Mapping[str, _RuntimeTarget] = {
         "algorithm-scheduling-platform",
         "kafka",
         "kafka",
-        ("http://127.0.0.1:18101/ops/readiness",),
+        (
+            "http://127.0.0.1:18101/ops/readiness",
+            "http://127.0.0.1:18102/ready",
+        ),
     ),
     "LOAD-015": _RuntimeTarget(
         "deploy/docker-compose.infrastructure.yml",

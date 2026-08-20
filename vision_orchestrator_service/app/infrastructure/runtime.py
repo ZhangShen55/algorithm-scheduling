@@ -193,7 +193,9 @@ class VisionOrchestratorRuntime:
                 max_concurrency=settings.vbas.max_concurrency,
                 lease_ttl_seconds=settings.vbas.lease_ttl_seconds,
                 request_timeout_seconds=settings.vbas.request_timeout_seconds,
+                capacity_retry_delay_seconds=settings.worker.poll_interval_seconds,
             ),
+            shutdown_event=self.stop_event,
         )
         extractor = FFmpegFrameExtractor(
             course_root=settings.storage.course_root,

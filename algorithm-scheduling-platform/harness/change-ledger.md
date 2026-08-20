@@ -1193,6 +1193,16 @@
 - 本地验证：复核/中断/Harness 定向 `72 passed`；平台全量 `2673 passed, 3 skipped`，3 个 skip 仅因本机没有 canonical FaceRec 注册 Token/容器，远端不得跳过；Ruff、strict Mypy、compileall/import、OpenSpec strict 和 `git diff --check` 均通过。
 - 结论：该 release 仅作为时序和恢复缺口证据，不得计入 12.9/14.1/14.3-14.7；修复提交必须以新完整 SHA 重跑 8A.7。
 
+## 2026-08-20 - 8A.7 deployment 变异后离线运行时稳定门禁
+
+- 先前状态：`580263d8e516675fa931151138ac6e3bb1483396` 已通过 clean-clone、配置权威、镜像、24 实例、GPU/PPT/Text Analysis/Comprehensive Smoke 和 deployment 93/93，但进入真实离线任务后两个后台服务 readiness 均为 503。
+- 根因：`LOAD-014` 只验证 Orchestrator；Vision 将 VBas 本地保护的 HTTP 429 当成致命错误退出 Consumer。若只改为整命令重试，又会因 Vision 并发 2 与 VBas 本地并发 1 的差异形成活锁。
+- 目标状态：`429` 在单批次内可中断重试，成功兄弟不重做；致命异常取消并收割兄弟。Kafka 重启同时验证两个 Consumer，deployment 后再执行精确离线服务稳定门禁。
+- 契约影响：A 面、VBas HTTP 路由/字段/响应、Kafka topic 和 offset 契约不变；只收紧过载恢复、并发收割和验收门禁。
+- 恢复事实：受控 `SIGINT` 后 Canonical 输出 `restore: complete`；24 个本轮算子已停止，唯一恢复 audit 为当前 UID、单链接、`0400`，未执行镜像删除或越界清理。
+- 本地验证：Vision Orchestrator `33 passed`；VBas/运行时/部署定向 `135 passed`；平台全量 `2681 passed, 3 skipped`，3 个 skip 仅因本机缺 canonical FaceRec Token/容器，远端不得跳过。Ruff、Mypy 139 个源码文件、OpenSpec strict、Bash 语法和 `git diff --check` 通过。
+- 验证边界：修复需提交新 SHA，然后以 `580263d8...` 为立即前驱重跑远端完整 Canonical；旧 release 不得补写通过。
+
 ## Record template
 
 - Date and scope:

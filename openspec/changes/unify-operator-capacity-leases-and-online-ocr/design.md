@@ -182,6 +182,8 @@ Control Service 的分配器只按能力、实例生命周期、模型就绪、�
 
 Vision Orchestrator 的 Kafka Consumer 必须将租约申请返回的“暂无可用算子容量” HTTP `503` 单独识别为可恢复容量等待。当平台容器先于 VBas 实例启动，或已注册 VBas 暂时满载时，Consumer 保留当前消息、不提交 offset，按 `worker.poll_interval_seconds` 原地重试，且后台循环仍属于存活状态；`/ready` 不得仅因正在等待算子容量而失败。服务关闭时必须立即终止等待且仍不提交该消息。算子注册中心不可用等其他 HTTP `503`、HTTP `400/401`、非法租约响应或其他协议/配置错误仍是后台循环故障，应使 `/ready` 失败，不能被容量等待逻辑掩盖。
 
+VBas 实例在已取得平台租约后仍可能因本地批次队列或模型安全保护返回 HTTP `429`。该结果同样属于可恢复过载：调用方必须释放当前尝试的租约，仅对该批次按可中断间隔重试，保留同一命令中已成功的兄弟批次，直到所有批次成功后才允许提交 Kafka offset。这避免平台容量大于 VBas 本地并发时，每次整命令重试都形成“一批成功、一批 `429`”的活锁。只有非容量的致命异常才取消并收割所有未完成兄弟批次，确保不留下孤立请求。服务关闭信号和调用方取消都必须立即打断单批次等待；VBas 普通 HTTP `503` 仍按算子调用故障处理，不得无条件并入容量等待。
+
 ### 7. Online Gateway 提供单图 OCR 适配而不改变 OCR 算子
 
 新增：
@@ -247,6 +249,8 @@ max_decoded_bytes = 52428800
 Canonical 总控生成业务 Campaign 命令时必须逐项忠实传递既定选项和值，不得把格式字符、补丁标记或其他未声明 token 注入 argv。该合同必须由真实 shell 执行生成命令并捕获 argv 的自动测试覆盖，不能只检查命令字符串包含阶段名称。
 
 业务 Campaign 的 8 项 B 级质量复核不能在当前 release 的真实课程结果产生前预制，也不能复用旧 SHA 的结论。`offline` 四任务完成后，Campaign 必须先发布包含当前完整 Git SHA、课程 `task_id` 和 7 个离线复核 case 的 write-once 请求，再有界等待独立复核索引；`vision` 结果完成后以同一课程身份追加等待 `VIS-025`。复核发布器先把每个脱敏 JSON 证据原子写入当前 release 的 `business/reviews/`，再原子更新 Git 外受限目录中的索引。索引和每项证据都必须属于当前 UID、权限 `0600`、单硬链接、路径祖先无符号链接，并对账 `case_id/git_sha/task_id/status/reviewer/observed`；课程图片、联系表、ASR/OCR 全文只允许保存在 Git 外受限目录，普通 release 证据只记录摘要、散列和不透明证据编号。索引缺项时可在限定时间内等待，出现旧 SHA、旧课程、非法路径或元数据时立即失败关闭。
+
+deployment 变异用例会真实重启 Kafka 及若干平台服务。`LOAD-014` 不得只校验 Orchestrator，必须同时等待 Orchestrator 与 Vision Orchestrator 的 Kafka Consumer readiness。deployment 阶段全部结束后、offline Campaign 启动前，Canonical 还必须再次探测这两个离线后台服务；只允许精确重启当前不健康的服务，随后重跑 runtime preflight，不得扩大为 Control、Online Gateway 或基础设施整体重启。
 
 若新镜像构建、revision 校验、容器健康、注册或 Smoke 任一步失败，旧镜像不得删除。若旧镜像仍被运行中、暂停或停止容器引用，清理步骤必须报告并跳过，不能强制删除。清理后不再具备旧镜像的本机即时回滚能力；旧 Git SHA、配置和 Harness 证据继续保留，确需回滚时从旧 SHA 重新构建或从可信镜像源重新取得。
 

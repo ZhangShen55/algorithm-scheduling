@@ -134,6 +134,15 @@ def test_load_013_waits_for_control_and_orchestrator_readiness() -> None:
     )
 
 
+def test_load_014_waits_for_both_kafka_consumer_services() -> None:
+    load = importlib.import_module("scripts.milestone_2b_case_runners.load")
+
+    assert load._RUNTIME_TARGETS["LOAD-014"].readiness_urls == (
+        "http://127.0.0.1:18101/ops/readiness",
+        "http://127.0.0.1:18102/ready",
+    )
+
+
 def test_load_015_uses_the_registered_facerec_capability() -> None:
     load = importlib.import_module("scripts.milestone_2b_case_runners.load")
     case = next(case for case in _load_cases() if case.case_id == "LOAD-015")

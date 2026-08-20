@@ -38,7 +38,6 @@ def test_8a7_runtime_orders_all_strict_gates_before_restore(tmp_path: Path) -> N
         "deploy/scripts/build-images",
         "milestone-2b-stage45.sh",
         "Orchestrator 在部署用例前未就绪",
-        'preflight runtime --git-sha "$EXPECTED_GIT_SHA"',
         "--phase deployment",
         "--phase offline",
         "--phase vision",
@@ -52,15 +51,15 @@ def test_8a7_runtime_orders_all_strict_gates_before_restore(tmp_path: Path) -> N
     )
     offsets = [
         runtime.rindex(value)
-        if value
-        in {
-            "restore-existing-containers",
-            'preflight runtime --git-sha "$EXPECTED_GIT_SHA"',
-        }
+        if value == "restore-existing-containers"
         else runtime.index(value)
         for value in expected
     ]
     assert offsets == sorted(offsets)
+    preflight = 'preflight runtime --git-sha "$EXPECTED_GIT_SHA"'
+    assert runtime.index(preflight) < runtime.index("--phase deployment")
+    assert runtime.index("--phase deployment") < runtime.rindex(preflight)
+    assert runtime.rindex(preflight) < runtime.index("--phase offline")
 
 
 def test_8a7_stabilizes_orchestrator_before_deployment_cases(tmp_path: Path) -> None:
@@ -77,10 +76,10 @@ def test_8a7_stabilizes_orchestrator_before_deployment_cases(tmp_path: Path) -> 
     )
     preflight = 'deploy/scripts/preflight runtime --git-sha "$EXPECTED_GIT_SHA"'
 
-    assert runtime.count(readiness) == 1
+    assert runtime.count(readiness) == 2
     assert runtime.count(restart) == 1
     assert runtime.count(wait) == 1
-    assert runtime.count(preflight) >= 2
+    assert runtime.count(preflight) >= 3
     assert "restart control-service" not in runtime
     assert "restart vision-orchestrator-service" not in runtime
     assert "restart online-gateway-service" not in runtime
@@ -91,7 +90,35 @@ def test_8a7_stabilizes_orchestrator_before_deployment_cases(tmp_path: Path) -> 
     assert runtime.index("milestone-2b-stage45.sh") < runtime.index(readiness)
     assert runtime.index(readiness) < runtime.index(restart)
     assert runtime.index(restart) < runtime.index(wait)
-    assert runtime.rindex(preflight) < runtime.index("--phase deployment")
+    assert runtime.index(preflight) < runtime.index("--phase deployment")
+
+
+def test_8a7_restabilizes_only_offline_runtimes_after_deployment_cases(
+    tmp_path: Path,
+) -> None:
+    runtime = runner.build_runtime(_arguments(tmp_path))
+
+    deployment = runtime.index("--phase deployment")
+    offline = runtime.index("--phase offline")
+    gate = runtime[deployment:offline]
+
+    assert "http://127.0.0.1:18101/ops/readiness" in gate
+    assert "http://127.0.0.1:18102/ready" in gate
+    assert "orchestrator-service|http://127.0.0.1:18101/ops/readiness" in gate
+    assert (
+        "vision-orchestrator-service|http://127.0.0.1:18102/ready" in gate
+    )
+    assert "docker compose -f deploy/docker-compose.platform.yml restart" in gate
+    assert '"$runtime_service"' in gate
+    assert '--wait --wait-timeout 300 "$runtime_service"' in gate
+    assert gate.count('curl --fail --silent --show-error --max-time 10') == 2
+    assert gate.count('preflight runtime --git-sha "$EXPECTED_GIT_SHA"') == 1
+    assert "restart control-service" not in gate
+    assert "restart online-gateway-service" not in gate
+    assert "restart postgresql" not in gate
+    assert "restart redis" not in gate
+    assert "restart kafka" not in gate
+    assert "restart mongodb" not in gate
 
 
 def test_8a7_cleanup_is_exact_and_lifecycle_guarded(tmp_path: Path) -> None:

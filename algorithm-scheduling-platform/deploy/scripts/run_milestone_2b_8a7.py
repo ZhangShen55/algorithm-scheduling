@@ -135,6 +135,25 @@ then
 fi
 deploy/scripts/preflight runtime --git-sha "$EXPECTED_GIT_SHA"
 {stage6[0]}
+for runtime_probe in \
+  'orchestrator-service|http://127.0.0.1:18101/ops/readiness' \
+  'vision-orchestrator-service|http://127.0.0.1:18102/ready'
+do
+  IFS='|' read -r runtime_service readiness_url <<<"$runtime_probe"
+  if ! curl --fail --silent --show-error --max-time 10 \
+    "$readiness_url" >/dev/null
+  then
+    printf '%s 在部署变异用例后未就绪，执行精确服务重启后重新验收\n' \
+      "$runtime_service" >&2
+    docker compose -f deploy/docker-compose.platform.yml restart \
+      "$runtime_service"
+    docker compose -f deploy/docker-compose.platform.yml up -d \
+      --wait --wait-timeout 300 "$runtime_service"
+  fi
+  curl --fail --silent --show-error --max-time 10 \
+    "$readiness_url" >/dev/null
+done
+deploy/scripts/preflight runtime --git-sha "$EXPECTED_GIT_SHA"
 """
     business = "\n\n".join(
         f"{_campaign_command(args, phase)}\n{_case_batch(phase)}"

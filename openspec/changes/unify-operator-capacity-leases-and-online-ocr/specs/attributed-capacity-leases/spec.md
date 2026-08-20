@@ -135,9 +135,17 @@ Control Service SHALL 提供 `GET /ops/operator-instances/{instance_id}/active-l
 - **WHEN** Vision Orchestrator 已取得一条视觉命令，但 VBas 尚未注册或暂无可用容量
 - **THEN** Consumer SHALL 保持存活、不提交当前 Kafka offset 并原地等待重试，`/ready` SHALL NOT 仅因容量等待而失败
 
+#### Scenario: VBas 实例本地过载
+- **WHEN** Vision Orchestrator 已取得租约，但被选中的 VBas 实例因本地批次或模型保护返回 HTTP `429`
+- **THEN** 调用方 SHALL 释放当前尝试的租约、仅对该批次按可中断间隔重试并保留已成功兄弟批次，且在全部批次成功前 SHALL NOT 提交 Kafka offset；其他 VBas HTTP `503` SHALL NOT 被无条件误分类为容量不足
+
+#### Scenario: 并发 VBas 批次中一项致命失败
+- **WHEN** 同一视觉命令已并发启动多个 VBas 批次，其中一项发生非容量的致命异常
+- **THEN** Vision Orchestrator SHALL 取消并收割全部未完成兄弟批次，释放已取得的租约，且 SHALL NOT 留下孤立请求或未检索异常
+
 #### Scenario: 容量等待期间关闭 Vision Orchestrator
 - **WHEN** Vision Orchestrator 在等待 VBas 容量时收到关闭信号
-- **THEN** Consumer SHALL 终止当前等待且 SHALL NOT 提交未完成命令的 Kafka offset
+- **THEN** Consumer SHALL 立即终止所有单批次容量等待且 SHALL NOT 提交未完成命令的 Kafka offset
 
 ### Requirement: 活跃租约明细只保存在 Redis
 系统 SHALL 使用 Redis 保存高频活跃租约和工作上下文，SHALL NOT 为每次快速申请、绑定、续期和释放新增 PostgreSQL 明细写入；现有任务事实和低频审计边界 SHALL 保持不变。

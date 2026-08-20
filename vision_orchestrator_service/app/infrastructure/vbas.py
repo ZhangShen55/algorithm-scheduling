@@ -10,7 +10,7 @@ from typing import Any, Protocol
 import httpx
 
 from .cache import VisionStream
-from .capacity import CapacityLease, WorkContext
+from .capacity import CapacityLease, CapacityUnavailableError, WorkContext
 
 JsonObject = dict[str, Any]
 
@@ -53,6 +53,7 @@ class VbasBatchConfig:
     max_concurrency: int = 2
     lease_ttl_seconds: int = 60
     request_timeout_seconds: float = 60.0
+    capacity_retry_delay_seconds: float = 1.0
 
     def __post_init__(self) -> None:
         if self.batch_size <= 0 or self.max_concurrency <= 0:
@@ -61,6 +62,8 @@ class VbasBatchConfig:
             raise ValueError("VBas 容量租约时长必须大于 0")
         if self.request_timeout_seconds <= 0:
             raise ValueError("VBas 请求超时必须大于 0")
+        if self.capacity_retry_delay_seconds <= 0:
+            raise ValueError("VBas 容量重试间隔必须大于 0")
 
 
 class VbasBatchClient:
@@ -70,10 +73,12 @@ class VbasBatchClient:
         lease_client: CapacityLeaseClient,
         *,
         config: VbasBatchConfig | None = None,
+        shutdown_event: asyncio.Event | None = None,
     ) -> None:
         self._http = http_client
         self._lease_client = lease_client
         self._config = config or VbasBatchConfig()
+        self._shutdown_event = shutdown_event
 
     async def analyze(
         self,
@@ -91,9 +96,54 @@ class VbasBatchClient:
             for index in range(0, len(frame_list), self._config.batch_size)
         ]
         semaphore = asyncio.Semaphore(self._config.max_concurrency)
+        batch_failed = asyncio.Event()
 
         async def run_batch(batch_index: int, batch: list[VbasFrame]) -> list[JsonObject]:
             async with semaphore:
+                if batch_failed.is_set():
+                    # A sibling already failed while this task was waiting for a slot.
+                    # Do not start another lease/HTTP request or race the original error.
+                    return []
+                try:
+                    return await self._analyze_batch_until_available(
+                        task_id,
+                        stream,
+                        batch_index,
+                        batch,
+                        trace_id=trace_id,
+                    )
+                except BaseException:
+                    batch_failed.set()
+                    raise
+
+        tasks = [
+            asyncio.create_task(
+                run_batch(index, batch),
+                name=f"vbas-{task_id}-{stream.value.lower()}-{index:04d}",
+            )
+            for index, batch in enumerate(batches)
+        ]
+        try:
+            batch_results = await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        return [result for batch in batch_results for result in batch]
+
+    async def _analyze_batch_until_available(
+        self,
+        task_id: str,
+        stream: VisionStream,
+        batch_index: int,
+        batch: list[VbasFrame],
+        *,
+        trace_id: str | None,
+    ) -> list[JsonObject]:
+        while True:
+            try:
                 return await self._analyze_batch(
                     task_id,
                     stream,
@@ -101,11 +151,19 @@ class VbasBatchClient:
                     batch,
                     trace_id=trace_id,
                 )
+            except CapacityUnavailableError:
+                await self._wait_for_capacity_retry()
 
-        batch_results = await asyncio.gather(
-            *(run_batch(index, batch) for index, batch in enumerate(batches))
-        )
-        return [result for batch in batch_results for result in batch]
+    async def _wait_for_capacity_retry(self) -> None:
+        delay = self._config.capacity_retry_delay_seconds
+        if self._shutdown_event is None:
+            await asyncio.sleep(delay)
+            return
+        try:
+            await asyncio.wait_for(self._shutdown_event.wait(), timeout=delay)
+        except TimeoutError:
+            return
+        raise asyncio.CancelledError
 
     async def _analyze_batch(
         self,
@@ -155,8 +213,14 @@ class VbasBatchClient:
                     ),
                     timeout=self._config.request_timeout_seconds,
                 )
+                if response.status_code == 429:
+                    raise CapacityUnavailableError(
+                        f"VBas 实例容量暂不可用: {lease.instance_id}"
+                    )
                 response.raise_for_status()
                 body = response.json()
+            except CapacityUnavailableError:
+                raise
             except (TimeoutError, httpx.HTTPError, ValueError) as exc:
                 raise VbasAdapterError(
                     f"VBas 批次调用失败: {task_id}/{batch_id}: {exc}"

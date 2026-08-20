@@ -1205,6 +1205,13 @@ Stage45 会执行大量实例停止、恢复、Smoke 与 GPU 生命周期检查�
 或 MongoDB。此门禁来自 `ea39759ad8abb7d970bef386d1f1de0dd0391c71` 的真实 `LOAD-011`
 失败：任务事实和 Outbox 已创建，但 readiness 503 的 Orchestrator 没有生成 DAG。
 
+deployment mutation 会真实重启 Kafka、PostgreSQL 及若干服务。`LOAD-014` 必须同时等待
+Orchestrator `18101/ops/readiness` 和 Vision Orchestrator `18102/ready`，不能只用一个
+Consumer 的恢复代表 Kafka 客户端全部恢复。全部 deployment 用例结束后、offline Campaign
+之前，总控再次探测这两个离线后台服务；只精确重启其中当前未就绪的服务，逐一
+重验 readiness 并重跑 runtime preflight。Control、Online Gateway 和四个基础设施不在该
+自动重启边界内。
+
 复核索引不能在真实任务完成前预制。offline Campaign 完成四条真实课程任务后发布
 `business/review-requests/offline.json`，有界等待 7 个离线质量项；vision Campaign 完成后发布
 `business/review-requests/vision.json`，再等待 `VIS-025`。复核发布入口为
