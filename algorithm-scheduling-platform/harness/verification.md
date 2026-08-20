@@ -109,15 +109,31 @@ deploy/scripts/run-milestone-2b-clean-clone-gate \
 最终 8A.7 使用：
 
 ```bash
+RESTRICTED_REVIEW_ROOT=/root/workspace/.algorithm-scheduling-restricted-reports
 deploy/scripts/run-milestone-2b-8a7 \
   --teacher-video-url "$TEACHER_VIDEO_URL" \
   --student-video-url "$STUDENT_VIDEO_URL" \
   --slides-video-url "$SLIDES_VIDEO_URL" \
-  --manual-review-json "$RELEASE_ROOT/business/b-level-reviews.json"
+  --manual-review-json "$RESTRICTED_REVIEW_ROOT/${EXPECTED_GIT_SHA}-b-level-reviews.json"
 ```
 
 `b-level-reviews.json` 必须覆盖 8 个 B 级质量复核 case，并让每项 `artifact` 指向当前 release
-内已存在的复核证据；它不能只写统一阶段结论。
+内已存在的复核证据；它不能只写统一阶段结论。Campaign 会在当前课程离线结果完成后发布
+`business/review-requests/offline.json` 并等待 7 项复核，在视觉结果完成后发布
+`business/review-requests/vision.json` 并等待 `VIS-025`。独立复核输入必须位于 Git 外受限目录、
+权限 `0600`，然后通过以下入口发布；发布器先写当前 SHA/课程的逐项证据，再原子更新索引：
+
+```bash
+deploy/scripts/publish-milestone-2b-b-level-reviews \
+  --release-root "$RELEASE_ROOT" \
+  --index "$RESTRICTED_REVIEW_ROOT/${EXPECTED_GIT_SHA}-b-level-reviews.json" \
+  --review-document "$RESTRICTED_REVIEW_ROOT/${EXPECTED_GIT_SHA}-review-input.json"
+```
+
+复核输入顶层只包含 `git_sha`、`task_id`、`reviews`；每个 review 必须包含 `status=通过`、
+`reviewer`、`reviewed_at`、`review_scope`、`method`、非空 `observed`、非空 `evidence` 和
+`conclusion`。课程联系表、证据图片及识别全文不得写入普通 release JSON，普通证据只保存摘要、
+SHA-256 和受限证据编号。
 
 2026-08-20 首次 Canonical 在 `b0012b513cdb0548d9ff37b2b5da98f057a76859` 构建 ASR Online 时
 因构建期导入缺少 `/app/config.toml` 失败。代码审计同时发现 ScreenDet 的 Cython 构建层存在同类

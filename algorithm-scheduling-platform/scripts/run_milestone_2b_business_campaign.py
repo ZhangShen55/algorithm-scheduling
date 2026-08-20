@@ -21,6 +21,12 @@ import httpx
 import websockets
 
 from scripts.aggregate_milestone_2b_cases import publish_json_once
+from scripts.milestone_2b_b_level_review import (
+    PHASE_REVIEW_CASE_IDS,
+    REVIEW_CASE_IDS,
+    load_review_index,
+    prepare_and_wait_for_reviews,
+)
 from scripts.milestone_2b_case_catalog import CaseDefinition, load_case_catalog
 from scripts.milestone_2b_case_runners.campaign import publish_campaign_case
 from scripts.milestone_2b_case_runners.evidence import release_identity
@@ -70,18 +76,7 @@ PHASE_REGRESSION_TARGETS: Mapping[str, tuple[str, ...]] = {
     ),
 }
 TERMINAL_STATUSES = {60, 70, 80}
-MANUAL_REVIEW_CASE_IDS = frozenset(
-    {
-        "PPT-012",
-        "PPT-013",
-        "PPT-014",
-        "KEY-005",
-        "ASR-012",
-        "ASR-013",
-        "ASR-017",
-        "VIS-025",
-    }
-)
+MANUAL_REVIEW_CASE_IDS = REVIEW_CASE_IDS
 
 
 def _case_regression_patterns() -> dict[str, tuple[str, ...]]:
@@ -448,35 +443,32 @@ def _run_regression(phase: str) -> dict[str, Any]:
     }
 
 
-def _manual_reviews(path: Path | None) -> dict[str, dict[str, Any]]:
+def _manual_reviews(
+    path: Path | None,
+    *,
+    release_root: Path,
+    task_id: str,
+) -> dict[str, dict[str, Any]]:
     if path is None:
         return {}
-    if path.is_symlink() or not path.is_file():
-        raise RuntimeError("B 级质量复核文件不存在或不安全")
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise RuntimeError("B 级质量复核文件不是合法 JSON") from error
-    if type(payload) is not dict:
-        raise RuntimeError("B 级质量复核文件必须是对象")
-    reviews: dict[str, dict[str, Any]] = {}
-    for case_id, raw in payload.items():
-        if case_id not in MANUAL_REVIEW_CASE_IDS or type(raw) is not dict:
-            raise RuntimeError(f"B 级质量复核包含未知或非法用例: {case_id}")
-        review = dict(raw)
-        if (
-            set(review) != {"status", "reviewer", "artifact", "observed"}
-            or review.get("status") != "通过"
-            or type(review.get("reviewer")) is not str
-            or not review["reviewer"].strip()
-            or type(review.get("artifact")) is not str
-            or not review["artifact"].strip()
-            or type(review.get("observed")) is not dict
-            or not review["observed"]
-        ):
-            raise RuntimeError(f"B 级质量复核不完整: {case_id}")
-        reviews[str(case_id)] = review
-    return reviews
+    return load_review_index(
+        path=path,
+        release_root=release_root,
+        task_id=task_id,
+    )
+
+
+def _review_task_id(phase: str, result: Mapping[str, Any]) -> str:
+    if phase == "offline":
+        course = result.get("real_course")
+        task_id = course.get("task_id") if isinstance(course, dict) else None
+    elif phase == "vision":
+        task_id = result.get("real_course_task_id")
+    else:
+        task_id = None
+    if type(task_id) is not str or not task_id:
+        raise RuntimeError(f"{phase} campaign 缺少 B 级复核 task_id")
+    return task_id
 
 
 def _runtime_probe(phase: str, result: Mapping[str, Any]) -> dict[str, Any]:
@@ -540,7 +532,14 @@ def _build_case_checks(
     if not isinstance(passed, list) or not passed:
         raise RuntimeError(f"{phase} campaign 缺少逐用例可归因的 JUnit 结果")
     runtime_probe = _runtime_probe(phase, result)
-    reviews = _manual_reviews(args.manual_review_json)
+    if phase in PHASE_REVIEW_CASE_IDS and args.manual_review_json is not None:
+        reviews = _manual_reviews(
+            args.manual_review_json,
+            release_root=args.release_root,
+            task_id=_review_task_id(phase, result),
+        )
+    else:
+        reviews = {}
     checks: dict[str, dict[str, Any]] = {}
     for case in _selected_cases(args.catalog, phase):
         patterns = CASE_REGRESSION_PATTERNS.get(case.case_id)
@@ -563,7 +562,7 @@ def _build_case_checks(
             if review_path.is_absolute() or ".." in review_path.parts:
                 raise RuntimeError(f"{case.case_id} B 级质量复核证据路径不安全")
             source = args.release_root / review_path
-            if source.is_symlink() or not source.is_file():
+            if not source.is_file():
                 raise RuntimeError(f"{case.case_id} B 级质量复核证据文件不存在")
         checks[case.case_id] = {
             "check_id": f"business-case-{case.case_id.lower()}",
@@ -1174,13 +1173,21 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--poll-interval-seconds", type=float, default=5)
     parser.add_argument("--online-timeout-seconds", type=float, default=300)
     parser.add_argument("--manual-review-json", type=_path)
+    parser.add_argument("--manual-review-timeout-seconds", type=float, default=7200)
+    parser.add_argument("--manual-review-poll-interval-seconds", type=float, default=2)
     args = parser.parse_args(argv)
     release_identity(args.release_root)
     if args.phase == "offline" and not all(
         (args.teacher_video_url, args.student_video_url, args.slides_video_url)
     ):
         parser.error("offline phase requires all three video URLs")
-    for field in ("course_timeout_seconds", "poll_interval_seconds", "online_timeout_seconds"):
+    for field in (
+        "course_timeout_seconds",
+        "poll_interval_seconds",
+        "online_timeout_seconds",
+        "manual_review_timeout_seconds",
+        "manual_review_poll_interval_seconds",
+    ):
         value = getattr(args, field)
         if not math.isfinite(value) or value <= 0:
             parser.error(f"{field} must be a finite positive number")
@@ -1197,6 +1204,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = _online_campaign(args)
     else:
         result = _load_campaign(args)
+    if args.phase in PHASE_REVIEW_CASE_IDS and args.manual_review_json is not None:
+        prepare_and_wait_for_reviews(
+            phase=args.phase,
+            release_root=args.release_root,
+            task_id=_review_task_id(args.phase, result),
+            index_path=args.manual_review_json,
+            timeout_seconds=args.manual_review_timeout_seconds,
+            poll_interval_seconds=args.manual_review_poll_interval_seconds,
+        )
     result["case_checks"] = _build_case_checks(
         args=args,
         phase=args.phase,

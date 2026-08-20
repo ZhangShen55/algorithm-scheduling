@@ -1156,6 +1156,17 @@
 - 本地验证：候选窗口/中断恢复定向 `12 passed`，Vision Orchestrator 全套 `32 passed`，平台全量 `2667 passed, 3 skipped`；3 个 skip 仅为需要远端 canonical FaceRec 注册 Token/容器的本机条件，远端不得跳过。Vision 严格 Mypy、Ruff、OpenSpec strict 和 `git diff --check` 均通过。
 - 结论：该 release 的已通过证据可作为故障诊断，但不得计入 OpenSpec 12.9/14.1/14.3-14.7 的最终 SHA 证据；必须以本 release 为立即前驱重跑完整 8A.7。
 
+## 2026-08-20 8A.7 B 级复核时序与早期中断恢复缺口
+
+- 失败 release：`3880772431313e45406e56601f5bbaabe951b039`；立即前驱为 `bec262b46bd7f570e43dc1a74b5f7e336f935084`。
+- 主动中断原因：fresh Campaign 在四条课程任务完成前就要求外部 `--manual-review-json`，但 7 个离线质量项必须使用本 SHA 的 PPT/ASR/OCR/关键词结果，`VIS-025` 必须再等待视觉结果；旧 SHA 只有 7 项且不得复用，因此原流程会确定性失败。
+- 中断现场：尚未建立算子 baseline/new 账本，也没有创建本轮算子容器；`operator_running=0`，原 `ocr-v6-amd` 保持 `Exited(143)`，四个平台与 PostgreSQL、Redis、Kafka、MongoDB 保持运行。
+- 恢复：使用本 release 唯一 snapshot 与空 paused ledger 执行 `restore-existing-containers`，输出 `restore: complete`，生成唯一 `0400` audit `existing-containers.jsonl.paused.jsonl.audit.fc0d303c76cd4a8d97e0cf0614fc0af8.jsonl`；未执行镜像清理、prune、卷或结果目录删除。
+- 暴露的第二缺口：Python 总控收到 `SIGINT` 后退出，但没有等待本轮 Bash 自动生成 restore audit。修复采用显式 Bash `HUP/INT/TERM -> exit` trap，让既有 `EXIT` 恢复路径先完成；本地中断回归只能证明控制逻辑，下一 SHA 仍须真实中断门禁复核。
+- B 级复核修复：offline/vision 真实结果完成后分别发布 write-once 请求并有界等待；新增受控发布器，逐项核验当前 `case_id/git_sha/task_id/status`，索引和证据要求当前 UID、`0600`、单硬链接及无符号链接祖先。课程图片、联系表和识别全文留在 Git 外受限目录，普通 release 只保留摘要、散列与不透明证据编号。
+- 本地验证：复核/中断/Harness 定向 `72 passed`；平台全量 `2673 passed, 3 skipped`，3 个 skip 仅因本机没有 canonical FaceRec 注册 Token/容器，远端不得跳过；Ruff、strict Mypy、compileall/import、OpenSpec strict 和 `git diff --check` 均通过。
+- 结论：该 release 仅作为时序和恢复缺口证据，不得计入 12.9/14.1/14.3-14.7；修复提交必须以新完整 SHA 重跑 8A.7。
+
 ## Record template
 
 - Date and scope:

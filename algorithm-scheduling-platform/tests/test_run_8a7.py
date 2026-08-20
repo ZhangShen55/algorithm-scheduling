@@ -9,6 +9,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from deploy.scripts import run_milestone_2b_8a7 as runner
 
 
@@ -22,6 +24,8 @@ def _arguments(tmp_path: Path) -> argparse.Namespace:
         manual_review_json=review,
         course_timeout_seconds=14400.0,
         online_timeout_seconds=300.0,
+        manual_review_timeout_seconds=7200.0,
+        manual_review_poll_interval_seconds=2.0,
     )
 
 
@@ -166,6 +170,10 @@ def test_8a7_campaign_command_passes_only_declared_arguments(tmp_path: Path) -> 
         "14400.0",
         "--online-timeout-seconds",
         "300.0",
+        "--manual-review-timeout-seconds",
+        "7200.0",
+        "--manual-review-poll-interval-seconds",
+        "2.0",
         "--teacher-video-url",
         arguments.teacher_video_url,
         "--student-video-url",
@@ -218,3 +226,23 @@ def test_execute_runtime_waits_for_exit_recovery_after_sigint(tmp_path: Path) ->
     assert returncode != 0
     assert lock_held_during_recovery.read_text(encoding="utf-8") == "held"
     assert recovered.read_text(encoding="utf-8") == "recovered"
+
+
+def test_8a7_rejects_invalid_review_wait_before_building_runtime(tmp_path: Path) -> None:
+    review = tmp_path / "reviews.json"
+    review.write_text("{}\n", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        runner.parse_args(
+            [
+                "--teacher-video-url",
+                "http://media.test/teacher.mp4",
+                "--student-video-url",
+                "http://media.test/student.mp4",
+                "--slides-video-url",
+                "http://media.test/slides.mp4",
+                "--manual-review-json",
+                str(review),
+                "--manual-review-timeout-seconds",
+                "0",
+            ]
+        )

@@ -1198,6 +1198,15 @@ PPT/关键词/ASR/视觉的 8 个 B 级质量项还必须通过
 `--manual-review-json` 引用当前 release 内的独立复核证据。缺少逐案记录、JUnit 有 skip、
 `overall_status` 不是“通过”或维护锁失效时，总控和镜像清理均失败关闭。
 
+复核索引不能在真实任务完成前预制。offline Campaign 完成四条真实课程任务后发布
+`business/review-requests/offline.json`，有界等待 7 个离线质量项；vision Campaign 完成后发布
+`business/review-requests/vision.json`，再等待 `VIS-025`。复核发布入口为
+`deploy/scripts/publish-milestone-2b-b-level-reviews`：它校验 Git 外 `0600` 独立复核输入，先以
+write-once 方式发布当前 SHA、当前 `task_id` 的逐项脱敏 JSON，再原子更新受限索引。索引和证据
+必须属于当前 UID、权限 `0600`、单硬链接且祖先无符号链接；旧 SHA、旧课程、非法证据路径或
+字段不一致均立即失败。图片、联系表和识别全文只能留在 Git 外受限目录，普通报告只记录摘要、
+散列及不透明证据编号。
+
 ```bash
 .venv/bin/python scripts/aggregate_milestone_2b_cases.py \
   --release-root "$RELEASE_ROOT" \

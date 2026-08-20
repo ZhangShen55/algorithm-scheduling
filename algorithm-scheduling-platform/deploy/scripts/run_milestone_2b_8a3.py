@@ -85,9 +85,16 @@ def execute_runtime(
     cwd: Path,
     capture_output: bool = False,
 ) -> subprocess.CompletedProcess[str]:
+    signal_traps = "\n".join(
+        (
+            "trap 'exit 129' HUP",
+            "trap 'exit 130' INT",
+            "trap 'exit 143' TERM",
+        )
+    )
     # Keep the script out of stdin because deployment subprocesses may consume it.
     process = subprocess.Popen(
-        ["bash", "-c", runtime],
+        ["bash", "-c", f"{signal_traps}\n{runtime}"],
         cwd=cwd,
         text=True,
         stdout=subprocess.PIPE if capture_output else None,
@@ -107,7 +114,14 @@ def execute_runtime(
         forwarded_signal = signum
         if process.poll() is None:
             _terminate_runtime_children(process.pid)
-            process.terminate()
+            # Bash normally exits immediately on SIGTERM without running an EXIT
+            # trap. The explicit shell traps above translate the forwarded signal
+            # into `exit`, so the canonical recovery trap finishes before this
+            # controller returns.
+            try:
+                os.kill(process.pid, signum)
+            except ProcessLookupError:
+                pass
 
     try:
         for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):

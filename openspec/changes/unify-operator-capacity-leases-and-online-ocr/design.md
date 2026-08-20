@@ -246,6 +246,8 @@ max_decoded_bytes = 52428800
 
 Canonical 总控生成业务 Campaign 命令时必须逐项忠实传递既定选项和值，不得把格式字符、补丁标记或其他未声明 token 注入 argv。该合同必须由真实 shell 执行生成命令并捕获 argv 的自动测试覆盖，不能只检查命令字符串包含阶段名称。
 
+业务 Campaign 的 8 项 B 级质量复核不能在当前 release 的真实课程结果产生前预制，也不能复用旧 SHA 的结论。`offline` 四任务完成后，Campaign 必须先发布包含当前完整 Git SHA、课程 `task_id` 和 7 个离线复核 case 的 write-once 请求，再有界等待独立复核索引；`vision` 结果完成后以同一课程身份追加等待 `VIS-025`。复核发布器先把每个脱敏 JSON 证据原子写入当前 release 的 `business/reviews/`，再原子更新 Git 外受限目录中的索引。索引和每项证据都必须属于当前 UID、权限 `0600`、单硬链接、路径祖先无符号链接，并对账 `case_id/git_sha/task_id/status/reviewer/observed`；课程图片、联系表、ASR/OCR 全文只允许保存在 Git 外受限目录，普通 release 证据只记录摘要、散列和不透明证据编号。索引缺项时可在限定时间内等待，出现旧 SHA、旧课程、非法路径或元数据时立即失败关闭。
+
 若新镜像构建、revision 校验、容器健康、注册或 Smoke 任一步失败，旧镜像不得删除。若旧镜像仍被运行中、暂停或停止容器引用，清理步骤必须报告并跳过，不能强制删除。清理后不再具备旧镜像的本机即时回滚能力；旧 Git SHA、配置和 Harness 证据继续保留，确需回滚时从旧 SHA 重新构建或从可信镜像源重新取得。
 
 若新镜像已构建或替换但后续门禁失败，Canonical 的 `EXIT` 恢复路径必须保留原退出码，先完整验证 baseline/new 账本和每个容器身份，再停止本轮精确 new ledger 并恢复已授权的原业务。账本或容器身份不可证明时必须失败关闭，不得执行宽泛停止或恢复。

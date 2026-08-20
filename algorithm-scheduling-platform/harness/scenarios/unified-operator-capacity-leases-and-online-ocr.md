@@ -414,6 +414,26 @@ Canonical 中断回归必须向 Python 总控发送 `SIGINT`，并证明 release
 `Exited(143)`、维护锁释放；未清理镜像。修复后必须用新 SHA，并将该失败
 release 作为 `PREVIOUS_RELEASE_ROOT` 完整重跑 8A.7。
 
+## 2026-08-20 B 级复核时序与早期中断恢复门禁
+
+`3880772431313e45406e56601f5bbaabe951b039` 的 fresh Canonical 在 clean-clone 执行期间被主动
+中断，因为只读复审确认旧流程要求 `--manual-review-json` 在 offline Campaign 进入前已经存在，
+但当前 SHA 的 7 个离线复核项只能在四条真实任务完成后生成，`VIS-025` 又必须等待视觉结果；
+继续执行必然在 `_build_case_checks()` 失败，旧 SHA 的 7 项证据也不得复制。
+
+该轮中断早于算子账本初始化，没有创建本轮算子容器；精确现场为 `operator_running=0`、原
+`ocr-v6-amd=Exited(143)`，平台与 PostgreSQL/Redis/Kafka/MongoDB 保持运行。使用该 release
+唯一 snapshot 和空 paused ledger 执行权威 restore，输出 `restore: complete` 并生成唯一
+`0400` audit `existing-containers.jsonl.paused.jsonl.audit.fc0d303c76cd4a8d97e0cf0614fc0af8.jsonl`；
+没有执行镜像清理或 prune。由于 Python 总控的本次信号退出没有自行产出 audit，信号修复仍须由
+下一 SHA 的自动回归和真实 Canonical 中断门禁重新证明。
+
+修复后的 Campaign 在 offline/vision 各自真实结果产生后发布当前 SHA 与课程 `task_id` 的
+write-once 复核请求，并有界等待 Git 外受限索引。逐项证据必须验证
+`case_id/git_sha/task_id/status/reviewer/observed`，索引和证据必须为当前 UID、`0600`、单硬链接
+且祖先无符号链接；普通 release 不保存课程图片、联系表或识别全文。只有 8 项全部由当前 release
+独立产生后，243 项聚合才允许继续。
+
 ## 实施后验证入口
 
 从工作区根目录执行 OpenSpec 门禁：

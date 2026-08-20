@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import shlex
 from collections.abc import Sequence
 from pathlib import Path
@@ -32,6 +33,10 @@ def _campaign_command(args: argparse.Namespace, phase: str) -> str:
         str(args.course_timeout_seconds),
         "--online-timeout-seconds",
         str(args.online_timeout_seconds),
+        "--manual-review-timeout-seconds",
+        str(args.manual_review_timeout_seconds),
+        "--manual-review-poll-interval-seconds",
+        str(args.manual_review_poll_interval_seconds),
     ]
     if phase == "offline":
         parts.extend(
@@ -168,7 +173,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--manual-review-json", type=_path, required=True)
     parser.add_argument("--course-timeout-seconds", type=float, default=14400)
     parser.add_argument("--online-timeout-seconds", type=float, default=300)
-    return parser.parse_args(argv)
+    parser.add_argument("--manual-review-timeout-seconds", type=float, default=7200)
+    parser.add_argument("--manual-review-poll-interval-seconds", type=float, default=2)
+    args = parser.parse_args(argv)
+    for field in (
+        "course_timeout_seconds",
+        "online_timeout_seconds",
+        "manual_review_timeout_seconds",
+        "manual_review_poll_interval_seconds",
+    ):
+        value = getattr(args, field)
+        if not math.isfinite(value) or value <= 0:
+            parser.error(f"{field} must be a finite positive number")
+    return args
 
 
 def main(argv: Sequence[str] | None = None) -> int:

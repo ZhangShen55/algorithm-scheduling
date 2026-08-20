@@ -122,7 +122,7 @@
 
 - [ ] 14.1 在 clean clone 环境按 Harness 准备 `.venv` 和依赖，执行静态、单元、真实 Redis/PostgreSQL、服务运行、算子契约六层验证并原子记录 revision 与环境证据。
 - [x] 14.2 对八种 profile 及全 24 实例执行镜像 preflight、启动、注册核验和 operator Smoke，确认每个实例从实际挂载 TOML 取得注册开关、Control URL、心跳、容量和 GPU 要求，Compose 展开后的实例身份、GPU 标签、单 worker、端口绑定和模型 revision 正确。
-- [ ] 14.3 运行里程碑 2B 的 PPT、ASR、教师/学生视觉及在线链路回归，确认新增 OCR 不破坏当前 `ppt-ocr-关键字` 泳道和既有 A 服务接口；教师/学生长视频粗扫还必须证明 ffmpeg/ffprobe 进程受 `media.max_concurrent_processes` 约束，Vision Orchestrator 的 `4G` cgroup 无 OOM 且 `/ready` 保持就绪；平台先于 VBas 启动时，已取得命令必须不提交 offset 地等待容量，Consumer 和 `/ready` 不得因此失败；真实长课程产生 `31` 个候选窗口时必须全部进入加密检测，超过可配置上限时仍失败关闭。
+- [ ] 14.3 运行里程碑 2B 的 PPT、ASR、教师/学生视觉及在线链路回归，确认新增 OCR 不破坏当前 `ppt-ocr-关键字` 泳道和既有 A 服务接口；教师/学生长视频粗扫还必须证明 ffmpeg/ffprobe 进程受 `media.max_concurrent_processes` 约束，Vision Orchestrator 的 `4G` cgroup 无 OOM 且 `/ready` 保持就绪；平台先于 VBas 启动时，已取得命令必须不提交 offset 地等待容量，Consumer 和 `/ready` 不得因此失败；真实长课程产生 `31` 个候选窗口时必须全部进入加密检测，超过可配置上限时仍失败关闭；offline/vision 结果产生后还必须分别发布当前 SHA 与课程 `task_id` 的 B 级复核请求，8 项独立证据全部通过安全索引校验后才允许聚合。
 - [ ] 14.4 执行容量并发/释放稳定性观察，确认短 OCR/关键词租约可快速复用、跨 TTL 的同步 HTTP 与长 WebSocket/PPT 租约持续续期、无 Redis 孤立租约和无新增 PostgreSQL 写放大。
 - [ ] 14.5 演练排空、服务重启和回滚顺序，确认新格式租约在回滚前已释放/过期，旧部署容量配置能成套恢复且不执行破坏性清理。
 - [ ] 14.6 汇总 Harness 报告、路由兼容清单、八算子真实推理结果和剩余风险；只有所有强制门禁有可复现证据时才完成本 OpenSpec 实施任务。

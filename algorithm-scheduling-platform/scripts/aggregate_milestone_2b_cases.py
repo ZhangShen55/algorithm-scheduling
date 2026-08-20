@@ -151,6 +151,18 @@ PUBLISH_PATHS = frozenset(
     }
 )
 CASE_EVIDENCE_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9_.-]*\.json")
+B_LEVEL_REVIEW_CASE_IDS = frozenset(
+    {
+        "PPT-012",
+        "PPT-013",
+        "PPT-014",
+        "KEY-005",
+        "ASR-012",
+        "ASR-013",
+        "ASR-017",
+        "VIS-025",
+    }
+)
 @dataclass(frozen=True)
 class OperatorInstance:
     service_name: str
@@ -982,6 +994,13 @@ def _is_canonical_publication_path(relative_path: Path) -> bool:
             "online-campaign.json",
             "final-campaign.json",
         }
+    if len(parts) == 3 and parts[:2] == ("business", "review-requests"):
+        return parts[2] in {"offline.json", "vision.json"}
+    if len(parts) == 3 and parts[:2] == ("business", "reviews"):
+        review_name = parts[2]
+        return review_name.endswith(".json") and (
+            review_name.removesuffix(".json") in B_LEVEL_REVIEW_CASE_IDS
+        )
     if len(parts) == 4 and parts[1] == "evidence":
         category, _, case_id, evidence_name = parts
         return (

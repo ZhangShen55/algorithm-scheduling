@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_directory="$(cd -- "$(dirname -- "$0")" && pwd -P)"
+platform_root="$(cd -- "$script_directory/../.." && pwd -P)"
+deploy_python="${DEPLOY_PYTHON:-$platform_root/.venv/bin/python}"
+
+exec "$deploy_python" -m scripts.publish_milestone_2b_b_level_reviews "$@"
