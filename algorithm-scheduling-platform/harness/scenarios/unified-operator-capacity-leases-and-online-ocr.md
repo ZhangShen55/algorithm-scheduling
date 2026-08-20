@@ -373,6 +373,19 @@ release 为立即前驱重跑完整 8A.7。修复后的 argv 聚焦回归为 `5 
 运行并核对 dmesg、任务终态和 `/ready`。失败 release 已按 baseline/new 和权威 Compose 身份
 精确停止 24 个新算子并输出 `restore: complete`；不得把该轮写成 14.3 完成。
 
+## 2026-08-20 视觉容量等待与启动顺序门禁
+
+`c07df67910558716985941bb2feff73b637bd844` 已通过 clean-clone、16 进程配置权威、八算子/四平台
+镜像构建及 `0006` 迁移。由于 Kafka 中存在上轮未完成视觉命令，平台先于 VBas 启动时
+Vision Consumer 申请租约得到 HTTP `503`。旧实现让后台循环退出，`/ready` 因此正确返回
+`503`，但该业务条件本应是离线等待而非服务故障。
+
+验收必须证明：只有“暂无可用算子容量” HTTP `503` 被分类为等待；当前 Kafka offset 在容量可用前不提交；Consumer 按
+`worker.poll_interval_seconds` 重试且保持存活；`/ready` 在等待期间保持就绪；关闭时不丢失消息。
+注册中心不可用等其他 `503`、HTTP `400/401`、非法响应和其他协议错误仍必须让后台循环和 `/ready` 失败。该轮已完成
+`restore: complete`，24 个新算子容器均未运行，非阻塞 `flock` 确认维护锁已释放；仍需在新 SHA
+的完整 8A.7 中重新取得运行证据。
+
 ## 实施后验证入口
 
 从工作区根目录执行 OpenSpec 门禁：

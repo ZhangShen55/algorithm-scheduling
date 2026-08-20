@@ -47,6 +47,20 @@ PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
 该命令只证明配置、跨 T/S 共享并发上限和 Compose `/ready` 探针；最终仍需在远端 `4G`
 Vision 容器内重跑真实 T/S 长视频，并确认任务完成、`/ready` 持续成功且 dmesg 没有新 cgroup OOM。
 
+`c07df67910558716985941bb2feff73b637bd844` 在平台先于 VBas 启动时处理上轮未完成视觉命令，
+租约申请 HTTP `503` 导致 Consumer 退出。该 release 已完成 `restore: complete`，维护锁也已释放，
+但不能计入 OpenSpec 12.9/14.x。容量等待本地门禁为：
+
+```bash
+(cd ../vision_orchestrator_service && \
+  ../algorithm-scheduling-platform/.venv/bin/python -m pytest -q \
+    tests/test_capacity.py tests/test_runtime.py)
+```
+
+测试必须覆盖容量 `503` 与注册中心不可用 `503` 的分类、不提交 offset 的重试、等待期间 Consumer 仍存活，
+以及关闭信号终止等待且不提交消息。最终 SHA 的远端 8A.7 还必须验证：先启动四个平台服务、
+后启动 VBas 的固定顺序不会让 Vision 变为 unhealthy，且保留命令在 VBas 注册后继续处理。
+
 八算子本地安全/受控部署 TOML 的进程级权威对照使用独立探针。它为每个算子的两类配置分别启动
 一个子进程，在子进程中确认五个已迁移旧环境变量确实存在后，通过显式 `CONFIG_PATH` 调用对应
 算子的正式配置加载入口；不导入 `app.main`，因此不会启动模型、连接数据库或占用 GPU。FaceRec、

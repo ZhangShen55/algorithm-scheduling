@@ -1134,6 +1134,17 @@
 - 本地验证：Vision Orchestrator 全项目 `23 passed`，平台 Compose 合同 `18 passed`，Harness 一致性 `5 passed`；Compose 展开、Ruff、strict Mypy、compileall、`app.main` 导入、OpenSpec strict 和 `git diff --check` 全部通过。本地结果只证明并发/配置/探针合同，不能替代下一 release 的真实长视频和 cgroup 证据。
 - 结论：该 release 可作为失败诊断证据，但不得计入 OpenSpec 14.3-14.7；修复验证通过后必须用新 SHA、以本 release 为立即前驱重跑完整 8A.7。
 
+## 2026-08-20 8A.7 视觉容量等待被误判为后台循环故障
+
+- 失败 release：`c07df67910558716985941bb2feff73b637bd844`；立即前驱为 `ecadb0cb1e884f24c18aa77965d5695101931d2f`。
+- 已通过门禁：clean-clone 七组验证、最终 SHA 的 16 进程配置权威、八类算子镜像、四个平台镜像和 PostgreSQL `0006` 迁移路径。
+- 失败位置：Kafka 保留上轮未完成的视觉命令；Canonical 固定先启动平台、后启动 VBas。Vision Consumer 在 VBas 尚未注册时申请租约收到 HTTP `503`，将它当作致命异常退出；`/ready` 正确变为 `503`，Compose 因此将 Vision 判定为 unhealthy。
+- 根因：已确认的“离线容量不足应等待”规则只在业务节点层表达，`CapacityLeaseHttpClient` 没有区分容量 `503` 和其他 HTTP/协议错误，Consumer 也没有保持当前 offset 的容量重试路径。
+- 恢复：Canonical 最终输出 `restore: complete`；release 内存在唯一 `0400` 终态 audit。baseline 为 `0`，new ledger 为 `24`，24 个 `algorithm-operators` 容器均未运行，原 `ocr-v6-amd` 保持 Exited；维护锁已用非阻塞 `flock` 复核为可获取。
+- 修复边界：仅将租约申请中明确的“暂无可用算子容量” HTTP `503` 映射为可恢复等待；Consumer 按 `worker.poll_interval_seconds` 原地重试且不提交 offset，关闭信号可终止等待。注册中心不可用等其他 `503`、HTTP `400/401`、响应协议错误等仍是致命错误，避免 `/ready` 掩盖配置或依赖故障。
+- 本地验证：Vision Orchestrator 完整套件 `32 passed`，Ruff 和 strict Mypy 通过；最终数量以本修复提交前重跑记录为准。
+- 结论：该 release 只能作为启动顺序缺口证据，不得计入 OpenSpec 12.9/14.x；必须用包含修复的新 SHA、以本 release 为立即前驱重跑完整 8A.7。
+
 ## Record template
 
 - Date and scope:

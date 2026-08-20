@@ -12,6 +12,9 @@ from packages.platform_contracts.status import NodeStatus, TaskType
 from packages.platform_contracts.vision import VisualEventType
 from vision_orchestrator_service.app.application.events import VisualCommandProcessor
 from vision_orchestrator_service.app.core.config import VisionSettings
+from vision_orchestrator_service.app.infrastructure.capacity import (
+    CapacityUnavailableError,
+)
 from vision_orchestrator_service.app.infrastructure.runtime import (
     VisionOrchestratorRuntime,
     VisionResources,
@@ -83,6 +86,106 @@ async def test_consumer_does_not_commit_retryable_processing_failure(tmp_path) -
 
     with pytest.raises(RuntimeError, match="temporary"):
         await loop.run_once()
+    assert consumer.committed == []
+
+
+@pytest.mark.asyncio
+async def test_consumer_retries_capacity_unavailable_without_losing_message(
+    tmp_path,
+) -> None:
+    value = _command(
+        tmp_path,
+        TaskType.TEACHER_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    ).to_bytes()
+
+    class Processor:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def handle(self, value: bytes) -> None:
+            del value
+            self.calls += 1
+            if self.calls < 3:
+                raise CapacityUnavailableError("capacity unavailable")
+
+    consumer = Consumer([_message(value)])
+    processor = Processor()
+    loop = VisualCommandConsumerLoop(
+        consumer,
+        processor,
+        poll_timeout_seconds=0.1,
+        retry_delay_seconds=0.001,
+    )
+
+    assert await loop.run_once(stop_event=asyncio.Event()) == 1
+    assert processor.calls == 3
+    assert consumer.committed == [0]
+
+
+@pytest.mark.asyncio
+async def test_consumer_shutdown_stops_capacity_retry_without_commit(tmp_path) -> None:
+    value = _command(
+        tmp_path,
+        TaskType.STUDENT_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    ).to_bytes()
+
+    class Processor:
+        async def handle(self, value: bytes) -> None:
+            del value
+            raise CapacityUnavailableError("capacity unavailable")
+
+    consumer = Consumer([_message(value)])
+    loop = VisualCommandConsumerLoop(
+        consumer,
+        Processor(),
+        poll_timeout_seconds=0.1,
+        retry_delay_seconds=0.01,
+    )
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(loop.run_once(stop_event=stop_event))
+    await asyncio.sleep(0)
+    stop_event.set()
+
+    assert await task == 0
+    assert consumer.committed == []
+
+
+@pytest.mark.asyncio
+async def test_consumer_loop_stays_alive_while_waiting_for_capacity(tmp_path) -> None:
+    value = _command(
+        tmp_path,
+        TaskType.TEACHER_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    ).to_bytes()
+
+    class Processor:
+        def __init__(self) -> None:
+            self.called = asyncio.Event()
+
+        async def handle(self, value: bytes) -> None:
+            del value
+            self.called.set()
+            raise CapacityUnavailableError("capacity unavailable")
+
+    consumer = Consumer([_message(value)])
+    processor = Processor()
+    loop = VisualCommandConsumerLoop(
+        consumer,
+        processor,
+        poll_timeout_seconds=0.1,
+        retry_delay_seconds=0.01,
+    )
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(loop.run(stop_event))
+    await asyncio.wait_for(processor.called.wait(), timeout=1)
+
+    assert task.done() is False
+    assert consumer.committed == []
+
+    stop_event.set()
+    await asyncio.wait_for(task, timeout=1)
     assert consumer.committed == []
 
 

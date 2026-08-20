@@ -24,7 +24,7 @@ from ..application.analyzer import CourseVisualAnalyzer
 from ..application.events import VisualCommandProcessor
 from ..core.config import VisionSettings
 from ..domain.evidence import VisionEvidenceConfig, VisionEvidencePublisher
-from .capacity import CapacityLeaseHttpClient
+from .capacity import CapacityLeaseHttpClient, CapacityUnavailableError
 from .media import FFmpegFrameExtractor
 from .vbas import VbasBatchClient, VbasBatchConfig
 
@@ -46,12 +46,16 @@ class VisualCommandConsumerLoop:
         processor: CommandHandler,
         *,
         poll_timeout_seconds: float,
+        retry_delay_seconds: float = 1.0,
     ) -> None:
+        if retry_delay_seconds <= 0:
+            raise ValueError("视觉命令重试间隔必须大于 0")
         self._consumer = consumer
         self._processor = processor
         self._poll_timeout_seconds = poll_timeout_seconds
+        self._retry_delay_seconds = retry_delay_seconds
 
-    async def run_once(self) -> int:
+    async def run_once(self, *, stop_event: asyncio.Event | None = None) -> int:
         messages = await self._consumer.poll(timeout_seconds=self._poll_timeout_seconds)
         handled = 0
         for message in messages:
@@ -61,14 +65,27 @@ class VisualCommandConsumerLoop:
                 # Invalid envelopes cannot become valid after retry and must not block a partition.
                 await self._consumer.commit(message)
                 continue
-            await self._processor.handle(message.value)
+            while True:
+                try:
+                    await self._processor.handle(message.value)
+                    break
+                except CapacityUnavailableError:
+                    if stop_event is None:
+                        raise
+                    try:
+                        await asyncio.wait_for(
+                            stop_event.wait(), timeout=self._retry_delay_seconds
+                        )
+                    except TimeoutError:
+                        continue
+                    return handled
             await self._consumer.commit(message)
             handled += 1
         return handled
 
     async def run(self, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
-            await self.run_once()
+            await self.run_once(stop_event=stop_event)
 
 
 @dataclass(slots=True)
@@ -229,6 +246,7 @@ class VisionOrchestratorRuntime:
                 self.resources.consumer,
                 processor,
                 poll_timeout_seconds=self.settings.kafka.poll_timeout_seconds,
+                retry_delay_seconds=self.settings.worker.poll_interval_seconds,
             )
             self.tasks = {
                 "visual_command_consumer": asyncio.create_task(

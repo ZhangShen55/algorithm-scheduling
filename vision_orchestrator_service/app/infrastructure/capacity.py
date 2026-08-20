@@ -47,6 +47,10 @@ class CapacityLeaseClientError(RuntimeError):
     pass
 
 
+class CapacityUnavailableError(CapacityLeaseClientError):
+    pass
+
+
 class CapacityLeaseHttpClient:
     def __init__(self, http_client: httpx.AsyncClient, *, control_service_url: str) -> None:
         self._http = http_client
@@ -72,6 +76,8 @@ class CapacityLeaseHttpClient:
                 f"{self._control_service_url}/internal/operator-instances/lease",
                 json=payload,
             )
+            if self._is_capacity_unavailable(response, capability=capability):
+                raise CapacityUnavailableError(f"算子容量暂不可用: {capability}")
             response.raise_for_status()
             body = response.json()
             lease = self._parse_lease(body)
@@ -130,6 +136,22 @@ class CapacityLeaseHttpClient:
                 raise CapacityLeaseClientError(
                     f"释放算子容量租约失败: {lease.lease_id}: {exc}"
                 ) from exc
+
+    @staticmethod
+    def _is_capacity_unavailable(
+        response: httpx.Response,
+        *,
+        capability: str,
+    ) -> bool:
+        if response.status_code != 503:
+            return False
+        try:
+            body = response.json()
+        except ValueError:
+            return False
+        return isinstance(body, dict) and body.get("detail") == (
+            f"暂无可用算子容量: {capability}"
+        )
 
     @staticmethod
     def _parse_lease(body: object) -> CapacityLease:

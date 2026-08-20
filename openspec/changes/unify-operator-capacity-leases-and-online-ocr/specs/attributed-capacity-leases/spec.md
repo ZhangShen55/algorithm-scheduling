@@ -131,6 +131,14 @@ Control Service SHALL 提供 `GET /ops/operator-instances/{instance_id}/active-l
 - **WHEN** Orchestrator 的节点或工作项申请不到目标能力租约
 - **THEN** 工作 SHALL 保持容量等待并由后续调度重试，Control Service 的内部 HTTP `503` SHALL NOT 成为 A 服务的课程终态响应
 
+#### Scenario: Vision Orchestrator 先于 VBas 启动
+- **WHEN** Vision Orchestrator 已取得一条视觉命令，但 VBas 尚未注册或暂无可用容量
+- **THEN** Consumer SHALL 保持存活、不提交当前 Kafka offset 并原地等待重试，`/ready` SHALL NOT 仅因容量等待而失败
+
+#### Scenario: 容量等待期间关闭 Vision Orchestrator
+- **WHEN** Vision Orchestrator 在等待 VBas 容量时收到关闭信号
+- **THEN** Consumer SHALL 终止当前等待且 SHALL NOT 提交未完成命令的 Kafka offset
+
 ### Requirement: 活跃租约明细只保存在 Redis
 系统 SHALL 使用 Redis 保存高频活跃租约和工作上下文，SHALL NOT 为每次快速申请、绑定、续期和释放新增 PostgreSQL 明细写入；现有任务事实和低频审计边界 SHALL 保持不变。
 
