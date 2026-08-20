@@ -1212,6 +1212,7 @@
 - 修复边界：新租约申请仍要求有效心跳、`ONLINE` 和模型就绪；既有未过期租约续期不再仅因 heartbeat key 短暂缺失而失败。心跳缺失期间实例仍拒绝新租约，旧租约继续占用容量；实例注销、同 ID 重注册、显式 `OFFLINE`、Redis 运行标识变化和租约自身到期仍保持失败关闭。
 - 本地验证：真实 Redis 注册表 `23 passed`，Control/租约跨服务定向 `59 passed`。新增用例明确覆盖“心跳过期后旧租约可续期、新租约被拒绝、心跳恢复后旧租约仍占满容量”。
 - 失败现场恢复：向 Canonical Controller 发送 `SIGINT`，保留 release-tag 锁直到精确停止本轮 24 个算子容器完成。原 `ocr-v6-amd` 基线状态为 `exited + unless-stopped`，恢复后身份和状态一致；空暂停账本已归档为唯一 `0400` 终态审计 `existing-containers.jsonl.paused.jsonl.audit.4e076eac00d844b0818b80e4fba3ecc2.jsonl`，release-tag 锁可非阻塞重新获取；未执行 prune、`down -v`、卷/数据/证据删除。
+- 重跑参数校正：修复提交 `c5ba9b10b876def1d20ff05e982a01a1218d2db8` 首次启动后，在进入业务 Campaign 前发现 P 视频 URL 的百分号编码少了课程目录片段，立即向 Controller 发送 `SIGINT`。该 release 未发布算子账本或业务结果，空暂停账本已归档为唯一 `0400` 终态审计 `existing-containers.jsonl.paused.jsonl.audit.b25b628ab66f4501819222e1e7524d5f.jsonl`。由于已恢复的 SHA 不得重用，后续必须以新 SHA 和 `c5ba9b10...` 立即前驱重跑，并使用与 `702dba67...` 已验证课程完全相同的 T/S/P URL。
 - 验证边界：本地测试不能替代真实长 ASR；当前失败 release 不得计入 OpenSpec 14.3-14.7，必须用包含修复的新 SHA 重跑完整 Canonical。
 
 ## Record template
