@@ -37,6 +37,7 @@ EXPECTED_DATABASE_COLUMNS = {
     "course_jobs": ("id", "task_id", "input_snapshot", "created_at", "updated_at"),
     "course_task_types": (
         "id",
+        "submission_id",
         "task_id",
         "task_type",
         "status",
@@ -213,6 +214,16 @@ def _database_column_rows() -> list[tuple[str, ...]]:
 
 def _database_index_rows() -> list[tuple[str, ...]]:
     return [(table, index) for index, table in EXPECTED_DATABASE_INDEXES.items()]
+
+
+def test_runtime_preflight_database_columns_match_control_readiness() -> None:
+    from control_service.app.infrastructure.runtime import CONTROL_SCHEMA_COLUMNS
+
+    from deploy.scripts.preflight_checks import EXPECTED_DATABASE_COLUMNS as PREFLIGHT_COLUMNS
+
+    assert PREFLIGHT_COLUMNS == {
+        table: set(columns) for table, columns in CONTROL_SCHEMA_COLUMNS.items()
+    }
 
 
 def _kafka_topic_output(

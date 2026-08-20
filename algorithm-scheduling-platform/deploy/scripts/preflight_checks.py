@@ -31,6 +31,7 @@ EXPECTED_DATABASE_COLUMNS = {
     "course_jobs": {"id", "task_id", "input_snapshot", "created_at", "updated_at"},
     "course_task_types": {
         "id",
+        "submission_id",
         "task_id",
         "task_type",
         "status",

@@ -1101,6 +1101,17 @@
 - 聚焦验证：迁移首次执行/重复执行/异常 schema、平台启动顺序、partial-up 精确停止与完整 cleanup 共 `5 passed`，脚本 `bash -n` 通过。
 - 结论：该 release 仍不得计入 OpenSpec 12.9/14.x 完成证据；修复必须以新 Git SHA 和本失败 release 作为立即前驱重跑完整 8A.7。
 
+## 2026-08-20 8A.7 PostgreSQL 预检目录未同步 0006
+
+- 失败 release：`0d8ee4af910b739e3bbca90c8088986e3920bc7a`。
+- 已通过门禁：clean-clone 7 组命令、最终 SHA 的 16 进程配置权威、八类算子镜像构建/revision，以及四个平台镜像构建和健康检查。
+- 迁移证据：Canonical 在平台替换前输出 `control-schema-migration: already applied`，四个平台服务均为 healthy，证明 `0006` 应用与幂等路径有效。
+- 失败位置：runtime preflight 对 PostgreSQL 实际列目录执行严格对账时报告 `PostgreSQL column catalog does not match expected migration fields`，尚未启动本轮 24 个算子或进入业务 Campaign。
+- 原因：Control Service readiness 已把 `course_task_types.submission_id` 作为必需列，但独立部署 preflight 的 `EXPECTED_DATABASE_COLUMNS` 及其测试夹具仍停在 `0005`。
+- 恢复：Canonical 对继承的 24 项 new ledger 完成身份核验和精确停止，输出 `restore: complete`，维护锁释放，原 `ocr-v6-amd` 保持 Exited。
+- 修复：把 `submission_id` 纳入 runtime preflight 权威列目录和测试夹具；新增跨边界断言，要求部署 preflight 的列集合始终与 Control Service readiness 的 `CONTROL_SCHEMA_COLUMNS` 完全一致，避免后续迁移再次双写漂移。
+- 结论：该 release 不得计入 OpenSpec 12.9/14.x 完成证据；修复验证通过后必须以新 Git SHA 和本失败 release 作为立即前驱重跑完整 8A.7。
+
 ## Record template
 
 - Date and scope:

@@ -336,6 +336,17 @@ ASR Online 打包合同：15 tests OK
 必须保留到精确停止和 restore 完成后才能清理。聚焦回归为 `5 passed` 且迁移脚本 Bash 语法
 检查通过；仍需用新 SHA、以本 release 为立即前驱重跑完整 8A.7。
 
+## 2026-08-20 最终门禁 PostgreSQL 目录漂移
+
+`0d8ee4af910b739e3bbca90c8088986e3920bc7a` 已越过 clean-clone、16 进程配置权威、八镜像
+revision、`0006` 幂等迁移和四平台健康门禁，但 runtime preflight 的独立数据库列目录未包含
+`course_task_types.submission_id`，因此与真实 PostgreSQL 严格对账失败。本轮尚未启动新算子或
+进入业务 Campaign；Canonical 已验证继承账本、精确停止并输出 `restore: complete`。
+
+修复必须同时更新部署 preflight 和测试夹具，并增加与 Control Service readiness
+`CONTROL_SCHEMA_COLUMNS` 的集合一致性回归，防止后续前向迁移再次只更新服务健康检查而遗漏
+部署门禁。仍需用新 SHA、以本 release 为立即前驱重跑完整 8A.7。
+
 ## 实施后验证入口
 
 从工作区根目录执行 OpenSpec 门禁：

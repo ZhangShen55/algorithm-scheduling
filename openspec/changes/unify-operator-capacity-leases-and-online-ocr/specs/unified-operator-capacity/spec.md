@@ -113,6 +113,10 @@ ASR Online、ASR Offline、FaceRec、OCR、ScreenDet、PPT Slice、VBas 和 Text
 ### Requirement: 里程碑 2B 精确清理旧平台和算子镜像
 `192.168.29.11` SHALL 使用最终 Git SHA 重新构建平台与八算子镜像，并 SHALL 只在新镜像完成 revision 校验、容器替换、基础健康、24 实例注册和算子 Smoke 后，按预先记录的精确镜像引用或镜像 ID 删除不再被容器引用的旧平台/算子镜像。
 
+#### Scenario: 平台替换前迁移并对账任务库
+- **WHEN** 最终发布准备替换四个平台容器
+- **THEN** Canonical SHALL 先幂等应用并核验当前 `0006` 前向迁移，且后续 runtime preflight 的 PostgreSQL 必需列集合 SHALL 与 Control Service readiness 的权威列集合完全一致
+
 #### Scenario: 前驱在算子账本初始化前中断
 - **WHEN** 立即前驱没有完整 `baseline/new`，其 maintenance provenance 到达一个合法 direct maintenance release，且该 release 具有当前 UID 所有、单链接、`0400` 的同 tag predecessor marker
 - **THEN** 只读 resolver SHALL 可沿 marker 查找更早的完整算子账本，但 SHALL NOT 改写历史 marker/provenance，并 SHALL 仅在 `current - resolved baseline == resolved new` 精确成立后继承账本
