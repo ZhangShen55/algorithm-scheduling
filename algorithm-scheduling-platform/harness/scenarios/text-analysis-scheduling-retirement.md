@@ -101,3 +101,14 @@ DAG、注册、迁移、七算子部署权威、217 条反例、26 条压力/恢
   Canonical FaceRec Token/容器，warnings 为多线程测试进程调用 `fork()` 的既有 Python 弃用提示。
 - Attempt 1 只作为失败诊断证据；后续必须使用新的完整 SHA，并把本 release 作为立即前驱重跑
   全部 Canonical，不能在原 SHA 上覆盖结果。
+
+## 2026-08-21 远端 Attempt 2：错误的前驱选择
+
+- Attempt 2 SHA 为 `55059ff70b2a8486ca65a1721323cdd2297f8fea`。实际服务器容器清单已经
+  通过修复后的生产校验，证明三个固定历史容器只在精确退出态被接受。
+- Canonical 随后在镜像构建、维护快照和业务变更前拒绝启动，错误为
+  `PREVIOUS_RELEASE_ROOT has no authoritative maintenance state`。原因是错误地把只产生预检文件和
+  predecessor marker、但尚未建立权威 snapshot/audit 的 Attempt 1 当成前驱。
+- 当前 release 继承只允许从拥有完整维护状态或可信 provenance 的 release 开始。下一 SHA 必须
+  继续使用最近具备完整 snapshot、唯一恢复 audit 和算子账本的 `7785155...` 作为前驱；失败
+  Attempt 1/2 均只保留为诊断证据，不删除、不覆盖也不再次使用相同 SHA。

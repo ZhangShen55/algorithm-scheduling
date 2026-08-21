@@ -57,6 +57,14 @@
   名称漂移或其他未知算法容器继续失败关闭。修复后平台完整回归为
   `2739 passed, 3 skipped, 27 warnings`；本 attempt 不计入最终远端验收。
 
+## 2026-08-21 - 七算子远端 Attempt 2 前驱选择失败
+
+- SHA `55059ff70b2a8486ca65a1721323cdd2297f8fea` 已通过真实服务器容器清单校验，但误把没有
+  权威 snapshot/audit 的 Attempt 1 目录作为 `PREVIOUS_RELEASE_ROOT`，Canonical 在镜像构建和
+  维护快照前以 `PREVIOUS_RELEASE_ROOT has no authoritative maintenance state` 失败关闭。
+- 现场无新算子、无活动维护锁、无课程提交或业务数据变更。下一 SHA 继续以具有完整维护状态和
+  唯一恢复 audit 的 `7785155...` 为可信前驱；两个失败 attempt 仅作为诊断证据保留。
+
 ## 2026-08-21 - `standardize-service-file-logging` 本地实施与验证
 
 - 本变更基于 `778515596b42123a3061daeb9a1c3bb446f1de1b` 开始，目标是七个当前算子和四个平台服务；
