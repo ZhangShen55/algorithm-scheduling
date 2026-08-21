@@ -51,6 +51,17 @@ class Settings:
         return self._cfg.get("log_path", "./asr_online_service.log")
 
     @property
+    def logging_config(self) -> dict:
+        configured = dict(self._cfg.get("logging", {}))
+        if not configured and self.log_path:
+            legacy_path = Path(self.log_path)
+            configured = {
+                "directory": str(legacy_path.parent),
+                "file_name": legacy_path.name,
+            }
+        return configured
+
+    @property
     def device(self) -> str:
         return self._cfg.get("device", "cuda:0")
 

@@ -173,3 +173,8 @@ CPU 与 NVIDIA GPU 共用 `docker/Dockerfile`，Ascend NPU 使用 `docker/Docker
 - 修改接口前先运行契约测试；响应中的每个 `value[i]` 必须保持为 JSON 字符串，并与 `key[i]` 对应。
 
 接口字段见 [docs/接口兼容说明.md](docs/接口兼容说明.md)，跨硬件状态见 [docs/部署说明.md](docs/部署说明.md)。
+# 日志
+
+运行日志默认写入 `logs/{instance_id}/application.log`，同时输出到 stdout；单文件上限
+100 MiB，归档保留 7 日。日志不记录 Base64 图片、完整 OCR/公式文本或请求体。无挂载时可
+直接进入容器查看，跨重建持久化使用可选日志 Compose 覆盖层。

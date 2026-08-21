@@ -1,5 +1,30 @@
 # Change Ledger
 
+## 2026-08-21 - `standardize-service-file-logging` 本地实施与验证
+
+- 本变更基于 `778515596b42123a3061daeb9a1c3bb446f1de1b` 开始，目标是七个当前算子和四个平台服务；
+  `text_analysis/` 保持只读，不纳入日志实现、镜像或默认日志 override。当前工作区仍有其他用户变更，
+  最终 SHA 尚未冻结。
+- 已完成共享文件日志实现：项目根 `logs/{instance_id}/application.log`、文件/stdout 双输出、
+  100 MiB 单文件上限、七日归档清理、实例隔离、结构化字段、脱敏和 Uvicorn handler 幂等接管；
+  平台服务通过 `platform_common.logging` 复用同一合同。
+- 已完成 11 个根配置、7 个当前算子部署 TOML、Dockerfile 日志目录创建、可选
+  `docker-compose.logs.yml`、README/AGENTS/部署边界和 Harness 场景更新。默认 Compose 不挂载宿主机日志，
+  显式 override 才挂载 `/data/logs/algorithm-scheduling/{service}/{instance_id}`。
+- `deploy/scripts/preflight host` 已支持可选 `LOG_ROOT`：未设置时完全跳过宿主机日志目录；设置后
+  仅创建并验证非符号链接、当前身份归属、可写性和磁盘余量，不接触 `/data/result`。
+- 本地证据：提交前日志/平台/配置/Compose 聚焦回归 `107 passed`，ASR Offline 运行配置
+  `4/4`、OCR 完整套件 `175 passed`、FaceRec 日志配置 `1 passed`；敏感日志脚本和三份 Compose
+  展开均通过。平台 `.venv` 的 Ruff、strict Mypy（141 个源文件）和 `compileall` 均通过。
+  共享 wheel 仅向七算子构建和分发，SHA-256 为
+  `ff489dc4cd207cb4903dd1679a55e202349cb908fffdeb7ced12069b9ee869c8`；其在 Python 3.11.13
+  与 3.10.19 隔离导入通过，`asr`/`facerecapi` 的 `pip check` 通过。
+- 修复了一个真实兼容问题：共享日志实现不再直接依赖 Python 3.11 的 `datetime.UTC`，改用
+  `timezone.utc`；同时静态敏感检查改为 AST 参数判断，避免把日志文案中的 `embedding` 误报为向量数据。
+- 尚未完成：11 项真实推理/真实进程轮转与容器重建、远端构建、完整 2B 业务泳道和最终 SHA 冻结；
+  这些必须在 `retire-text-analysis-from-scheduling-platform` 本地完成后，以同一最终 SHA 统一执行，
+  本条不回写旧 release 的失败/通过结论。
+
 ## 2026-08-20 - `ea39759` Canonical LOAD-011 平台运行时稳定门禁修正
 
 - 失败 release：Git SHA `ea39759ad8abb7d970bef386d1f1de0dd0391c71`，证据目录为

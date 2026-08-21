@@ -41,3 +41,8 @@ docker build -f orchestrator_service/docker/Dockerfile -t orchestrator-service .
 Outbox Publisher、Kafka Consumer 和节点执行循环已经接入应用生命周期；`/ops/readiness`
 同时报告这些后台组件的状态。健康接口只说明进程存活，不能替代 readiness、真实基础设施和
 算子契约验证。
+# 日志
+
+运行日志默认写入 `logs/{instance_id}/application.log`，同时输出到 stdout；单文件上限
+100 MiB，归档保留 7 日。日志只保留 Outbox、Kafka、节点和算子实例上下文，不记录媒体
+URL 凭据或完整 ASR/OCR 结果。

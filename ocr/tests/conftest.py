@@ -60,8 +60,11 @@ layout_threshold = 0.5
 [logging]
 level = "INFO"
 directory = "logs"
-max_size_mb = 10
-backup_count = 2
+file_name = "application.log"
+max_file_size_mib = 10
+retention_days = 2
+stdout_enabled = true
+file_enabled = true
 """.strip(),
         encoding="utf-8",
     )

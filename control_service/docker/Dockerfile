@@ -30,6 +30,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+RUN mkdir -p /app/logs
+
 RUN --mount=type=bind,from=builder,source=/wheelhouse,target=/tmp/wheelhouse \
     --mount=type=bind,from=builder,source=/tmp/requirements.txt,target=/tmp/requirements.txt \
     python -m pip install \

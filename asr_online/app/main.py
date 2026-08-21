@@ -15,7 +15,7 @@ from packages.operator_registry_client import install_operator_runtime
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    setup_logging(settings.log_path)
+    setup_logging()
     reset_stats()
     app.state.run_start_time = datetime.utcnow()
     await load_models_if_needed()

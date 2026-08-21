@@ -45,6 +45,20 @@ Each root-level platform service independently owns `app/`, `tests/`, `docker/Do
 
 Keep `config.toml`, model directories, Docker files, scripts, tests and README files at the project root unless a project-specific `AGENTS.md` says otherwise. Resolve configuration and model paths from an explicit project root. `CONFIG_PATH` may override the default root `config.toml`.
 
+## Logging Contract
+
+The seven current operators and four root-level platform services write JSON Lines to
+`logs/{instance_id}/application.log` and stdout. Defaults are a 100 MiB active-file limit and
+seven-day archive retention, configured by the root `[logging]` TOML section. Docker images
+create the project `logs/` directory even when no host volume is mounted. Host persistence is
+optional and uses the platform `docker-compose.logs.yml` override; `text_analysis/` is outside
+this contract and must not be modified, built, registered or deployed by the platform.
+
+Logging must not contain Base64/media bytes, complete request or response bodies, credentials,
+complete ASR/OCR text or embeddings. Use the shared operator logging package and retain concise
+Chinese comments only around non-obvious rotation, cleanup, redaction, handler de-duplication and
+instance-path boundaries.
+
 ## Compatibility Boundaries
 
 - Do not change existing HTTP/WebSocket paths, methods, request fields, response fields or default service ports as part of structural work.

@@ -58,7 +58,8 @@ pip install -r requirements.txt
 Docker 构建默认使用清华 PyPI 镜像，并为构建工具升级和业务依赖安装统一设置
 300 秒超时、10 次重试和 Wheel 优先。`fastdeploy-gpu-python==1.0.7` 不在标准
 PyPI，构建默认通过 Paddle FastDeploy Wheel 页面解析 CPython 3.10 Linux 产物。
-交付环境可覆盖两个源：
+完整的镜像构建、单独启动和接入平台命令见
+[`docker/README.md`](docker/README.md)。交付环境可覆盖两个源：
 
 ```bash
 docker build \
@@ -235,3 +236,8 @@ POST /recognize
 ## 联系方式
 
 - 邮箱: seonzheung@gmail.com
+# 日志
+
+运行日志默认写入 `logs/{instance_id}/application.log`，同时输出到 stdout；单文件上限
+100 MiB，归档保留 7 日。人脸原图、embedding、Token 和完整数据库连接串不得进入日志；
+`save_person_photo` 只控制业务存储，不改变日志禁记规则。

@@ -53,3 +53,8 @@ PostgreSQL 迁移、Kafka 视觉主题和 Control Service 已就绪。VBas 可�
 docker build -f vision_orchestrator_service/docker/Dockerfile \
   -t vision-orchestrator-service .
 ```
+# 日志
+
+运行日志默认写入 `logs/{instance_id}/application.log`，同时输出到 stdout；单文件上限
+100 MiB，归档保留 7 日。日志只保留扫描轮次、时间点、租约和聚合摘要，不记录帧图片、
+Base64 或完整 VBas 响应。

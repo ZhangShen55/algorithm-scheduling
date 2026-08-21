@@ -37,7 +37,7 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     CONFIG_PATH=/workspace/config.toml
 
-RUN chmod +x docker/start.sh
+RUN chmod +x docker/start.sh && mkdir -p /workspace/logs
 ARG PROTECT_SOURCE=0
 RUN set -e; \
     if [ "$PROTECT_SOURCE" = "1" ]; then \

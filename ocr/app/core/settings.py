@@ -88,8 +88,11 @@ class FormulaSettings(BaseModel):
 class LoggingSettings(BaseModel):
     level: str = "INFO"
     directory: Path = Path("logs")
-    max_size_mb: Annotated[int, Field(ge=1)] = 100
-    backup_count: Annotated[int, Field(ge=1)] = 3
+    file_name: str = "application.log"
+    max_file_size_mib: Annotated[int, Field(ge=1)] = 100
+    retention_days: Annotated[int, Field(ge=1)] = 7
+    stdout_enabled: bool = True
+    file_enabled: bool = True
 
     @field_validator("level")
     @classmethod

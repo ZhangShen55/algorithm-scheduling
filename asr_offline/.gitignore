@@ -12,3 +12,4 @@ model/
 *.whl
 *.json
 *.log
+logs/

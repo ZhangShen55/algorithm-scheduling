@@ -110,3 +110,8 @@ conda run -n jy-tias python -m pip check
 ```
 
 最终验收需启动 `app.main:app`，直接调用学生和教师推理接口，不依赖外部视觉编排服务。
+# 日志
+
+运行日志默认写入 `logs/{instance_id}/application.log`，同时输出到 stdout；单文件上限
+100 MiB，归档保留 7 日。日志不记录学生/教师图片、Base64 或完整检测响应，只保留受控
+实例、批次、耗时和状态字段。

@@ -52,6 +52,7 @@ EXPECTED_PACKAGE_MODULES = (
     "client.py",
     "config.py",
     "lifecycle.py",
+    "logging.py",
     "ops.py",
     "runtime.py",
     "validation.py",

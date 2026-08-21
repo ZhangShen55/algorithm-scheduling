@@ -1,31 +1,37 @@
-import logging
-from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
+from packages.operator_registry_client import (
+    FileLoggingSettings,
+)
+from packages.operator_registry_client import (
+    configure_logging as configure_shared_logging,
+)
 
 from app.core.settings import LoggingSettings
 
 
 def configure_logging(settings: LoggingSettings) -> None:
-    settings.directory.mkdir(parents=True, exist_ok=True)
-    formatter = logging.Formatter(
-        "%(asctime)s %(levelname)s %(name)s %(message)s"
+    project_root = Path(__file__).resolve().parents[2]
+    directory = settings.directory
+    if directory.is_absolute():
+        try:
+            relative_directory = directory.resolve().relative_to(project_root)
+        except ValueError:
+            project_root = directory.resolve().parent
+            relative_directory = Path(directory.name)
+    else:
+        relative_directory = directory
+    shared_settings = FileLoggingSettings.from_mapping(
+        {
+            "level": settings.level,
+            "directory": str(relative_directory),
+            "file_name": settings.file_name,
+            "max_file_size_mib": settings.max_file_size_mib,
+            "retention_days": settings.retention_days,
+            "stdout_enabled": settings.stdout_enabled,
+            "file_enabled": settings.file_enabled,
+        },
+        service_name="ocr",
+        project_root=project_root,
     )
-
-    root = logging.getLogger()
-    root.setLevel(settings.level)
-    if any(getattr(handler, "_ocr_service_handler", False) for handler in root.handlers):
-        return
-
-    stream = logging.StreamHandler()
-    stream.setFormatter(formatter)
-    stream._ocr_service_handler = True
-    root.addHandler(stream)
-
-    file_handler = RotatingFileHandler(
-        settings.directory / "ocr-service.log",
-        maxBytes=settings.max_size_mb * 1024 * 1024,
-        backupCount=settings.backup_count,
-        encoding="utf-8",
-    )
-    file_handler.setFormatter(formatter)
-    file_handler._ocr_service_handler = True
-    root.addHandler(file_handler)
+    configure_shared_logging(shared_settings)

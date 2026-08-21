@@ -26,7 +26,12 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
     import time
     t_total_start = time.time()
 
-    logger.debug(f"[recognize] 接收到请求参数：{request}")
+    # 请求对象包含图片 Base64；日志只保留可排障的数量和阈值，不展开请求体。
+    logger.debug(
+        "[recognize] 收到图片识别请求 targets=%s threshold_override=%s",
+        len(request.targets or []),
+        request.threshold is not None,
+    )
 
     # 1. 确定阈值
     threshold = request.threshold if request.threshold else THRESHOLD
@@ -471,4 +476,3 @@ async def recognize_batch_api(request: BatchRecognizeRequest = Body(..., descrip
         message="批量识别成功"
     )
     ##
-

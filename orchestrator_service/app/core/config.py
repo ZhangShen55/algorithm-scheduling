@@ -13,6 +13,8 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
+from packages.platform_common.config import LoggingConfig
+
 SERVICE_ROOT = Path(__file__).resolve().parents[2]
 _config_path_override: ContextVar[Path | None] = ContextVar(
     "orchestrator_config_path_override",
@@ -140,6 +142,7 @@ class OrchestratorSettings(BaseSettings):
     )
 
     service: ServiceConfig = Field(default_factory=ServiceConfig)
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
     postgres: PostgresConfig = Field(default_factory=PostgresConfig)
     kafka: KafkaConfig = Field(default_factory=KafkaConfig)
     outbox: OutboxConfig = Field(default_factory=OutboxConfig)

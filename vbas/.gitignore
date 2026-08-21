@@ -36,5 +36,6 @@ tests2/head_pose_outputs/*
 
 tmp/
 mnt/
+logs/
 models-encrypted/
 docker/secrets/

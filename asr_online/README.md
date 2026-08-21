@@ -20,6 +20,7 @@ asr_online/
 ├── docker/
 │   ├── Dockerfile          # CUDA 12.1 + Conda 普通镜像构建
 │   ├── Dockerfile.cython   # Cython 编译镜像构建
+│   ├── README.md           # 镜像构建和 docker run 部署命令
 │   └── start.sh            # 容器启动脚本：单 Uvicorn、workers=1
 ├── requirements.txt        # Python 依赖
 ├── api/routes/
@@ -132,7 +133,9 @@ WebSocket 测试可参考 `test/test_api_ws_client.py`（需自备 16 kHz PCM/WA
 
 ## Docker 构建与运行
 
-镜像基于 `nvcr.io/nvidia/cuda:12.1.1-cudnn8-runtime-centos7`，内含 Conda 环境 `seacraftasr_online`。**需要 NVIDIA GPU 与 nvidia-container-toolkit** 才能在容器内使用 CUDA。
+镜像基于 `nvcr.io/nvidia/cuda:12.1.1-cudnn8-runtime-centos7`，内含 Conda 环境 `asr`。
+使用 CUDA 时需要 NVIDIA GPU 与 NVIDIA Container Toolkit。完整构建、单独启动和接入平台的
+命令见 [`docker/README.md`](docker/README.md)。
 
 ### 构建镜像
 
@@ -175,26 +178,17 @@ python setup_cython.py build_ext --inplace
 
 ### 运行容器
 
-模型目录需**挂载到容器内**与 `config.toml` 一致的路径（或挂载自定义 `config.toml`）：
+镜像已经包含项目根 `model/`。运行时必须挂载实际 `config.toml`；仅在配置显式使用镜像外模型
+路径时才需要额外挂载模型目录：
 
 ```bash
 docker run -d \
   --name seacraft-asr-online \
   --gpus all \
   -p 8084:8084 \
-  -v /path/on/host/model_zoo:/var/model_zoo/model_asr:ro \
   -v /path/on/host/config.toml:/config.toml:ro \
-  seacraft-asr-online:latest
-```
-
-仅使用镜像内默认配置时，可省略 config 挂载（镜像已将 `config.toml` 复制为 `/config.toml`），但**模型卷仍必须提供**：
-
-```bash
-docker run -d \
-  --name seacraft-asr-online \
-  --gpus all \
-  -p 8084:8084 \
-  -v /path/on/host/model_zoo:/var/model_zoo/model_asr:ro \
+  -e CONFIG_PATH=/config.toml \
+  -e UVICORN_WORKERS=1 \
   seacraft-asr-online:latest
 ```
 
@@ -237,3 +231,8 @@ WebSocket 压测或单路测试：将 `test/test_api_ws_client.py` 中的 `ws_ur
 ## 许可证
 
 请根据组织/仓库实际许可证补充；本仓库未单独声明 LICENSE 文件时以上游 FunASR、ModelScope 及所用模型许可为准。
+# 日志
+
+运行日志默认写入 `logs/{instance_id}/application.log`，同时输出到 stdout；单文件上限
+100 MiB，归档保留 7 日。日志不记录 PCM、完整转写文本、WebSocket 消息体或凭据。容器不
+挂载日志卷时仍可在容器内查看；跨重建持久化使用可选日志 Compose 覆盖层。

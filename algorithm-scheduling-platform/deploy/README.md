@@ -80,6 +80,35 @@ docker compose -f deploy/docker-compose.platform.yml ps
 deploy/scripts/preflight runtime --git-sha "$EXPECTED_GIT_SHA"
 ```
 
+## 日志持久化（可选）
+
+四个平台服务和七类当前算子默认在容器内写入
+`logs/{instance_id}/application.log`，同时输出 stdout；单文件上限 100 MiB，归档保留
+7 日。默认启动不需要宿主机日志目录。需要跨容器重建保留时，在通过预检创建并校验
+`/data/logs/algorithm-scheduling` 后，额外加载 `deploy/docker-compose.logs.yml`：
+
+```bash
+docker compose \
+  -f deploy/docker-compose.platform.yml \
+  -f deploy/docker-compose.operators.yml \
+  -f deploy/docker-compose.logs.yml \
+  --profile '*' up -d
+```
+
+该覆盖层只增加独立实例目录挂载，不改变服务、端口、GPU/CPU、模型或结果目录合同；
+`text_analysis` 不在当前日志标准化范围内，也不由该覆盖层发布。
+
+启用覆盖层前可在主机预检中显式设置 `LOG_ROOT`；预检只在该变量非空时创建并校验日志根目录的
+非符号链接、当前执行身份归属、可写性和剩余空间。未设置 `LOG_ROOT` 时不会检查或创建宿主机
+日志目录，也不会影响无挂载模式：
+
+```bash
+LOG_ROOT=/data/logs/algorithm-scheduling \
+MIN_LOG_FREE_GIB=1 \
+OPERATOR_REGISTRY_TOKEN="$OPERATOR_REGISTRY_TOKEN" \
+deploy/scripts/preflight host
+```
+
 Do not start the infrastructure and platform files sequentially as separate Compose
 projects. Use `docker-compose.infrastructure.yml` alone only for dependency tests or
 when platform processes intentionally run on the host.

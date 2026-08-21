@@ -78,3 +78,8 @@ algorithm-scheduling-platform/deploy/scripts/run-online-gateway-smoke \
 docker build -f online_gateway_service/docker/Dockerfile \
   -t online-gateway-service .
 ```
+# 日志
+
+运行日志默认写入 `logs/{instance_id}/application.log`，同时输出到 stdout；单文件上限
+100 MiB，归档保留 7 日。日志只记录图片/音频大小、耗时、实例和状态，不记录图像、音频、
+完整转写、Token 或 Cookie。

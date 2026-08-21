@@ -11,6 +11,8 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
+from packages.platform_common.config import LoggingConfig
+
 SERVICE_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -78,6 +80,7 @@ class OnlineGatewaySettings(BaseSettings):
     )
 
     service: ServiceConfig = ServiceConfig()
+    logging: LoggingConfig = LoggingConfig()
     control: ControlConfig = ControlConfig()
     face_persons: FacePersonsConfig = FacePersonsConfig()
     http: HttpConfig = HttpConfig()

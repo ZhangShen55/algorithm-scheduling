@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from logging.handlers import TimedRotatingFileHandler
+from packages.operator_registry_client.logging import SizeAndAgeRotatingFileHandler
 
 
 ASR_ROOT = Path(__file__).resolve().parents[1]
@@ -78,13 +78,15 @@ class RuntimeConfigurationTests(unittest.TestCase):
                 rotating_handlers = [
                     handler
                     for handler in root.handlers
-                    if isinstance(handler, TimedRotatingFileHandler)
+                    if isinstance(handler, SizeAndAgeRotatingFileHandler)
                 ]
                 self.assertEqual(len(rotating_handlers), 1)
-                self.assertEqual(rotating_handlers[0].when, "MIDNIGHT")
-                # The active daily file plus six rotated files cover no more than seven days.
-                self.assertEqual(rotating_handlers[0].backupCount, 6)
-                self.assertEqual(Path(rotating_handlers[0].baseFilename), log_dir / "asr_service.log")
+                self.assertEqual(rotating_handlers[0].settings.retention_days, 7)
+                self.assertEqual(rotating_handlers[0]._max_bytes, 100 * 1024 * 1024)
+                self.assertEqual(
+                    rotating_handlers[0].settings.log_path,
+                    (log_dir / "local" / "application.log").resolve(),
+                )
         finally:
             for handler in root.handlers[:]:
                 root.removeHandler(handler)

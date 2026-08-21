@@ -14,6 +14,22 @@ log_level = "INFO"
 # 跨服务链路跟踪请求头名。
 trace_header = "X-Trace-ID"
 
+[logging]
+# 日志级别；支持 CRITICAL、ERROR、WARNING、INFO、DEBUG、NOTSET。
+level = "INFO"
+# 相对 control_service 项目根的日志目录；不挂载时写入容器内该目录。
+directory = "logs"
+# 当前实例活动日志文件名。
+file_name = "application.log"
+# 单个日志文件最大大小，单位 MiB。
+max_file_size_mib = 100
+# 归档日志保留天数。
+retention_days = 7
+# 是否同时输出到容器 stdout。
+stdout_enabled = true
+# 是否写入项目根日志文件。
+file_enabled = true
+
 [postgres]
 # 平台任务库 DSN；生产用户名和密码通过 CONTROL_POSTGRES__DSN 覆盖。
 dsn = "postgresql+psycopg://algorithm:algorithm@127.0.0.1:5432/algorithm"

@@ -32,6 +32,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+RUN mkdir -p /app/logs
+
 RUN sed -i \
         -e "s|http://deb.debian.org/debian-security|${DEBIAN_SECURITY_MIRROR}|g" \
         -e "s|http://deb.debian.org/debian|${DEBIAN_MIRROR}|g" \

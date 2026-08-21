@@ -8,7 +8,13 @@ from packages.platform_common.trace import trace_context
 
 
 def create_gateway_base_app(settings: PlatformSettings) -> FastAPI:
-    configure_logging(service_name=settings.service_name, level=settings.log_level)
+    configure_logging(
+        service_name=settings.service_name,
+        level=settings.log_level,
+        instance_id=settings.logging.instance_id,
+        project_root=settings.project_root,
+        logging_config=settings.logging.model_dump(),
+    )
     metrics = PlatformMetrics()
     app = FastAPI(title=settings.service_name)
     app.state.settings = settings

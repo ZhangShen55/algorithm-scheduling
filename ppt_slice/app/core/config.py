@@ -101,13 +101,18 @@ def load_toml_config() -> dict:
 
         # logging section
         if "logging" in config:
-            flat_config["LOG_LEVEL"] = config["logging"].get("level")
-            flat_config["LOG_DIR"] = config["logging"].get("dir")
-            flat_config["LOG_FILE"] = config["logging"].get("file")
-            flat_config["LOG_MAX_BYTES"] = config["logging"].get("max_bytes")
-            flat_config["LOG_BACKUP_COUNT"] = config["logging"].get("backup_count")
-            flat_config["LOG_FORMAT"] = config["logging"].get("format")
-            flat_config["LOG_DATE_FORMAT"] = config["logging"].get("date_format")
+            logging_data = config["logging"]
+            flat_config["LOG_LEVEL"] = logging_data.get("level")
+            flat_config["LOG_DIR"] = logging_data.get("directory", logging_data.get("dir"))
+            flat_config["LOG_FILE"] = logging_data.get("file_name", logging_data.get("file"))
+            flat_config["LOG_MAX_FILE_SIZE_MIB"] = logging_data.get(
+                "max_file_size_mib", 100
+            )
+            flat_config["LOG_RETENTION_DAYS"] = logging_data.get("retention_days", 7)
+            flat_config["LOG_STDOUT_ENABLED"] = logging_data.get("stdout_enabled", True)
+            flat_config["LOG_FILE_ENABLED"] = logging_data.get("file_enabled", True)
+            flat_config["LOG_FORMAT"] = logging_data.get("format")
+            flat_config["LOG_DATE_FORMAT"] = logging_data.get("date_format")
 
         # 移除 None 值
         return {k: v for k, v in flat_config.items() if v is not None}
@@ -168,6 +173,10 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_DIR: str = "./logs"
     LOG_FILE: str = "app.log"
+    LOG_MAX_FILE_SIZE_MIB: int = Field(100, gt=0)
+    LOG_RETENTION_DAYS: int = Field(7, gt=0)
+    LOG_STDOUT_ENABLED: bool = True
+    LOG_FILE_ENABLED: bool = True
     LOG_MAX_BYTES: int = 10 * 1024 * 1024  # 10MB
     LOG_BACKUP_COUNT: int = 5
     LOG_FORMAT: str = DEFAULT_LOG_FORMAT

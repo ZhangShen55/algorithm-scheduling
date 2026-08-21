@@ -4,6 +4,27 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+class LoggingConfig(BaseSettings):
+    """文件日志合同；相对目录始终从服务项目根解析。"""
+
+    level: str = "INFO"
+    directory: str = "logs"
+    file_name: str = "application.log"
+    max_file_size_mib: int = Field(default=100, gt=0)
+    retention_days: int = Field(default=7, gt=0)
+    stdout_enabled: bool = True
+    file_enabled: bool = True
+    instance_id: str | None = None
+
+    @field_validator("level")
+    @classmethod
+    def normalize_level(cls, value: str) -> str:
+        normalized = value.upper()
+        if normalized not in {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}:
+            raise ValueError("logging.level 不是有效的 Python 日志级别")
+        return normalized
+
+
 class PlatformSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="PLATFORM_",
@@ -16,6 +37,8 @@ class PlatformSettings(BaseSettings):
     environment: str = "development"
     log_level: str = "INFO"
     trace_header: str = "X-Trace-ID"
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    project_root: Path = Path(".")
 
     postgres_dsn: str = "postgresql+psycopg://algorithm:algorithm@127.0.0.1:5432/algorithm"
     kafka_bootstrap_servers: str = "127.0.0.1:9092"

@@ -3,12 +3,26 @@
 id_engine = "online-1"
 version = "seacraft-asr-online-v1.0.0"
 
-# 设备配置（建议与主服务使用不同 GPU 以避免显存竞争）
+# 使用cpu启动 device = "cpu"，gpu启动 device = "cuda:0"
 device = "cpu"
+# 使用gpu数量的参数，1：表示使用1张GPU，如果使用GPU，默认为1，CPU为0
 ngpu = 0
 
-# 日志
-log_path = "./asr_online_service.log"
+[logging]
+# 日志级别。
+level = "INFO"
+# 相对项目根的日志目录；未挂载时写入容器内该目录。
+directory = "logs"
+# 当前实例日志文件名。
+file_name = "application.log"
+# 单个日志文件最大大小，单位 MiB。
+max_file_size_mib = 100
+# 归档日志保留天数。
+retention_days = 7
+# 是否输出到 stdout。
+stdout_enabled = true
+# 是否写入文件。
+file_enabled = true
 
 [platform]
 # 本地默认不主动向调度平台注册

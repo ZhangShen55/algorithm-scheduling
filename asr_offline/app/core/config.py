@@ -147,6 +147,10 @@ class Settings:
     def chunk_retry_count(self) -> int:
         return int(self._cfg.get("audio_chunk", {}).get("chunk_retry_count", 2))
 
+    @property
+    def logging_config(self) -> dict:
+        return dict(self._cfg.get("logging", {}))
+
 
 settings = Settings()
 operator_deployment = load_operator_deployment_settings(

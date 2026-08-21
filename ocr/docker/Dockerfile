@@ -75,6 +75,7 @@ RUN --mount=type=secret,id=ocr_model_manifest,required=true \
          --exact \
     && install -m 0444 /run/secrets/ocr_model_manifest /app/models/manifest.sha256 \
     && cp /app/.build/config.toml /app/config.toml \
+    && mkdir -p /app/logs \
     && python -c "import app.main; import app.engines.paddleocr_v6; import app.engines.paddle_formula; import app.services.ocr_service; import app.services.formula_service" \
     && rm -f /app/config.toml \
     && rm -rf /app/.build

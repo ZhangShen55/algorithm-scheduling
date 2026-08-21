@@ -65,11 +65,12 @@ class DetectionConfig:
 @dataclass(frozen=True)
 class LoggingConfig:
     level: str = "INFO"
-    log_dir: str = "logs"
-    access_log: str = "access.log"
-    app_log: str = "app.log"
-    max_bytes: int = 10 * 1024 * 1024
-    backup_count: int = 10
+    directory: str = "logs"
+    file_name: str = "application.log"
+    max_file_size_mib: int = 100
+    retention_days: int = 7
+    stdout_enabled: bool = True
+    file_enabled: bool = True
 
 
 @dataclass(frozen=True)

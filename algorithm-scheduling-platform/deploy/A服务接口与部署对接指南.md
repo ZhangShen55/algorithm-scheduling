@@ -309,6 +309,17 @@ A/播放器建连后发送现有实时 ASR 协议规定的音频帧，平台在�
 
 ## 7. 网络与部署连通性
 
+## 7.0 日志边界（不新增 A 接口）
+
+平台内部七个当前算子和四个平台服务各自将 JSON Lines 写入
+`logs/{instance_id}/application.log`，并同步输出 stdout；默认单文件上限 100 MiB、归档
+保留 7 日。宿主机持久化日志是平台部署选项，目录位于
+`/data/logs/algorithm-scheduling/{service}/{instance_id}`，不属于 A 的请求、查询或结果
+合同。A 不直接读取该目录，也不接收日志路径；仍通过课程任务查询接口获取状态和结果。
+
+日志禁止记录 Base64、音视频/图片字节、完整请求体、Token、Cookie、密码、完整 DSN、完整
+ASR/OCR 文本和 embedding。`text_analysis` 不属于当前平台发布范围。
+
 ### 7.1 平台进程运行在宿主机
 
 A 与平台同机时使用：

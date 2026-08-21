@@ -1,0 +1,81 @@
+name: algorithm-scheduling-logs
+
+# 可选日志持久化覆盖层。默认 Compose 不加载本文件；需要跨容器重建保留日志时，
+# 通过 `-f docker-compose.operators.yml -f docker-compose.logs.yml` 显式启用。
+# LOG_ROOT 未设置时使用 /data/logs/algorithm-scheduling，目录预检由部署脚本负责。
+services:
+  control-service:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/control-service/control-service", target: /app/logs/control-service}
+  orchestrator-service:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/orchestrator-service/orchestrator-service", target: /app/logs/orchestrator-service}
+  vision-orchestrator-service:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/vision-orchestrator-service/vision-orchestrator-service", target: /app/logs/vision-orchestrator-service}
+  online-gateway-service:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/online-gateway-service/online-gateway-service", target: /app/logs/online-gateway-service}
+  asr-offline-gpu0:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/asr_offline/asr-offline-gpu0", target: /app/logs/asr-offline-gpu0}
+  asr-offline-gpu1:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/asr_offline/asr-offline-gpu1", target: /app/logs/asr-offline-gpu1}
+  asr-offline-gpu2:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/asr_offline/asr-offline-gpu2", target: /app/logs/asr-offline-gpu2}
+  asr-online-gpu0:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/asr_online/asr-online-gpu0", target: /app/logs/asr-online-gpu0}
+  asr-online-gpu1:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/asr_online/asr-online-gpu1", target: /app/logs/asr-online-gpu1}
+  asr-online-gpu2:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/asr_online/asr-online-gpu2", target: /app/logs/asr-online-gpu2}
+  ocr-gpu0:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/ocr/ocr-gpu0", target: /app/logs/ocr-gpu0}
+  ocr-gpu1:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/ocr/ocr-gpu1", target: /app/logs/ocr-gpu1}
+  ocr-gpu2:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/ocr/ocr-gpu2", target: /app/logs/ocr-gpu2}
+  vbas-gpu0:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/vbas/vbas-gpu0", target: /workspace/logs/vbas-gpu0}
+  vbas-gpu1:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/vbas/vbas-gpu1", target: /workspace/logs/vbas-gpu1}
+  vbas-gpu2:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/vbas/vbas-gpu2", target: /workspace/logs/vbas-gpu2}
+  facerec-gpu0:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/facerec/facerec-gpu0", target: /app/logs/facerec-gpu0}
+  facerec-gpu1:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/facerec/facerec-gpu1", target: /app/logs/facerec-gpu1}
+  facerec-gpu2:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/facerec/facerec-gpu2", target: /app/logs/facerec-gpu2}
+  screen-det-gpu0:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/screen_det/screen-det-gpu0", target: /app/logs/screen-det-gpu0}
+  screen-det-gpu1:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/screen_det/screen-det-gpu1", target: /app/logs/screen-det-gpu1}
+  screen-det-gpu2:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/screen_det/screen-det-gpu2", target: /app/logs/screen-det-gpu2}
+  ppt-slice-cpu0:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/ppt_slice/ppt-slice-cpu0", target: /workspace/logs/ppt-slice-cpu0}
+  ppt-slice-cpu1:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/ppt_slice/ppt-slice-cpu1", target: /workspace/logs/ppt-slice-cpu1}
+  ppt-slice-cpu2:
+    volumes:
+      - {type: bind, source: "${LOG_ROOT:-/data/logs/algorithm-scheduling}/ppt_slice/ppt-slice-cpu2", target: /workspace/logs/ppt-slice-cpu2}

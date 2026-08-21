@@ -4,7 +4,7 @@ from packages.platform_common.application import create_service_app
 from packages.platform_common.config import PlatformSettings
 
 from ..api import router
-from ..core.config import VisionSettings
+from ..core.config import SERVICE_ROOT, VisionSettings
 from ..infrastructure.runtime import VisionOrchestratorRuntime
 
 
@@ -20,6 +20,8 @@ def create_vision_orchestrator_app(
         environment=resolved.service.environment,
         log_level=resolved.service.log_level,
         trace_header=resolved.service.trace_header,
+        logging=resolved.logging,
+        project_root=SERVICE_ROOT,
         postgres_dsn=resolved.postgres.dsn,
         kafka_bootstrap_servers=resolved.kafka.bootstrap_servers,
         control_service_url=resolved.control.base_url,

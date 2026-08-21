@@ -383,6 +383,32 @@ def validate_root_disk(available_kib: int, minimum_gib: int) -> None:
         )
 
 
+def validate_logging_root(path: Path, *, minimum_free_gib: int = 1) -> None:
+    """仅在启用宿主机日志挂载时创建并校验独立日志根目录。"""
+    directory = Path(path)
+    if not directory.is_absolute():
+        raise DeploymentContractError("logging root must be an absolute path")
+    current = Path(directory.anchor)
+    for component in directory.relative_to(directory.anchor).parts:
+        current /= component
+        if current.is_symlink():
+            raise DeploymentContractError(f"logging root contains a symlink: {current}")
+        if current.exists() and not current.is_dir():
+            raise DeploymentContractError(f"logging root component is not a directory: {current}")
+        if not current.exists():
+            current.mkdir(mode=0o750)
+    validate_writable_directory(directory)
+    metadata = directory.stat()
+    if metadata.st_uid != os.geteuid():
+        raise DeploymentContractError(
+            f"logging root is not owned by the preflight identity: {directory}"
+        )
+    if minimum_free_gib < 0:
+        raise DeploymentContractError("logging root minimum free GiB must be non-negative")
+    available_kib = shutil.disk_usage(directory).free // 1024
+    validate_root_disk(available_kib, minimum_free_gib)
+
+
 def validate_existing_algorithm_containers(
     containers: Iterable[Mapping[str, Any]],
     allowed_identities: set[tuple[str, str]],
@@ -556,6 +582,9 @@ def _build_parser() -> argparse.ArgumentParser:
     root_disk = subparsers.add_parser("root-disk")
     root_disk.add_argument("--available-kib", required=True, type=int)
     root_disk.add_argument("--minimum-gib", required=True, type=int)
+    logging_root = subparsers.add_parser("logging-root")
+    logging_root.add_argument("path")
+    logging_root.add_argument("--minimum-free-gib", type=int, default=1)
     containers = subparsers.add_parser("existing-containers")
     containers.add_argument("container_document")
     containers.add_argument("compose_documents", nargs="+")
@@ -603,6 +632,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             validate_writable_directory(Path(path))
     elif arguments.command == "root-disk":
         validate_root_disk(arguments.available_kib, arguments.minimum_gib)
+    elif arguments.command == "logging-root":
+        validate_logging_root(
+            Path(arguments.path), minimum_free_gib=arguments.minimum_free_gib
+        )
     elif arguments.command == "existing-containers":
         containers = _load_json(arguments.container_document)
         if not isinstance(containers, list):

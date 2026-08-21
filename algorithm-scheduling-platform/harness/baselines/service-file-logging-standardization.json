@@ -1,0 +1,43 @@
+{
+  "schema": "service-file-logging-standardization",
+  "schema_version": 1,
+  "scope": {
+    "operators": [
+      "asr_offline",
+      "asr_online",
+      "facerec",
+      "ocr",
+      "screen_det",
+      "ppt_slice",
+      "vbas"
+    ],
+    "platform_services": [
+      "control_service",
+      "orchestrator_service",
+      "vision_orchestrator_service",
+      "online_gateway_service"
+    ],
+    "excluded_projects": ["text_analysis"]
+  },
+  "defaults": {
+    "directory": "logs",
+    "file_name": "application.log",
+    "max_file_size_mib": 100,
+    "retention_days": 7,
+    "stdout_enabled": true,
+    "file_enabled": true
+  },
+  "required_evidence": [
+    "config_contract",
+    "structured_json_lines",
+    "size_rotation",
+    "seven_day_archive_cleanup",
+    "instance_directory_isolation",
+    "sensitive_logging_sentinel",
+    "container_without_log_mount",
+    "optional_host_mount_restart_continuity",
+    "text_analysis_snapshot_unchanged"
+  ],
+  "local_status": "implementation_and_static_contracts_passed",
+  "remote_status": "not_started_until_retirement_sha_is_frozen"
+}

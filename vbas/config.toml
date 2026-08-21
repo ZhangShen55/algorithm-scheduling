@@ -17,6 +17,22 @@ max_concurrent_requests = 128
 # 本地默认允许 CPU；GPU 部署配置显式设为 true
 require_gpu = false
 
+[logging]
+# 日志级别。
+level = "INFO"
+# 相对项目根的日志目录；未挂载时写入容器内该目录。
+directory = "logs"
+# 当前实例日志文件名。
+file_name = "application.log"
+# 单个日志文件最大大小，单位 MiB。
+max_file_size_mib = 100
+# 归档日志保留天数。
+retention_days = 7
+# 是否输出到 stdout。
+stdout_enabled = true
+# 是否写入文件。
+file_enabled = true
+
 [TIAS]
 # TIAS 实例身份和对外访问地址。
 InstanceId = "tias-8981"

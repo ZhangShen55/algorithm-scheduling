@@ -17,7 +17,7 @@ COPY app ./app
 COPY models ./models
 COPY scripts/verify_models.py ./scripts/verify_models.py
 
-RUN python scripts/verify_models.py
+RUN python scripts/verify_models.py && mkdir -p /app/logs
 
 EXPOSE 8866
 

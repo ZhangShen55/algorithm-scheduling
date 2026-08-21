@@ -498,7 +498,11 @@ async def search_person_api(
         )
 
         if not persons_list:
-            logger.warning(f"[/persons/search] 未找到人物: {request.model_dump(exclude_unset=True)}")
+            logger.warning(
+                "[/persons/search] 未找到人物 name_provided=%s number_provided=%s",
+                bool(request.name),
+                bool(request.number),
+            )
             return ApiResponse.success(
                 data={"persons": []},
                 message="未找到符合条件的人物"

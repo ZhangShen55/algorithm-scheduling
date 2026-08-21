@@ -325,7 +325,8 @@ async def analyze_student_behavior(
                 logger.info(f"[学生行为分析] Base64图片解码耗时: {(time.time() - decode_start) * 1000:.1f}ms")
             elif image_item.StoragePath.startswith('http://') or image_item.StoragePath.startswith('https://'):
                 # 网络流图片
-                logger.debug(f"[图片处理] 从网络URL加载图片 ID={image_item.ImageId}: Url={image_item.StoragePath}")
+                # URL 可能带签名或媒体凭据，只记录来源类型和图片标识。
+                logger.debug("[图片处理] 从网络 URL 加载图片 ID=%s", image_item.ImageId)
                 import requests
                 t0 = time.time()
                 resp = requests.get(image_item.StoragePath, timeout=5)
@@ -427,7 +428,11 @@ async def analyze_student_behavior(
             logger.info(
                 f"[学生行为分析] 图片 {image_item.ImageId} 处理完成: 人数={len(person_positions)}, 抬头={len(face_positions)}, 行为检测={sum(len(pos) for pos in behavior_results.values())}, 总检测数={total_detections}, 耗时={image_use_time_ms}ms")
         except Exception as e:
-            logger.error(f"[学生行为分析] 图片 {image_item.ImageId} 处理失败: {str(e)}")
+            logger.error(
+                "[学生行为分析] 图片处理失败 image_id=%s error_type=%s",
+                image_item.ImageId,
+                type(e).__name__,
+            )
             # 添加失败结果
             image_result = ImageResult(
                 StatusObject={"StatusString": "failed", "StatusCode": 500},

@@ -83,7 +83,7 @@ COPY ./docker/start.sh /usr/local/bin/vbas-start
 
 RUN chmod 0755 /usr/local/bin/tias-secure-entrypoint && \
     chmod 0755 /usr/local/bin/vbas-start && \
-    mkdir -p /workspace/model-assets /workspace/models-encrypted && \
+    mkdir -p /workspace/model-assets /workspace/models-encrypted /workspace/logs && \
     find /workspace/app -type d -name '__pycache__' -prune -exec rm -rf {} + && \
     find /workspace/app -type f \( -name '*.pt' -o -name '*.pth' -o -name '*.onnx' -o -name '*.engine' -o -name '*.key' -o -name '*.pem' -o -name '*.crt' \) -delete
 

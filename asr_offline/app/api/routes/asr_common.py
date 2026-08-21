@@ -97,7 +97,14 @@ async def prepare_asr_context(request: AsrRequestParams) -> Tuple[Optional[dict]
         logger.error("音频为空")
         return {"msg": "音频文件不能为空", "code": 4001}, None
 
-    logger.info(f"request: \n{request}")
+    # 请求模型包含 UploadFile 和可选热词，不能序列化整个对象进入日志。
+    logger.info(
+        "收到 ASR 请求 filename_present=%s hotword_count=%s show_spk=%s show_emotion=%s",
+        bool(request.audioFile.filename),
+        len(request.hotWords or []),
+        request.showSpk,
+        request.showEmotion,
+    )
 
     param_dict = {
         "batch_size_s": 300,

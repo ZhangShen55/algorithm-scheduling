@@ -260,9 +260,22 @@ curl http://127.0.0.1:9001/LocalVideoPPTSliceTasks/v1.0.0/getVersion
 
 ## Docker
 
+完整部署说明见 [`docker/README.md`](docker/README.md)。以下命令从项目根目录执行：
+
 ```bash
-docker build -t ppt-slice .
-docker run --rm -p 9001:9001 \
-  -v /host/result:/data/result \
-  ppt-slice
+docker build -f docker/Dockerfile -t algorithm-ppt-slice:local .
+docker run -d \
+  --name ppt-slice-cpu0 \
+  --restart unless-stopped \
+  -p 9001:9001 \
+  -v /opt/algorithm-operators/ppt_slice/config.toml:/workspace/config.toml:ro \
+  -v /opt/algorithm-operators/ppt_slice/result:/data/result \
+  -e CONFIG_PATH=/workspace/config.toml \
+  -e RESULT_ROOT=/data/result \
+  algorithm-ppt-slice:local
 ```
+# 日志
+
+运行日志默认写入 `logs/{instance_id}/application.log`，同时输出到 stdout；单文件上限
+100 MiB，归档保留 7 日。日志不记录视频、切片图片或完整请求；切片结果仍按既有共享路径
+合同落盘。

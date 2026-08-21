@@ -13,6 +13,8 @@ from pydantic_settings import (
     TomlConfigSettingsSource,
 )
 
+from packages.platform_common.config import LoggingConfig
+
 SERVICE_ROOT = Path(__file__).resolve().parents[2]
 _config_path_override: ContextVar[Path | None] = ContextVar(
     "control_config_path_override",
@@ -94,6 +96,7 @@ class ControlSettings(BaseSettings):
     )
 
     service: ServiceConfig = Field(default_factory=ServiceConfig)
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
     postgres: PostgresConfig = Field(default_factory=PostgresConfig)
     redis: RedisConfig = Field(default_factory=RedisConfig)
     operator_registry: OperatorRegistryConfig = Field(default_factory=OperatorRegistryConfig)

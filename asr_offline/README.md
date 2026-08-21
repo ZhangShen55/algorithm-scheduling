@@ -353,3 +353,8 @@ docker run -d \
 ## 📄 License
 
 MIT License
+# 日志
+
+运行日志默认写入 `logs/{instance_id}/application.log`，同时输出到 stdout；单文件上限
+100 MiB，归档保留 7 日。日志不记录音频字节、完整识别文本、请求体或凭据。容器不挂载
+日志卷时仍可在容器内查看；需要跨重建保留时使用平台提供的可选日志 Compose 覆盖层。

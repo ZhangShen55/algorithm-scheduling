@@ -1,6 +1,6 @@
 from packages.platform_common.config import PlatformSettings
 
-from ..core.config import OrchestratorSettings
+from ..core.config import SERVICE_ROOT, OrchestratorSettings
 
 
 def to_platform_settings(settings: OrchestratorSettings) -> PlatformSettings:
@@ -11,6 +11,8 @@ def to_platform_settings(settings: OrchestratorSettings) -> PlatformSettings:
         environment=settings.service.environment,
         log_level=settings.service.log_level,
         trace_header=settings.service.trace_header,
+        logging=settings.logging,
+        project_root=SERVICE_ROOT,
         postgres_dsn=settings.postgres.dsn,
         kafka_bootstrap_servers=",".join(settings.kafka.bootstrap_servers),
         control_service_url=settings.control.base_url,

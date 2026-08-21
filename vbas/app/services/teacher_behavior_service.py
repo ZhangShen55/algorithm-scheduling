@@ -717,7 +717,9 @@ async def analyze_teacher_behavior_by_model(request: TeacherBehaviorRequest) -> 
                         )
                     except Exception as head_pose_error:
                         logger.error(
-                            f"[老师行为模型] 头部方向检测失败 {image_item.ImageId}: {str(head_pose_error)}",
+                            "[老师行为模型] 头部方向检测失败 image_id=%s error_type=%s",
+                            image_item.ImageId,
+                            type(head_pose_error).__name__,
                             exc_info=True,
                         )
                         head_pose_result = failed_head_pose_result(str(head_pose_error))
@@ -739,7 +741,12 @@ async def analyze_teacher_behavior_by_model(request: TeacherBehaviorRequest) -> 
             processed_image_ids.append(image_item.ImageId)
             logger.info(f"Successfully processed teacher behavior image {image_item.ImageId}")
         except Exception as e:
-            logger.error(f"[老师行为模型] 处理图片失败 {image_item.ImageId}: {str(e)}", exc_info=True)
+            logger.error(
+                "[老师行为模型] 处理图片失败 image_id=%s error_type=%s",
+                image_item.ImageId,
+                type(e).__name__,
+                exc_info=True,
+            )
             data_list.append(TeacherBehaviorImageResult(
                 StatusObject={"StatusString": "failed", "StatusCode": 500},
                 ResultList=[]

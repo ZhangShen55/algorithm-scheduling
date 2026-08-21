@@ -47,10 +47,16 @@ layout_threshold = 0.5
 [logging]
 level = "INFO"
 directory = "logs"
-# 单个应用日志文件上限，单位：MiB
-max_size_mb = 100
-# 应用日志历史文件数量；Docker JSON 日志轮转由 docker run 参数单独控制
-backup_count = 3
+# 当前实例日志文件名。
+file_name = "application.log"
+# 单个日志文件最大大小，单位：MiB。
+max_file_size_mib = 100
+# 归档日志保留天数。
+retention_days = 7
+# 是否输出到 stdout。
+stdout_enabled = true
+# 是否写入文件。
+file_enabled = true
 
 [platform]
 # 本地安全模板默认不向调度平台注册。

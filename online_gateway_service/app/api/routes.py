@@ -16,7 +16,7 @@ from packages.platform_common.metrics import PlatformMetrics
 from packages.platform_common.trace import get_trace_id, new_trace_id
 from packages.platform_contracts.responses import BusinessResponse
 
-from ..core.config import ControlConfig, OnlineGatewaySettings, ServiceConfig
+from ..core.config import SERVICE_ROOT, ControlConfig, OnlineGatewaySettings, ServiceConfig
 from ..core.service_app import create_gateway_base_app
 from ..domain import decoded_base64_size, vbas_route
 from ..infrastructure.capacity import (
@@ -112,6 +112,7 @@ def create_online_gateway_app(
                 log_level=settings.log_level,
                 trace_header=settings.trace_header,
             ),
+            logging=settings.logging,
             control=ControlConfig(base_url=settings.control_service_url),
         )
         platform_settings = settings
@@ -122,6 +123,8 @@ def create_online_gateway_app(
             environment=service_settings.service.environment,
             log_level=service_settings.service.log_level,
             trace_header=service_settings.service.trace_header,
+            logging=service_settings.logging,
+            project_root=SERVICE_ROOT,
             control_service_url=service_settings.control.base_url,
         )
     app = create_gateway_base_app(platform_settings)

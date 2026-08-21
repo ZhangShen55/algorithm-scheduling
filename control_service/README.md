@@ -75,3 +75,8 @@ Docker 构建上下文必须是工作区根目录：
 ```bash
 docker build -f control_service/docker/Dockerfile -t control-service .
 ```
+# 日志
+
+运行日志默认写入 `logs/{instance_id}/application.log`，同时输出到 stdout；单文件上限
+100 MiB，归档保留 7 日。日志只保留任务、注册和租约审计标识，不记录 A 服务完整请求、
+数据库凭据或算子管理 Token。

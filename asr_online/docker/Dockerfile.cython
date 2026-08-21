@@ -121,7 +121,7 @@ COPY --from=cython-builder /build/model ./model
 
 COPY config.toml /config.toml
 
-RUN chmod +x ./start.sh
+RUN chmod +x ./start.sh && mkdir -p /app/logs
 
 EXPOSE 8084
 

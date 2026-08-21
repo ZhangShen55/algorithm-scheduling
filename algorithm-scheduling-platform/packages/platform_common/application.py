@@ -19,7 +19,13 @@ def create_service_app(
     service_lifespan: ServiceLifespan | None = None,
 ) -> FastAPI:
     resolved = settings or PlatformSettings()
-    configure_logging(service_name=resolved.service_name, level=resolved.log_level)
+    configure_logging(
+        service_name=resolved.service_name,
+        level=resolved.log_level,
+        instance_id=resolved.logging.instance_id,
+        project_root=resolved.project_root,
+        logging_config=resolved.logging.model_dump(),
+    )
     metrics = PlatformMetrics()
 
     @asynccontextmanager

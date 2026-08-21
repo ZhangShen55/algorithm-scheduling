@@ -78,6 +78,7 @@ COPY docker/start.sh ./
 COPY model/ model/
 
 RUN chmod +x ./start.sh && \
+    mkdir -p /app/logs && \
     mkdir -p /var/model_zoo && \
     ln -sfnT /app/model /model && \
     ln -sfnT /app/model /var/model_zoo/model_asr

@@ -737,3 +737,7 @@ A：`POST http://<host>:8880/detect_tilt`，Body 选 raw，类型 text，直接�
 ## 许可证与联系
 
 企业内部算法服务项目；部署地址与网络策略以实际环境为准。历史文档中的路径 `detect_tilt` 与对外 IP 仅作示例，请以当前仓库与运维配置为准。
+# 日志
+
+运行日志默认写入 `logs/{instance_id}/application.log`，同时输出到 stdout；单文件上限
+100 MiB，归档保留 7 日。日志只记录请求大小、路径、耗时和状态，不记录图片字节或 Base64。

@@ -90,6 +90,16 @@ PY
 done
 printf 'preflight: OK: course and result directories are writable\n'
 
+log_root="${LOG_ROOT:-}"
+if [[ -n "$log_root" ]]; then
+  minimum_log_free_gib="${MIN_LOG_FREE_GIB:-1}"
+  [[ "$minimum_log_free_gib" =~ ^[0-9]+$ ]] || fail \
+    "MIN_LOG_FREE_GIB must be a non-negative integer"
+  "$preflight_python" "$deployment_contracts" logging-root "$log_root" \
+    --minimum-free-gib "$minimum_log_free_gib" || exit 1
+  printf 'preflight: OK: optional host log root is safe and writable\n'
+fi
+
 platform_compose="${deploy_root}/docker-compose.platform.yml"
 operator_compose="${deploy_root}/docker-compose.operators.yml"
 if ! platform_compose_json="$(docker compose --project-directory "$deploy_root" \

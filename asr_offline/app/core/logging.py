@@ -1,10 +1,8 @@
 import logging
-import sys
-from logging.handlers import TimedRotatingFileHandler
-from pathlib import Path
 
-from app.core.config import PROJECT_ROOT
+from packages.operator_registry_client import FileLoggingSettings, configure_logging
 
+from app.core.config import PROJECT_ROOT, settings
 
 LOG_DIR = PROJECT_ROOT / "logs"
 
@@ -14,32 +12,21 @@ class _HotwordFilter(logging.Filter):
                 'Hotword list:' not in record.getMessage() and 'rtf_avg:' not in record.getMessage())
 
 def setup_logging() -> None:
-    # 1. 清空旧 handler
-    root = logging.getLogger()
-    for h in root.handlers[:]:
-        root.removeHandler(h)
-
-    # 2. 创建固定目录的按日日志归档，当日加六个归档不超过7天
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    file_hdl = TimedRotatingFileHandler(
-        LOG_DIR / "asr_service.log",
-        when="midnight",
-        interval=1,
-        backupCount=6,
-        encoding="utf-8",
+    configured = dict(settings.logging_config)
+    project_root = PROJECT_ROOT
+    if LOG_DIR != PROJECT_ROOT / "logs":
+        # 测试或临时运行可替换整个日志根，但生产配置仍从项目根解析。
+        project_root = LOG_DIR.parent
+        configured["directory"] = LOG_DIR.name
+    configure_logging(
+        FileLoggingSettings.from_mapping(
+            configured,
+            service_name="asr_offline",
+            project_root=project_root,
+        )
     )
-    console_hdl = logging.StreamHandler(sys.stdout)
-
-    # 3. 将过滤器挂到 handler上
-    file_hdl.addFilter(_HotwordFilter())
-    console_hdl.addFilter(_HotwordFilter())
-
-    # 4. 配置
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[file_hdl, console_hdl]
-    )
+    for handler in logging.getLogger().handlers:
+        handler.addFilter(_HotwordFilter())
 
     # 日志降噪
     logging.getLogger("ai-voice-analysis-service").setLevel(logging.WARNING)

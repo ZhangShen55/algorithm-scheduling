@@ -218,7 +218,7 @@ def _assert_platform_dockerfile_contract(
     expected_runtime_names = ["FROM"]
     if service in {"orchestrator_service", "vision_orchestrator_service"}:
         expected_runtime_names.extend(["ARG", "ARG"])
-    expected_runtime_names.extend(["ARG", "LABEL", "ENV", "WORKDIR", "RUN"])
+    expected_runtime_names.extend(["ARG", "LABEL", "ENV", "WORKDIR", "RUN", "RUN"])
     if service in {"orchestrator_service", "vision_orchestrator_service"}:
         expected_runtime_names.append("RUN")
     expected_runtime_names.extend(["COPY", "COPY", "EXPOSE", "CMD"])
@@ -260,9 +260,10 @@ def _assert_platform_dockerfile_contract(
         f"COPY {service}/config.toml /app/config.toml",
     ], service
 
-    expected_runs = [OFFLINE_INSTALL_RUN]
+    # 每个运行镜像先创建容器内日志根目录，再安装离线依赖；日志目录是无挂载模式的基础合同。
+    expected_runs = ["RUN mkdir -p /app/logs", OFFLINE_INSTALL_RUN]
     if service in {"orchestrator_service", "vision_orchestrator_service"}:
-        expected_runs.insert(0, FFMPEG_INSTALL_RUN)
+        expected_runs.insert(1, FFMPEG_INSTALL_RUN)
     assert _instructions_named(runtime, "RUN") == expected_runs, service
 
     expected_command = (

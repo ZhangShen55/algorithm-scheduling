@@ -21,7 +21,7 @@ wheel 成员 allowlist 和 RECORD hash/size 后，才原子更新本目录的 `d
 进程，并将每个目标的临时文件、备份和替换进度写入耐久事务 journal；进程崩溃后，
 下一次运行会在发布新版本之前优先完成旧版本回滚。
 
-各算子的 `requirements.txt` 显式固定 `algorithm-operator-registry-client==0.2.0`。
+各当前七个算子的 `requirements.txt` 显式固定 `algorithm-operator-registry-client==0.2.0`。
 内部 PyPI 尚未建立时，先安装或暂存上述 wheel，再安装算子 requirements；不得从公网查找同名私有包。
 
 安装后保持现有导入路径：
@@ -45,3 +45,11 @@ from packages.operator_registry_client import install_operator_runtime
 服务启动后调用 `register()` 并运行周期 `heartbeat()`；正常进程关闭直接注销，不持久化
 `DRAINING`。只有运维排空才显式调用 `drain()`，等待本地 `inflight=0` 后再注销；该排空意图
 会跨实例重启保留。注册客户端不改变现有模型推理接口、请求和响应。
+
+日志接入
+
+`logging.py` 提供统一的 `FileLoggingSettings`、JSON Lines formatter、文件/stdout
+双输出和大小加年龄轮转。默认写入每个项目的 `logs/{instance_id}/application.log`，
+单文件上限 100 MiB，归档保留 7 日；调用 `configure_logging()` 前应完成模型和实例
+标识解析。日志上下文采用允许列表，不能把 Base64、媒体字节、完整请求/响应、凭据或
+完整 ASR/OCR 文本作为 message 或 extra 写入。

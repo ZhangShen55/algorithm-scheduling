@@ -47,7 +47,17 @@ recognition_batch_size = 1
 layout_threshold = 0.5
 
 [logging]
+# 日志级别。
 level = "INFO"
+# 相对项目根的日志目录；未挂载时写入容器内该目录。
 directory = "logs"
-max_size_mb = 100
-backup_count = 3
+# 当前实例日志文件名。
+file_name = "application.log"
+# 单个日志文件最大大小，单位 MiB。
+max_file_size_mib = 100
+# 归档日志保留天数。
+retention_days = 7
+# 是否输出到 stdout。
+stdout_enabled = true
+# 是否写入文件。
+file_enabled = true

@@ -4,14 +4,15 @@ from fastapi.responses import JSONResponse
 from .api.stu_tea_behavior import build_behavior_router
 from .api.worker_ops import build_worker_ops_router
 from .core.settings import operator_deployment, settings
+from .core.logging import setup_logging
 from .services.worker_state import BatchAdmissionController
 from packages.operator_registry_client import install_operator_runtime
 import logging
 import asyncio
 import uvloop
 
+setup_logging()
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.DEBUG)
 
 app = FastAPI(
     title="TIAS视觉推理服务",

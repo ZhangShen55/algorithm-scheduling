@@ -35,6 +35,18 @@
 
 每个服务都必须拥有自己的 `app/`、`tests/`、`docker/Dockerfile`、`config.toml`、`requirements.txt` 和 `README.md`。TOML 字段旁必须有中文注释。配置按服务默认值、`config.toml`、环境变量的顺序解析。
 
+## 日志合同
+
+七个当前算子和四个平台服务统一写入项目根 `logs/{instance_id}/application.log`，同时输出
+stdout；默认单文件上限 100 MiB、归档保留 7 日，字段由各自根 `config.toml` 的 `[logging]`
+配置。镜像必须预创建 `logs/`，未挂载宿主机目录时也必须能在容器内查看日志；需要跨重建
+持久化时才显式加载 `deploy/docker-compose.logs.yml`，并为每个实例使用独立宿主机目录。
+
+日志只能保留受控标识、大小、耗时、状态和节点上下文，不得写入 Base64、媒体字节、完整
+请求/响应、凭据、完整 ASR/OCR 文本或 embedding。`text_analysis/` 是非平台项目，排除在
+日志实现、镜像和部署之外。日志改造新增的轮转、过期清理、脱敏、handler 去重和路径边界
+必须有简洁中文原因注释，但不得改变任务、租约、推理或进程拓扑。
+
 当前里程碑 2B 部署不使用 `.env`。用户已批准把部署模板、服务器登录合同和受控服务默认值提交到 Git；当前固定登录合同是 `root@192.168.29.11:22`，密码为 `kedacom_123`。该批准是明确例外，不表示模型解密密钥、Deploy Key/私钥、人脸原图、课程媒体、大型 fixture 或外部可信模型 manifest 可以进入 Git、Markdown、报告或镜像上下文。以后增加凭据时必须先判断是否属于已批准例外，不能笼统套用“所有敏感值只允许环境变量”或“所有密码都不得写入 Git”的旧规则。
 
 `.env` 与 `.venv` 含义不同：前者是本里程碑不使用的部署配置文件，后者是 Harness Python 运行环境。里程碑 2B 的 clean clone 必须先准备项目 `.venv`，从 `pyproject.toml` 安装基础依赖，验证 `httpx`、PyYAML、`websockets` 和 `aiokafka` 可导入，并在任何 preflight 或 Smoke 前把 Python/依赖版本原子写入当前 release 的 `preflight` 证据。

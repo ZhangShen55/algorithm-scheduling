@@ -16,6 +16,7 @@ from .runtime_device import resolve_runtime_device
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = str(resolve_config_path())
 _cfg = load_config(CONFIG_PATH)
+LOGGING_CONFIG = dict(_cfg.get("logging", {}))
 
 class Settings(BaseSettings):
     IMAGE_ROOT: str = "/mnt/ias-images"

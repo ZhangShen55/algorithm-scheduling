@@ -1,6 +1,6 @@
 from packages.platform_common.config import PlatformSettings
 
-from ..core.config import ControlSettings
+from ..core.config import SERVICE_ROOT, ControlSettings
 
 
 def to_platform_settings(settings: ControlSettings) -> PlatformSettings:
@@ -11,6 +11,8 @@ def to_platform_settings(settings: ControlSettings) -> PlatformSettings:
         environment=settings.service.environment,
         log_level=settings.service.log_level,
         trace_header=settings.service.trace_header,
+        logging=settings.logging,
+        project_root=SERVICE_ROOT,
         postgres_dsn=settings.postgres.dsn,
         redis_url=settings.redis.url,
         operator_registry_token=settings.operator_registry.management_token,

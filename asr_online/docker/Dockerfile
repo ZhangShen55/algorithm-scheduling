@@ -64,7 +64,7 @@ RUN touch /tmp/asr-online-build-config.toml && \
     rm -f /tmp/asr-online-build-config.toml
 
 # 权限
-RUN chmod +x ./start.sh
+RUN chmod +x ./start.sh && mkdir -p /app/logs
 
 # 一个容器只暴露一个可注册的 Uvicorn 端点
 EXPOSE 8084

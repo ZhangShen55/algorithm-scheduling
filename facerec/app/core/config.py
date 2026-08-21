@@ -88,7 +88,13 @@ class FrontLoginSettings(BaseModel):
 
 class LoggerSettings(BaseModel):
     level: str = "INFO"
-    log_path: str = "/app/logs/facerec.log"
+    directory: str = "logs"
+    file_name: str = "application.log"
+    max_file_size_mib: int = 100
+    retention_days: int = 7
+    stdout_enabled: bool = True
+    file_enabled: bool = True
+    log_path: str | None = None
 
 class FeatureImageSettings(BaseModel):
     max_feature_image_width_px: int = 720
@@ -124,6 +130,11 @@ def load_config():
 
     logger.debug("Config loaded successfully from %s", config_path)
 
+    logging_data = dict(config_data.get("logging") or config_data.get("logger") or {})
+    if "log_path" in logging_data and "directory" not in logging_data:
+        legacy_path = Path(str(logging_data["log_path"]))
+        logging_data["directory"] = str(legacy_path.parent)
+        logging_data["file_name"] = legacy_path.name
     return Settings(
         db=DBSettings(**apply_db_environment(config_data["db"])),
         face=FaceSettings(**config_data["face"]),
@@ -131,7 +142,7 @@ def load_config():
         gpu=GpuSettings(**config_data["gpu"]),
         frontlogin=FrontLoginSettings(**config_data["frontlogin"]),
         feature_image=FeatureImageSettings(**config_data["image"]),
-        logger=LoggerSettings(**config_data["logger"]),
+        logger=LoggerSettings(**logging_data),
         stats=StatsSettings(**config_data.get("stats", {}))  # 兼容旧配置
     )
 

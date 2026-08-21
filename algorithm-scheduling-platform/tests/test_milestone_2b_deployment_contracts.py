@@ -11,6 +11,7 @@ import yaml  # type: ignore[import-untyped]
 from deploy.scripts.deployment_contracts import (
     DeploymentContractError,
     validate_existing_algorithm_containers,
+    validate_logging_root,
     validate_operator_config_mounts,
     validate_operator_service_contracts,
     validate_operator_toml_contract,
@@ -127,7 +128,7 @@ def test_dep_010_and_011_require_the_exact_registry_wheel(source: str) -> None:
         validate_registry_wheel_dockerfile(source, "operator/Dockerfile")
 
     validate_registry_wheel_dockerfile(
-        "COPY wheel/algorithm_operator_registry_client-0.2.0-py3-none-any.whl "
+                "COPY wheel/algorithm_operator_registry_client-0.2.0-py3-none-any.whl "
         "/tmp/client.whl\n",
         "operator/Dockerfile",
     )
@@ -182,6 +183,22 @@ def test_dep_015_and_016_probe_directory_writability_without_leaving_files(
             validate_writable_directory(unwritable)
     finally:
         unwritable.chmod(0o700)
+
+
+def test_logging_root_is_created_and_checked_only_for_optional_mounts(tmp_path: Path) -> None:
+    log_root = tmp_path / "logs" / "algorithm-scheduling"
+    validate_logging_root(log_root, minimum_free_gib=0)
+    assert log_root.is_dir()
+
+
+def test_logging_root_rejects_symlink_components(tmp_path: Path) -> None:
+    target = tmp_path / "real"
+    target.mkdir()
+    link = tmp_path / "logs"
+    link.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(DeploymentContractError, match="symlink"):
+        validate_logging_root(link / "algorithm-scheduling", minimum_free_gib=0)
 
 
 def test_dep_017_enforces_the_root_disk_threshold() -> None:
