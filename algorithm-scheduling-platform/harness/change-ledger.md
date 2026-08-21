@@ -158,6 +158,23 @@
   Ruff、strict Mypy、compileall、四项受影响 OpenSpec strict、退役静态排除和 `git diff --check`
   全部通过。
 
+## 2026-08-22 - 七算子远端 Attempt 8 复核证据路径冲突
+
+- SHA `30a58482a91a76229e99663e0052237a5a81ada2` 已进入 clean-clone，尚未结束全量 pytest，也未
+  进入镜像构建、算子启动、业务 Campaign、反例/压力、复核或镜像清理。
+- 独立复核准备发现 Harness 文本建议创建 `business/review-materials/{phase}.json`，但
+  `aggregate_milestone_2b_cases._is_canonical_publication_path` 的固定白名单不允许该目录；照此
+  执行会确定性失败。该问题是文档示例与已有 write-once publication 合同冲突，不是生产结果失败。
+- 不扩大 canonical 报告白名单。复核 `observed` 继续保存固定人工计数，`evidence` 改为引用当前
+  release 已存在的 request、课程媒体预检或运行摘要；原视频、图片和完整 ASR/OCR 文本仍只在
+  Git 外受限位置查看。
+- 向 Python 总控发送 `SIGINT` 后终态为 `Terminated`、`restore: complete`。唯一恢复审计
+  `existing-containers.jsonl.paused.jsonl.audit.4301cf0724bd4ad9ade85e0f89c1feb2.jsonl` 为当前
+  UID、`0400`、单链接；锁已释放，运行中算子为0，21 个当前算子和3个历史 Text Analysis 容器
+  均 Exited，四平台和 PostgreSQL/Redis/Kafka/MongoDB 全部 healthy。
+- offline/vision request、复核 artifact 和通过结论均未产生；本 release 只作为审计中断和恢复
+  证据。文档修复必须形成新 SHA，并以本 release 为立即前驱完整重跑。
+
 ## 2026-08-21 - `standardize-service-file-logging` 本地实施与验证
 
 - 本变更基于 `778515596b42123a3061daeb9a1c3bb446f1de1b` 开始，目标是七个当前算子和四个平台服务；

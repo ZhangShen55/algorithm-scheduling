@@ -224,9 +224,11 @@ VIS-025: paired_evidence_count, mismatch_count
 ```
 
 计数必须是非负整数，时长必须是有限非负数。原视频、图片和完整 ASR/OCR 文本只在 Git 外受限
-位置供复核，不写入普通 release。复核人员应把不含敏感正文的计数、时间范围与原始证据摘要先以
-`0600`、write-once JSON 发布到当前 release，再在 `evidence` 中使用
-`release:<相对路径>#sha256:<64位小写摘要>` 引用；发布器会重新读取文件并核对权限和摘要。
+位置供复核，不写入普通 release；人工观察计数写入上述固定 `observed`。`evidence` 使用
+`release:<相对路径>#sha256:<64位小写摘要>` 引用当前 release 已经发布的 `0600` 身份/运行证据，
+例如当期 `business/review-requests/{offline,vision}.json`、`preflight/course-media.json` 或已存在的
+运行摘要；发布器会重新读取文件并核对权限和摘要。不得绕过 canonical publication allowlist
+临时创建未定义的 `business/review-materials/` 目录。
 
 复核输入顶层只包含 `git_sha`、`task_id`、`reviews`；每个 review 必须包含 `status=通过`、
 `reviewer`、`reviewed_at`、`review_scope`、`method`、非空 `observed`、非空 `evidence` 和

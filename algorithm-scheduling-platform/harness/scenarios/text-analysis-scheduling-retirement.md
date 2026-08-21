@@ -196,3 +196,17 @@ DAG、注册、迁移、七算子部署权威、217 条反例、26 条压力/恢
   证据摘要门禁。定向验证为 `28 passed` 与 `37 passed`，平台全量为
   `2756 passed, 3 skipped, 27 warnings`；Ruff、strict Mypy、compileall、四项受影响 OpenSpec
   strict、静态退役排除和 `git diff --check` 通过。下一轮远端仍必须做到零 skip 和完整终态。
+
+## 2026-08-22 远端 Attempt 8：复核材料路径示例冲突
+
+- Attempt 8 SHA 为 `30a58482a91a76229e99663e0052237a5a81ada2`，立即前驱为 Attempt 7。
+  运行进入 clean-clone，但尚未完成 pytest，也没有构建镜像、启动算子或进入业务 Campaign。
+- 独立复核准备确认 Harness 建议的 `business/review-materials/{phase}.json` 不属于 canonical 报告
+  白名单，照文档执行会在 `publish_json_once` 失败。决定不扩展报告面：逐案人工计数继续进入
+  固定 `observed`，`evidence` 引用当前 release 已存在的 request、媒体预检或运行摘要；原始媒体
+  和完整文本仍只在受限位置查看。
+- 通过 Python 总控 `SIGINT` 有界中断后输出 `restore: complete`。唯一恢复审计为
+  `existing-containers.jsonl.paused.jsonl.audit.4301cf0724bd4ad9ade85e0f89c1feb2.jsonl`，权限
+  `0400`；维护锁释放，运行中算子为0，当前/历史算子均 Exited，四平台与四基础设施 healthy。
+- 没有生成 offline/vision request、复核 input、artifact 或通过结论，也没有执行清理。本 release
+  不计入最终通过；文档修复后必须以新 SHA 和本 release 为立即前驱完整重跑。
