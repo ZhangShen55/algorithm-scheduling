@@ -16,10 +16,10 @@ import sys
 import tempfile
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
-    from .operator_topology import CURRENT_TOPOLOGY
+    from .operator_topology import CURRENT_TOPOLOGY  # type: ignore[import-not-found]
 elif __package__:
     from .operator_topology import CURRENT_TOPOLOGY
 else:
@@ -58,6 +58,7 @@ INFRASTRUCTURE_IDENTITIES = {
 RETIRED_STOPPED_OPERATOR_SERVICES = frozenset(
     {"text-analysis-cpu0", "text-analysis-cpu1", "text-analysis-cpu2"}
 )
+CONTAINER_ID_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 class DeploymentContractError(ValueError):
@@ -116,14 +117,14 @@ def _environment(service_name: str, service: Mapping[str, Any]) -> dict[str, str
 def _expected_config_target(service_name: str) -> str:
     for operator_name, target in CONFIG_TARGETS.items():
         if service_name.startswith(f"{operator_name}-"):
-            return target
+            return cast(str, target)
     raise DeploymentContractError(f"unknown operator service: {service_name}")
 
 
 def _operator_name(service_name: str) -> str:
     for operator_name in CONFIG_TARGETS:
         if service_name.startswith(f"{operator_name}-"):
-            return operator_name
+            return cast(str, operator_name)
     raise DeploymentContractError(f"unknown operator service: {service_name}")
 
 
@@ -424,21 +425,9 @@ def validate_existing_algorithm_containers(
         project = labels.get("com.docker.compose.project") if isinstance(labels, Mapping) else None
         service = labels.get("com.docker.compose.service") if isinstance(labels, Mapping) else None
         identity = (project, service)
-        if (
-            project == "algorithm-operators"
-            and isinstance(service, str)
-            and service in RETIRED_STOPPED_OPERATOR_SERVICES
-        ):
-            state = container.get("State")
-            expected_name = f"algorithm-operators-{service}-1"
-            if (
-                name == expected_name
-                and isinstance(state, Mapping)
-                and state.get("Status") == "exited"
-                and state.get("Running") is False
-            ):
-                # 退役实例只作为已停止的旧 release 资产保留，不能放宽当前运行身份集合。
-                continue
+        if _retired_stopped_operator_service(container) is not None:
+            # 退役实例只作为已停止的旧 release 资产保留，不能放宽当前运行身份集合。
+            continue
         if (
             not all(isinstance(value, str) for value in identity)
             or identity not in allowed_identities
@@ -449,6 +438,157 @@ def validate_existing_algorithm_containers(
             "unknown algorithm container requires manual confirmation: "
             + ", ".join(sorted(unknown))
         )
+
+
+def _retired_stopped_operator_service(
+    container: Mapping[str, Any],
+) -> str | None:
+    name_value = container.get("Name")
+    config = container.get("Config")
+    labels = config.get("Labels") if isinstance(config, Mapping) else None
+    project = labels.get("com.docker.compose.project") if isinstance(labels, Mapping) else None
+    service = labels.get("com.docker.compose.service") if isinstance(labels, Mapping) else None
+    state = container.get("State")
+    if not isinstance(service, str) or service not in RETIRED_STOPPED_OPERATOR_SERVICES:
+        return None
+    if (
+        project != "algorithm-operators"
+        or name_value != f"/algorithm-operators-{service}-1"
+        or not isinstance(state, Mapping)
+        or state.get("Status") != "exited"
+        or state.get("Running") is not False
+    ):
+        return None
+    return service
+
+
+def _validate_sorted_container_ids(container_ids: Sequence[str], label: str) -> None:
+    if list(container_ids) != sorted(set(container_ids)):
+        raise DeploymentContractError(
+            f"继承算子账本必须按字节序排序且 ID 唯一: {label}"
+        )
+    invalid = [value for value in container_ids if CONTAINER_ID_PATTERN.fullmatch(value) is None]
+    if invalid:
+        raise DeploymentContractError(f"继承算子账本包含无效容器 ID: {label}")
+
+
+def project_inherited_operator_ledgers(
+    baseline_ids: Sequence[str],
+    new_ids: Sequence[str],
+    containers: Sequence[Mapping[str, Any]],
+    allowed_services: set[str],
+) -> tuple[list[str], list[str]]:
+    """将完整旧拓扑账本严格投影到当前算子集合，不改写来源账本。"""
+    _validate_sorted_container_ids(baseline_ids, "baseline")
+    _validate_sorted_container_ids(new_ids, "new")
+    if set(baseline_ids) & set(new_ids):
+        raise DeploymentContractError("继承算子账本的 baseline 与 new 不得重叠")
+    if not allowed_services or RETIRED_STOPPED_OPERATOR_SERVICES & allowed_services:
+        raise DeploymentContractError("当前算子 allowlist 无效")
+
+    expected_ids = [*baseline_ids, *new_ids]
+    by_id: dict[str, Mapping[str, Any]] = {}
+    for container in containers:
+        container_id = container.get("Id")
+        if not isinstance(container_id, str) or container_id in by_id:
+            raise DeploymentContractError("继承算子账本的 Docker inspect 结果无效")
+        by_id[container_id] = container
+    if set(by_id) != set(expected_ids):
+        raise DeploymentContractError("继承算子账本与 Docker inspect 结果不一致")
+
+    retired_services: set[str] = set()
+
+    def project(container_ids: Sequence[str]) -> list[str]:
+        projected: list[str] = []
+        for container_id in container_ids:
+            container = by_id[container_id]
+            config = container.get("Config")
+            labels = config.get("Labels") if isinstance(config, Mapping) else None
+            project_name = (
+                labels.get("com.docker.compose.project")
+                if isinstance(labels, Mapping)
+                else None
+            )
+            service = (
+                labels.get("com.docker.compose.service")
+                if isinstance(labels, Mapping)
+                else None
+            )
+            if project_name == "algorithm-operators" and service in allowed_services:
+                projected.append(container_id)
+                continue
+            retired_service = _retired_stopped_operator_service(container)
+            if retired_service is None or retired_service in retired_services:
+                raise DeploymentContractError(
+                    f"继承算子账本包含非当前或不可信容器: {container_id}"
+                )
+            retired_services.add(retired_service)
+        return projected
+
+    projected_baseline = project(baseline_ids)
+    projected_new = project(new_ids)
+    if retired_services and retired_services != RETIRED_STOPPED_OPERATOR_SERVICES:
+        missing = sorted(RETIRED_STOPPED_OPERATOR_SERVICES - retired_services)
+        raise DeploymentContractError(
+            "继承算子账本的退役实例集合不完整: " + ", ".join(missing)
+        )
+    return projected_baseline, projected_new
+
+
+def _read_strict_line_file(path: Path, label: str) -> list[str]:
+    try:
+        metadata = path.lstat()
+        if not stat.S_ISREG(metadata.st_mode):
+            raise DeploymentContractError(f"{label} 必须是非 symlink 普通文件")
+        values = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as error:
+        raise DeploymentContractError(f"无法读取 {label}: {path}") from error
+    return values
+
+
+def _inspect_containers(container_ids: Sequence[str]) -> list[Mapping[str, Any]]:
+    if not container_ids:
+        return []
+    try:
+        completed = subprocess.run(
+            ["docker", "inspect", *container_ids],
+            check=True,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=60,
+        )
+        parsed = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as error:
+        raise DeploymentContractError("无法核验继承算子账本中的容器") from error
+    if not isinstance(parsed, list) or any(not isinstance(item, Mapping) for item in parsed):
+        raise DeploymentContractError("继承算子账本的 Docker inspect 结果无效")
+    return parsed
+
+
+def _write_projected_ledger(path: Path, container_ids: Sequence[str]) -> None:
+    flags = os.O_WRONLY | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+        ):
+            raise DeploymentContractError(f"投影算子账本输出文件不可信: {path}")
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            descriptor = -1
+            stream.write("".join(f"{container_id}\n" for container_id in container_ids))
+            stream.flush()
+            os.fsync(stream.fileno())
+    except OSError as error:
+        raise DeploymentContractError(f"无法写入投影算子账本: {path}") from error
+    finally:
+        if "descriptor" in locals() and descriptor >= 0:
+            os.close(descriptor)
 
 
 def compose_identities(documents: Iterable[Mapping[str, Any]]) -> set[tuple[str, str]]:
@@ -601,6 +741,12 @@ def _build_parser() -> argparse.ArgumentParser:
     containers = subparsers.add_parser("existing-containers")
     containers.add_argument("container_document")
     containers.add_argument("compose_documents", nargs="+")
+    inherited_ledgers = subparsers.add_parser("project-inherited-operator-ledgers")
+    inherited_ledgers.add_argument("--allowlist", required=True)
+    inherited_ledgers.add_argument("--baseline", required=True)
+    inherited_ledgers.add_argument("--new", required=True)
+    inherited_ledgers.add_argument("--projected-baseline", required=True)
+    inherited_ledgers.add_argument("--projected-new", required=True)
     return parser
 
 
@@ -662,6 +808,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         validate_existing_algorithm_containers(
             containers, compose_identities(compose_documents)
         )
+    elif arguments.command == "project-inherited-operator-ledgers":
+        allowed_services = _read_strict_line_file(
+            Path(arguments.allowlist), "当前算子 allowlist"
+        )
+        if allowed_services != sorted(set(allowed_services)):
+            raise DeploymentContractError("当前算子 allowlist 必须排序且唯一")
+        baseline_ids = _read_strict_line_file(
+            Path(arguments.baseline), "previous baseline 账本"
+        )
+        new_ids = _read_strict_line_file(Path(arguments.new), "previous new 账本")
+        inspected = _inspect_containers([*baseline_ids, *new_ids])
+        projected_baseline, projected_new = project_inherited_operator_ledgers(
+            baseline_ids,
+            new_ids,
+            inspected,
+            set(allowed_services),
+        )
+        _write_projected_ledger(
+            Path(arguments.projected_baseline), projected_baseline
+        )
+        _write_projected_ledger(Path(arguments.projected_new), projected_new)
     return 0
 
 

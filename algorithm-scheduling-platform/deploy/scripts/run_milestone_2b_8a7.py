@@ -184,11 +184,102 @@ def _adapt_current_stage3(stage3: str) -> str:
     current_ledger_gate = (
         f"test \"$(wc -l <\"$NEW_OPERATOR_IDS\" | tr -d ' ')\" = {instance_count}"
     )
-    if stage3.count(legacy_service_gate) != 1 or stage3.count(legacy_ledger_gate) != 1:
+    legacy_inheritance = '''  validate_operator_ledger_file "$PREVIOUS_BASELINE_OPERATOR_IDS"
+  validate_operator_ledger_file "$PREVIOUS_NEW_OPERATOR_IDS"
+
+  INHERIT_CURRENT_TMP="$(
+    mktemp "$LEDGER_DIR/.inherit-current-operator-container-ids.XXXXXX"
+  )"
+  OPERATOR_LEDGER_TEMPS+=("$INHERIT_CURRENT_TMP")
+  INHERIT_NEW_TMP="$(
+    mktemp "$LEDGER_DIR/.inherit-new-operator-container-ids.XXXXXX"
+  )"
+  OPERATOR_LEDGER_TEMPS+=("$INHERIT_NEW_TMP")
+  snapshot_current_operator_ids "$INHERIT_CURRENT_TMP"
+  if ! comm -23 "$INHERIT_CURRENT_TMP" "$PREVIOUS_BASELINE_OPERATOR_IDS" \\
+    >"$INHERIT_NEW_TMP"; then
+    echo "无法重算 current 与 previous baseline 的差集" >&2
+    exit 1
+  fi
+  if ! cmp -s "$INHERIT_NEW_TMP" "$PREVIOUS_NEW_OPERATOR_IDS"; then
+    echo "current - previous baseline 必须与 previous new ledger 精确一致" >&2
+    exit 1
+  fi
+
+  BASELINE_TMP="$(mktemp "$LEDGER_DIR/.baseline-operator-container-ids.XXXXXX")"
+  OPERATOR_LEDGER_TEMPS+=("$BASELINE_TMP")
+  if ! cp -- "$PREVIOUS_BASELINE_OPERATOR_IDS" "$BASELINE_TMP"; then
+    echo "无法继承 previous baseline 账本" >&2
+    exit 1
+  fi
+  chmod 0600 "$BASELINE_TMP"
+  if ! cmp -s "$BASELINE_TMP" "$PREVIOUS_BASELINE_OPERATOR_IDS"; then
+    echo "previous baseline 继承内容不一致" >&2
+    exit 1
+  fi'''
+    current_inheritance = '''  PROJECTED_PREVIOUS_BASELINE_TMP="$(
+    mktemp "$LEDGER_DIR/.projected-previous-baseline-operator-container-ids.XXXXXX"
+  )"
+  OPERATOR_LEDGER_TEMPS+=("$PROJECTED_PREVIOUS_BASELINE_TMP")
+  PROJECTED_PREVIOUS_NEW_TMP="$(
+    mktemp "$LEDGER_DIR/.projected-previous-new-operator-container-ids.XXXXXX"
+  )"
+  OPERATOR_LEDGER_TEMPS+=("$PROJECTED_PREVIOUS_NEW_TMP")
+  if ! "$DEPLOY_PYTHON" deploy/scripts/deployment_contracts.py \\
+    project-inherited-operator-ledgers \\
+    --allowlist "$OPERATOR_SERVICE_ALLOWLIST_TMP" \\
+    --baseline "$PREVIOUS_BASELINE_OPERATOR_IDS" \\
+    --new "$PREVIOUS_NEW_OPERATOR_IDS" \\
+    --projected-baseline "$PROJECTED_PREVIOUS_BASELINE_TMP" \\
+    --projected-new "$PROJECTED_PREVIOUS_NEW_TMP"; then
+    echo "继承算子账本无法安全投影到当前拓扑" >&2
+    exit 1
+  fi
+  validate_operator_ledger_file "$PROJECTED_PREVIOUS_BASELINE_TMP"
+  validate_operator_ledger_file "$PROJECTED_PREVIOUS_NEW_TMP"
+
+  INHERIT_CURRENT_TMP="$(
+    mktemp "$LEDGER_DIR/.inherit-current-operator-container-ids.XXXXXX"
+  )"
+  OPERATOR_LEDGER_TEMPS+=("$INHERIT_CURRENT_TMP")
+  INHERIT_NEW_TMP="$(
+    mktemp "$LEDGER_DIR/.inherit-new-operator-container-ids.XXXXXX"
+  )"
+  OPERATOR_LEDGER_TEMPS+=("$INHERIT_NEW_TMP")
+  snapshot_current_operator_ids "$INHERIT_CURRENT_TMP"
+  if ! comm -23 "$INHERIT_CURRENT_TMP" "$PROJECTED_PREVIOUS_BASELINE_TMP" \\
+    >"$INHERIT_NEW_TMP"; then
+    echo "无法重算 current 与 projected previous baseline 的差集" >&2
+    exit 1
+  fi
+  if ! cmp -s "$INHERIT_NEW_TMP" "$PROJECTED_PREVIOUS_NEW_TMP"; then
+    printf '%s%s\n' \\
+      "current - previous baseline（当前拓扑投影后）必须与 " \\
+      "previous new ledger（当前拓扑投影后）精确一致" >&2
+    exit 1
+  fi
+
+  BASELINE_TMP="$(mktemp "$LEDGER_DIR/.baseline-operator-container-ids.XXXXXX")"
+  OPERATOR_LEDGER_TEMPS+=("$BASELINE_TMP")
+  if ! cp -- "$PROJECTED_PREVIOUS_BASELINE_TMP" "$BASELINE_TMP"; then
+    echo "无法继承 projected previous baseline 账本" >&2
+    exit 1
+  fi
+  chmod 0600 "$BASELINE_TMP"
+  if ! cmp -s "$BASELINE_TMP" "$PROJECTED_PREVIOUS_BASELINE_TMP"; then
+    echo "projected previous baseline 继承内容不一致" >&2
+    exit 1
+  fi'''
+    if (
+        stage3.count(legacy_service_gate) != 1
+        or stage3.count(legacy_ledger_gate) != 1
+        or stage3.count(legacy_inheritance) != 1
+    ):
         raise RuntimeError("历史生命周期脚手架中的实例数量门禁发生漂移")
-    return stage3.replace(legacy_service_gate, current_service_gate).replace(
-        legacy_ledger_gate,
-        current_ledger_gate,
+    return (
+        stage3.replace(legacy_service_gate, current_service_gate)
+        .replace(legacy_ledger_gate, current_ledger_gate)
+        .replace(legacy_inheritance, current_inheritance)
     )
 
 

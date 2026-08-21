@@ -1579,6 +1579,9 @@ exec "$REAL_PYTHON" "$@"
 """,
     )
     shutil.copy2(SCRIPTS / "operator_lifecycle.py", scripts / "operator_lifecycle.py")
+    shutil.copy2(SCRIPTS / "deployment_contracts.py", scripts / "deployment_contracts.py")
+    shutil.copy2(SCRIPTS / "operator_topology.py", scripts / "operator_topology.py")
+    shutil.copy2(DEPLOY / "operator-topology.json", scripts.parent / "operator-topology.json")
     _write_executable(
         scripts / "preflight",
         """#!/usr/bin/env bash
@@ -2180,6 +2183,32 @@ def _set_legacy_ocr_container_state(
     state_path.write_text(json.dumps(state), encoding="utf-8")
 
 
+def _add_retired_operator_containers(
+    environment: dict[str, str],
+    *,
+    running_service: str | None = None,
+) -> list[str]:
+    state_path = Path(environment["FAKE_DOCKER_STATE"]) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    container_ids: list[str] = []
+    for index, service in enumerate(
+        ("text-analysis-cpu0", "text-analysis-cpu1", "text-analysis-cpu2"),
+        start=3001,
+    ):
+        container_id = _container_id(index)
+        container_ids.append(container_id)
+        state["containers"][container_id] = {
+            "project": "algorithm-operators",
+            "service": service,
+            "name": f"algorithm-operators-{service}-1",
+            "published_ports": [],
+        }
+        if service == running_service:
+            state["current"].append(container_id)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    return container_ids
+
+
 def _write_active_maintenance_transaction(
     release_root: Path,
     *,
@@ -2485,6 +2514,92 @@ def test_new_release_inherits_previous_baseline_and_immediately_refreshes_new_le
     assert completed.returncode == 0, completed.stderr
     assert _ledger_ids(release_root, "baseline-operator-container-ids.txt") == []
     assert _ledger_ids(release_root, "new-operator-container-ids.txt") == previous_new
+
+
+def test_new_release_projects_complete_stopped_retired_topology_to_current_ledger(
+    tmp_path: Path,
+) -> None:
+    project_root, release_root, environment, _, profiles = _prepare_fake_lifecycle(
+        tmp_path,
+        initial_profiles=("gpu0", "gpu1", "gpu2", "cpu"),
+        include_baseline=False,
+    )
+    retired_ids = _add_retired_operator_containers(environment)
+    current_ids = sorted(
+        container_id
+        for profile in ("gpu0", "gpu1", "gpu2", "cpu")
+        for container_id in profiles[profile]
+    )
+    previous_root = _previous_release_root(environment)
+    previous_new = sorted([*current_ids, *retired_ids])
+    _write_operator_ledgers(previous_root, [], previous_new)
+    environment["PREVIOUS_RELEASE_ROOT"] = str(previous_root)
+
+    completed, _ = _run_prepared_lifecycle(
+        project_root, environment, _stage_three_initialization()
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert _ledger_ids(release_root, "baseline-operator-container-ids.txt") == []
+    assert _ledger_ids(release_root, "new-operator-container-ids.txt") == current_ids
+    assert _ledger_ids(previous_root, "new-operator-container-ids.txt") == previous_new
+    assert not set(retired_ids) & set(
+        _ledger_ids(release_root, "new-operator-container-ids.txt")
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("missing", "running", "disguised", "unknown"),
+)
+def test_new_release_rejects_untrusted_retired_topology_projection(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    project_root, release_root, environment, _, profiles = _prepare_fake_lifecycle(
+        tmp_path,
+        initial_profiles=("gpu0", "gpu1", "gpu2", "cpu"),
+        include_baseline=False,
+    )
+    running_service = "text-analysis-cpu0" if mutation == "running" else None
+    retired_ids = _add_retired_operator_containers(
+        environment,
+        running_service=running_service,
+    )
+    state_path = Path(environment["FAKE_DOCKER_STATE"]) / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    if mutation == "missing":
+        retired_ids.pop()
+    elif mutation == "disguised":
+        state["containers"][retired_ids[0]]["name"] += "-copy"
+    elif mutation == "unknown":
+        unknown_id = _container_id(3004)
+        state["containers"][unknown_id] = {
+            "project": "algorithm-operators",
+            "service": "retired-unknown-cpu0",
+            "name": "algorithm-operators-retired-unknown-cpu0-1",
+            "published_ports": [],
+        }
+        retired_ids.append(unknown_id)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    current_ids = sorted(
+        container_id
+        for profile in ("gpu0", "gpu1", "gpu2", "cpu")
+        for container_id in profiles[profile]
+    )
+    previous_root = _previous_release_root(environment)
+    _write_operator_ledgers(previous_root, [], sorted([*current_ids, *retired_ids]))
+    environment["PREVIOUS_RELEASE_ROOT"] = str(previous_root)
+
+    completed, _ = _run_prepared_lifecycle(
+        project_root, environment, _stage_three_initialization()
+    )
+
+    assert completed.returncode != 0
+    assert "继承算子账本" in completed.stderr
+    ledger_dir = release_root / "container-maintenance"
+    assert not (ledger_dir / "baseline-operator-container-ids.txt").exists()
+    assert not (ledger_dir / "new-operator-container-ids.txt").exists()
 
 
 def test_new_release_rejects_previous_new_when_it_is_not_current_minus_baseline(
