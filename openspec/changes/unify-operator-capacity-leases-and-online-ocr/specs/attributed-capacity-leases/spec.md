@@ -151,6 +151,21 @@ Control Service SHALL 提供 `GET /ops/operator-instances/{instance_id}/active-l
 - **WHEN** Vision Orchestrator 在等待 VBas 容量时收到关闭信号
 - **THEN** Consumer SHALL 立即终止所有单批次容量等待且 SHALL NOT 提交未完成命令的 Kafka offset
 
+### Requirement: 视觉事件在终态竞争下必须幂等
+Vision Orchestrator SHALL 先持久化视觉结果和节点终态再发布完成事件；Orchestrator SHALL 将终态后的重复完成事件和经二次读取确认的迟到进度事件幂等提交，且 SHALL NOT 覆盖终态、重复持久化视觉结果或使 Consumer 退出。
+
+#### Scenario: 进度写入与终态持久化竞争
+- **WHEN** Orchestrator 初读节点为 `RUNNING`，但在进度写入取得数据库行锁前 Vision Orchestrator 已将该节点提交为 `COMPLETED`
+- **THEN** Orchestrator SHALL 重读节点、保留已持久化终态、提交该迟到进度的 Kafka offset，并 SHALL 继续消费后续事件
+
+#### Scenario: 终态后重复完成事件
+- **WHEN** 同一视觉节点在结果和任务类型已完成后再次收到完成事件
+- **THEN** Orchestrator SHALL 幂等提交该事件，且 SHALL NOT 重复持久化结果或重复汇总已完成的任务类型
+
+#### Scenario: 非竞争错误仍失败关闭
+- **WHEN** 进度写入失败后重读节点仍未完成，或事件的任务身份与持久化事实不一致
+- **THEN** Orchestrator SHALL 保留错误、SHALL NOT 提交当前 Kafka offset，并 SHALL 使 readiness 显示后台循环故障
+
 ### Requirement: 活跃租约明细只保存在 Redis
 系统 SHALL 使用 Redis 保存高频活跃租约和工作上下文，SHALL NOT 为每次快速申请、绑定、续期和释放新增 PostgreSQL 明细写入；现有任务事实和低频审计边界 SHALL 保持不变。
 

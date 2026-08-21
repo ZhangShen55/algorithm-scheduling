@@ -5,7 +5,11 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import NAMESPACE_URL, uuid5
 
-from packages.platform_common.repository import NodeRecord, TaskTypeRecord
+from packages.platform_common.repository import (
+    NodeRecord,
+    RepositoryStateConflictError,
+    TaskTypeRecord,
+)
 from packages.platform_contracts.status import NodeStatus, TaskType
 from packages.platform_contracts.vision import (
     VisualAnalysisCommand,
@@ -243,15 +247,33 @@ class VisualEventProcessor:
                 return
             if node.status is not NodeStatus.RUNNING:
                 raise RuntimeError("视觉进度事件对应节点不在处理中")
-            await asyncio.to_thread(
-                self._repository.update_node_progress,
-                node.id,
-                {"percent": event.progress, "stage": event.stage},
-                reason=event.reason,
-            )
+            try:
+                await asyncio.to_thread(
+                    self._repository.update_node_progress,
+                    node.id,
+                    {"percent": event.progress, "stage": event.stage},
+                    reason=event.reason,
+                )
+            except RepositoryStateConflictError:
+                # Vision Orchestrator persists the terminal result before publishing
+                # its completion event. A previously published progress event can
+                # therefore be consumed after the node has already completed. Re-read
+                # the node under that race and acknowledge only the completed state;
+                # all other repository validation failures remain fatal.
+                current = await asyncio.to_thread(
+                    self._repository.get_node,
+                    node.id,
+                )
+                if current.status is NodeStatus.COMPLETED:
+                    return
+                raise
             return
         if node.status is not NodeStatus.COMPLETED:
             raise RuntimeError("视觉终态事件早于结果持久化")
+        if task.status is NodeStatus.COMPLETED:
+            return
+        if task.status in {NodeStatus.FAILED, NodeStatus.CANCELLED}:
+            raise RuntimeError("视觉终态事件与任务类型终态不一致")
         await asyncio.to_thread(
             self._repository.aggregate_task_type_state,
             node.course_task_type_id,

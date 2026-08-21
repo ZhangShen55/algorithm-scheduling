@@ -1216,13 +1216,16 @@
 - 新 SHA 配置权威证据：`aae96b046dea1d724f8656c07ee7b5e89ac14d73` 的 `preflight/operator-config-authority.json` 以 8 算子 × 本地安全/受控部署两组配置启动 16 个独立子进程，全部返回 `PASS`。证据中 Git SHA、注册开关、Control URL、心跳、确认容量和六 GPU/两 CPU 要求全部一致；五个旧环境变量已注入但无法覆盖 TOML。文件为当前 UID 所有、`0600`、单硬链接，复读 SHA-256 为 `b1ee8db7741923b3272e23b5d9e700c4a5e3c5d2432b235b51222008f59f100a`，OpenSpec 12.9 已完成。
 - 验证边界：本地测试不能替代真实长 ASR；当前失败 release 不得计入 OpenSpec 14.3-14.7，必须用包含修复的新 SHA 重跑完整 Canonical。
 
-## 2026-08-20 8A.7 deployment 完成后的外部中断
+## 2026-08-21 - 8A.7 迟到视觉进度事件破坏 Consumer 幂等性
 
 - 失败 release：`aae96b046dea1d724f8656c07ee7b5e89ac14d73`；直接前驱为 `c5ba9b10b876def1d20ff05e982a01a1218d2db8`。
-- 已通过门禁：clean-clone 静态/单元/真实 PostgreSQL、Redis、Kafka，16 进程配置权威，四平台与八类算子镜像 revision，24/24 实例注册，18/18 GPU 实例真实推理，6/6 CPU 实例 Smoke，8/8 算子综合 Smoke，以及 deployment `76` 条反例与 `17` 条压力用例，共 `93/93` 通过。OpenSpec 14.1 的六层证据已由当前 release 和正式聚合器复核通过。
-- 中断位置：deployment 执行证据全部发布后、离线业务 Campaign 启动前。受限日志只出现 `Terminated`，没有 `CODEX_8A7_TERMINAL`、Python traceback、OOM 或业务用例失败记录；进程终态符合收到外部 `SIGTERM`。当前证据不足以将信号来源归因到平台代码、容器 OOM 或某个 Harness 用例。
-- 安全恢复：Canonical `EXIT` 路径根据排序的 `baseline/new` 账本和权威 Compose allowlist 精确停止 24 个本轮算子容器，输出 `restore: complete`；生成唯一当前 UID、单硬链接、`0400` 终态审计 `existing-containers.jsonl.paused.jsonl.audit.72a7b72a10334738852a2ff1507f8f44.jsonl`。维护锁可非阻塞获取，原 `ocr-v6-amd` 保持 `Exited(143)`；未执行镜像清理、prune、卷/数据/证据删除。
-- 结论：14.3-14.7 仍未完成，不得从已恢复的失败 release 继续补写业务或最终报告。下一轮必须用新 Git SHA，并以本 release 为同 tag 直接前驱重跑完整 8A.7。
+- 已通过门禁：clean-clone 静态/单元/真实 PostgreSQL、Redis、Kafka，16 进程配置权威，四平台与八类算子镜像 revision，24/24 实例注册，18/18 GPU 实例真实推理，6/6 CPU 实例 Smoke，8/8 算子综合 Smoke，以及 deployment `76` 条反例与 `17` 条压力用例，共 `93/93` 通过。OpenSpec 14.1 的六层证据已由当前 release 和正式聚合器复核通过。真实离线课程中 ASR 转写与教师行为节点已完成，学生视觉粗扫和 PPT Slice 已开始；Vision Orchestrator 持续就绪，VBas 本地 `429` 已表现为“释放当前租约、仅重试失败批次、保留成功批次”。
+- 失败位置：Orchestrator `/ops/readiness` 返回 `503`，`visual_event_consumer` 错误为 `只有处理中节点可以更新进度: 165`，随后其余 Orchestrator 后台循环全部停止。数据库中的节点 `165` 已为完成态 `60`，因此本轮不是 deployment 后的无因外部中断。
+- 根因：Vision Orchestrator 先持久化终态，再发布完成事件；已经发布但尚未消费的进度事件可能在节点完成后到达。Orchestrator 虽然在更新前检查节点状态，但检查和 `update_node_progress` 不在同一事务内，节点可在两步之间从 `RUNNING` 变为 `COMPLETED`。Repository 的终态保护因此抛出 `ValueError`，迟到消息被误判为后台循环致命故障且 offset 未提交。
+- 修复边界：进度更新遇到 Repository 状态校验错误时重新读取节点；只有节点已进入 `COMPLETED` 才把该进度事件作为幂等成功，其他状态和其他持久化异常继续失败关闭。已完成任务类型的重复终态事件直接幂等确认，不重复写结果或汇总；A 面、Kafka 消息结构、视觉结果持久化和节点状态机不变。
+- 本地验证：在平台 `.venv` 中从 `orchestrator_service/` 执行完整测试，结果 `56 passed`；新增用例覆盖“RUNNING 初读后并发完成”“仍为 RUNNING 时错误不得吞掉”“迟到进度/重复终态提交 offset 并继续消费”和“身份不一致不提交”。状态冲突使用 `RepositoryStateConflictError` 显式分类，不吞掉其他 `ValueError`。变更文件 Ruff、strict Mypy、`compileall`、OpenSpec strict 与 `git diff --check` 通过。
+- 安全恢复：Canonical `EXIT` 路径根据排序的 `baseline/new` 账本和权威 Compose allowlist 精确停止 24 个本轮算子容器；生成唯一当前 UID、单硬链接、`0400` 终态审计 `existing-containers.jsonl.paused.jsonl.audit.72a7b72a10334738852a2ff1507f8f44.jsonl`。维护锁可非阻塞获取，原 `ocr-v6-amd` 保持 `Exited(143)`；未生成镜像清理证据，未执行 prune、强制镜像删除、卷/数据/课程结果/Harness 证据删除。
+- 结论：该 release 不得计入 OpenSpec 14.3-14.7。修复必须形成新完整 SHA，并以本 release 为同 tag 直接前驱重跑完整 8A.7；真实链路、容量稳定性、回滚演练、最终汇总和精确旧镜像清理仍待新 SHA 证据。
 
 ## Record template
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,7 +16,11 @@ from orchestrator_service.app.application.vision_events import (
     VisualNodeCoordinator,
 )
 from packages.platform_common.kafka import KafkaMessage
-from packages.platform_common.repository import NodeRecord, TaskTypeRecord
+from packages.platform_common.repository import (
+    NodeRecord,
+    RepositoryStateConflictError,
+    TaskTypeRecord,
+)
 from packages.platform_contracts.status import NodeStatus, Priority, TaskType
 from packages.platform_contracts.vision import (
     VisualAnalysisCommand,
@@ -125,7 +130,38 @@ class Repository:
 
     def aggregate_task_type_state(self, course_task_type_id: int) -> TaskTypeRecord:
         self.aggregated.append(course_task_type_id)
-        return replace(self.task, status=NodeStatus.RUNNING)
+        self.task = replace(self.task, status=NodeStatus.COMPLETED)
+        return self.task
+
+
+class ProgressCompletionRaceRepository(Repository):
+    def __init__(self) -> None:
+        super().__init__(running=[_node(NodeStatus.RUNNING)])
+        self._reads = 0
+
+    def get_node(self, node_id: int) -> NodeRecord:
+        assert node_id == 31
+        self._reads += 1
+        if self._reads == 1:
+            return _node(NodeStatus.RUNNING)
+        return _node(NodeStatus.COMPLETED)
+
+    def update_node_progress(
+        self,
+        node_id: int,
+        progress: dict[str, object],
+        *,
+        reason: str,
+    ) -> NodeRecord:
+        raise RepositoryStateConflictError(
+            f"只有处理中节点可以更新进度: {node_id}"
+        )
+
+
+class ProgressFailureRepository(ProgressCompletionRaceRepository):
+    def get_node(self, node_id: int) -> NodeRecord:
+        assert node_id == 31
+        return _node(NodeStatus.RUNNING)
 
 
 class Downloader:
@@ -268,7 +304,95 @@ async def test_visual_events_are_idempotent_for_progress_and_completion() -> Non
     terminal = _event(VisualEventType.COMPLETED)
     await completed_processor.handle(terminal)
     await completed_processor.handle(terminal)
-    assert completed_repository.aggregated == [7, 7]
+    assert completed_repository.aggregated == [7]
+
+
+@pytest.mark.asyncio
+async def test_progress_repository_error_remains_fatal_while_node_is_running() -> None:
+    processor = VisualEventProcessor(ProgressFailureRepository())
+
+    with pytest.raises(
+        RepositoryStateConflictError,
+        match="只有处理中节点可以更新进度: 31",
+    ):
+        await processor.handle(_event(VisualEventType.PROGRESS, progress=95))
+
+
+@pytest.mark.asyncio
+async def test_late_progress_is_committed_and_consumer_continues_to_terminal() -> None:
+    repository = ProgressCompletionRaceRepository()
+    consumer = Consumer(
+        [
+            KafkaMessage(
+                "visual",
+                0,
+                10,
+                None,
+                _event(VisualEventType.PROGRESS, progress=95),
+                None,
+            ),
+            KafkaMessage(
+                "visual",
+                0,
+                11,
+                None,
+                _event(VisualEventType.COMPLETED),
+                None,
+            ),
+        ]
+    )
+    loop = VisualEventConsumerLoop(
+        consumer,
+        VisualEventProcessor(repository),
+        poll_timeout_seconds=0.1,
+    )
+
+    assert await loop.run_once() == 2
+    assert consumer.committed == [10, 11]
+    assert repository.progress == []
+    assert repository.aggregated == [7]
+
+    consumer.messages.append(
+        KafkaMessage(
+            "visual",
+            0,
+            12,
+            None,
+            _event(VisualEventType.COMPLETED),
+            None,
+        )
+    )
+    assert await loop.run_once() == 1
+    assert consumer.committed == [10, 11, 12]
+    assert repository.aggregated == [7]
+
+
+@pytest.mark.asyncio
+async def test_mismatched_visual_event_remains_uncommitted_and_fatal() -> None:
+    payload = json.loads(_event(VisualEventType.COMPLETED))
+    payload["payload"]["task_id"] = "another-course"
+    consumer = Consumer(
+        [
+            KafkaMessage(
+                "visual",
+                0,
+                20,
+                None,
+                json.dumps(payload).encode(),
+                None,
+            )
+        ]
+    )
+    loop = VisualEventConsumerLoop(
+        consumer,
+        VisualEventProcessor(Repository()),
+        poll_timeout_seconds=0.1,
+    )
+
+    with pytest.raises(ValueError, match="视觉事件与任务事实不一致"):
+        await loop.run_once()
+
+    assert consumer.committed == []
 
 
 class Consumer:

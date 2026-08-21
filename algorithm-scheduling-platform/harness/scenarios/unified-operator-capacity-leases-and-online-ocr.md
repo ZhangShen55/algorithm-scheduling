@@ -555,6 +555,25 @@ summary.json
 - 结论：该 release 是运行时缺口证据，不得计入 OpenSpec 12.9/14.1/14.3-14.7；修复后必须
   用新完整 SHA、以该 release 为立即前驱重跑完整 Canonical。
 
+### 2026-08-21 视觉终态与迟到进度事件竞争
+
+- 受影响 release：`aae96b046dea1d724f8656c07ee7b5e89ac14d73`。该 SHA 已通过 clean-clone
+  六层、16 进程配置权威、24 实例注册、18/18 GPU 真实推理、6/6 CPU Smoke、
+  八算子综合 Smoke 与 deployment `93/93`，但这些证据不替代后续真实课程终态。
+- 现场故障：视觉节点 `165` 已持久化为 `COMPLETED`，Orchestrator 仍在处理一条先前发布的
+  进度事件。进度处理初读节点为 `RUNNING`，但在 `update_node_progress` 取得行锁前
+  Vision Orchestrator 已提交终态；Repository 因此返回“只有处理中节点可以更新进度”，
+  `visual_event_consumer` 退出并使 Orchestrator readiness 变为 `503`。
+- 修复契约：写入进度发生状态冲突后重读节点，只对确认已完成的迟到进度幂等提交；
+  节点仍在运行、任务身份不一致、终态早于持久化等情况继续失败关闭且不提交 offset。
+  已完成任务类型的重复完成事件不再重复汇总。
+- 恢复边界：受控 `SIGINT` 后 Controller 自行终止 Campaign、精确停止 24 个本轮算子并
+  保持原 `ocr-v6-amd` 的 `exited + unless-stopped` 事实。唯一 restore audit 为当前 UID、
+  `0400`、单硬链接，release-tag 锁可非阻塞重新获取；未执行 prune、强制镜像删除、
+  卷/课程结果/证据删除。
+- 结论：本地竞争和 Consumer commit 回归只能关闭代码缺口；OpenSpec `14.3-14.7`
+  仍必须使用包含修复的新完整 SHA、以 `aae96b0...` 为直接前驱重跑 Canonical。
+
 只有同时满足以下条件，本场景和 `DEC-025` 才能从“待验证”改为“符合”：
 
 1. OpenSpec 88 项任务均由对应代码和可复现证据关闭，严格校验通过。

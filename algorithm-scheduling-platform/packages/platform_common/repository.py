@@ -18,6 +18,10 @@ class RepositoryNotFoundError(LookupError):
     """Raised when an update target no longer exists."""
 
 
+class RepositoryStateConflictError(ValueError):
+    """Raised when a repository write conflicts with the current state."""
+
+
 @dataclass(frozen=True, slots=True)
 class TaskTypeWrite:
     task_type: TaskType
@@ -1106,7 +1110,9 @@ class CourseRepository:
             if current_value is None:
                 raise RepositoryNotFoundError(f"节点不存在: {node_id}")
             if NodeStatus(current_value) is not NodeStatus.RUNNING:
-                raise ValueError(f"只有处理中节点可以更新进度: {node_id}")
+                raise RepositoryStateConflictError(
+                    f"只有处理中节点可以更新进度: {node_id}"
+                )
             connection.execute(
                 text(
                     """
