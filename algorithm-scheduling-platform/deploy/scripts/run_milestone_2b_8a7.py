@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import shlex
 from collections.abc import Sequence
@@ -50,6 +51,36 @@ def _campaign_command(args: argparse.Namespace, phase: str) -> str:
             ]
         )
     return " \\\n  ".join(parts)
+
+
+def _media_preflight_command(args: argparse.Namespace) -> str:
+    media_document = json.dumps(
+        {
+            "teacher_video_url": args.teacher_video_url,
+            "student_video_url": args.student_video_url,
+            "slides_video_url": args.slides_video_url,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    parts = [
+        "deploy/scripts/preflight-course-media",
+        "--release-root",
+        '"$RELEASE_ROOT"',
+        "--media-json-stdin",
+        "--attempts",
+        str(args.media_preflight_attempts),
+        "--request-timeout-seconds",
+        str(args.media_preflight_timeout_seconds),
+        "--retry-interval-seconds",
+        str(args.media_preflight_retry_interval_seconds),
+    ]
+    return (
+        " \\\n  ".join(parts)
+        + " <<'CODEX_COURSE_MEDIA_JSON'\n"
+        + media_document
+        + "\nCODEX_COURSE_MEDIA_JSON"
+    )
 
 
 def _case_batch(phase: str) -> str:
@@ -180,6 +211,7 @@ test "$stage45_status" = 0
             stage2[0],
             stage3[0],
             stage45_and_deployment,
+            _media_preflight_command(args),
             business,
             stage6[2],
             image_cleanup,
@@ -203,12 +235,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--online-timeout-seconds", type=float, default=300)
     parser.add_argument("--manual-review-timeout-seconds", type=float, default=7200)
     parser.add_argument("--manual-review-poll-interval-seconds", type=float, default=2)
+    parser.add_argument("--media-preflight-attempts", type=int, choices=(3,), default=3)
+    parser.add_argument("--media-preflight-timeout-seconds", type=float, default=30)
+    parser.add_argument("--media-preflight-retry-interval-seconds", type=float, default=2)
     args = parser.parse_args(argv)
     for field in (
         "course_timeout_seconds",
         "online_timeout_seconds",
         "manual_review_timeout_seconds",
         "manual_review_poll_interval_seconds",
+        "media_preflight_timeout_seconds",
+        "media_preflight_retry_interval_seconds",
     ):
         value = getattr(args, field)
         if not math.isfinite(value) or value <= 0:

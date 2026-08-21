@@ -11,6 +11,64 @@ platform tests:
 单元、真实 Redis 和算子项目测试证据；最终提交后仍必须从相应目录重跑，并把完整输出保存到
 `harness/reports/unified-operator-capacity-leases-and-online-ocr/{完整GitSHA}/`。
 
+## 2026-08-21 三路课程媒体预检与失败关闭
+
+release `99e0f9aeca14fda1679410a31b05e57bac1e936e` 已通过 `93/93` deployment
+用例，但真实课程的 P/S 下载在后台处理时收到 HTTP `404`。ASR、课程脑图和教师行为完成，
+PPT Slice 进入失败终态，学生视频准备保持重试；因此本 SHA 未发布 8 项 B 级复核索引，
+不得计入 OpenSpec `14.3-14.7`。服务器恢复后 24 个测试算子均为 Exited，四平台与四基础设施
+healthy，原 `ocr-v6-amd` 保持 `Exited(143)`，唯一权威审计为
+`existing-containers.jsonl.paused.jsonl.audit.f25ccdfe5eab4b6daa86061574653cbb.jsonl`。
+该审计为空是因为快照中的原容器本来就是 Exited，并非恢复证据缺失。PostgreSQL 的
+`course_task_types.request_payload` 进一步确认，本 release 提交的 PPT URL 缺少 T/S 所在
+课程目录的时间片段；使用修正后的同课程 T/S/P 地址从 Orchestrator 容器只读探测时三路均
+返回 `206`、`Content-Length=1048576` 且首块长度为正。旧任务终态保持不变。
+
+修复后的 Canonical 在 deployment 与 offline Campaign 之间执行：
+
+```bash
+deploy/scripts/preflight-course-media \
+  --release-root "$RELEASE_ROOT" \
+  --media-json-stdin \
+  --attempts 3 \
+  --request-timeout-seconds 30 \
+  --retry-interval-seconds 2 <<MEDIA_JSON
+{"teacher_video_url":"$TEACHER_VIDEO_URL","student_video_url":"$STUDENT_VIDEO_URL","slides_video_url":"$SLIDES_VIDEO_URL"}
+MEDIA_JSON
+```
+
+命令必须在 `orchestrator-service` 容器内并发读取三路首块，三轮每一路都要求 HTTP
+`200/206`、正 `Content-Length` 和正实际读取长度。结果以 URL 摘要写入
+`preflight/course-media.json`；失败时不得创建课程任务。容器超时/不可用、空或异常 stdout、
+退出码矛盾都必须先写脱敏失败证据。最终 aggregator 缺少该文件、身份不符、不是固定三轮、
+角色不完整、同一角色摘要跨轮漂移或任一状态/长度失败时，不得发布 `summary/cases.json`。
+宿主还必须把每项摘要与实际输入 URL 对账；外层 Canonical runtime 使用匿名受控脚本文件，
+避免完整 runtime 出现在 Bash argv，也不占用可被部署子进程消费的 stdin。当前本地验证：
+
+```bash
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/test_preflight_course_media.py tests/test_run_8a7.py
+# 26 passed
+
+.venv/bin/ruff check \
+  deploy/scripts/preflight_course_media.py \
+  deploy/scripts/run_milestone_2b_8a7.py \
+  tests/test_preflight_course_media.py tests/test_run_8a7.py
+
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/mypy \
+  deploy/scripts/preflight_course_media.py \
+  deploy/scripts/run_milestone_2b_8a7.py
+
+bash -n deploy/scripts/preflight-course-media deploy/scripts/run-milestone-2b-8a7
+```
+
+媒体、总控、聚合及锁边界定向回归为 `584 passed`；平台全量为
+`2709 passed, 3 skipped, 27 warnings`。3 个 skip 只要求本机不存在的 Canonical FaceRec
+Token/容器，远端不得跳过；warnings 是既有多线程进程中 `fork()` 的 Python 弃用提示。
+
+这些本地结果只证明参数、顺序、证据发布和失败关闭逻辑；真实容器访问与后续全泳道仍需新
+完整 SHA 在 `192.168.29.11` 重跑 Canonical。
+
 2026-08-20 release `7111d7dd2557222db111a9d6bb912cc9dae35947` 的阶段 4/5 全部通过，
 但 93 条 deployment 用例中的 `LOAD-015` 因 checker 把幂等释放接口的
 HTTP `200 + ALREADY_RELEASED` 错当成“旧租约仍存活”而失败。远端独立 key 前缀复现确认

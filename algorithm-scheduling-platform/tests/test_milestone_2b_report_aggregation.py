@@ -384,7 +384,42 @@ class ReleaseTree:
             self._write_json(f"gpu-instances/{instance_id}.json", running)
             self._write_json(f"recovery/{instance_id}-stopped.json", stopped)
 
+    def write_course_media_preflight(self) -> None:
+        self._write_json(
+            "preflight/course-media.json",
+            {
+                "schema_version": 1,
+                "evidence_type": "course_media_preflight",
+                "release_tag": self.release_tag,
+                "git_sha": self.git_sha,
+                "recorded_at": EVIDENCE_TIMESTAMP,
+                "probe_location": "orchestrator-service",
+                "configured_attempts": 3,
+                "status": "passed",
+                "attempts": [
+                    {
+                        "attempt": attempt,
+                        "results": [
+                            {
+                                "role": role,
+                                "url_sha256": hashlib.sha256(role.encode()).hexdigest(),
+                                "status_code": 206,
+                                "declared_length": 1024,
+                                "first_chunk_bytes": 1024,
+                                "passed": True,
+                                "error_type": None,
+                            }
+                            for role in ("teacher", "student", "slides")
+                        ],
+                    }
+                    for attempt in range(1, 4)
+                ],
+                "failure_type": None,
+            },
+        )
+
     def write_complete_sources(self) -> None:
+        self.write_course_media_preflight()
         self.write_all_registrations()
         self.write_all_gpu_pairs()
 
@@ -3914,6 +3949,67 @@ def test_gpu_fail_rejects_missing_reason_and_present_identity_drift(
     stopped["reason"] = "stopped check failed"
     with pytest.raises(ValueError, match="container.instance_id"):
         _validate_gpu_pair(release_tree, running, stopped)
+
+
+def test_aggregator_requires_course_media_preflight(release_tree: ReleaseTree) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    (release_tree.root / "preflight/course-media.json").unlink()
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 1
+    assert "preflight/course-media.json" in completed.stderr
+    assert not (release_tree.root / "summary/cases.json").exists()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "failed",
+        "wrong-release",
+        "wrong-attempt-count",
+        "missing-role",
+        "digest-drift",
+        "bad-status",
+        "bad-declared-length",
+        "bad-first-chunk",
+    ),
+)
+def test_aggregator_rejects_invalid_course_media_preflight(
+    release_tree: ReleaseTree,
+    mutation: str,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    document = release_tree.read_json("preflight/course-media.json")
+    first_results = document["attempts"][0]["results"]
+    if mutation == "failed":
+        document["status"] = "failed"
+        document["failure_type"] = "media_probe_failed"
+    elif mutation == "wrong-release":
+        document["git_sha"] = "b" * 40
+    elif mutation == "wrong-attempt-count":
+        document["configured_attempts"] = 2
+    elif mutation == "missing-role":
+        first_results.pop()
+    elif mutation == "digest-drift":
+        document["attempts"][1]["results"][0]["url_sha256"] = "f" * 64
+    elif mutation == "bad-status":
+        first_results[0]["status_code"] = 404
+    elif mutation == "bad-declared-length":
+        first_results[0]["declared_length"] = 0
+    elif mutation == "bad-first-chunk":
+        first_results[0]["first_chunk_bytes"] = 0
+    else:
+        raise AssertionError(f"unknown mutation: {mutation}")
+    release_tree.replace_json("preflight/course-media.json", document)
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 1
+    assert "preflight/course-media.json" in completed.stderr
+    assert not (release_tree.root / "summary/cases.json").exists()
 
 
 def test_task4_cli_publishes_complete_deterministic_envelope(

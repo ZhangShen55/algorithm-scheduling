@@ -116,8 +116,9 @@ load/cases.json
 
 ## 聚合与报告门禁
 
-`scripts/aggregate_milestone_2b_cases.py` 校验上述 canonical 输入、版本化 envelope、
-release/SHA 一致性和覆盖计数，然后 write-once 发布：
+`scripts/aggregate_milestone_2b_cases.py` 先强制校验 `preflight/course-media.json` 属于当前
+release/SHA、状态通过、固定三轮 T/S/P 摘要稳定且逐项状态/长度有效，再校验上述 canonical
+输入、版本化 envelope、release/SHA 一致性和覆盖计数，然后 write-once 发布：
 
 ```text
 summary/cases.json

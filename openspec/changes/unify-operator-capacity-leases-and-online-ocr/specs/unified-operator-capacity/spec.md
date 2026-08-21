@@ -121,6 +121,22 @@ ASR Online、ASR Offline、FaceRec、OCR、ScreenDet、PPT Slice、VBas 和 Text
 - **WHEN** Canonical 为离线、视觉、在线和最终阶段生成业务 Campaign 命令
 - **THEN** 生成命令 SHALL 只向 Campaign 传入已声明的选项和值，且 SHALL NOT 注入格式字符、补丁标记或其他额外 argv
 
+#### Scenario: 真实课程提交前校验三路媒体
+- **WHEN** deployment 用例和离线服务恢复门禁已经完成，但真实离线课程任务尚未创建
+- **THEN** Canonical SHALL 在 `orchestrator-service` 容器内并发流式读取 T/S/P 三个 URL 的首个数据块，要求每路每轮均返回 HTTP `200/206`、正声明长度和正实际读取长度，并原子记录脱敏证据；任一路失败时 SHALL NOT 创建课程任务且 SHALL 进入既有精确恢复
+
+#### Scenario: 媒体探针基础设施失败
+- **WHEN** 容器执行超时、目标容器不可用、stdout 为空或异常，或者探针退出码与结构化结果矛盾
+- **THEN** Canonical SHALL 先发布不含 stderr、完整 URL 和媒体内容的脱敏失败证据，再返回非零并进入精确恢复；Canonical 到宿主预检以及宿主预检到容器探针 SHALL 通过 stdin 传递完整 URL，外层连续 runtime SHALL 通过不暴露正文的受控脚本文件执行
+
+#### Scenario: 探针摘要绑定实际输入
+- **WHEN** 容器探针返回三轮逐角色 URL SHA-256
+- **THEN** 宿主 SHALL 重新计算实际 T/S/P 输入摘要并逐项对账，且 Canonical SHALL 只接受固定三轮；任一摘要不匹配或轮数不是三时 SHALL 在课程创建前失败
+
+#### Scenario: 最终聚合校验媒体门禁
+- **WHEN** aggregator 准备发布当前 release 的 `summary/cases.json`
+- **THEN** 它 SHALL 强制读取 `preflight/course-media.json` 并校验当前 release tag/Git SHA、`status=passed`、固定三轮、每轮恰好 T/S/P、同一角色三轮摘要恒定以及每项 HTTP 状态、声明长度和首块长度；证据缺失、失败或字段不一致时 SHALL NOT 发布最终聚合结果
+
 #### Scenario: 前驱在算子账本初始化前中断
 - **WHEN** 立即前驱没有完整 `baseline/new`，其 maintenance provenance 到达一个合法 direct maintenance release，且该 release 具有当前 UID 所有、单链接、`0400` 的同 tag predecessor marker
 - **THEN** 只读 resolver SHALL 可沿 marker 查找更早的完整算子账本，但 SHALL NOT 改写历史 marker/provenance，并 SHALL 仅在 `current - resolved baseline == resolved new` 精确成立后继承账本

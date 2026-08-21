@@ -982,7 +982,10 @@ def publish_json_once(
 def _is_canonical_publication_path(relative_path: Path) -> bool:
     if relative_path in PUBLISH_PATHS:
         return True
-    if relative_path == Path("preflight/clean-clone-validation.json"):
+    if relative_path in {
+        Path("preflight/clean-clone-validation.json"),
+        Path("preflight/course-media.json"),
+    }:
         return True
     if relative_path.is_absolute() or ".." in relative_path.parts:
         return False
@@ -1709,6 +1712,100 @@ def _load_release_json_list(release_root: Path, relative_path: Path) -> list[Any
     except (json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f"invalid JSON release source {relative_path}: {exc}") from exc
     return _require_list(loaded, f"release source {relative_path}")
+
+
+def validate_course_media_preflight(
+    *,
+    release_root: Path,
+    release_tag: str,
+    git_sha: str,
+    expected_attempts: int = 3,
+) -> None:
+    relative_path = Path("preflight/course-media.json")
+    context = str(relative_path)
+    document = _load_release_json(release_root, relative_path)
+    _require_exact_fields(
+        document,
+        {
+            "schema_version",
+            "evidence_type",
+            "release_tag",
+            "git_sha",
+            "recorded_at",
+            "probe_location",
+            "configured_attempts",
+            "status",
+            "attempts",
+            "failure_type",
+        },
+        context,
+    )
+    if document["schema_version"] != 1:
+        raise ValueError(f"{context}.schema_version must equal 1")
+    if document["evidence_type"] != "course_media_preflight":
+        raise ValueError(f"{context}.evidence_type is invalid")
+    if document["release_tag"] != release_tag or document["git_sha"] != git_sha:
+        raise ValueError(f"{context} release identity is invalid")
+    _require_string(document["recorded_at"], f"{context}.recorded_at")
+    if document["probe_location"] != "orchestrator-service":
+        raise ValueError(f"{context}.probe_location is invalid")
+    if document["configured_attempts"] != expected_attempts:
+        raise ValueError(
+            f"{context}.configured_attempts must equal {expected_attempts}"
+        )
+    if document["status"] != "passed" or document["failure_type"] is not None:
+        raise ValueError(f"{context} did not pass")
+
+    attempts = _require_list(document["attempts"], f"{context}.attempts")
+    if len(attempts) != expected_attempts:
+        raise ValueError(f"{context}.attempts must contain {expected_attempts} rounds")
+    expected_roles = ("teacher", "student", "slides")
+    role_digests: dict[str, str] = {}
+    for expected_number, raw_attempt in enumerate(attempts, start=1):
+        attempt_context = f"{context}.attempts[{expected_number - 1}]"
+        attempt = _require_object(raw_attempt, attempt_context)
+        _require_exact_fields(attempt, {"attempt", "results"}, attempt_context)
+        if attempt["attempt"] != expected_number:
+            raise ValueError(f"{attempt_context}.attempt is invalid")
+        results = _require_list(attempt["results"], f"{attempt_context}.results")
+        if len(results) != len(expected_roles):
+            raise ValueError(f"{attempt_context}.results must contain T/S/P")
+        roles: list[str] = []
+        for result_index, raw_result in enumerate(results):
+            result_context = f"{attempt_context}.results[{result_index}]"
+            result = _require_object(raw_result, result_context)
+            _require_exact_fields(
+                result,
+                {
+                    "role",
+                    "url_sha256",
+                    "status_code",
+                    "declared_length",
+                    "first_chunk_bytes",
+                    "passed",
+                    "error_type",
+                },
+                result_context,
+            )
+            roles.append(_require_string(result["role"], f"{result_context}.role"))
+            digest = result["url_sha256"]
+            if type(digest) is not str or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                raise ValueError(f"{result_context}.url_sha256 is invalid")
+            prior_digest = role_digests.setdefault(result["role"], digest)
+            if digest != prior_digest:
+                raise ValueError(f"{result_context}.url_sha256 changed between rounds")
+            if type(result["status_code"]) is not int or result["status_code"] not in {
+                200,
+                206,
+            }:
+                raise ValueError(f"{result_context}.status_code is invalid")
+            for field in ("declared_length", "first_chunk_bytes"):
+                if type(result[field]) is not int or result[field] <= 0:
+                    raise ValueError(f"{result_context}.{field} must be positive")
+            if result["passed"] is not True or result["error_type"] is not None:
+                raise ValueError(f"{result_context} did not pass")
+        if tuple(roles) != expected_roles:
+            raise ValueError(f"{attempt_context}.results roles are invalid")
 
 
 def _release_source_metadata(
@@ -3177,6 +3274,11 @@ def main() -> int:
             raise ValueError(f"--output must equal {expected_output}")
         release_locks.enter_context(
             _release_root_lock(arguments.release_root, exclusive=True)
+        )
+        validate_course_media_preflight(
+            release_root=arguments.release_root,
+            release_tag=release_tag,
+            git_sha=git_sha,
         )
         registration_cases, registration_coverage = collect_registration_gpu_cases(
             release_root=arguments.release_root,

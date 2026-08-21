@@ -1227,6 +1227,17 @@
 - 安全恢复：Canonical `EXIT` 路径根据排序的 `baseline/new` 账本和权威 Compose allowlist 精确停止 24 个本轮算子容器；生成唯一当前 UID、单硬链接、`0400` 终态审计 `existing-containers.jsonl.paused.jsonl.audit.72a7b72a10334738852a2ff1507f8f44.jsonl`。维护锁可非阻塞获取，原 `ocr-v6-amd` 保持 `Exited(143)`；未生成镜像清理证据，未执行 prune、强制镜像删除、卷/数据/课程结果/Harness 证据删除。
 - 结论：该 release 不得计入 OpenSpec 14.3-14.7。修复必须形成新完整 SHA，并以本 release 为同 tag 直接前驱重跑完整 8A.7；真实链路、容量稳定性、回滚演练、最终汇总和精确旧镜像清理仍待新 SHA 证据。
 
+## 2026-08-21 - 8A.7 三路课程媒体可达性门禁
+
+- 失败 release：`99e0f9aeca14fda1679410a31b05e57bac1e936e`；直接前驱为 `aae96b046dea1d724f8656c07ee7b5e89ac14d73`。
+- 已通过门禁：clean-clone 六层验证、16 进程配置权威、四平台与八类算子镜像、PostgreSQL `0006`、24/24 实例注册、18/18 GPU 真实推理、6/6 CPU Smoke、八算子综合 Smoke，以及 deployment `76/76` 反例和 `17/17` 压力/恢复用例，共 `93/93`。
+- 真实课程结果：ASR 转写、课程脑图和教师行为分析完成；PPT Slice 下载 P 视频时收到 HTTP `404` 并进入终态 `70`；学生视频准备持续收到 HTTP `404` 并保持等待重试。当前任务标识为 `m2b-v1.0_260812-99e0f9aeca14-full-course`。事后读取 PostgreSQL 的 `course_task_types.request_payload` 确认，本 release 的 PPT URL 缺少 T/S 所在课程目录中的时间片段，不能把 PPT 失败只归因于源站波动。
+- 复核边界：PPT 失败导致 `PPT-012/013/014` 与 `KEY-005` 没有真实结果，独立复核按失败关闭处理，未发布 offline review request、外部 review index 或 `VIS-025`；本 release 不得计入 OpenSpec `14.3-14.7`。
+- 现场对照：使用修正后的同课程 T/S/P 地址，从 Orchestrator 容器通过 stdin 只读探测，三路均返回 HTTP `206`、`Content-Length=1048576` 且首块长度为正。该结果只确认后续受控输入，不改写旧 `task_id` 已有失败终态。
+- 恢复：服务器权威 release 中唯一恢复审计为 `existing-containers.jsonl.paused.jsonl.audit.f25ccdfe5eab4b6daa86061574653cbb.jsonl`，当前 UID 所有、权限 `0400`、单硬链接且内容为空；空审计与快照中的原 `ocr-v6-amd` 本就为 Exited 一致。24 个 `algorithm-operators` 测试容器均已停止；四平台和 PostgreSQL、Redis、Kafka、MongoDB 保持 healthy，原 `ocr-v6-amd` 保持 `Exited(143)`；未删除容器、镜像、卷、模型、数据或报告。
+- 修复：新增 `preflight-course-media`，固定在 deployment 与课程提交之间，从 `orchestrator-service` 容器并发读取 T/S/P 首块；Canonical 固定三轮并全部要求 HTTP `200/206`、正声明长度和正读取长度。三路 URL 从 Canonical 到宿主预检、再到容器探针均通过 stdin 传递；外层连续 runtime 改由匿名受控脚本文件执行，不把完整正文放进 Bash argv 或可被子进程消费的 stdin。宿主逐角色对账探针摘要与实际输入，聚合器要求同一角色三轮摘要恒定。任一路失败、容器超时/不可用、stdout 为空/异常或退出码矛盾时，先原子记录不含 stderr、完整 URL 和媒体内容的脱敏失败证据，再返回非零、不创建新 `task_id` 并进入精确恢复。最终 aggregator 强制校验当前 release/SHA、通过状态、固定三轮、每轮恰好 T/S/P、摘要稳定以及逐项状态/长度，证据缺失或失败时不发布 `summary/cases.json`。该门禁不修改 `MediaDownloader` 的业务终态或增加无限下载重试。
+- 本地验证：媒体门禁与 8A.7 生成顺序定向 `26 passed`，媒体/总控/聚合/锁边界定向 `584 passed`，平台全量 `2709 passed, 3 skipped, 27 warnings`；3 个 skip 只因本机缺少 Canonical FaceRec Token/容器，远端不得跳过，warnings 为既有多线程进程中 `fork()` 的 Python 弃用提示。Ruff、Mypy、Bash 语法、OpenSpec strict 和 `git diff --check` 通过；独立只读复审确认失败证据、URL 传递、摘要绑定、固定三轮和最终聚合门禁没有剩余阻断或中等风险。真实容器门禁及全泳道仍必须由新 SHA 的完整 Canonical 证明。
+
 ## Record template
 
 - Date and scope:

@@ -1184,7 +1184,9 @@ deployment 状态均为 0，随后结束。以下聚合块不得在 8A.3 release
 ### 8A.7：243 条最终聚合与报告渲染
 
 仅在 PPT/ASR、视觉、在线业务泳道和各自分期用例完成后，先重新执行全部 217 条反例与
-26 条压力用例，再聚合当前 release 的 canonical 输入并渲染 JSON/Markdown 汇总。aggregator 校验
+26 条压力用例，再聚合当前 release 的 canonical 输入并渲染 JSON/Markdown 汇总。aggregator 先
+强制校验 `preflight/course-media.json` 的当前 release/SHA、固定三轮 T/S/P、摘要跨轮稳定及逐项
+状态/长度，再校验
 完整注册、GPU、Smoke 和声明输入，展开 `negative/cases.json` 与 `load/cases.json` 中的
 243 条声明，并以 write-once 方式生成 `summary/cases.json`；renderer 要求通过用例有
 证据文件、未执行用例有中文原因、所有用例使用同一 release/SHA，并拒绝跨目录或包含

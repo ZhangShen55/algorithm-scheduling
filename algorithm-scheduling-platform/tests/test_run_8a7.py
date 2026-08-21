@@ -26,6 +26,9 @@ def _arguments(tmp_path: Path) -> argparse.Namespace:
         online_timeout_seconds=300.0,
         manual_review_timeout_seconds=7200.0,
         manual_review_poll_interval_seconds=2.0,
+        media_preflight_attempts=3,
+        media_preflight_timeout_seconds=30.0,
+        media_preflight_retry_interval_seconds=2.0,
     )
 
 
@@ -39,6 +42,7 @@ def test_8a7_runtime_orders_all_strict_gates_before_restore(tmp_path: Path) -> N
         "milestone-2b-stage45.sh",
         "Orchestrator 在部署用例前未就绪",
         "--phase deployment",
+        "preflight-course-media",
         "--phase offline",
         "--phase vision",
         "--phase online",
@@ -60,6 +64,10 @@ def test_8a7_runtime_orders_all_strict_gates_before_restore(tmp_path: Path) -> N
     assert runtime.index(preflight) < runtime.index("--phase deployment")
     assert runtime.index("--phase deployment") < runtime.rindex(preflight)
     assert runtime.rindex(preflight) < runtime.index("--phase offline")
+    assert runtime.index("--phase deployment") < runtime.index(
+        "preflight-course-media"
+    )
+    assert runtime.index("preflight-course-media") < runtime.index("--phase offline")
 
 
 def test_8a7_stabilizes_orchestrator_before_deployment_cases(tmp_path: Path) -> None:
@@ -249,6 +257,51 @@ def test_8a7_campaign_command_passes_only_declared_arguments(tmp_path: Path) -> 
     ]
 
 
+def test_8a7_media_preflight_passes_only_declared_arguments(tmp_path: Path) -> None:
+    arguments = _arguments(tmp_path)
+    executable = tmp_path / "deploy/scripts/preflight-course-media"
+    executable.parent.mkdir(parents=True)
+    executable.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "import sys\n"
+        "print(json.dumps({'argv': sys.argv[1:], 'stdin': json.load(sys.stdin)}))\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o700)
+
+    completed = subprocess.run(
+        ["bash", "-c", runner._media_preflight_command(arguments)],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={**os.environ, "RELEASE_ROOT": "$RELEASE_ROOT"},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    observed = json.loads(completed.stdout)
+    assert observed["argv"] == [
+        "--release-root",
+        "$RELEASE_ROOT",
+        "--media-json-stdin",
+        "--attempts",
+        "3",
+        "--request-timeout-seconds",
+        "30.0",
+        "--retry-interval-seconds",
+        "2.0",
+    ]
+    assert observed["stdin"] == {
+        "teacher_video_url": arguments.teacher_video_url,
+        "student_video_url": arguments.student_video_url,
+        "slides_video_url": arguments.slides_video_url,
+    }
+    assert arguments.teacher_video_url not in observed["argv"]
+    assert arguments.student_video_url not in observed["argv"]
+    assert arguments.slides_video_url not in observed["argv"]
+
+
 def test_execute_runtime_waits_for_exit_recovery_after_sigint(tmp_path: Path) -> None:
     ready = tmp_path / "ready"
     recovered = tmp_path / "recovered"
@@ -310,5 +363,29 @@ def test_8a7_rejects_invalid_review_wait_before_building_runtime(tmp_path: Path)
                 str(review),
                 "--manual-review-timeout-seconds",
                 "0",
+            ]
+        )
+
+
+@pytest.mark.parametrize("attempts", ("0", "2", "4"))
+def test_8a7_requires_exactly_three_media_preflight_attempts(
+    tmp_path: Path,
+    attempts: str,
+) -> None:
+    review = tmp_path / "reviews.json"
+    review.write_text("{}\n", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        runner.parse_args(
+            [
+                "--teacher-video-url",
+                "http://media.test/teacher.mp4",
+                "--student-video-url",
+                "http://media.test/student.mp4",
+                "--slides-video-url",
+                "http://media.test/slides.mp4",
+                "--manual-review-json",
+                str(review),
+                "--media-preflight-attempts",
+                attempts,
             ]
         )

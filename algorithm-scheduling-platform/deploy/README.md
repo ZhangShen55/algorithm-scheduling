@@ -470,6 +470,21 @@ deploy/scripts/preflight operators --full --git-sha "$EXPECTED_GIT_SHA" \
   --release-tag "$RELEASE_TAG" --reports-root "$PWD/deploy/reports"
 ```
 
+Canonical 完成全部 deployment 用例、精确恢复两个离线后台服务并重跑 runtime preflight 后，
+还必须在创建真实课程任务之前执行 `deploy/scripts/preflight-course-media`。该门禁在
+`orchestrator-service` 容器内并发对 T/S/P 三路 URL 发起流式 `GET`，默认连续三轮校验
+HTTP `200/206`、正 `Content-Length` 和首块正读取长度；只有三路三轮全部通过才进入
+offline Campaign。证据固定发布为当前不可变 release 的
+`preflight/course-media.json`，仅记录 URL SHA-256，不记录完整 URL。任一路失败时不创建
+课程任务，并由 Canonical 的 `EXIT` 路径精确停止本轮算子和恢复已授权原业务。Canonical
+使用 `--media-json-stdin` 把三路 URL 交给宿主预检，宿主再通过 stdin 送入容器探针，避免
+新增携带完整 URL 的子进程 argv；外层连续 runtime 使用匿名受控脚本文件执行，不把完整
+runtime 放入 `bash -c` argv 或可被子进程消费的 stdin。探针返回的 SHA-256 必须与宿主实际
+输入逐角色一致，同一角色三轮摘要必须恒定，Canonical 只接受固定三轮。探针超时、容器不可用、空/异常 stdout 或退出码矛盾也会
+先发布固定失败分类的脱敏证据；不得把 stderr、完整 URL 或媒体内容写入 release。最终
+aggregator 强制校验该证据属于当前 release/SHA、状态为 `passed`、恰有固定三轮且每轮 T/S/P
+状态和长度均有效，缺失或失败时不发布 `summary/cases.json`。
+
 `preflight runtime/operators` 对运行容器使用的最终镜像执行
 `org.opencontainers.image.revision` attestation；`run-operator-smoke --git-sha` 只把结果
 归档到对应 release/SHA，不证明镜像来源。FaceRec 的 gpu0/gpu1/gpu2 三实例必须同时

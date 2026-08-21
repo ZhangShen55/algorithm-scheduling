@@ -256,6 +256,8 @@ Canonical 总控生成业务 Campaign 命令时必须逐项忠实传递既定选
 
 deployment 变异用例会真实重启 Kafka 及若干平台服务。`LOAD-014` 不得只校验 Orchestrator，必须同时等待 Orchestrator 与 Vision Orchestrator 的 Kafka Consumer readiness。deployment 阶段全部结束后、offline Campaign 启动前，Canonical 还必须再次探测这两个离线后台服务；只允许精确重启当前不健康的服务，随后重跑 runtime preflight，不得扩大为 Control、Online Gateway 或基础设施整体重启。
 
+离线后台服务恢复就绪后、创建真实课程任务前，Canonical 必须在 `orchestrator-service` 容器内并发对 T/S/P 三个输入 URL 发起流式 `GET`，读取每路首个数据块并校验 HTTP `200/206`、正 `Content-Length` 和正实际读取长度。Canonical 固定连续执行三轮且每路每轮都必须通过，不能用 2/4 等其他轮数启动整轮业务后再等待聚合失败。结果以 URL 摘要而非完整 URL 原子写入当前 release 的 `preflight/course-media.json`；宿主必须把探针返回的逐角色 SHA-256 与实际输入 URL 重新计算对账，最终聚合还必须确认同一角色三轮摘要恒定。URL 通过 stdin 传给宿主预检和容器探针，连续 Canonical runtime 通过匿名受控脚本文件而非 `bash -c <runtime>` 或可被子进程消费的 stdin 执行，因此预检 URL 不进入外层 Bash argv；既有业务 Campaign 自身仍使用 URL 参数，移除该既有接口 argv 属于后续契约调整。任一路失败、容器不可用、执行超时、stdout 为空/异常或探针退出码矛盾时，都必须先发布只含固定失败分类的脱敏 `failed` 证据，不保存 stderr、完整 URL 或媒体内容，然后返回非零且不得创建新的课程 `task_id`。最终 aggregator 必须把该文件作为强制输入，严格对账当前 release tag/Git SHA、`status=passed`、固定三轮、每轮恰好 T/S/P、摘要稳定以及逐项状态和长度；缺失或失败时不得发布 `summary/cases.json`。该门禁只验证输入可达性，不把 `MediaDownloader` 的业务失败终态改成无限重试。
+
 若新镜像构建、revision 校验、容器健康、注册或 Smoke 任一步失败，旧镜像不得删除。若旧镜像仍被运行中、暂停或停止容器引用，清理步骤必须报告并跳过，不能强制删除。清理后不再具备旧镜像的本机即时回滚能力；旧 Git SHA、配置和 Harness 证据继续保留，确需回滚时从旧 SHA 重新构建或从可信镜像源重新取得。
 
 若新镜像已构建或替换但后续门禁失败，Canonical 的 `EXIT` 恢复路径必须保留原退出码，先完整验证 baseline/new 账本和每个容器身份，再停止本轮精确 new ledger 并恢复已授权的原业务。账本或容器身份不可证明时必须失败关闭，不得执行宽泛停止或恢复。

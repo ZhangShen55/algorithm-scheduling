@@ -6,6 +6,7 @@ import os
 import re
 import signal
 import subprocess
+import tempfile
 from pathlib import Path
 from types import FrameType
 from typing import Any
@@ -92,18 +93,30 @@ def execute_runtime(
             "trap 'exit 143' TERM",
         )
     )
-    # Keep the script out of stdin because deployment subprocesses may consume it.
-    process = subprocess.Popen(
-        ["bash", "-c", f"{signal_traps}\n{runtime}"],
-        cwd=cwd,
-        text=True,
-        stdout=subprocess.PIPE if capture_output else None,
-        stderr=subprocess.PIPE if capture_output else None,
-        # Do not let a terminal signal kill the release lock holder before Bash can
-        # run its EXIT recovery trap. The controller translates HUP/INT/TERM to TERM
-        # for the outer Bash and waits for recovery to finish.
-        start_new_session=True,
-    )
+    # Keep the script out of both stdin and argv. Deployment subprocesses may consume
+    # inherited stdin, while the runtime contains media URLs that must not appear in
+    # the outer Bash command line.
+    script_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
+    script_file.write(f"{signal_traps}\n{runtime}")
+    script_file.flush()
+    os.fsync(script_file.fileno())
+    script_file.seek(0)
+    try:
+        process = subprocess.Popen(
+            ["bash", f"/dev/fd/{script_file.fileno()}"],
+            cwd=cwd,
+            text=True,
+            stdout=subprocess.PIPE if capture_output else None,
+            stderr=subprocess.PIPE if capture_output else None,
+            pass_fds=(script_file.fileno(),),
+            # Do not let a terminal signal kill the release lock holder before Bash can
+            # run its EXIT recovery trap. The controller translates HUP/INT/TERM to TERM
+            # for the outer Bash and waits for recovery to finish.
+            start_new_session=True,
+        )
+    except BaseException:
+        script_file.close()
+        raise
     forwarded_signal: int | None = None
     previous_handlers: dict[signal.Signals, Any] = {}
 
@@ -136,6 +149,7 @@ def execute_runtime(
     finally:
         for registered_signal, handler in previous_handlers.items():
             signal.signal(registered_signal, handler)
+        script_file.close()
 
     return subprocess.CompletedProcess(
         process.args,

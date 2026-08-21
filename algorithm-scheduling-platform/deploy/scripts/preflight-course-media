@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+platform_root="$(cd "$(dirname "$0")/../.." && pwd)"
+project_python="${platform_root}/.venv/bin/python"
+if [[ -n "${DEPLOY_PYTHON:-}" ]]; then
+  python="${DEPLOY_PYTHON}"
+elif [[ -x "$project_python" ]]; then
+  python="$project_python"
+else
+  python="python3"
+fi
+
+cd "$platform_root"
+exec "$python" -m deploy.scripts.preflight_course_media "$@"

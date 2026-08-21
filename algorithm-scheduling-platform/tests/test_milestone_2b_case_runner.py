@@ -3627,6 +3627,7 @@ aggregate.parse_args = lambda: Namespace(
 aggregate.load_operator_inventory = lambda _path: object()
 aggregate.load_report_plan_bytes = lambda _payload: {}
 aggregate.load_smoke_manifest = lambda _path: []
+aggregate.validate_course_media_preflight = lambda **_kwargs: None
 
 def collect_registration_gpu_cases(**_kwargs):
     checkpoint("collect")

@@ -513,6 +513,7 @@ redis-lease-integration.txt
 active-leases-sanitized.json
 http-timeout-renewal.json
 online-ocr-boundaries.json
+preflight/course-media.json
 image-inventory-before.json
 image-cleanup-result.json
 disk-usage-before-after.json
@@ -573,6 +574,35 @@ summary.json
   卷/课程结果/证据删除。
 - 结论：本地竞争和 Consumer commit 回归只能关闭代码缺口；OpenSpec `14.3-14.7`
   仍必须使用包含修复的新完整 SHA、以 `aae96b0...` 为直接前驱重跑 Canonical。
+
+### 2026-08-21 三路课程媒体源在任务创建前失败关闭
+
+- 受影响 release：`99e0f9aeca14fda1679410a31b05e57bac1e936e`。该 SHA 已通过
+  clean-clone 六层、16 进程配置权威、24 实例注册、18/18 GPU 真实推理、6/6 CPU Smoke、
+  八算子综合 Smoke 和 deployment `93/93`，但这些阶段证据不能替代真实课程结果。
+- 真实任务 `m2b-v1.0_260812-99e0f9aeca14-full-course` 中 ASR、课程脑图和教师行为完成；
+  PPT Slice 因 P 视频 HTTP `404` 进入状态 `70`，学生视频准备持续遇到 HTTP `404`。
+  `PPT-012/013/014`、`KEY-005` 无真实结果，因此没有发布 offline/vision B 级复核索引。
+- 恢复后从宿主机和 Orchestrator 容器访问相同 URL 均得到 `200/206`，说明验证前必须把
+  “输入在真实执行网络边界内可读”作为独立门禁，不能把旧任务失败终态改写为成功。
+- 新门禁在所有 deployment 用例及离线服务恢复之后、课程创建之前执行。它在
+  `orchestrator-service` 容器内连续三轮并发流式读取 T/S/P 首块，逐路要求 HTTP
+  `200/206`、正声明长度和正读取长度；只发布 URL SHA-256、状态和长度到当前 release 的
+  `preflight/course-media.json`，不得记录完整 URL 或媒体内容。
+- Canonical 到宿主预检、宿主预检到容器探针均通过 stdin 传递 URL，不新增包含完整 URL 的
+  子进程 argv；外层连续 runtime 使用匿名受控脚本文件，不把正文放进 `bash -c` argv 或
+  可被部署子进程消费的 stdin。Canonical 只接受固定三轮，宿主逐角色对账探针摘要与实际输入。
+  任一路任一轮失败、容器执行超时/不可用、stdout 为空/异常或退出码矛盾时，
+  先发布不含 stderr、完整 URL 和媒体内容的固定分类失败证据；Canonical 不创建 `task_id`，
+  保留非零退出码并使用既有精确账本恢复。
+- 最终 aggregator 必须把该证据作为强制输入，验证当前 release tag/Git SHA、`status=passed`、
+  固定三轮、每轮恰好 teacher/student/slides、同一角色摘要跨轮恒定以及每项 HTTP 状态、声明长度和首块长度；缺失或
+  失败时不得发布 `summary/cases.json` 或得出最终通过结论。
+  不给 `MediaDownloader` 增加无限重试，也不把外部源站不稳定误报为算法或调度成功。
+- 当前本地验证为媒体/总控 `26 passed`、媒体/总控/聚合/锁边界定向 `584 passed`、平台全量
+  `2709 passed, 3 skipped`；3 个 skip 只因本机缺少 Canonical FaceRec Token/容器，远端
+  不得跳过。Ruff、Mypy、Bash 语法与 OpenSpec strict 通过；最终结论必须由新 SHA 的真实
+  容器预检、四条离线/视觉泳道、在线链路和 B 级复核共同形成。
 
 只有同时满足以下条件，本场景和 `DEC-025` 才能从“待验证”改为“符合”：
 

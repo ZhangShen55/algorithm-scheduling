@@ -28,6 +28,24 @@ printf 'CODEX_RUNTIME_CONTINUED\\n'
 
     assert completed.returncode == 0
     assert completed.stdout.endswith("CODEX_RUNTIME_CONTINUED\n")
+    assert completed.args[0] == "bash"
+    assert completed.args[1].startswith("/dev/fd/")
+    assert runtime not in completed.args
+
+
+def test_runtime_content_is_not_exposed_in_outer_bash_argv(tmp_path: Path) -> None:
+    runner = _load_runner()
+    sensitive_url = "http://media.test/private-course.mp4"
+
+    completed = runner.execute_runtime(
+        f"printf '%s\\n' {sensitive_url!r}",
+        cwd=tmp_path,
+        capture_output=True,
+    )
+
+    assert completed.returncode == 0
+    assert sensitive_url not in " ".join(completed.args)
+    assert completed.stdout == sensitive_url + "\n"
 
 
 def test_runtime_starts_case_batch_as_project_module() -> None:
