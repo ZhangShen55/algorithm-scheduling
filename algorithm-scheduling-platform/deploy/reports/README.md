@@ -83,7 +83,7 @@ registration/operator-registration-instance-vbas-gpu2.json
 | `vbas-gpu1` | `gpu-instances/vbas-gpu1.json` | `recovery/vbas-gpu1-stopped.json` |
 | `vbas-gpu2` | `gpu-instances/vbas-gpu2.json` | `recovery/vbas-gpu2-stopped.json` |
 
-八类 full Smoke 输入由一个逻辑用例文件和八个算子证据文件组成：
+七类 full Smoke 输入由一个逻辑用例文件和七个算子证据文件组成：
 
 ```text
 smoke/cases.json

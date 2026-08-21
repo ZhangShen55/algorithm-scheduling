@@ -89,6 +89,12 @@ Compose project/service、规范容器名、`State.Status=exited` 和 `Running=f
 
 B 级人工复核删除 `KEY-005` 和 `ASR-017`，从8项调整为6项；PPT、ASR 和视觉仍需人工复核的项目保持不变。
 
+六项复核必须由 Campaign 在真实结果完成后按 `offline`、`vision` 两阶段发布 request，外部复核
+输入不得提前预制或跨阶段混合。输入与索引位于整个 Git 工作区和 release 之外，逐案
+`observed` 使用固定计数/时长字段，`reviewed_at` 带时区，reviewer 使用可追溯身份；证据只以
+`release:<相对路径>#sha256:<摘要>` 绑定当前 release 中已经存在的脱敏文件。原视频、证据图片
+和完整 ASR/OCR 文本只用于受限复核，不进入普通 release 报告。
+
 ### 7. 活动 OpenSpec 标记废止，完成事实不回滚
 
 `unify-operator-capacity-leases-and-online-ocr` 与 `close-platform-runtime-and-harness-gaps` 中已经完成的 Text Analysis 任务、设计和验证记录保留原文，并在相关章节追加“后续范围调整已废止”的标准说明。尚未完成的最终验收任务改为七算子、PPT/OCR 和 ASR-only 范围。

@@ -5,6 +5,26 @@ platform root, use the explicit workspace import path below; this prevents a
 bare top-level `tests` package from another checkout from shadowing the
 platform tests:
 
+## 2026-08-21 七算子当前验收入口
+
+当前发布范围由
+[`scenarios/milestone-2b-seven-operator-release.md`](scenarios/milestone-2b-seven-operator-release.md)
+和 `deploy/operator-topology.json` 共同定义：7 类算子、21 个实例、18 个 GPU 实例、3 个
+CPU PPT Slice 实例、14 个配置解析进程和 7/7 综合 Smoke。唯一正式总控入口是：
+
+```bash
+deploy/scripts/run-milestone-2b-8a7 \
+  --teacher-video-url "$TEACHER_VIDEO_URL" \
+  --student-video-url "$STUDENT_VIDEO_URL" \
+  --slides-video-url "$SLIDES_VIDEO_URL" \
+  --manual-review-json \
+    "/root/workspace/.algorithm-scheduling-restricted-reports/${EXPECTED_GIT_SHA}-b-level-reviews.json"
+```
+
+`text_analysis/` 只作为非平台源码项目保留，不进入当前 clean clone 的算子合同、配置权威、
+构建、注册、租约或 Smoke。本文后续注明“历史八算子”的命令、数量和 release 只用于复现
+当时事实，不得作为当前发布入口或补足七算子验收。
+
 ## 2026-08-19 统一算子配置、容量租约、在线 OCR 与镜像清理实施门禁
 
 本节对应 `scenarios/unified-operator-capacity-leases-and-online-ocr.md`。当前已取得本地静态、
@@ -132,10 +152,10 @@ PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
 `SIGINT`，确认长子进程已终止、锁持有进程在外层 Bash `EXIT` trap 开始时仍存活，且 Python 等待 trap 完成后才返回。最终远端结论仍必须来自
 新 SHA 的完整 8A.7，旧 release 仅是诊断与精确恢复证据。
 
-八算子本地安全/受控部署 TOML 的进程级权威对照使用独立探针。它为每个算子的两类配置分别启动
+七算子本地安全/受控部署 TOML 的进程级权威对照使用独立探针。它为每个算子的两类配置分别启动
 一个子进程，在子进程中确认五个已迁移旧环境变量确实存在后，通过显式 `CONFIG_PATH` 调用对应
 算子的正式配置加载入口；不导入 `app.main`，因此不会启动模型、连接数据库或占用 GPU。FaceRec、
-OCR 和 Text Analysis 使用受版本控制且不含真实凭据的安全模板，clean clone 不依赖被忽略的运行
+OCR 使用受版本控制且不含真实凭据的安全模板，clean clone 不依赖被忽略的运行
 配置；OCR 仅在该配置探针中跳过模型目录存在性检查。最终 SHA 的 write-once 证据命令为：
 
 ```bash
@@ -150,7 +170,7 @@ PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
   tests/test_milestone_2b_operator_configs.py
 ```
 
-通过条件为 `operator_count=8`、`process_count=16`、全部结果与确认容量一致，根配置均为
+通过条件为 `operator_count=7`、`process_count=14`、全部结果与确认容量一致，根配置均为
 `registration_enabled=false/require_gpu=false`，受控部署配置均为容器 Control URL、心跳
 `5`、已批准 GPU 要求，且 `legacy_environment_injected=true`。报告只记录旧变量名称，不记录
 继承环境、Token、密码或其他变量值。
@@ -187,6 +207,26 @@ deploy/scripts/publish-milestone-2b-b-level-reviews \
   --index "$RESTRICTED_REVIEW_ROOT/${EXPECTED_GIT_SHA}-b-level-reviews.json" \
   --review-document "$RESTRICTED_REVIEW_ROOT/${EXPECTED_GIT_SHA}-review-input.json"
 ```
+
+发布器只接受已经出现的当期 request：offline 输入必须一次包含
+`PPT-012/PPT-013/PPT-014/ASR-012/ASR-013`，vision 输入只能在 vision request 出现后单独包含
+`VIS-025`。`reviewed_at` 必须是带时区的 ISO 8601 时间；`reviewer` 必须是可追溯的独立复核身份，
+不能使用 `controller`、`canonical`、`系统` 等空泛值。逐案 `observed` 固定为：
+
+```text
+PPT-012: reviewed_start_slice_count, black_start_false_positive_count
+PPT-013: reviewed_dynamic_segment_count, slice_count_in_dynamic_segments,
+         obvious_burst_false_positive_count
+PPT-014: reviewed_stable_page_count, obvious_missed_stable_page_count
+ASR-012: reviewed_audio_seconds, reviewed_segment_count, obvious_omitted_span_count
+ASR-013: reviewed_bilingual_segment_count, severe_error_segment_count
+VIS-025: paired_evidence_count, mismatch_count
+```
+
+计数必须是非负整数，时长必须是有限非负数。原视频、图片和完整 ASR/OCR 文本只在 Git 外受限
+位置供复核，不写入普通 release。复核人员应把不含敏感正文的计数、时间范围与原始证据摘要先以
+`0600`、write-once JSON 发布到当前 release，再在 `evidence` 中使用
+`release:<相对路径>#sha256:<64位小写摘要>` 引用；发布器会重新读取文件并核对权限和摘要。
 
 复核输入顶层只包含 `git_sha`、`task_id`、`reviews`；每个 review 必须包含 `status=通过`、
 `reviewer`、`reviewed_at`、`review_scope`、`method`、非空 `observed`、非空 `evidence` 和
@@ -590,7 +630,18 @@ rg -n '13.468 QPS|P95 `152.716 ms`|8201d923|20 组均满足' \
 报告记录 20 组固定矩阵、2,000 个计量请求、公式识别、显存、重启和失败日志；完整证据见
 [`scenarios/ocr-optional-cython-build-and-sync.md`](scenarios/ocr-optional-cython-build-and-sync.md)。
 
-## 里程碑 2B 部署验证场景
+## 当前里程碑 2B 七算子部署验证场景
+
+当前完整执行顺序、证据目录和终态边界见
+[`scenarios/milestone-2b-seven-operator-release.md`](scenarios/milestone-2b-seven-operator-release.md)，
+由 `deploy/scripts/run-milestone-2b-8a7` 读取当前场景并复用下述已经审计的生命周期脚手架。
+当前数量、算子集合和禁止标识必须从 `deploy/operator-topology.json` 派生，不能从历史段复制。
+
+## 历史：里程碑 2B 八算子部署验证场景
+
+> **后续范围调整已废止（2026-08-21）：** 本节保留八算子、24 实例、Text Analysis 和旧
+> Canonical 命令的历史事实。它所引用的 `milestone-2b-deploy.md` 不再是当前正式入口；当前
+> 发布必须使用上一节的七算子场景和 `run-milestone-2b-8a7`。
 
 完整执行顺序、证据目录和未执行边界见
 [`scenarios/milestone-2b-deploy.md`](scenarios/milestone-2b-deploy.md)。本机

@@ -129,6 +129,35 @@
 - Attempt 6 只证明上述已通过边界，不满足 OpenSpec `14.3-14.7` 的完整验收；修复后必须使用
   新 SHA 并以本 release 为立即前驱重跑 Canonical。
 
+## 2026-08-22 - 七算子远端 Attempt 7 审计主动中断
+
+- SHA `88f9d6f17f7add1856b083b99d092118509d8375` 已通过模型资产校验、报告目录初始化、当前拓扑
+  `7/21/18/3/14/7` 门禁、维护快照和受控暂停检查；clean-clone 全量 pytest 尚未结束，未进入
+  镜像构建、算子启动、业务 Campaign、反例/压力、B 级复核或镜像清理。
+- 并行最终规格复审发现三类当前合同漂移：平台 clean-clone 仍正向验证 `text_analysis` 注册
+  runtime/Docker/requirements；活跃 Verification/证据矩阵仍把八算子入口写作当前命令；B 级
+  复核发布器未强制当期 request/phase、整个 Git 工作区外路径和逐 case 摘要格式。
+- 为避免错误 SHA 继续形成发布证据，向 Python Canonical 总控发送 `SIGINT`。总控等待 Bash
+  `EXIT` trap 完成后退出，终态明确输出 `restore: complete`；唯一恢复审计为当前 UID、单链接、
+  `0400` 的
+  `existing-containers.jsonl.paused.jsonl.audit.3bd038a493d74aa0b1def93d0a379852.jsonl`。
+- 恢复后 release-tag 维护锁可重新获取，当前算子运行数为0，原 `ocr-v6-amd` 保持 Exited，
+  四个平台服务和 PostgreSQL、Redis、Kafka、MongoDB 全部 healthy。未执行 prune、`down -v`、
+  卷、数据、镜像或历史 release 删除。
+- 本 release 只证明中断恢复合同，不计入 OpenSpec 远端通过。修复必须形成新完整 SHA，并以本
+  release 为立即前驱重新执行全部 Canonical。
+- 修复后当前平台测试只正向验证拓扑权威中的七个算子，并单独断言 `text_analysis/` 源码保留但
+  不进入 Compose/部署配置；Verification、证据矩阵、报告 README、部署 README 和旧离线设计
+  已区分当前七算子入口与历史八算子事实。
+- B 级发布器现按 request phase 精确绑定 SHA、任务、外部索引和完整 case 集合；输入与索引均
+  排除整个 Git 工作区和 release，校验可追溯 reviewer、带时区时间、六项固定 `observed` schema
+  及 `release:<path>#sha256:<digest>` 当前证据引用。
+- 本地验证：B 级复核与业务 Campaign 定向 `28 passed`，七算子入口/配置/Harness 定向
+  `37 passed`，平台全量 `2756 passed, 3 skipped, 27 warnings`。3 个 skip 仅因本机没有远端
+  Canonical FaceRec Token/容器；27 个 warning 为既有多线程进程中 `fork()` 的 Python 弃用提示。
+  Ruff、strict Mypy、compileall、四项受影响 OpenSpec strict、退役静态排除和 `git diff --check`
+  全部通过。
+
 ## 2026-08-21 - `standardize-service-file-logging` 本地实施与验证
 
 - 本变更基于 `778515596b42123a3061daeb9a1c3bb446f1de1b` 开始，目标是七个当前算子和四个平台服务；

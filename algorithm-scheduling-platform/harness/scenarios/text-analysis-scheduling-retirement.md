@@ -163,12 +163,36 @@ DAG、注册、迁移、七算子部署权威、217 条反例、26 条压力/恢
 - 七算子与四平台镜像均绑定本 SHA；四平台 healthy，21/21 实例注册、18/18 GPU 真实推理和
   物理卡/PID 归属、3/3 PPT CPU 真实切片、7/7 综合 Smoke 全部通过，Stage 4/5 终态为
   `CODEX_STAGE45_COMPLETE failures=0`。
-- deployment 反例已执行 75 项，74 项通过；`DEP-014` 失败为
+- deployment 共执行 92 项，其中 91 项通过；`DEP-014` 失败为
   `checker reason does not contain required detail: CONFIG_PATH`。只读复核确认该 runner 仍用
   `text-analysis-cpu0` 构造错误配置，生产合同正确先拒绝未知退役算子，导致 checker 没有到达
   `CONFIG_PATH` 校验。修复只把变异目标改为当前 `ppt-slice-cpu0`，不放宽生产合同。
-- 失败发生在业务 Campaign 和复核请求之前，未执行完整 217 条反例、26 条压力/恢复或 6 项
-  B 级复核。Canonical 自动输出 `restore: complete`；0/21 baseline/new 账本完整，21 个当前算子
-  与三个历史 Text Analysis 容器均 Exited，原 `ocr-v6-amd` 保持 Exited，四平台和基础设施全部
-  healthy。没有删除容器、镜像、卷、数据或历史证据。
+- 失败发生在三路课程媒体预检、业务 Campaign 和复核请求之前，未执行完整 217 条反例、26 条
+  压力/恢复或 6 项 B 级复核，也未进入镜像清理。Canonical 自动输出 `restore: complete`；0/21
+  baseline/new 账本完整，21 个当前算子与三个历史 Text Analysis 容器均 Exited，原
+  `ocr-v6-amd` 保持 Exited，四平台和基础设施全部 healthy。唯一恢复审计为当前 UID、单链接、
+  `0400` 的
+  `existing-containers.jsonl.paused.jsonl.audit.0789d8284b7e4e228f1c0a27e2a63363.jsonl`；没有删除
+  容器、镜像、卷、数据或历史证据。
 - Attempt 6 仍是失败诊断证据；修复必须形成新 SHA，并以本 release 为立即前驱完整重跑。
+
+## 2026-08-22 远端 Attempt 7：最终规格复审后主动中断
+
+- Attempt 7 SHA 为 `88f9d6f17f7add1856b083b99d092118509d8375`，立即前驱为 Attempt 6。
+  模型资产、报告初始化、七算子拓扑门禁、维护快照和暂停检查已通过；clean-clone pytest 仍在
+  执行，尚未构建镜像或启动本轮算子。
+- 并行复审确认 clean-clone 当前测试仍把 `text_analysis` 当作平台注册 runtime/Docker/requirements
+  正向验证，部分活跃 Harness 文档仍指向旧八算子入口；B 级复核发布器也缺少当期 request/phase、
+  整个 Git 工作区外路径和逐 case 摘要格式门禁。这些属于退役边界和最终证据合同遗漏。
+- 向 Python 总控发送 `SIGINT` 后，控制器有界等待既有 Bash `EXIT` trap，最终输出
+  `restore: complete`。唯一恢复审计为
+  `existing-containers.jsonl.paused.jsonl.audit.3bd038a493d74aa0b1def93d0a379852.jsonl`，权限
+  `0400`；维护锁已释放，当前算子运行数为0，原业务状态、四平台和四基础设施保持不变。
+- 本 release 未执行业务泳道、217 条完整反例、26 条压力/恢复、6 项 B 级复核或镜像清理，只作为
+  审计中断与精确恢复证据。合同修复后必须使用新 SHA，并以本 release 为立即前驱完整重跑。
+- 修复后平台当前合同测试只覆盖七算子，并明确验证 `text_analysis/` 不进入拓扑、Compose 和受控
+  TOML；当前 Harness 入口、证据矩阵、部署说明和旧离线设计已区分现行范围与历史事实。
+- B 级发布器新增 request/phase、SHA、task、Git 外路径、逐案摘要、带时区时间和当前 release
+  证据摘要门禁。定向验证为 `28 passed` 与 `37 passed`，平台全量为
+  `2756 passed, 3 skipped, 27 warnings`；Ruff、strict Mypy、compileall、四项受影响 OpenSpec
+  strict、静态退役排除和 `git diff --check` 通过。下一轮远端仍必须做到零 skip 和完整终态。

@@ -197,16 +197,16 @@ all seven operator build contexts with the repository pipeline:
 ```bash
 python scripts/build_and_stage_operator_registry_wheel.py
 python -m pip install \
-  packages/operator_registry_client/dist/algorithm_operator_registry_client-0.1.0-py3-none-any.whl
+  packages/operator_registry_client/dist/algorithm_operator_registry_client-0.2.0-py3-none-any.whl
 ```
 
-All seven current operator projects declare `algorithm-operator-registry-client==0.1.0` in
+All seven current operator projects declare `algorithm-operator-registry-client==0.2.0` in
 their runtime requirements. Their Dockerfiles consume the same versioned artifact
 from an ignored `wheel/` build-context directory. The command above builds without an
 index from a clean Git-tracked source allowlist, validates the fixed filename,
 metadata, wheel member set and RECORD, atomically publishes `dist`, and stages
 byte-identical copies with SHA-256 verification. A private cross-process lock and
-durable transaction journal serialize the eight destination replacements and recover
+durable transaction journal serialize the seven destination replacements and recover
 an interrupted publication before the next run. Run it before building images.
 The legacy command remains an alias for the same rebuild-and-stage pipeline and never
 copies a previously built wheel without rebuilding:

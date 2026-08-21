@@ -37,6 +37,14 @@
 - **WHEN** 聚合器生成当前 SHA 的人工复核请求
 - **THEN** 只要求3项 PPT、2项 ASR和1项视觉复核共6项，不包含 `KEY-005` 或 `ASR-017`
 
+#### Scenario: 分阶段发布 B 级复核
+- **WHEN** 独立复核人员提交 offline 或 vision 复核结果
+- **THEN** 发布器只接受已经生成且 SHA、任务、索引与完整 case 集合均匹配的当期 request，并校验 Git 外 `0600` 输入、逐案摘要字段、带时区时间和当前 release 证据摘要
+
+#### Scenario: 提前或跨阶段提交复核
+- **WHEN** 复核输入在 request 之前生成、混合 offline 与 vision case、使用空泛 reviewer 或引用不存在/摘要不符的证据
+- **THEN** 发布器失败关闭且不得写入复核 artifact 或更新外部索引
+
 ### Requirement: 历史 release 与新基线隔离
 所有八算子 release、报告、账本和恢复审计 SHALL 保持只读；它们可以作为历史实现或失败诊断证据，但 MUST NOT 满足七算子最终验收。
 

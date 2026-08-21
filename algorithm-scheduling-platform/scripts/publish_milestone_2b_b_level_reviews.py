@@ -15,9 +15,15 @@ from scripts.milestone_2b_b_level_review import (
     REVIEW_CASE_IDS,
     _read_secure_object,
     _require_plain_string,
+    _validate_reviewed_at,
+    _validate_reviewer,
     load_review_index,
     require_external_review_index,
+    require_external_review_path,
+    require_matching_review_request,
     require_safe_directory,
+    validate_evidence_references,
+    validate_observed,
 )
 from scripts.milestone_2b_case_runners.evidence import release_identity
 
@@ -73,6 +79,13 @@ def publish_reviews(
 ) -> None:
     _, git_sha = release_identity(release_root)
     require_external_review_index(index_path, release_root)
+    require_external_review_path(
+        review_document,
+        release_root,
+        "B 级独立复核输入",
+    )
+    if review_document == index_path:
+        raise RuntimeError("B 级独立复核输入和索引必须使用不同文件")
     document = _read_secure_object(review_document, "B 级独立复核输入")
     if set(document) != {"git_sha", "task_id", "reviews"}:
         raise RuntimeError("B 级独立复核输入字段不完整")
@@ -84,6 +97,13 @@ def publish_reviews(
     raw_reviews = document["reviews"]
     if type(raw_reviews) is not dict or not raw_reviews:
         raise RuntimeError("B 级独立复核输入没有用例")
+    require_matching_review_request(
+        release_root=release_root,
+        index_path=index_path,
+        git_sha=git_sha,
+        task_id=task_id,
+        case_ids=set(raw_reviews),
+    )
 
     merged: dict[str, dict[str, Any]] = {}
     if index_path.exists() or index_path.is_symlink():
@@ -112,27 +132,20 @@ def publish_reviews(
         optional = {"limitation"}
         if not required.issubset(review) or not set(review).issubset(required | optional):
             raise RuntimeError(f"B 级独立复核输入字段不完整: {case_id}")
-        if (
-            review["status"] != "通过"
-            or type(review["observed"]) is not dict
-            or not review["observed"]
-        ):
-            raise RuntimeError(f"B 级独立复核没有通过或 observed 非法: {case_id}")
-        for field in (
-            "reviewer",
-            "reviewed_at",
-            "review_scope",
-            "method",
-            "conclusion",
-        ):
+        if review["status"] != "通过":
+            raise RuntimeError(f"B 级独立复核没有通过: {case_id}")
+        _validate_reviewer(review["reviewer"], f"{case_id}.reviewer")
+        _validate_reviewed_at(review["reviewed_at"], f"{case_id}.reviewed_at")
+        for field in ("review_scope", "method", "conclusion"):
             _require_plain_string(review[field], f"{case_id}.{field}")
         if "limitation" in review:
             _require_plain_string(review["limitation"], f"{case_id}.limitation")
-        evidence = review["evidence"]
-        if type(evidence) is not list or not evidence:
-            raise RuntimeError(f"{case_id}.evidence 必须是非空数组")
-        for index, item in enumerate(evidence):
-            _require_plain_string(item, f"{case_id}.evidence[{index}]")
+        validate_observed(case_id, review["observed"])
+        validate_evidence_references(
+            release_root=release_root,
+            case_id=case_id,
+            value=review["evidence"],
+        )
         artifact = Path("business/reviews") / f"{case_id}.json"
         artifact_document = {
             "schema_version": 1,

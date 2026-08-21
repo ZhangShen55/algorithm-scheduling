@@ -13,6 +13,9 @@ CAPACITY_BASELINE = (
     / "algorithm-scheduling-platform/harness/baselines/"
     "unified-operator-capacity-leases-and-online-ocr.json"
 )
+OPERATOR_TOPOLOGY = (
+    WORKSPACE_ROOT / "algorithm-scheduling-platform/deploy/operator-topology.json"
+)
 LOCAL_CONFIGS = {
     "asr_online": "config.toml",
     "asr_offline": "config.toml",
@@ -21,7 +24,6 @@ LOCAL_CONFIGS = {
     "screen_det": "config.toml",
     "ppt_slice": "config.toml",
     "vbas": "config.toml",
-    "text_analysis": "config.example.toml",
 }
 
 
@@ -49,8 +51,13 @@ def _declared_routes(project: str) -> set[tuple[str, str]]:
 
 def test_unified_capacity_change_has_machine_readable_compatibility_baseline() -> None:
     baseline = json.loads(CAPACITY_BASELINE.read_text(encoding="utf-8"))
+    topology = json.loads(OPERATOR_TOPOLOGY.read_text(encoding="utf-8"))
     assert baseline["baseline_git_revision"] == "bd59541"
     capacities = baseline["approved_current_capacities"]
+    current_projects = {
+        operator["project_directory"] for operator in topology["operators"]
+    }
+    assert current_projects == set(LOCAL_CONFIGS)
     deploy_names = {
         "asr_online": "asr_online.gpu.toml",
         "asr_offline": "asr_offline.gpu.toml",
@@ -61,7 +68,8 @@ def test_unified_capacity_change_has_machine_readable_compatibility_baseline() -
         "vbas": "vbas.gpu.toml",
     }
 
-    for project, contract in baseline["operators"].items():
+    for project in sorted(current_projects):
+        contract = baseline["operators"][project]
         current_routes = _declared_routes(project)
         expected_routes = {
             (route["method"], route["path"])
@@ -82,25 +90,17 @@ def test_unified_capacity_change_has_machine_readable_compatibility_baseline() -
         }
         assert root_config["runtime"]["require_gpu"] is False
 
-        if project in deploy_names:
-            deploy_config = tomllib.loads(
-                (
-                    WORKSPACE_ROOT
-                    / "algorithm-scheduling-platform/deploy/config/operators"
-                    / deploy_names[project]
-                ).read_text(encoding="utf-8")
-            )
-            assert (
-                deploy_config["platform"]["max_concurrent_requests"]
-                == capacities[project]
-            )
-        else:
-            assert project == "text_analysis"
-            assert not (
+        deploy_config = tomllib.loads(
+            (
                 WORKSPACE_ROOT
-                / "algorithm-scheduling-platform/deploy/config/operators/"
-                "text_analysis.cpu.toml"
-            ).exists()
+                / "algorithm-scheduling-platform/deploy/config/operators"
+                / deploy_names[project]
+            ).read_text(encoding="utf-8")
+        )
+        assert (
+            deploy_config["platform"]["max_concurrent_requests"]
+            == capacities[project]
+        )
 
     compose = yaml.safe_load(
         (
@@ -113,17 +113,12 @@ def test_unified_capacity_change_has_machine_readable_compatibility_baseline() -
         assert forbidden.isdisjoint(service["environment"])
 
 
-def test_all_operator_entrypoints_install_the_shared_registry_runtime() -> None:
+def test_all_current_operator_entrypoints_install_the_shared_registry_runtime() -> None:
     expected = {
         "asr_offline": ("app/main.py", "asr_offline", ["asr_offline"]),
         "asr_online": ("app/main.py", "asr_online", ["asr_online"]),
         "ppt_slice": ("app/main.py", "ppt_slice", ["ppt_slice"]),
         "ocr": ("app/main.py", "ocr", ["ocr"]),
-        "text_analysis": (
-            "app/main.py",
-            "text_analysis",
-            ["course_overviews", "extract_keywords"],
-        ),
         "vbas": ("app/main.py", "vbas", ["student_behavior", "teacher_behavior"]),
         "facerec": ("app/main.py", "facerec", ["recognize"]),
         "screen_det": ("app/application.py", "screen_det", ["detect_all"]),
@@ -208,13 +203,12 @@ def test_facerec_image_installs_versioned_registry_wheel() -> None:
     assert "pip install --no-deps" in source
 
 
-def test_all_operator_requirements_declare_registry_client() -> None:
+def test_all_current_operator_requirements_declare_registry_client() -> None:
     requirement_files = {
         "asr_offline": ("requirements.txt", "requirements-pip.txt"),
         "asr_online": ("requirements.txt",),
         "ppt_slice": ("requirements.txt",),
         "ocr": ("requirements.txt",),
-        "text_analysis": ("requirements.txt",),
         "vbas": ("requirements.txt",),
         "facerec": ("requirements.txt",),
         "screen_det": ("requirements.txt", "docker/requirements-docker.txt"),
@@ -231,13 +225,12 @@ def test_all_operator_requirements_declare_registry_client() -> None:
             )
 
 
-def test_all_canonical_operator_images_install_staged_registry_wheel() -> None:
+def test_all_current_operator_images_install_staged_registry_wheel() -> None:
     dockerfiles = {
         "asr_offline": ("docker/Dockerfile",),
         "asr_online": ("docker/Dockerfile", "docker/Dockerfile.cython"),
         "ppt_slice": ("Dockerfile",),
         "ocr": ("docker/Dockerfile", "docker/Dockerfile.npu"),
-        "text_analysis": ("Dockerfile",),
         "vbas": ("docker/Dockerfile", "docker/Dockerfile.runtime"),
         "facerec": ("docker/Dockerfile",),
         "screen_det": ("docker/Dockerfile",),
@@ -262,7 +255,7 @@ def test_registry_wheel_staging_entrypoint_always_rebuilds_before_staging() -> N
     assert "shutil.copy2" not in source
 
 
-def test_operator_business_routes_and_default_ports_remain_compatible() -> None:
+def test_current_operator_business_routes_and_default_ports_remain_compatible() -> None:
     contracts = {
         "asr_offline": {
             "port": "8083",
@@ -303,15 +296,6 @@ def test_operator_business_routes_and_default_ports_remain_compatible() -> None:
                 ]
             },
         },
-        "text_analysis": {
-            "port": "8000",
-            "sources": {
-                "app/api/v1/routes/course_overviews.py": ["/v1/course_overviews"],
-                "app/api/v1/routes/extract_keywords_text.py": [
-                    "/v1/extract_keywords"
-                ],
-            },
-        },
     }
 
     for project, contract in contracts.items():
@@ -331,6 +315,27 @@ def test_operator_business_routes_and_default_ports_remain_compatible() -> None:
             source = (project_root / relative_path).read_text(encoding="utf-8")
             for route_path in paths:
                 assert route_path in source, (project, route_path)
+
+
+def test_text_analysis_is_retained_but_excluded_from_current_deployment() -> None:
+    topology = json.loads(OPERATOR_TOPOLOGY.read_text(encoding="utf-8"))
+    current_projects = {
+        operator["project_directory"] for operator in topology["operators"]
+    }
+    compose = yaml.safe_load(
+        (
+            WORKSPACE_ROOT
+            / "algorithm-scheduling-platform/deploy/docker-compose.operators.yml"
+        ).read_text(encoding="utf-8")
+    )
+    deploy_config = (
+        WORKSPACE_ROOT / "algorithm-scheduling-platform/deploy/config/operators"
+    )
+
+    assert (WORKSPACE_ROOT / "text_analysis").is_dir()
+    assert "text_analysis" not in current_projects
+    assert all("text-analysis" not in name for name in compose["services"])
+    assert not (deploy_config / "text_analysis.cpu.toml").exists()
 
 
 def test_operator_compose_declares_restart_health_mounts_and_instance_identity() -> None:
