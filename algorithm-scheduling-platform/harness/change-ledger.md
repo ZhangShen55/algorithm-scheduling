@@ -65,6 +65,14 @@
 - 现场无新算子、无活动维护锁、无课程提交或业务数据变更。下一 SHA 继续以具有完整维护状态和
   唯一恢复 audit 的 `7785155...` 为可信前驱；两个失败 attempt 仅作为诊断证据保留。
 
+## 2026-08-21 - 七算子远端 Attempt 3 clean-clone 根配置缺口
+
+- SHA `fde5eef5516c0b2090fcca30229f93612fc8f949` 已通过主机预检并建立受控维护快照，但
+  clean-clone 全量测试为 `1 failed, 2733 passed, 8 skipped`：Git 中没有被本机 ignore 文件
+  掩盖的 `facerec/config.toml`，同类检查还确认 `ocr/config.toml` 未被跟踪。
+- Canonical 在镜像构建、算子启动和课程提交前完成 `restore: complete`。修复把两份当前算子
+  根默认配置纳入 Git，并增加 11 项根配置必须跟踪的回归；`text_analysis` 配置继续排除。
+
 ## 2026-08-21 - `standardize-service-file-logging` 本地实施与验证
 
 - 本变更基于 `778515596b42123a3061daeb9a1c3bb446f1de1b` 开始，目标是七个当前算子和四个平台服务；

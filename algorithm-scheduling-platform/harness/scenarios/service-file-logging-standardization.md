@@ -79,3 +79,12 @@ openspec validate standardize-service-file-logging --strict
   一日过期清理、未过期归档保留和目录隔离，结果为
   `{"processes": 11, "status": "PASS"}`。该结果只覆盖日志进程行为；七算子真实模型推理及
   HTTP/WebSocket 全链路敏感哨兵仍须在远端同一最终 SHA 下完成。
+
+## 2026-08-21 远端 clean-clone 根配置缺口
+
+- 七算子 retirement Attempt 3 在镜像构建前的 clean-clone 全量测试中发现
+  `facerec/config.toml` 不存在；本机此前因 `.gitignore` 下的实际文件存在而错误通过。
+- 同一审计确认 `ocr/config.toml` 也处于相同的 ignore 边界。修复把两份非敏感根默认配置纳入
+  Git，继续排除 `text_analysis/config.toml`，并增加 11 份目标根配置必须被 Git 跟踪的门禁。
+- 失败结果为 `1 failed, 2733 passed, 8 skipped`，Canonical 随即输出 `restore: complete`；
+  尚未构建镜像、启动算子或提交课程任务。该 SHA 只作为 clean-clone 缺口证据。

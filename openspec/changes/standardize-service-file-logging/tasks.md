@@ -73,7 +73,7 @@
 - [x] 8.3 运行四服务完整相关测试、strict Mypy、Ruff、健康/就绪和跨服务闭环测试，确认任务状态机、Outbox、Kafka、租约和在线转发无回归。
 - [x] 8.4 使用小型临时阈值执行 11 项真实进程轮转测试，验证单文件上限、七日清理模拟、未过期保留和越界保护。
 - [ ] 8.5 使用代表性 HTTP、WebSocket、ASR、OCR、FaceRec、ScreenDet、VBas 和 PPT 请求执行敏感哨兵检查，文件/stdout 原值检出数必须为零。
-- [x] 8.6 展开 Compose 并运行配置权威、挂载、项目根、实例隔离、clean clone、镜像构建合同和 `git diff --check`。
+- [ ] 8.6 展开 Compose 并运行配置权威、挂载、项目根、实例隔离、clean clone、镜像构建合同和 `git diff --check`。
 - [x] 8.7 运行 `openspec validate standardize-service-file-logging --strict` 及受影响活动变更的全部严格校验，解决所有失败后才进入远端阶段。
 
 ## 9. Harness 与变更协同

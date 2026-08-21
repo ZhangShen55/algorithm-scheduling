@@ -112,3 +112,14 @@ DAG、注册、迁移、七算子部署权威、217 条反例、26 条压力/恢
 - 当前 release 继承只允许从拥有完整维护状态或可信 provenance 的 release 开始。下一 SHA 必须
   继续使用最近具备完整 snapshot、唯一恢复 audit 和算子账本的 `7785155...` 作为前驱；失败
   Attempt 1/2 均只保留为诊断证据，不删除、不覆盖也不再次使用相同 SHA。
+
+## 2026-08-21 远端 Attempt 3：被本机忽略文件掩盖的 clean-clone 缺口
+
+- Attempt 3 SHA 为 `fde5eef5516c0b2090fcca30229f93612fc8f949`，使用权威 `7785155...`
+  前驱并成功建立维护快照；原 `ocr-v6-amd` 本来就是退出态，因此没有暂停运行中的业务容器。
+- clean-clone 全量测试为 `1 failed, 2733 passed, 8 skipped`，唯一失败是 Git 中没有
+  `facerec/config.toml`；本机工作树存在该 ignored 文件，因而此前的完整测试未暴露问题。
+  同类审计进一步发现 `ocr/config.toml` 也未被跟踪。
+- Canonical 在镜像构建、算子启动和课程提交前失败并完成 `restore: complete`。修复必须把两份
+  当前平台算子的根默认配置纳入 Git，并用门禁证明 11 份目标根配置在 clean clone 中全部存在；
+  `text_analysis/config.toml` 继续作为非平台项目配置排除。

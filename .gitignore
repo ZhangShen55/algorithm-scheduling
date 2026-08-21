@@ -64,8 +64,6 @@ Thumbs.db
 **/*.p12
 **/*.pfx
 **/docker/secrets/
-/facerec/config.toml
-/ocr/config.toml
 /text_analysis/config.toml
 
 # Model artifacts and offline binary dependencies

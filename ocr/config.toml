@@ -1,0 +1,60 @@
+[platform]
+# 本地默认不主动向调度平台注册
+registration_enabled = false
+control_service_url = ""  # 启用注册时填写 Control Service 地址
+heartbeat_interval_seconds = 5  # 注册心跳间隔秒数，必须为有限正数
+# 平台允许同时分发到本实例的单图请求数；不覆盖 OCR 引擎锁
+max_concurrent_requests = 256
+
+[runtime]
+# 本地默认允许 CPU；GPU 部署配置显式设为 true
+require_gpu = false
+
+[application]
+name = "jy-algorithm-app-ocr-v6-service"
+version = "OCR_V3.0_PP-OCRv6"
+
+[server]
+host = "0.0.0.0"
+port = 8866
+workers = 1
+
+[ocr]
+device = "cpu"
+detection_model_dir = "models/PP-OCRv6_medium_det"
+recognition_model_dir = "models/PP-OCRv6_medium_rec"
+recognition_batch_size = 1
+cpu_threads = 8
+enable_mkldnn = false
+enable_hpi = false
+max_concurrency = 1
+image_max_bytes = 52428800
+
+[ocr.detection]
+limit_side_len = 960
+threshold = 0.3
+box_threshold = 0.6
+unclip_ratio = 1.5
+
+[formula]
+enabled = true
+layout_model_dir = "models/PP-DocLayout_plus-L"
+recognition_model_dir = "models/PP-FormulaNet_plus-M"
+recognition_batch_size = 1
+layout_threshold = 0.5
+
+[logging]
+# 日志级别。
+level = "INFO"
+# 相对项目根的日志目录；未挂载时写入容器内该目录。
+directory = "logs"
+# 当前实例日志文件名。
+file_name = "application.log"
+# 单个日志文件最大大小，单位 MiB。
+max_file_size_mib = 100
+# 归档日志保留天数。
+retention_days = 7
+# 是否输出到 stdout。
+stdout_enabled = true
+# 是否写入文件。
+file_enabled = true

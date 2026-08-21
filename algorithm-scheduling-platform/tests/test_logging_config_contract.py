@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -63,6 +64,19 @@ def _assert_logging_contract(path: Path) -> None:
 def test_target_root_configs_use_the_unified_logging_contract() -> None:
     for project in TARGET_PROJECTS:
         _assert_logging_contract(WORKSPACE_ROOT / project / "config.toml")
+
+
+def test_target_root_configs_are_tracked_for_clean_clone() -> None:
+    for project in TARGET_PROJECTS:
+        config_path = f"{project}/config.toml"
+        completed = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", config_path],
+            cwd=WORKSPACE_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert completed.returncode == 0, config_path
 
 
 def test_current_operator_deployment_configs_use_the_unified_logging_contract() -> None:
