@@ -184,6 +184,58 @@ def _adapt_current_stage3(stage3: str) -> str:
     current_ledger_gate = (
         f"test \"$(wc -l <\"$NEW_OPERATOR_IDS\" | tr -d ' ')\" = {instance_count}"
     )
+    legacy_snapshot = '''snapshot_current_operator_ids() {
+  local output_file="$1"
+  if ! docker compose -f deploy/docker-compose.operators.yml --profile '*' \\
+    ps --all --no-trunc -q | LC_ALL=C sort -u >"$output_file"; then
+    echo "无法获取完整算子容器快照" >&2
+    return 1
+  fi
+  if ! validate_operator_id_file "$output_file"; then
+    echo "当前算子容器快照校验失败" >&2
+    return 1
+  fi
+  return 0
+}'''
+    current_snapshot = '''snapshot_current_operator_ids() {
+  local output_file="$1" RAW_CURRENT_TMP EMPTY_BASELINE_TMP PROJECTED_BASELINE_TMP
+  RAW_CURRENT_TMP="$(mktemp "$LEDGER_DIR/.raw-current-operator-container-ids.XXXXXX")"
+  EMPTY_BASELINE_TMP="$(mktemp "$LEDGER_DIR/.empty-baseline-operator-container-ids.XXXXXX")"
+  PROJECTED_BASELINE_TMP="$(
+    mktemp "$LEDGER_DIR/.projected-current-baseline-operator-container-ids.XXXXXX"
+  )"
+  OPERATOR_LEDGER_TEMPS+=(
+    "$RAW_CURRENT_TMP" "$EMPTY_BASELINE_TMP" "$PROJECTED_BASELINE_TMP"
+  )
+  if ! docker compose -f deploy/docker-compose.operators.yml --profile '*' \\
+    ps --all --no-trunc -q | LC_ALL=C sort -u >"$RAW_CURRENT_TMP"; then
+    echo "无法获取包含历史 orphan 的完整算子容器快照" >&2
+    return 1
+  fi
+  if ! validate_operator_id_file "$RAW_CURRENT_TMP"; then
+    echo "当前原始算子容器快照校验失败" >&2
+    return 1
+  fi
+  if ! "$DEPLOY_PYTHON" deploy/scripts/deployment_contracts.py \\
+    project-inherited-operator-ledgers \\
+    --allowlist "$OPERATOR_SERVICE_ALLOWLIST_TMP" \\
+    --baseline "$EMPTY_BASELINE_TMP" \\
+    --new "$RAW_CURRENT_TMP" \\
+    --projected-baseline "$PROJECTED_BASELINE_TMP" \\
+    --projected-new "$output_file"; then
+    echo "当前算子快照无法安全投影到七算子拓扑" >&2
+    return 1
+  fi
+  if [[ -s "$PROJECTED_BASELINE_TMP" ]]; then
+    echo "当前算子快照投影产生了非空 baseline" >&2
+    return 1
+  fi
+  if ! validate_operator_id_file "$output_file"; then
+    echo "当前投影算子容器快照校验失败" >&2
+    return 1
+  fi
+  return 0
+}'''
     legacy_inheritance = '''  validate_operator_ledger_file "$PREVIOUS_BASELINE_OPERATOR_IDS"
   validate_operator_ledger_file "$PREVIOUS_NEW_OPERATOR_IDS"
 
@@ -273,12 +325,14 @@ def _adapt_current_stage3(stage3: str) -> str:
     if (
         stage3.count(legacy_service_gate) != 1
         or stage3.count(legacy_ledger_gate) != 1
+        or stage3.count(legacy_snapshot) != 1
         or stage3.count(legacy_inheritance) != 1
     ):
         raise RuntimeError("历史生命周期脚手架中的实例数量门禁发生漂移")
     return (
         stage3.replace(legacy_service_gate, current_service_gate)
         .replace(legacy_ledger_gate, current_ledger_gate)
+        .replace(legacy_snapshot, current_snapshot)
         .replace(legacy_inheritance, current_inheritance)
     )
 

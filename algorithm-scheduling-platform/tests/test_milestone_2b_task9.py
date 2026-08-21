@@ -1789,10 +1789,15 @@ if args and args[0] == "compose":
                 raise SystemExit(67)
             expected_project = state["compose_documents"][compose_file]["name"]
             requested_services = set(args[args.index("-q") + 1 :])
+            compose_ids = list(
+                dict.fromkeys(
+                    [*state["current"], *state.get("compose_orphans", [])]
+                )
+            )
             print(
                 "\\n".join(
                     container_id
-                    for container_id in state["current"]
+                    for container_id in compose_ids
                     if (
                         (
                             not requested_services
@@ -2205,6 +2210,7 @@ def _add_retired_operator_containers(
         }
         if service == running_service:
             state["current"].append(container_id)
+        state.setdefault("compose_orphans", []).append(container_id)
     state_path.write_text(json.dumps(state), encoding="utf-8")
     return container_ids
 
@@ -2516,7 +2522,7 @@ def test_new_release_inherits_previous_baseline_and_immediately_refreshes_new_le
     assert _ledger_ids(release_root, "new-operator-container-ids.txt") == previous_new
 
 
-def test_new_release_projects_complete_stopped_retired_topology_to_current_ledger(
+def test_new_release_projects_stopped_retired_compose_orphans_to_current_ledger(
     tmp_path: Path,
 ) -> None:
     project_root, release_root, environment, _, profiles = _prepare_fake_lifecycle(

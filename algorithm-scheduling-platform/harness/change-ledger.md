@@ -73,6 +73,40 @@
 - Canonical 在镜像构建、算子启动和课程提交前完成 `restore: complete`。修复把两份当前算子
   根默认配置纳入 Git，并增加 11 项根配置必须跟踪的回归；`text_analysis` 配置继续排除。
 
+## 2026-08-22 - 七算子远端 Attempt 4 旧账本拓扑投影缺口
+
+- SHA `5a31ebd0fe95bdb378601189b2150132db3a0c73` 的 clean-clone 为
+  `2735 passed, 8 skipped`，四服务为 `25/55/33/20 passed`，真实 PostgreSQL/Redis 为
+  `69 passed`，真实 Kafka 为 `12 passed`；14 进程配置权威也已通过。
+- Canonical 在构建和启动当前算子前继承旧八算子 release 的完整账本时失败：历史 new ledger
+  含 24 个容器，而当前权威 allowlist 只有 21 个服务，旧逻辑要求两者直接按当前拓扑校验，无法
+  表达三个已退役 Text Analysis 容器作为历史事实继续存在。
+- 修复使用固定退役身份把旧 baseline/new 账本严格投影到当前七算子拓扑；三套身份必须完整、
+  规范且处于退出态，缺失、运行态、伪装或未知容器继续失败关闭。Canonical 已输出
+  `restore: complete`，原 `ocr-v6-amd`、基础设施和四平台服务恢复到执行前状态。
+- Attempt 4 只证明 clean-clone、集成测试、配置权威和账本投影缺口，不计入 21 实例或最终 release
+  通过证据；修复以新 SHA 重跑。
+
+## 2026-08-22 - 七算子远端 Attempt 5 Compose orphan 当前快照缺口
+
+- SHA `b10751800bd4cf7c4e638ab76a36e9e71d795ad0` 的 clean-clone 为
+  `2740 passed, 8 skipped`，四服务为 `25/55/33/20 passed`，真实 PostgreSQL/Redis 为
+  `69 passed`，真实 Kafka 为 `12 passed`；七个算子镜像全部构建成功并通过 `amd64`、完整
+  revision 和精确镜像身份门禁，没有构建或重标 Text Analysis。
+- 失败发生在启动 21 个当前算子实例之前。previous baseline/new 已正确投影为七算子集合，但
+  `docker compose ps --all -q` 仍返回同 project 下三个已停止的 Text Analysis orphan；未经投影的
+  24 项当前快照与 21 项 previous new 比较，触发
+  `current - previous baseline（当前拓扑投影后）必须与 previous new ledger（当前拓扑投影后）精确一致`。
+- 当前快照修复先保留 Compose 返回的完整集合，再复用既有账本投影合同，只排除固定身份完整且
+  处于 Exited 状态的三套历史 Text Analysis orphan；未知容器、运行态退役容器及名称或 Compose
+  身份漂移继续失败关闭。聚焦、Task 9 与控制器/部署合同共 `590 passed`，Ruff、strict Mypy 和
+  `compileall` 通过。
+- Canonical 已输出 `restore: complete`；24 个历史算子容器均保持 Exited，三个 Text Analysis
+  容器未启动、未删除，原 `ocr-v6-amd` 保持 Exited，四平台和基础设施均 healthy。未提交业务
+  任务、未生成复核请求、未执行 prune、`down -v`、卷/数据/历史 release 或镜像清理。
+- Attempt 5 仍是失败诊断证据；修复提交后必须使用新 SHA，并以本 release 为立即前驱重跑完整
+  Canonical。
+
 ## 2026-08-21 - `standardize-service-file-logging` 本地实施与验证
 
 - 本变更基于 `778515596b42123a3061daeb9a1c3bb446f1de1b` 开始，目标是七个当前算子和四个平台服务；

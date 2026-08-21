@@ -123,3 +123,34 @@ DAG、注册、迁移、七算子部署权威、217 条反例、26 条压力/恢
 - Canonical 在镜像构建、算子启动和课程提交前失败并完成 `restore: complete`。修复必须把两份
   当前平台算子的根默认配置纳入 Git，并用门禁证明 11 份目标根配置在 clean clone 中全部存在；
   `text_analysis/config.toml` 继续作为非平台项目配置排除。
+
+## 2026-08-22 远端 Attempt 4：旧八算子账本投影缺口
+
+- Attempt 4 SHA 为 `5a31ebd0fe95bdb378601189b2150132db3a0c73`。clean-clone 为
+  `2735 passed, 8 skipped`，四服务、真实 PostgreSQL/Redis、真实 Kafka 和 14 进程配置权威均通过。
+- 当前代码在继承旧八算子 release 的 24 项 new ledger 时，直接使用七算子 allowlist 校验历史容器，
+  因此不能区分 21 个仍在平台范围内的实例与 3 个已退出的 Text Analysis 历史实例。Canonical 在当前
+  算子构建、启动和课程提交前失败关闭并完成 `restore: complete`。
+- 修复把历史 baseline/new 账本严格投影为当前 allowlist；只有三套固定身份、完整存在且处于
+  Exited 状态的 Text Analysis 容器可以被排除，缺失、运行态、伪装或未知身份均继续拒绝。
+- 本 Attempt 只保留为失败诊断，不满足远端七算子 release 的任何最终门禁。
+
+## 2026-08-22 远端 Attempt 5：Compose orphan 重新进入当前快照
+
+- Attempt 5 SHA 为 `b10751800bd4cf7c4e638ab76a36e9e71d795ad0`，立即前驱为 Attempt 4。
+  clean-clone 为 `2740 passed, 8 skipped`；Control、Orchestrator、Vision 和 Online Gateway
+  分别为 `25/55/33/20 passed`，真实 PostgreSQL/Redis 为 `69 passed`，真实 Kafka 为
+  `12 passed`。七个算子镜像均成功构建并通过 `amd64`、完整 revision 和镜像身份门禁；未构建、
+  重标或启动 Text Analysis。
+- previous baseline/new 已正确投影为 21 个当前实例，但 Compose 的 `ps --all` 仍返回同 project 下
+  三个停止态 Text Analysis orphan，导致未经投影的 24 项当前快照与 21 项 previous new 不一致。
+  失败发生在启动当前 21 实例、业务提交、217 条反例、26 条压力/恢复和人工复核之前。
+- 修复使当前快照先保留 Compose 完整集合，再通过同一个严格投影合同生成当前七算子快照。只有
+  固定三套、身份完整且 Exited 的 orphan 可排除；未知容器、运行态退役容器、名称或 Compose 身份
+  漂移仍失败关闭。相关聚焦、Task 9 和控制器/部署合同合计 `590 passed`，Ruff、strict Mypy 和
+  `compileall` 均通过。
+- Canonical 已完成 `restore: complete`；24 个历史算子容器保持 Exited，三个 Text Analysis 容器
+  未启动、未删除，原 `ocr-v6-amd` 保持 Exited，PostgreSQL、Redis、Kafka、MongoDB 与四平台
+  服务均 healthy。未执行 prune、`down -v`、卷、`/data/result`、历史 release 或镜像删除。
+- Attempt 5 仍不得计入最终通过；下一次必须以包含本修复的新完整 SHA 和本 release 为立即前驱
+  执行完整 Canonical。
