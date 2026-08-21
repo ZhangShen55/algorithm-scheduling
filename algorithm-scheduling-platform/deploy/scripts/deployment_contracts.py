@@ -55,6 +55,9 @@ INFRASTRUCTURE_IDENTITIES = {
     ("algorithm-scheduling-platform", service)
     for service in ("postgres", "kafka", "redis", "mongodb")
 }
+RETIRED_STOPPED_OPERATOR_SERVICES = frozenset(
+    {"text-analysis-cpu0", "text-analysis-cpu1", "text-analysis-cpu2"}
+)
 
 
 class DeploymentContractError(ValueError):
@@ -421,6 +424,21 @@ def validate_existing_algorithm_containers(
         project = labels.get("com.docker.compose.project") if isinstance(labels, Mapping) else None
         service = labels.get("com.docker.compose.service") if isinstance(labels, Mapping) else None
         identity = (project, service)
+        if (
+            project == "algorithm-operators"
+            and isinstance(service, str)
+            and service in RETIRED_STOPPED_OPERATOR_SERVICES
+        ):
+            state = container.get("State")
+            expected_name = f"algorithm-operators-{service}-1"
+            if (
+                name == expected_name
+                and isinstance(state, Mapping)
+                and state.get("Status") == "exited"
+                and state.get("Running") is False
+            ):
+                # 退役实例只作为已停止的旧 release 资产保留，不能放宽当前运行身份集合。
+                continue
         if (
             not all(isinstance(value, str) for value in identity)
             or identity not in allowed_identities

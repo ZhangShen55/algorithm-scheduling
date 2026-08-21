@@ -22,6 +22,14 @@
 - **WHEN** 构建脚本读取当前算子镜像权威清单
 - **THEN** 只构建七个算子镜像，不构建或重新标记 `algorithm-text-analysis`
 
+#### Scenario: 主机保留已停止的旧容器
+- **WHEN** 主机预检发现旧 release 的三个 Text Analysis 容器，且 Compose 身份、规范名称和退出状态均精确匹配
+- **THEN** 预检允许它们作为非运行历史资产保留，但不得启动、注册、路由或纳入当前实例证据
+
+#### Scenario: 退役容器仍在运行或身份漂移
+- **WHEN** 任一旧 Text Analysis 容器仍在运行，或其名称、Compose project/service 与固定历史身份不匹配
+- **THEN** 主机预检失败关闭并要求人工确认，不自动停止、删除或改写该容器
+
 ### Requirement: Text Analysis 源码作为非平台项目保留
 工作区 SHALL 保留 `text_analysis/` 源码和既有接口文件，但 MUST 将其标记为非平台项目，并且本变更不得删除、裁剪或修改其业务接口来模拟退役。
 

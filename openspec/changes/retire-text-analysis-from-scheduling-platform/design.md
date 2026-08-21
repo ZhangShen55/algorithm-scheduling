@@ -76,6 +76,11 @@ CPU:      ppt_slice × 3
 
 现有八算子镜像与 release 证据保持只读。只有新的完整 Git SHA 通过七算子构建、注册、真实调用、业务泳道、压力/反例、恢复和最终聚合，才能成为新范围的通过结论。
 
+主机预检仍允许三个旧 `text-analysis-cpu0/1/2` 容器作为停止态历史资产存在，但必须同时满足
+Compose project/service、规范容器名、`State.Status=exited` 和 `Running=false` 精确匹配。
+它们不属于七算子允许身份集合，任何运行态、名称漂移或其他未知算法容器仍失败关闭；该兼容只为
+保留旧 release 事实，不允许重新启动、注册、路由或冒充当前证据。
+
 ### 6. Harness 用新语义替换 LLM 用例，不删除历史记录
 
 旧 release 报告、旧 baseline、旧场景执行结果和 `change-ledger.md` 既有条目不得回写。新增独立场景和 baseline，旧文档只追加“后续范围调整已废止”说明。

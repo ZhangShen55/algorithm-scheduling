@@ -232,6 +232,37 @@ def test_dep_018_rejects_unknown_algorithm_prefixed_containers() -> None:
     validate_existing_algorithm_containers(canonical, allowed)
 
 
+def test_retired_text_analysis_containers_are_allowed_only_as_exact_exited_assets() -> None:
+    allowed = {
+        ("algorithm-scheduling-platform", "control-service"),
+        ("algorithm-operators", "vbas-gpu0"),
+    }
+    retired = [
+        {
+            "Name": f"/algorithm-operators-text-analysis-cpu{gpu_id}-1",
+            "Config": {
+                "Labels": {
+                    "com.docker.compose.project": "algorithm-operators",
+                    "com.docker.compose.service": f"text-analysis-cpu{gpu_id}",
+                }
+            },
+            "State": {"Status": "exited", "Running": False},
+        }
+        for gpu_id in range(3)
+    ]
+    validate_existing_algorithm_containers(retired, allowed)
+
+    running = dict(retired[0])
+    running["State"] = {"Status": "running", "Running": True}
+    with pytest.raises(DeploymentContractError, match="unknown algorithm container"):
+        validate_existing_algorithm_containers([running], allowed)
+
+    disguised = dict(retired[0])
+    disguised["Name"] = "/algorithm-operators-text-analysis-cpu0-copy"
+    with pytest.raises(DeploymentContractError, match="unknown algorithm container"):
+        validate_existing_algorithm_containers([disguised], allowed)
+
+
 def test_dep_020_checkout_release_fails_closed_when_fixed_commit_cannot_be_read(
     tmp_path: Path,
 ) -> None:

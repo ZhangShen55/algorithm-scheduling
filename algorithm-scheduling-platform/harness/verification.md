@@ -175,9 +175,9 @@ deploy/scripts/run-milestone-2b-8a7 \
   --manual-review-json "$RESTRICTED_REVIEW_ROOT/${EXPECTED_GIT_SHA}-b-level-reviews.json"
 ```
 
-`b-level-reviews.json` 必须覆盖 8 个 B 级质量复核 case，并让每项 `artifact` 指向当前 release
+`b-level-reviews.json` 必须覆盖 6 个 B 级质量复核 case，并让每项 `artifact` 指向当前 release
 内已存在的复核证据；它不能只写统一阶段结论。Campaign 会在当前课程离线结果完成后发布
-`business/review-requests/offline.json` 并等待 7 项复核，在视觉结果完成后发布
+`business/review-requests/offline.json` 并等待 5 项复核，在视觉结果完成后发布
 `business/review-requests/vision.json` 并等待 `VIS-025`。独立复核输入必须位于 Git 外受限目录、
 权限 `0600`，然后通过以下入口发布；发布器先写当前 SHA/课程的逐项证据，再原子更新索引：
 

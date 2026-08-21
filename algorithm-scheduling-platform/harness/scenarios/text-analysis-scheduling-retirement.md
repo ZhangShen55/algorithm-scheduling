@@ -86,3 +86,18 @@ DAG、注册、迁移、七算子部署权威、217 条反例、26 条压力/恢
 - 已达到本地静态、单元、真实 PostgreSQL/Redis、真实 Kafka、服务运行合同和算子源码合同六层；
   尚未达到新 SHA 的远端七镜像、21 实例、18/18 GPU、3/3 CPU、真实业务泳道、243 条用例、
   Canonical 恢复与精确镜像清理证据。
+
+## 2026-08-21 远端 Attempt 1：停止态历史容器预检缺口
+
+- Attempt 1 SHA 为 `7cbfaf4f33127e85be1844c27fab79af992da490`，previous release 为
+  `778515596b42123a3061daeb9a1c3bb446f1de1b`。模型资产、Harness Python 和七算子拓扑通过后，
+  主机预检在镜像构建、容器启动和课程提交前失败。
+- 失败原因是三个已退出的旧 Text Analysis 容器不再属于当前七算子 Compose，通用未知容器门禁
+  因此把它们误判为需要人工确认的活动风险。现场没有新算子容器、活动维护锁或业务数据变更，
+  四平台和基础设施保持健康。
+- 修复只允许规范名称、旧 Compose 身份、`State.Status=exited` 且 `Running=false` 的三个固定
+  历史容器通过。运行态、身份/名称漂移及其他未知算法容器继续失败关闭，不自动停止或删除。
+- 修复后平台完整回归为 `2739 passed, 3 skipped, 27 warnings`；三个 skip 仍只因本机缺少
+  Canonical FaceRec Token/容器，warnings 为多线程测试进程调用 `fork()` 的既有 Python 弃用提示。
+- Attempt 1 只作为失败诊断证据；后续必须使用新的完整 SHA，并把本 release 作为立即前驱重跑
+  全部 Canonical，不能在原 SHA 上覆盖结果。
