@@ -210,3 +210,26 @@ DAG、注册、迁移、七算子部署权威、217 条反例、26 条压力/恢
   `0400`；维护锁释放，运行中算子为0，当前/历史算子均 Exited，四平台与四基础设施 healthy。
 - 没有生成 offline/vision request、复核 input、artifact 或通过结论，也没有执行清理。本 release
   不计入最终通过；文档修复后必须以新 SHA 和本 release 为立即前驱完整重跑。
+
+## 2026-08-22 远端 Attempt 9：课程媒体 URL 目录片段错误
+
+- Attempt 9 SHA 为 `dc628302966ead17f51fb49d1e53f589ddc56690`，立即前驱为 Attempt 8。
+  clean-clone 为 `2751 passed, 8 skipped`，四服务为 `25/55/33/20 passed`，真实
+  PostgreSQL/Redis 为 `69 passed`，真实 Kafka 为 `12 passed`；退役静态排除为 0 违规，
+  14 进程配置权威通过。
+- 七个算子和四个平台镜像均绑定本 SHA 并通过 `amd64`、完整 revision 与精确镜像身份门禁；
+  四平台 healthy，21/21 实例注册、18/18 GPU 真实推理与物理卡/PID 归属、3/3 PPT CPU
+  真实切片及 7/7 综合 Smoke 全部通过。媒体门禁前执行的 75 条反例和 17 条压力/恢复基础用例
+  也全部通过；这些部分证据只用于诊断，不补足最终目录。
+- 三路课程媒体预检固定执行三轮，T/S/P 每轮均返回 HTTP `404`、声明长度与首块长度均为
+  `153`，因此以 `media_probe_failed` 失败关闭。现场核对媒体服务器目录确认，本次 Canonical
+  参数把实际存在的 `2025年9月12号17时10分` 目录误写为 `2025年9月12分`；正确目录仍包含
+  `教师2.mp4`、`学生1.mp4` 和 `PPT.mp4`，不是媒体服务器、容器网络或探针实现故障。
+- 失败发生在课程任务创建和 offline/vision 复核 request 发布前；没有生成 task、复核 input、
+  artifact 或通过结论，Git 外复核索引保持空对象。下一 Attempt 必须先以正确三路 URL 通过
+  独立只读探测，再从当前 release 作为立即前驱完整重跑，不复用本轮部分证据。
+- Canonical 明确输出 `restore: complete`；唯一恢复审计为当前 UID、单硬链接、`0400` 的
+  `existing-containers.jsonl.paused.jsonl.audit.9ae1777bcb5346928cb1aaff5651ded0.jsonl`。
+  21 个当前算子与 3 个历史 Text Analysis 容器均为 Exited，原 `ocr-v6-amd` 保持原有 Exited
+  状态，四平台和 PostgreSQL、Redis、Kafka、MongoDB 全部 healthy；未执行 prune、`down -v`、
+  卷、数据、历史 release 或镜像删除。

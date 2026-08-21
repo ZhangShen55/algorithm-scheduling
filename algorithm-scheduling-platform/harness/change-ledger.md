@@ -175,6 +175,25 @@
 - offline/vision request、复核 artifact 和通过结论均未产生；本 release 只作为审计中断和恢复
   证据。文档修复必须形成新 SHA，并以本 release 为立即前驱完整重跑。
 
+## 2026-08-22 - 七算子远端 Attempt 9 课程媒体 URL 目录错误
+
+- SHA `dc628302966ead17f51fb49d1e53f589ddc56690` 已通过 clean-clone
+  `2751 passed, 8 skipped`、四服务 `25/55/33/20 passed`、真实 PostgreSQL/Redis `69 passed`、
+  真实 Kafka `12 passed`、14 进程配置权威、七算子与四平台镜像 revision、21/21 注册、
+  18/18 GPU 真实推理、3/3 PPT CPU 真实切片和 7/7 综合 Smoke。媒体门禁前 75 条反例及 17 条
+  压力/恢复基础用例全部通过，但不得单独满足当前最终目录。
+- 三路媒体门禁连续三轮均得到 HTTP `404`，以 `media_probe_failed` 在 task 创建前失败关闭。
+  只读对照媒体索引确认本次参数遗漏课程目录中的 `号17时10分`，把实际的
+  `2025年9月12号17时10分` 写成 `2025年9月12分`；正确目录中的 T/S/P 三个文件仍存在。
+  因此不放宽 HTTP 状态、声明长度或首块读取门禁，只校正下一 Attempt 的输入 URL。
+- 本 release 未创建课程任务、offline/vision review request、复核 input/artifact 或最终汇总；
+  外部索引仍为空对象。Canonical 输出 `restore: complete`，唯一 `0400`、单链接恢复审计为
+  `existing-containers.jsonl.paused.jsonl.audit.9ae1777bcb5346928cb1aaff5651ded0.jsonl`。
+- 恢复后 21 个当前算子和 3 个历史 Text Analysis 容器均停止，原 `ocr-v6-amd` 保持 Exited，
+  四平台与 PostgreSQL/Redis/Kafka/MongoDB 全部 healthy；没有执行 prune、`down -v`、卷、
+  数据、历史证据或镜像删除。Attempt 9 仅作为输入失败诊断，下一新 SHA 以本 release 为立即
+  前驱并使用已验证的正确三路 URL 完整重跑。
+
 ## 2026-08-21 - `standardize-service-file-logging` 本地实施与验证
 
 - 本变更基于 `778515596b42123a3061daeb9a1c3bb446f1de1b` 开始，目标是七个当前算子和四个平台服务；
