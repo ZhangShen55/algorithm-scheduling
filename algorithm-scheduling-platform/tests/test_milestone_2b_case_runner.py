@@ -1003,7 +1003,7 @@ class _PublishingRunner:
 
 
 @pytest.mark.asyncio
-async def test_batch_publishes_schema2_evidence_and_execution_once(
+async def test_batch_publishes_schema3_evidence_and_execution_once(
     tmp_path: Path,
 ) -> None:
     from scripts.run_milestone_2b_case_batch import run_case_batch
@@ -1034,7 +1034,7 @@ async def test_batch_publishes_schema2_evidence_and_execution_once(
         "payload",
     }
     assert raw == {
-        "schema_version": 2,
+        "schema_version": 3,
         "evidence_type": "case_evidence",
         "case_id": "DEP-001",
         "release_tag": "v1.0_260818",
@@ -1058,7 +1058,7 @@ async def test_batch_publishes_schema2_evidence_and_execution_once(
         "git_sha",
         "evidence",
     }
-    assert execution["schema_version"] == 2
+    assert execution["schema_version"] == 3
     assert execution["evidence_type"] == "negative_case"
     assert execution["case_id"] == "DEP-001"
     assert execution["status"] == "通过"
@@ -1433,7 +1433,7 @@ async def test_different_case_ids_run_concurrently_with_a_global_bound(
 
     release_root = _release_root(tmp_path)
     runner = _PublishingRunner(delay=0.15)
-    cases = tuple(_case(f"DEP-{number:03d}") for number in range(7, 11))
+    cases = tuple(_case(f"DEP-{number:03d}") for number in (7, 9, 10, 11))
     started = time.monotonic()
     result = await run_case_batch(
         cases=cases,  # type: ignore[arg-type]
@@ -1447,7 +1447,9 @@ async def test_different_case_ids_run_concurrently_with_a_global_bound(
 
     assert runner.max_active == 2
     assert elapsed < 0.55
-    assert result.completed == tuple(f"DEP-{number:03d}" for number in range(7, 11))
+    assert result.completed == tuple(
+        f"DEP-{number:03d}" for number in (7, 9, 10, 11)
+    )
 
 
 @pytest.mark.asyncio

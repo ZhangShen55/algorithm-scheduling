@@ -32,7 +32,6 @@ class OperatorCode(StrEnum):
     ASR_ONLINE = "asr_online"
     PPT_SLICE = "ppt_slice"
     OCR = "ocr"
-    TEXT_ANALYSIS = "text_analysis"
     VBAS = "vbas"
     FACEREC = "facerec"
     SCREEN_DET = "screen_det"

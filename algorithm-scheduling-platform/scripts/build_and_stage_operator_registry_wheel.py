@@ -24,6 +24,11 @@ from typing import TypedDict, cast
 
 PLATFORM_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = PLATFORM_ROOT.parent
+if str(PLATFORM_ROOT) not in sys.path:
+    sys.path.insert(0, str(PLATFORM_ROOT))
+
+from deploy.scripts.operator_topology import CURRENT_TOPOLOGY  # noqa: E402
+
 PACKAGE_ROOT = PLATFORM_ROOT / "packages" / "operator_registry_client"
 DIST_DIR = PACKAGE_ROOT / "dist"
 
@@ -73,16 +78,7 @@ EXPECTED_DIST_INFO_MEMBERS = frozenset(
         f"{DIST_INFO_DIRECTORY}/RECORD",
     }
 )
-TARGET_PROJECTS = (
-    "asr_offline",
-    "asr_online",
-    "ppt_slice",
-    "ocr",
-    "text_analysis",
-    "vbas",
-    "facerec",
-    "screen_det",
-)
+TARGET_PROJECTS = tuple(entry.project_directory for entry in CURRENT_TOPOLOGY.operators)
 
 Builder = Callable[[Path, Path], None]
 Replace = Callable[[str | os.PathLike[str], str | os.PathLike[str]], None]

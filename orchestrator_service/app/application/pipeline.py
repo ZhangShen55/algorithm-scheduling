@@ -64,14 +64,6 @@ def pipeline_nodes(task_type: TaskType, priority: Priority) -> list[NodeWrite]:
                 "ocr",
                 ("PPT_SLICE",),
             ),
-            NodeWrite(
-                "PPT_KEYWORDS",
-                NodeStatus.WAITING_PREREQUISITE,
-                priority,
-                "等待 OCR 完成",
-                "extract_keywords",
-                ("PPT_OCR",),
-            ),
         ]
     if task_type is TaskType.ASR:
         return [
@@ -81,14 +73,6 @@ def pipeline_nodes(task_type: TaskType, priority: Priority) -> list[NodeWrite]:
                 priority,
                 "等待离线语音转写",
                 "asr_offline",
-            ),
-            NodeWrite(
-                "COURSE_OVERVIEW",
-                NodeStatus.WAITING_PREREQUISITE,
-                priority,
-                "等待语音转写完成",
-                "course_overviews",
-                ("ASR_TRANSCRIPTION",),
             ),
         ]
     if task_type is TaskType.TEACHER_BEHAVIOR:

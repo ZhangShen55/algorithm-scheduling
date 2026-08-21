@@ -12,6 +12,11 @@ GPU 或静态 Compose 结果当作真实部署通过。
 部署模板、该登录合同和受控服务默认值。模型解密密钥、SSH 私钥、课程媒体、人脸原图、
 大型 fixture 和外部可信模型 manifest 仍必须留在 Git 工作树外。
 
+当前发布权威为七类算子、21 个实例、18 个 GPU 实例、3 个 CPU PPT Slice 实例和 14 个
+配置解析进程。最终同一 Git SHA 必须取得 7/7 算子 Smoke、217 条反例、26 条压力/恢复用例
+和 6 项 B 级人工复核。旧八算子/24 实例 release 只作为历史证据保留，不能补足当前门禁；
+`text_analysis` 镜像只可在新 release 全部通过后作为经精确身份核验的历史清理候选。
+
 发布必须先取得完整 commit SHA。服务器已经持有的
 `/root/workspace/.algorithm-scheduling-assets/v1.0_260812/model-assets.manifest.json`
 是外部可信基线；部署不得运行 `generate-model-asset-manifest` 重新生成或覆盖它，只能暂存并校验：
@@ -62,7 +67,7 @@ python3 -m venv "$PWD/.venv"
 [`milestone-2b-deploy.md`](../harness/scenarios/milestone-2b-deploy.md) 为准。
 
 完整 8A.7 入口是 `deploy/scripts/run-milestone-2b-8a7`。它要求三路视频 URL 和当前 release
-的 B 级质量复核 JSON，并在同一维护锁下完成 clean-clone、24 实例、全部 243 条用例、报告、
+的 B 级质量复核 JSON，并在同一维护锁下完成 clean-clone、21 实例、全部 243 条用例、报告、
 精确旧镜像清理和原业务恢复。不得单独提前调用 cleanup 模式绕过总控门禁。
 
 The platform Compose includes PostgreSQL, Kafka, Redis, MongoDB and all four platform
@@ -179,14 +184,15 @@ the upstream A service, follow [A服务接口与部署对接指南](./A服务接
 ## Operator instances
 
 `docker-compose.operators.yml` is the single-machine operator topology template. It
-contains 24 instances. GPU 0, GPU 1 and GPU 2 each run one instance of all six GPU
+contains 21 instances. GPU 0, GPU 1 and GPU 2 each run one instance of all six GPU
 operators: offline ASR, realtime ASR, OCR, VBas, face recognition and image quality.
-The CPU profile runs three PPT Slice instances and three Text Analysis instances.
+The CPU profile runs three PPT Slice instances. `text_analysis/` is retained outside
+the platform and must not be built, registered, routed, leased or included in Smoke.
 
 Every image used by this compose file must include the lightweight
 `algorithm-operator-registry-client` distribution so that the operator can import
 `packages.operator_registry_client`. Rebuild, validate and stage the exact wheel into
-all eight operator build contexts with the repository pipeline:
+all seven operator build contexts with the repository pipeline:
 
 ```bash
 python scripts/build_and_stage_operator_registry_wheel.py
@@ -194,13 +200,13 @@ python -m pip install \
   packages/operator_registry_client/dist/algorithm_operator_registry_client-0.1.0-py3-none-any.whl
 ```
 
-All eight operator projects declare `algorithm-operator-registry-client==0.1.0` in
+All seven current operator projects declare `algorithm-operator-registry-client==0.1.0` in
 their runtime requirements. Their Dockerfiles consume the same versioned artifact
 from an ignored `wheel/` build-context directory. The command above builds without an
 index from a clean Git-tracked source allowlist, validates the fixed filename,
 metadata, wheel member set and RECORD, atomically publishes `dist`, and stages
 byte-identical copies with SHA-256 verification. A private cross-process lock and
-durable transaction journal serialize the nine destination replacements and recover
+durable transaction journal serialize the eight destination replacements and recover
 an interrupted publication before the next run. Run it before building images.
 The legacy command remains an alias for the same rebuild-and-stage pipeline and never
 copies a previously built wheel without rebuilding:
@@ -210,7 +216,7 @@ python scripts/stage_operator_registry_wheel.py
 ```
 
 The authoritative operator image matrix is `deploy/operator-images.tsv`. Validate
-all eight Dockerfiles and build contexts without building an image:
+all seven Dockerfiles and build contexts without building an image:
 
 ```bash
 deploy/scripts/verify-operator-build-contexts
@@ -220,7 +226,7 @@ The gate rejects matrix drift, workspace-root build contexts, `COPY`/`ADD` sourc
 outside an operator context and missing `.dockerignore` controls for Git state,
 tests, caches, local Harness/OpenSpec/Codex data and common secret-file classes.
 After model assets have been staged through the separately controlled asset process,
-build and inspect all eight images from any working directory:
+build and inspect all seven images from any working directory:
 
 ```bash
 ASSET_SOURCE=/root/workspace/.algorithm-scheduling-assets/v1.0_260812
@@ -266,7 +272,7 @@ redaction boundary.
 
 即使代码改动只影响 Harness，提交后得到的新最终 SHA 也会使旧镜像中的
 `org.opencontainers.image.revision` 和旧 release evidence 对本轮验收失效。
-四个平台和八个算子镜像必须按新最终 SHA 重新构建或重标，并重新取证；
+四个平台和七个算子镜像必须按新最终 SHA 重新构建或重标，并重新取证；
 不得把旧 SHA 的构建、注册、GPU 或 Smoke 证据复制到新 release 目录。重标后的运行镜像仍必须通过 runtime/operator
 preflight 对最终 SHA 的 revision 校验。
 
@@ -294,7 +300,7 @@ renderer 返回码 `0` 表示报告结论通过；返回码 `3` 表示报告已�
 返回码，不能只检查 `report.md` 是否存在。
 
 The asset definition is `deploy/model-assets.json`: ASR Offline, ASR Online, OCR,
-VBas plain models, FaceRec and ScreenDet. PPT Slice and Text Analysis have no local
+VBas plain models, FaceRec and ScreenDet. PPT Slice has no local
 model roots. The external manifest is an input artifact and must stay outside Git.
 The external asset root must be owned by the execution user, contain no symlink in its
 path and have exact `0700` mode; its pre-existing trusted manifest must have exact `0600`
@@ -318,7 +324,7 @@ external model roots do not gain a second manifest authority.
 
 Before deployment, copy the two canonical endpoint files from `deploy/endpoints.json`
 and `deploy/endpoints-full.json` into the Git-external fixture root. Per-instance GPU
-triggers use the external `endpoints.json`; the full eight-operator Smoke command uses
+triggers use the external `endpoints.json`; the full seven-operator Smoke command uses
 the external `endpoints-full.json`.
 
 Python wheels may be downloaded while each image is built. A quiet BuildKit log alone
@@ -404,7 +410,7 @@ deploy/scripts/verify-operator-registration \
 每个 GPU 实例都必须执行同一顺序：真实推理采样、`docker stop`、立即
 `--assert-stopped`、`docker restart`，再用 `activate-operator-instances --instance`
 显式恢复持久生命周期，然后等待注册、首次心跳、`ONLINE` 和 `model_ready=true`。
-只有实例恢复后才能验证下一个实例，最终必须让 24 个实例同时
+只有实例恢复后才能验证下一个实例，最终必须让 21 个实例同时
 ONLINE。恢复后使用 `verify-operator-registration --instance <当前实例>` 生成独立
 write-once 报告，不要重复运行已生成报告的 profile preflight。不得为了收集停止证据而把容器留在停止状态。
 
@@ -422,7 +428,7 @@ never reads or reports secret content, size or hashes. ASR Online's current `.en
 implementation embeds its decryption material in source and is therefore an acknowledged
 risk, not a secure secret boundary.
 
-All eight runtime TOML files come from read-only Compose mounts under
+All seven runtime TOML files come from read-only Compose mounts under
 `deploy/config/operators/`; local `config*.toml` files are excluded from images.
 The build entrypoint verifies model assets, validates build inputs, stages the registry wheel,
 checks root-disk free space
@@ -518,10 +524,10 @@ aggregator 强制校验该证据属于当前 release/SHA、状态为 `passed`、
 `org.opencontainers.image.revision` attestation；`run-operator-smoke --git-sha` 只把结果
 归档到对应 release/SHA，不证明镜像来源。FaceRec 的 gpu0/gpu1/gpu2 三实例必须同时
 running/ONLINE 后再执行该算子的 Smoke。CPU profile 的
-`ppt-slice-cpu0/1/2`、`text-analysis-cpu0/1/2` 必须使用逐实例
-`endpoints.json` 分别执行 Smoke，不能只以 cpu0 代表六个实例。六个 CPU 结果齐备后，
+`ppt-slice-cpu0/1/2` 必须使用逐实例 `endpoints.json` 分别执行 Smoke，不能只以 cpu0
+代表三个实例。三个 CPU 结果齐备后，
 先确认 FaceRec 三实例同时 running/ONLINE，最后只使用一次
-`endpoints-full.json` 执行八类 full Smoke。
+`endpoints-full.json` 执行七类 full Smoke。
 
 PPT Smoke 的 `19090` 是 Harness-only 临时回调端口，不属于平台北向暴露面。
 必须动态读取 `algorithm-platform` Docker bridge gateway，并同时作为监听和广播
@@ -535,7 +541,7 @@ ALGORITHM_PLATFORM_GATEWAY="$(
 test -n "$ALGORITHM_PLATFORM_GATEWAY"
 test "$ALGORITHM_PLATFORM_GATEWAY" != "<no value>"
 
-# 在六个 CPU 逐实例 Smoke 和唯一一次 full Smoke 中复用该参数数组。
+# 在三个 CPU 逐实例 Smoke 和唯一一次 full Smoke 中复用该参数数组。
 CALLBACK_SMOKE_ARGS=(
   --callback-listen-host "$ALGORITHM_PLATFORM_GATEWAY"
   --callback-advertise-base-url "http://${ALGORITHM_PLATFORM_GATEWAY}:19090"

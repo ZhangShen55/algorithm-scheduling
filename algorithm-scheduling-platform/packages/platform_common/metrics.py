@@ -5,6 +5,15 @@ from pathlib import Path
 
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, generate_latest
 
+from packages.platform_common.operator_registry import OperatorCode
+
+
+def _current_operator_code(value: str) -> str:
+    try:
+        return OperatorCode(value).value
+    except ValueError as exc:
+        raise ValueError(f"不支持的当前算子代码: {value}") from exc
+
 
 class PlatformMetrics:
     def __init__(self) -> None:
@@ -104,7 +113,7 @@ class PlatformMetrics:
         count: int,
     ) -> None:
         self._operator_instances.labels(
-            operator_code=operator_code,
+            operator_code=_current_operator_code(operator_code),
             lifecycle=lifecycle,
             model_ready=str(model_ready).lower(),
             gpu=gpu_label or "none",
@@ -117,7 +126,7 @@ class PlatformMetrics:
         count: int,
     ) -> None:
         self._active_leases.labels(
-            operator_code=operator_code,
+            operator_code=_current_operator_code(operator_code),
             instance_id=instance_id,
         ).set(count)
 
@@ -131,7 +140,7 @@ class PlatformMetrics:
         success: bool,
     ) -> None:
         labels = {
-            "operator_code": operator_code,
+            "operator_code": _current_operator_code(operator_code),
             "capability": capability,
             "instance_id": instance_id,
         }

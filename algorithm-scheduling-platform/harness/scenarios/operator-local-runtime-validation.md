@@ -1,5 +1,11 @@
 # 场景：算子本机真实运行与平台接入前提
 
+> **后续范围调整已废止（2026-08-21）**
+>
+> 本场景中的 Text Analysis、八算子及相关节点内容记录当时的真实实现与验收事实，后续已由
+> `retire-text-analysis-from-scheduling-platform` 调整为七算子当前范围。当前权威基线见
+> `text-analysis-scheduling-retirement.md`；下文旧命令、数量、结果、SHA 和 release 路径保持原样。
+
 ## 目标
 
 在 MacBook CPU 环境逐个验证算子能够从真实 `app.main:app` 启动、完成业务推理，并确认轻量

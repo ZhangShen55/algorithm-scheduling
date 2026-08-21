@@ -1,3 +1,8 @@
+> **后续范围调整已废止（2026-08-21）**
+>
+> 本规格对 Text Analysis 容量与八算子配置的要求保留为历史实现记录。当前可注册集合和部署
+> 基线以 `retire-text-analysis-from-scheduling-platform` 的七算子合同为准。
+
 ## ADDED Requirements
 
 ### Requirement: 八个算子使用统一平台配置段

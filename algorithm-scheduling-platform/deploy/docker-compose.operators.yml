@@ -80,11 +80,6 @@ x-ppt-slice-environment: &ppt-slice-environment
   OPERATOR_PORT: "9001"
   CONFIG_PATH: /workspace/config.toml
 
-x-text-analysis-environment: &text-analysis-environment
-  <<: *operator-environment
-  OPERATOR_PORT: "8000"
-  CONFIG_PATH: /app/config.toml
-
 x-asr-offline: &asr-offline
   <<: *operator-common
   image: ${ASR_OFFLINE_IMAGE:-seacraft-asr-offline:v1.0_260812}
@@ -149,14 +144,6 @@ x-ppt-slice: &ppt-slice
     - {type: bind, source: "${COURSE_ROOT:-/data/course}", target: /data/course}
     - {type: bind, source: "${RESULT_ROOT:-/data/result}", target: /data/result}
     - {type: bind, source: ./config/operators/ppt_slice.cpu.toml, target: /workspace/config.toml, read_only: true}
-x-text-analysis: &text-analysis
-  <<: *operator-common
-  image: ${TEXT_ANALYSIS_IMAGE:-algorithm-text-analysis:v1.0_260812}
-  volumes:
-    - {type: bind, source: "${COURSE_ROOT:-/data/course}", target: /data/course}
-    - {type: bind, source: "${RESULT_ROOT:-/data/result}", target: /data/result}
-    - {type: bind, source: ./config/operators/text_analysis.cpu.toml, target: /app/config.toml, read_only: true}
-
 services:
   asr-offline-gpu0:
     <<: *asr-offline
@@ -400,33 +387,6 @@ services:
       <<: *ppt-slice-environment
       PLATFORM_INSTANCE_ID: ppt-slice-cpu2
       PLATFORM_SERVICE_URL: http://ppt-slice-cpu2:9001
-
-  text-analysis-cpu0:
-    <<: *text-analysis
-    profiles: [cpu]
-    ports: ["127.0.0.1:18000:8000"]
-    environment:
-      <<: *text-analysis-environment
-      PLATFORM_INSTANCE_ID: text-analysis-cpu0
-      PLATFORM_SERVICE_URL: http://text-analysis-cpu0:8000
-
-  text-analysis-cpu1:
-    <<: *text-analysis
-    profiles: [cpu]
-    ports: ["127.0.0.1:28000:8000"]
-    environment:
-      <<: *text-analysis-environment
-      PLATFORM_INSTANCE_ID: text-analysis-cpu1
-      PLATFORM_SERVICE_URL: http://text-analysis-cpu1:8000
-
-  text-analysis-cpu2:
-    <<: *text-analysis
-    profiles: [cpu]
-    ports: ["127.0.0.1:38000:8000"]
-    environment:
-      <<: *text-analysis-environment
-      PLATFORM_INSTANCE_ID: text-analysis-cpu2
-      PLATFORM_SERVICE_URL: http://text-analysis-cpu2:8000
 
 networks:
   algorithm-platform:

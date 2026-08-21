@@ -4,9 +4,24 @@
 数据库迁移、部署编排、平台契约测试和 Harness。
 
 Current maturity: the four FastAPI service projects, typed configuration, control-plane
-components, PPT shared-result components and single-machine Compose are present. The
-real Kafka-backed orchestrator and visual Worker loops are still being implemented;
-the repository must not yet be treated as an end-to-end production runtime.
+components, PPT shared-result components, Kafka-backed orchestrator and visual Worker
+runtime wiring, and single-machine Compose are present. Final seven-operator deployment,
+real business-lane and recovery evidence is still incomplete, so the repository must not yet
+be treated as an end-to-end production runtime.
+
+The current scheduling topology contains seven operator types and 21 instances: 18 GPU
+instances (six operator types on each of three GPUs) and three CPU PPT Slice instances.
+`text_analysis/` remains in the workspace as a non-platform project; platform build, deployment,
+registration, routing, leasing and verification must exclude it. Historical task and audit data
+that mention Text Analysis remain readable.
+
+New offline tasks use only these DAGs:
+
+- PPT: `PPT_SLICE -> PPT_OCR`
+- ASR: `ASR_TRANSCRIPTION`
+
+Historical `PPT_KEYWORDS` and `COURSE_OVERVIEW` nodes may still appear in queries for old tasks,
+but new tasks do not create placeholders for them.
 
 ## Services
 

@@ -1,5 +1,11 @@
 # 场景：方案 C 基础调度闭环
 
+> **后续范围调整已废止（2026-08-21）**
+>
+> 本场景中的 Text Analysis、八算子及相关节点内容记录当时的真实实现与验收事实，后续已由
+> `retire-text-analysis-from-scheduling-platform` 调整为七算子当前范围。当前权威基线见
+> `text-analysis-scheduling-retirement.md`；下文旧命令、数量、结果、SHA 和 release 路径保持原样。
+
 ## 目标边界
 
 当前阶段由两个连续里程碑组成：

@@ -29,26 +29,24 @@ else:
     if str(SCRIPT_ROOT) not in sys.path:
         sys.path.insert(0, str(SCRIPT_ROOT))
     from deployment_contracts import validate_operator_toml_contract
+    from operator_topology import CURRENT_TOPOLOGY
 
 PLATFORM_ROOT = SCRIPT_ROOT.parents[1]
 COMPOSE_PATH = PLATFORM_ROOT / "deploy" / "docker-compose.operators.yml"
 TAG_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 SHA_PATTERN = re.compile(r"[0-9a-fA-F]{40}")
+if TYPE_CHECKING:
+    from deploy.scripts.operator_topology import CURRENT_TOPOLOGY
+
 OPERATOR_CONTRACTS = {
-    "asr-offline": ("asr_offline", {"asr_offline"}),
-    "asr-online": ("asr_online", {"asr_online"}),
-    "ocr": ("ocr", {"ocr"}),
-    "vbas": ("vbas", {"student_behavior", "teacher_behavior"}),
-    "facerec": ("facerec", {"recognize"}),
-    "screen-det": ("screen_det", {"detect_all"}),
-    "ppt-slice": ("ppt_slice", {"ppt_slice"}),
-    "text-analysis": ("text_analysis", {"course_overviews", "extract_keywords"}),
+    entry.service_prefix: (entry.operator_code, set(entry.capabilities))
+    for entry in CURRENT_TOPOLOGY.operators
 }
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="验证里程碑 2B 的 24 个算子实例",
+        description="验证里程碑 2B 的 21 个算子实例",
         allow_abbrev=False,
     )
     parser.add_argument("--control-url", required=True)
@@ -157,8 +155,8 @@ def atomic_json(path: Path, payload: dict[str, Any]) -> None:
 def load_expected(path: Path) -> dict[str, dict[str, Any]]:
     document = yaml.safe_load(path.read_text(encoding="utf-8"))
     services = document.get("services")
-    if not isinstance(services, dict) or len(services) != 24:
-        raise ValueError("Compose 权威清单必须精确包含 24 个实例")
+    if not isinstance(services, dict) or len(services) != CURRENT_TOPOLOGY.totals["instances"]:
+        raise ValueError("Compose 权威清单必须精确包含 21 个实例")
     expected: dict[str, dict[str, Any]] = {}
     for instance_id, service in services.items():
         matches = [prefix for prefix in OPERATOR_CONTRACTS if instance_id.startswith(prefix + "-")]
@@ -398,7 +396,7 @@ def main() -> int:
     last_issues: list[str] = []
     last_specific_issues: list[str] = []
     observed_count = 0
-    expected_count = 24
+    expected_count = CURRENT_TOPOLOGY.totals["instances"]
     observed: dict[str, dict[str, Any]] = {}
     selection = {"mode": "full", "values": []}
     try:

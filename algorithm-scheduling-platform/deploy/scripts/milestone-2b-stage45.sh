@@ -278,34 +278,17 @@ run_cpu_instance_smoke_stage45() {
     --run-id "cpu-smoke-${instance_id}" --timeout-seconds 3600
 }
 
-GPU_MATRIX=(
-  'asr-offline-gpu0|asr_offline|0'
-  'asr-offline-gpu1|asr_offline|1'
-  'asr-offline-gpu2|asr_offline|2'
-  'asr-online-gpu0|asr_online|0'
-  'asr-online-gpu1|asr_online|1'
-  'asr-online-gpu2|asr_online|2'
-  'ocr-gpu0|ocr|0'
-  'ocr-gpu1|ocr|1'
-  'ocr-gpu2|ocr|2'
-  'vbas-gpu0|vbas|0'
-  'vbas-gpu1|vbas|1'
-  'vbas-gpu2|vbas|2'
-  'facerec-gpu0|facerec|0'
-  'facerec-gpu1|facerec|1'
-  'facerec-gpu2|facerec|2'
-  'screen-det-gpu0|screen_det|0'
-  'screen-det-gpu1|screen_det|1'
-  'screen-det-gpu2|screen_det|2'
-)
-
-for gpu_case in "${GPU_MATRIX[@]}"; do
-  IFS='|' read -r service_name operator_code physical_gpu <<<"$gpu_case"
-  if ! verify_one_gpu_instance_stage45 \
-    "$service_name" "$operator_code" "$physical_gpu"; then
-    record_stage45_failure "GPU:${service_name}"
-  fi
-done
+if ! GPU_MATRIX_OUTPUT=$(.venv/bin/python deploy/scripts/operator_topology.py gpu-matrix); then
+  record_stage45_failure '无法读取七算子 GPU 拓扑权威'
+else
+  while IFS='|' read -r service_name operator_code physical_gpu; do
+    [[ -n "$service_name" ]] || continue
+    if ! verify_one_gpu_instance_stage45 \
+      "$service_name" "$operator_code" "$physical_gpu"; then
+      record_stage45_failure "GPU:${service_name}"
+    fi
+  done <<<"$GPU_MATRIX_OUTPUT"
+fi
 
 if ! deploy/scripts/preflight operators --full --git-sha "$EXPECTED_GIT_SHA" \
   --control-url "$CONTROL_URL" \
@@ -325,22 +308,18 @@ fi
 if [[ -z "$ALGORITHM_PLATFORM_GATEWAY" || "$ALGORITHM_PLATFORM_GATEWAY" == '<no value>' ]]; then
   record_stage45_failure '无法解析 algorithm-platform gateway'
 else
-  CPU_MATRIX=(
-    'ppt_slice|ppt-slice-cpu0'
-    'ppt_slice|ppt-slice-cpu1'
-    'ppt_slice|ppt-slice-cpu2'
-    'text_analysis|text-analysis-cpu0'
-    'text_analysis|text-analysis-cpu1'
-    'text_analysis|text-analysis-cpu2'
-  )
-  for cpu_case in "${CPU_MATRIX[@]}"; do
-    IFS='|' read -r operator_code instance_id <<<"$cpu_case"
-    if run_cpu_instance_smoke_stage45 "$operator_code" "$instance_id"; then
-      printf 'CODEX_STAGE5_CPU_SMOKE_PASS %s\n' "$instance_id"
-    else
-      record_stage45_failure "CPU-Smoke:${instance_id}"
-    fi
-  done
+  if ! CPU_MATRIX_OUTPUT=$(.venv/bin/python deploy/scripts/operator_topology.py cpu-matrix); then
+    record_stage45_failure '无法读取七算子 CPU 拓扑权威'
+  else
+    while IFS='|' read -r instance_id operator_code _unused; do
+      [[ -n "$instance_id" ]] || continue
+      if run_cpu_instance_smoke_stage45 "$operator_code" "$instance_id"; then
+        printf 'CODEX_STAGE5_CPU_SMOKE_PASS %s\n' "$instance_id"
+      else
+        record_stage45_failure "CPU-Smoke:${instance_id}"
+      fi
+    done <<<"$CPU_MATRIX_OUTPUT"
+  fi
 fi
 
 FACEREC_IDS=()
@@ -374,7 +353,7 @@ if [[ -n "${ALGORITHM_PLATFORM_GATEWAY:-}" && \
     --callback-listen-host "$ALGORITHM_PLATFORM_GATEWAY" \
     --callback-advertise-base-url "http://${ALGORITHM_PLATFORM_GATEWAY}:19090" \
     --endpoints-json "$FULL_ENDPOINTS" --timeout-seconds 3600; then
-    record_stage45_failure 'full-eight-operator-smoke'
+    record_stage45_failure 'full-seven-operator-smoke'
   fi
 fi
 

@@ -1,5 +1,53 @@
 # Change Ledger
 
+## 2026-08-21 - `retire-text-analysis-from-scheduling-platform` 基线冻结
+
+- 本变更从 `56d42f5cc5e88f271935e0a5c99dadd54e0e07a6` 开始；`text_analysis/` 的 101 个非缓存
+  文件摘要冻结为 `96ea62765502e043443d44f9ba23d7eddf027a60ba0948eebf82b8e0428ca4e1`，其用户已有
+  README 与 Docker 草稿保持只读。
+- 只读复核 `192.168.29.11`：旧 `7785155...` Canonical 已无 PID或维护锁，24 个算子容器
+  均已停止，存在唯一可信 `0400` 恢复 audit；原 `ocr-v6-amd` 保持退出态，未执行清理。
+- PostgreSQL 保留 18 个完成和 3 个等待的历史 Text Analysis 节点；3 个等待节点所属任务均已失败，
+  所属任务状态 10 至 50 的活动退役节点为 0。Redis 已无 Text Analysis 实例、心跳、能力或租约键；
+  PostgreSQL 的三个已注销实例行继续作为历史审计事实保留。
+- 当前证据只达到变更保护和旧 release/数据只读基线层级；七算子实现、本地六层验证和新远端 release
+  尚未完成，不得使用旧八算子结果补足。
+
+## 2026-08-21 - `retire-text-analysis-from-scheduling-platform` 文档范围收口
+
+- 四份包含 Text Analysis、八算子或退役节点的旧 Harness 场景仅追加后续废止说明；旧命令、数量、
+  结果、SHA 和 release 路径保持不可变，不能作为当前七算子最终验收证据。
+- 根与平台 `AGENTS.md` 的长期合同收敛为七个当前算子、21 个实例、18 个 GPU 实例、3 个 CPU
+  PPT Slice 实例和 14 个配置解析进程；`text_analysis/` 只作为非平台项目保留。
+- 当前新任务 DAG 固定为 `PPT_SLICE -> PPT_OCR` 和 `ASR_TRANSCRIPTION`。历史任务中的
+  `PPT_KEYWORDS`、`COURSE_OVERVIEW` 及历史 `operator_code=text_analysis` 仍可查询，但平台不得
+  再创建、注册、路由、租赁或调用这些节点和能力。
+- 总体设计保留既有架构图并新增带日期与版本号的七算子部署图和当前 DAG 图；A 服务、数据库、
+  部署及四服务 README 同步当前边界。本条只记录文档/治理层变更，不宣称代码、Compose、远端
+  七算子 release、217 条反例、26 条压力/恢复或 6 项人工复核已经通过。
+
+## 2026-08-21 - `retire-text-analysis-from-scheduling-platform` 本地实现闭环
+
+- 新 PPT DAG 已收敛为 `PPT_SLICE -> PPT_OCR`，新 ASR DAG 只保留
+  `ASR_TRANSCRIPTION`；Control 拒绝新的 `text_analysis` 注册，历史 PostgreSQL 节点和审计
+  字符串继续可查，活动退役节点切换预检失败关闭。
+- 平台完整测试为 `2738 passed, 3 skipped`；三个跳过项只因本机缺少 Canonical FaceRec
+  注册 Token，远端最终验收不得跳过。真实 PostgreSQL/Redis/Kafka 集成为 `126 passed`，
+  Kafka 闭环专项 `8 passed`，退役边界专项 `54 passed`，Control 预检 `4 passed`。
+- 七算子本机完整测试分别为 `58/22/175/54/78/100/75 passed`。Ruff、`compileall`、四服务
+  导入/TOML、143 个主平台 strict Mypy 源文件和 9 个部署脚本 strict Mypy 源文件全部通过。
+- 新权威已固定为 7 类算子、21 个实例、18 个 GPU 实例、3 个 CPU 实例、14 个配置解析进程；
+  当前用例目录为 217 条反例、26 条压力/恢复、10 条 RET 和 6 项 B 级复核。
+- 本记录只确认本地六层门禁和实现闭环。新 SHA 的远端七镜像构建、21/21 注册、18/18 GPU、
+  3/3 CPU、七条真实泳道、243 条用例、恢复和精确清理仍未执行，旧八算子证据不得补足。
+
+## 2026-08-21 - `standardize-service-file-logging` 十一进程轮转补充证据
+
+- 11 个独立 Python 进程在隔离临时目录中验证写前轮转、一日过期清理、未过期归档保留和实例
+  目录隔离，终态为 `{"processes": 11, "status": "PASS"}`。
+- 本地已完成 11 项导入/编译、四服务回归、静态门禁、Compose/配置权威和轮转进程验证；七算子
+  真实模型推理及代表性 HTTP/WebSocket 敏感哨兵仍保留为远端同 SHA 验收项，不提前勾选。
+
 ## 2026-08-21 - `standardize-service-file-logging` 本地实施与验证
 
 - 本变更基于 `778515596b42123a3061daeb9a1c3bb446f1de1b` 开始，目标是七个当前算子和四个平台服务；

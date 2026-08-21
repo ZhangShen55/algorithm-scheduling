@@ -41,13 +41,12 @@ from packages.platform_common.operator_registry import (
 from packages.platform_common.redis_operator_registry import RedisOperatorRegistry
 from packages.platform_common.repository import (
     CourseRepository,
-    NodeWrite,
     OutboxRecord,
     OutboxStateRecord,
     RepositoryNotFoundError,
     TaskTypeWrite,
 )
-from packages.platform_contracts.status import NodeStatus, Priority, TaskType
+from packages.platform_contracts.status import TaskType
 from scripts.milestone_2b_case_catalog import CaseDefinition
 
 from .base import CaseContext, CaseOutcome
@@ -1259,31 +1258,6 @@ def _create_asr_task(repository: CourseRepository, task_id: str) -> str:
     if len(records) != 1 or not records[0].submission_id:
         raise ValueError("ASR 测试任务没有生成唯一 submission_id")
     return records[0].submission_id
-
-
-def _initialize_asr_nodes(repository: CourseRepository, task_id: str) -> tuple[int, ...]:
-    nodes = repository.initialize_pipeline(
-        task_id,
-        TaskType.ASR,
-        [
-            NodeWrite(
-                "ASR_TRANSCRIPTION",
-                NodeStatus.PENDING,
-                Priority.NORMAL,
-                "等待离线语音转写",
-                "asr_offline",
-            ),
-            NodeWrite(
-                "COURSE_OVERVIEW",
-                NodeStatus.WAITING_PREREQUISITE,
-                Priority.NORMAL,
-                "等待语音转写完成",
-                "text_analysis",
-                ("ASR_TRANSCRIPTION",),
-            ),
-        ],
-    )
-    return tuple(node.id for node in nodes)
 
 
 @contextmanager

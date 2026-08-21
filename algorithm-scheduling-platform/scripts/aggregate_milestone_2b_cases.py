@@ -21,6 +21,12 @@ from typing import TYPE_CHECKING, Any, cast
 
 import yaml  # type: ignore[import-untyped]
 
+_PLATFORM_ROOT = Path(__file__).resolve().parents[1]
+if str(_PLATFORM_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PLATFORM_ROOT))
+
+from deploy.scripts.operator_topology import CURRENT_TOPOLOGY  # noqa: E402
+
 if TYPE_CHECKING:
     from scripts.milestone_2b_report_contract import (
         DECLARATION_CATEGORY_BY_CASE_ID,
@@ -28,6 +34,8 @@ if TYPE_CHECKING:
         DECLARATION_TARGET,
         EXECUTION_CASE_KIND_BY_CATEGORY,
         EXECUTION_RECORD_FIELDS,
+        EXECUTION_SCHEMA_VERSION,
+        SCHEMA_VERSION,
         CaseRecord,
         Coverage,
         expand_declaration_cases,
@@ -45,6 +53,8 @@ else:
     DECLARATION_PLACEHOLDER = _contract.DECLARATION_PLACEHOLDER
     DECLARATION_TARGET = _contract.DECLARATION_TARGET
     DECLARATION_CATEGORY_BY_CASE_ID = _contract.DECLARATION_CATEGORY_BY_CASE_ID
+    SCHEMA_VERSION = _contract.SCHEMA_VERSION
+    EXECUTION_SCHEMA_VERSION = _contract.EXECUTION_SCHEMA_VERSION
     EXECUTION_CASE_KIND_BY_CATEGORY = _contract.EXECUTION_CASE_KIND_BY_CATEGORY
     EXECUTION_RECORD_FIELDS = _contract.EXECUTION_RECORD_FIELDS
     CaseRecord = _contract.CaseRecord
@@ -62,16 +72,14 @@ EXPECTED_FACEREC_INSTANCES = (
     "facerec-gpu2",
 )
 CPU_OPERATOR_CODES = {
-    "ppt-slice": "ppt_slice",
-    "text-analysis": "text_analysis",
+    entry.service_prefix: entry.operator_code
+    for entry in CURRENT_TOPOLOGY.operators
+    if entry.device_kind == "cpu"
 }
 GPU_OPERATOR_CODES = {
-    "asr-offline": "asr_offline",
-    "asr-online": "asr_online",
-    "facerec": "facerec",
-    "ocr": "ocr",
-    "screen-det": "screen_det",
-    "vbas": "vbas",
+    entry.service_prefix: entry.operator_code
+    for entry in CURRENT_TOPOLOGY.operators
+    if entry.device_kind == "gpu"
 }
 GPU_BINDING_ENVIRONMENT_FIELDS = (
     "PLATFORM_GPU_ID",
@@ -118,16 +126,7 @@ SMOKE_EVIDENCE_BASE_FIELDS = {
     "git_sha",
 }
 EXPECTED_SMOKE_OPERATOR_CODES = frozenset(
-    {
-        "asr_offline",
-        "asr_online",
-        "facerec",
-        "ocr",
-        "ppt_slice",
-        "screen_det",
-        "text_analysis",
-        "vbas",
-    }
+    entry.operator_code for entry in CURRENT_TOPOLOGY.operators
 )
 DECLARATION_CATEGORIES = ("negative", "load")
 DECLARATION_FIELDS = {
@@ -156,10 +155,8 @@ B_LEVEL_REVIEW_CASE_IDS = frozenset(
         "PPT-012",
         "PPT-013",
         "PPT-014",
-        "KEY-005",
         "ASR-012",
         "ASR-013",
-        "ASR-017",
         "VIS-025",
     }
 )
@@ -1028,7 +1025,7 @@ def _declaration_document(
     reason: str,
 ) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": SCHEMA_VERSION,
         "evidence_type": "execution_declaration",
         "category": category,
         "status": DECLARATION_PLACEHOLDER,
@@ -1167,8 +1164,12 @@ def load_smoke_manifest(path: str | Path) -> list[dict[str, Any]]:
     if type(document["schema_version"]) is not int or document["schema_version"] != 1:
         raise ValueError(f"smoke manifest {manifest_path}: schema_version must equal 1")
     raw_cases = _require_list(document["cases"], f"smoke manifest {manifest_path}: cases")
-    if len(raw_cases) != 8:
-        raise ValueError(f"smoke manifest {manifest_path}: cases must contain exactly 8 items")
+    expected_smoke_types = CURRENT_TOPOLOGY.totals["operator_smoke_types"]
+    if len(raw_cases) != expected_smoke_types:
+        raise ValueError(
+            f"smoke manifest {manifest_path}: cases must contain exactly "
+            f"{expected_smoke_types} items"
+        )
 
     cases: list[dict[str, Any]] = []
     seen_case_ids: set[str] = set()
@@ -1206,7 +1207,7 @@ def load_smoke_manifest(path: str | Path) -> list[dict[str, Any]]:
 
     if seen_operator_codes != EXPECTED_SMOKE_OPERATOR_CODES:
         raise ValueError(
-            "smoke manifest operator_code set does not match the 8-operator authority"
+            "smoke manifest operator_code set does not match the seven-operator authority"
         )
     return cases
 
@@ -1245,8 +1246,11 @@ def load_operator_inventory(path: Path) -> OperatorInventory:
         raise ValueError(f"failed to read operator Compose inventory: {path}") from exc
     document = _require_object(loaded, f"operator Compose {path}")
     services = _require_object(document.get("services"), f"{path}: services")
-    if len(services) != 24:
-        raise ValueError(f"{path}: services must contain exactly 24 operator instances")
+    expected_instances = CURRENT_TOPOLOGY.totals["instances"]
+    if len(services) != expected_instances:
+        raise ValueError(
+            f"{path}: services must contain exactly {expected_instances} operator instances"
+        )
 
     instances: list[OperatorInstance] = []
     seen_instance_ids: set[str] = set()
@@ -1345,12 +1349,21 @@ def load_operator_inventory(path: Path) -> OperatorInventory:
     inventory = OperatorInventory(
         instances=tuple(sorted(instances, key=lambda instance: instance.instance_id))
     )
-    if len(inventory.instances) != 24:
-        raise ValueError(f"{path}: operator inventory must contain exactly 24 instances")
-    if len(inventory.gpu_instances) != 18:
-        raise ValueError(f"{path}: operator inventory must contain exactly 18 GPU instances")
-    if len(inventory.cpu_instances) != 6:
-        raise ValueError(f"{path}: operator inventory must contain exactly 6 CPU instances")
+    if len(inventory.instances) != CURRENT_TOPOLOGY.totals["instances"]:
+        raise ValueError(
+            f"{path}: operator inventory must contain exactly "
+            f"{CURRENT_TOPOLOGY.totals['instances']} instances"
+        )
+    if len(inventory.gpu_instances) != CURRENT_TOPOLOGY.totals["gpu_instances"]:
+        raise ValueError(
+            f"{path}: operator inventory must contain exactly "
+            f"{CURRENT_TOPOLOGY.totals['gpu_instances']} GPU instances"
+        )
+    if len(inventory.cpu_instances) != CURRENT_TOPOLOGY.totals["cpu_instances"]:
+        raise ValueError(
+            f"{path}: operator inventory must contain exactly "
+            f"{CURRENT_TOPOLOGY.totals['cpu_instances']} CPU instances"
+        )
     return inventory
 
 
@@ -1927,8 +1940,13 @@ def collect_case_executions(
         expected_path = Path(category) / "executions" / f"{case_id}.json"
         if relative_path != expected_path:
             raise ValueError(f"execution record path must equal {expected_path}")
-        if type(document.get("schema_version")) is not int or document["schema_version"] != 2:
-            raise ValueError(f"{context}.schema_version must equal 2")
+        if (
+            type(document.get("schema_version")) is not int
+            or document["schema_version"] != EXECUTION_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                f"{context}.schema_version must equal {EXECUTION_SCHEMA_VERSION}"
+            )
         expected_type = f"{category}_case"
         if document.get("evidence_type") != expected_type:
             raise ValueError(f"{context}.evidence_type must equal {expected_type}")
@@ -2503,8 +2521,11 @@ def _smoke_authority(report_plan: dict[str, Any]) -> None:
 def _smoke_manifest_index(
     smoke_manifest: list[dict[str, Any]], inventory: OperatorInventory
 ) -> dict[str, dict[str, Any]]:
-    if type(smoke_manifest) is not list or len(smoke_manifest) != 8:
-        raise ValueError("smoke_manifest must contain exactly 8 cases")
+    expected_smoke_types = CURRENT_TOPOLOGY.totals["operator_smoke_types"]
+    if type(smoke_manifest) is not list or len(smoke_manifest) != expected_smoke_types:
+        raise ValueError(
+            f"smoke_manifest must contain exactly {expected_smoke_types} cases"
+        )
     by_operator: dict[str, dict[str, Any]] = {}
     source_ids: set[str] = set()
     for index, raw_case in enumerate(smoke_manifest):
@@ -2929,7 +2950,10 @@ def collect_smoke_cases(
     logical_path = Path("smoke/cases.json")
     logical_cases = _load_release_json_list(release_root, logical_path)
     if len(logical_cases) != len(manifest_by_operator):
-        raise ValueError("smoke/cases.json must contain exactly 8 manifest cases")
+        raise ValueError(
+            "smoke/cases.json must contain exactly "
+            f"{CURRENT_TOPOLOGY.totals['operator_smoke_types']} manifest cases"
+        )
     logical_by_source: dict[str, object] = {}
     for index, raw_case in enumerate(logical_cases):
         case = _require_object(raw_case, f"{logical_path.as_posix()}[{index}]")
@@ -3312,8 +3336,10 @@ def main() -> int:
             raise ValueError(
                 "--require-all-executed rejects remaining execution_declaration cases"
             )
-        schema_version = 2 if execution_cases else 1
-        if schema_version == 1:
+        schema_version = (
+            EXECUTION_SCHEMA_VERSION if execution_cases else SCHEMA_VERSION
+        )
+        if schema_version == SCHEMA_VERSION:
             coverage = {
                 **registration_coverage,
                 **smoke_coverage,

@@ -89,9 +89,6 @@ screen-det-gpu2 = "http://screen-det-gpu2:8880"
 ppt-slice-cpu0 = "http://ppt-slice-cpu0:9001"
 ppt-slice-cpu1 = "http://ppt-slice-cpu1:9001"
 ppt-slice-cpu2 = "http://ppt-slice-cpu2:9001"
-text-analysis-cpu0 = "http://text-analysis-cpu0:8000"
-text-analysis-cpu1 = "http://text-analysis-cpu1:8000"
-text-analysis-cpu2 = "http://text-analysis-cpu2:8000"
 
 [features]
 # 本次交付允许 A 服务提交的离线任务类型；动态可用性仍由算子注册状态决定。

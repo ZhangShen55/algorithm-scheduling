@@ -63,8 +63,8 @@ Content-Type: application/json
 
 | task type | 必填字段 | 可选字段 | 节点 |
 |---|---|---|---|
-| `PPT` | `slides_video_path` | 无 | `PPT_SLICE -> PPT_OCR -> PPT_KEYWORDS` |
-| `ASR` | `teacher_video_path` | `asr_options` | `ASR_TRANSCRIPTION -> COURSE_OVERVIEW` |
+| `PPT` | `slides_video_path` | 无 | `PPT_SLICE -> PPT_OCR` |
+| `ASR` | `teacher_video_path` | `asr_options` | `ASR_TRANSCRIPTION` |
 | `TEACHER_BEHAVIOR` | `teacher_video_path` | 无 | `TEACHER_BEHAVIOR_ANALYSIS` |
 | `STUDENT_BEHAVIOR` | `student_video_path`、`student_count` | `front_points`、`back_point` | `STUDENT_BEHAVIOR_ANALYSIS` |
 
@@ -214,20 +214,23 @@ GET /api/course-jobs/{task_id}
 | `70` | 处理失败 | 节点失败 |
 | `80` | 已取消 | 节点取消 |
 
-建议 A 以 2-5 秒间隔轮询，不要高频无间隔请求。每条管道独立：例如 `PPT_SLICE=60`、`PPT_OCR=30` 时，A 已可读取切片路径，但关键词尚不可用。
+建议 A 以 2-5 秒间隔轮询，不要高频无间隔请求。每条管道独立：例如 `PPT_SLICE=60`、
+`PPT_OCR=30` 时，A 已可读取切片路径，但 OCR 结构化结果尚不可用。
+
+新任务的 `nodes` 只包含当前实际 DAG 节点，不返回退役节点占位符。历史任务查询仍可能返回
+已经持久化的 `PPT_KEYWORDS` 或 `COURSE_OVERVIEW`，A 应按 `node_code` 兼容读取，但不得据此
+期待新任务继续生成这些结果。
 
 ### 4.1 文件结果与结构化结果
 
 - `PPT_SLICE` 返回 `path/count`，例如 `/data/result/course-001/ppt/slices`。
 - `PPT_OCR.result` 按 `ppt_image_id` 返回 OCR 结构化数据和进度。
-- `PPT_KEYWORDS.result` 按同一 `ppt_image_id` 返回关键词和进度。
 - `ASR_TRANSCRIPTION.result` 保存离线 ASR v1.1.8 完整成功响应；成功顶层保持 `language`、`segments`、`text`、`speed_info`、`load_audio_time_ms`、`gpu_time_ms`，不增加能力状态或成功业务码字段；`effective_params` 单独返回。
 - ASR 每段 `speed` 使用 `int(内容数量 × 60 / (ed-bg) × 0.4)`；`speed_info` 保持 1/5/10 分钟窗口统计且不乘 `0.4`。
-- `COURSE_OVERVIEW.result` 保存原 `GenericResponse`，其中仍有算法自身的嵌套 `result.overview`。
 - `TEACHER_BEHAVIOR.result` 返回板书、坐、站、讲授区间和精选证据。没有某行为时对应数组为 `[]`，状态仍为 60。
 - `STUDENT_BEHAVIOR.result` 返回人数、到课率、区域入座率、provided 标识、行为统计和精选证据。
 
-只有真实落地文件返回 `path/count`。OCR、关键词、ASR、脑图和视觉统计不通过本地 JSON path 间接返回。
+只有真实落地文件返回 `path/count`。OCR、ASR 和视觉统计不通过本地 JSON path 间接返回。
 
 ## 5. 在线图片接口
 
@@ -332,7 +335,7 @@ ws://127.0.0.1:18103/api/online/asr/stream
 
 A 在其他机器时，使用平台服务器内网 IP，并只开放 control-service `18100` 和
 online-gateway-service `18103`。PostgreSQL `5432`、Kafka `9092`、Redis `6379`、
-MongoDB `27017`、orchestrator `18101`、vision `18102` 和全部 24 个算法实例宿主机端口
+MongoDB `27017`、orchestrator `18101`、vision `18102` 和全部 21 个算法实例宿主机端口
 只绑定 `127.0.0.1`，不对 A 开放。
 
 ### 7.2 A 与平台都运行在 Docker
@@ -363,7 +366,7 @@ ws://online-gateway-service:8001
 2. 重复提交相同 `(task_id, PPT)`，确认 `created=false` 且没有重复切片。
 3. 在同一 `task_id` 追加 ASR，确认 PPT 结果保留。
 4. 查询运行中组合任务，确认各泳道和节点状态可独立观察。
-5. 验证 `PPT_SLICE.path` 在共享挂载上可读，OCR/关键词从 `result` 读取。
+5. 验证 `PPT_SLICE.path` 在共享挂载上可读，OCR 从 `result` 读取。
 6. 验证 ASR 默认参数和覆盖后的 `effective_params`。
 7. 验证 `fr` 的条件字段、词时间和语速响应，并验证小语种关闭时 HTTP 200、`code=4003`。
 8. 在缺少 front/back 区域时验证 provided 标识为 false，结果多次查询保持稳定。

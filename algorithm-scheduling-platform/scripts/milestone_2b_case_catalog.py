@@ -26,25 +26,28 @@ CASE_FIELDS = {
 CASE_CATEGORIES = {"negative", "load"}
 CASE_PHASES = {"deployment", "offline", "vision", "online", "final"}
 CASE_SAFETY_LEVELS = {"read_only", "isolated_mutation", "canonical_runtime"}
-EXPECTED_RANGES = {
-    "DEP": (1, 20),
-    "GPU": (1, 20),
-    "REG": (1, 20),
-    "INF": (1, 16),
-    "JOB": (1, 20),
-    "FILE": (1, 16),
-    "PPT": (1, 15),
-    "OCR": (1, 5),
-    "KEY": (1, 5),
-    "ASR": (1, 18),
-    "VIS": (1, 28),
-    "ONL": (1, 20),
-    "FACE": (1, 14),
-    "LOAD": (1, 26),
-}
+SCHEMA_VERSION = 2
+EXPECTED_RANGES = (
+    ("DEP", 1, 7),
+    ("DEP", 9, 20),
+    ("GPU", 1, 20),
+    ("REG", 1, 20),
+    ("INF", 1, 16),
+    ("JOB", 1, 20),
+    ("FILE", 1, 16),
+    ("PPT", 1, 15),
+    ("OCR", 1, 5),
+    ("ASR", 1, 13),
+    ("ASR", 18, 18),
+    ("VIS", 1, 28),
+    ("ONL", 1, 20),
+    ("FACE", 1, 14),
+    ("RET", 1, 10),
+    ("LOAD", 1, 26),
+)
 EXPECTED_CASE_IDS = {
     f"{prefix}-{number:03d}"
-    for prefix, (first, last) in EXPECTED_RANGES.items()
+    for prefix, first, last in EXPECTED_RANGES
     for number in range(first, last + 1)
 }
 RUNNER_PATTERN = re.compile(r"[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*")
@@ -95,8 +98,11 @@ def load_case_catalog(path: str | Path) -> CaseCatalog:
         raise ValueError(f"2B 用例目录包含未知字段: {sorted(unknown_top_level)}")
     if set(document) != TOP_LEVEL_FIELDS:
         raise ValueError("2B 用例目录缺少 schema_version 或 cases")
-    if type(document.get("schema_version")) is not int or document["schema_version"] != 1:
-        raise ValueError("2B 用例目录 schema_version 必须为 1")
+    if (
+        type(document.get("schema_version")) is not int
+        or document["schema_version"] != SCHEMA_VERSION
+    ):
+        raise ValueError(f"2B 用例目录 schema_version 必须为 {SCHEMA_VERSION}")
     raw_cases = document.get("cases")
     if not isinstance(raw_cases, list):
         raise ValueError("2B 用例目录 cases 必须是数组")
@@ -153,7 +159,7 @@ def load_case_catalog(path: str | Path) -> CaseCatalog:
             f"missing={sorted(EXPECTED_CASE_IDS - actual_ids)}, "
             f"unknown={sorted(actual_ids - EXPECTED_CASE_IDS)}"
         )
-    return CaseCatalog(schema_version=1, cases=tuple(cases))
+    return CaseCatalog(schema_version=SCHEMA_VERSION, cases=tuple(cases))
 
 
 def _required_string(value: object, context: str) -> str:

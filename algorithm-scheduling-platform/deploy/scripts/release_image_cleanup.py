@@ -13,7 +13,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from deploy.scripts.operator_topology import CURRENT_TOPOLOGY
 from scripts.milestone_2b_case_runners.safety import DelegatedMaintenanceLockGuard
+from scripts.milestone_2b_report_contract import EXECUTION_SCHEMA_VERSION
+from scripts.render_milestone_2b_report import REPORT_SCHEMA_VERSION
 
 PLATFORM_SERVICES = (
     "control-service",
@@ -21,30 +24,19 @@ PLATFORM_SERVICES = (
     "vision-orchestrator-service",
     "online-gateway-service",
 )
-GPU_OPERATORS = (
-    "asr-offline",
-    "asr-online",
-    "ocr",
-    "vbas",
-    "facerec",
-    "screen-det",
+GPU_OPERATORS = tuple(
+    entry.service_prefix
+    for entry in CURRENT_TOPOLOGY.operators
+    if entry.device_kind == "gpu"
 )
-CPU_OPERATORS = ("ppt-slice", "text-analysis")
-OPERATOR_SERVICES = tuple(
-    [f"{operator}-gpu{gpu}" for operator in GPU_OPERATORS for gpu in range(3)]
-    + [f"{operator}-cpu{index}" for operator in CPU_OPERATORS for index in range(3)]
+CPU_OPERATORS = tuple(
+    entry.service_prefix
+    for entry in CURRENT_TOPOLOGY.operators
+    if entry.device_kind == "cpu"
 )
+OPERATOR_SERVICES = CURRENT_TOPOLOGY.instance_ids
 SMOKE_OPERATORS = frozenset(
-    {
-        "asr_offline",
-        "asr_online",
-        "facerec",
-        "ocr",
-        "ppt_slice",
-        "screen_det",
-        "text_analysis",
-        "vbas",
-    }
+    entry.operator_code for entry in CURRENT_TOPOLOGY.operators
 )
 SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 IMAGE_ID_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
@@ -464,10 +456,12 @@ def _validate_release_gates(release_root: Path, tag: str, sha: str) -> None:
         config_authority.get("evidence_type") != "operator_config_authority"
         or config_authority.get("status") != "PASS"
         or config_authority.get("git_sha") != sha
-        or config_authority.get("operator_count") != 8
-        or config_authority.get("process_count") != 16
+        or config_authority.get("operator_count")
+        != CURRENT_TOPOLOGY.totals["operator_types"]
+        or config_authority.get("process_count")
+        != CURRENT_TOPOLOGY.totals["config_authority_processes"]
         or not isinstance(results, list)
-        or len(results) != 16
+        or len(results) != CURRENT_TOPOLOGY.totals["config_authority_processes"]
         or len(
             {
                 (row.get("operator_code"), row.get("mode"))
@@ -475,7 +469,7 @@ def _validate_release_gates(release_root: Path, tag: str, sha: str) -> None:
                 if isinstance(row, dict)
             }
         )
-        != 16
+        != CURRENT_TOPOLOGY.totals["config_authority_processes"]
     ):
         raise ImageCleanupError("operator configuration authority evidence is incomplete")
 
@@ -488,10 +482,12 @@ def _validate_release_gates(release_root: Path, tag: str, sha: str) -> None:
         or registration.get("release_tag") != tag
         or registration.get("git_sha") != sha
         or (registration.get("selection") or {}).get("mode") != "full"
-        or (registration.get("summary") or {}).get("valid") != 24
-        or len(registration.get("validated_instances") or []) != 24
+        or (registration.get("summary") or {}).get("valid")
+        != CURRENT_TOPOLOGY.totals["instances"]
+        or len(registration.get("validated_instances") or [])
+        != CURRENT_TOPOLOGY.totals["instances"]
     ):
-        raise ImageCleanupError("full 24-instance registration evidence did not pass")
+        raise ImageCleanupError("full 21-instance registration evidence did not pass")
     observed_smoke: set[str] = set()
     for path in sorted((release_root / "smoke").glob("*.json")):
         payload = _read_json(path)
@@ -508,7 +504,7 @@ def _validate_release_gates(release_root: Path, tag: str, sha: str) -> None:
             raise ImageCleanupError(f"operator smoke evidence did not pass: {path.name}")
         observed_smoke.add(str(operator))
     if observed_smoke != SMOKE_OPERATORS:
-        raise ImageCleanupError("eight-operator smoke evidence is incomplete")
+        raise ImageCleanupError("seven-operator smoke evidence is incomplete")
 
     cases = _read_json(release_root / "summary" / "cases.json")
     coverage = cases.get("coverage")
@@ -517,7 +513,8 @@ def _validate_release_gates(release_root: Path, tag: str, sha: str) -> None:
         "load_cases": {"expected": 26, "observed": 26, "passed": 26},
     }
     if (
-        cases.get("release_tag") != tag
+        cases.get("schema_version") != EXECUTION_SCHEMA_VERSION
+        or cases.get("release_tag") != tag
         or cases.get("git_sha") != sha
         or not isinstance(coverage, dict)
         or any(coverage.get(name) != value for name, value in expected_coverage.items())
@@ -527,7 +524,9 @@ def _validate_release_gates(release_root: Path, tag: str, sha: str) -> None:
     report = _read_json(release_root / "summary" / "report.json")
     counts = report.get("counts")
     if (
-        report.get("release_tag") != tag
+        report.get("schema_version") != REPORT_SCHEMA_VERSION
+        or report.get("cases_schema_version") != EXECUTION_SCHEMA_VERSION
+        or report.get("release_tag") != tag
         or report.get("git_sha") != sha
         or report.get("overall_status") != "通过"
         or report.get("coverage") != coverage

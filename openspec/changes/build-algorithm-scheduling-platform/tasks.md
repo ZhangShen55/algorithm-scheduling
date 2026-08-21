@@ -1,3 +1,9 @@
+> **后续范围调整已废止（2026-08-21）**
+>
+> 以下勾选和任务原文记录当时的真实实施，不删除、不取消勾选。其中 Text Analysis、
+> `PPT_KEYWORDS` 和 `COURSE_OVERVIEW` 已由
+> `retire-text-analysis-from-scheduling-platform` 后续废止，不再属于当前平台目标。
+
 ## 1. 平台仓库与本地基础设施
 
 - [x] 1.1 Create the `algorithm-scheduling-platform` monorepo with four service packages and three shared packages from the approved layout

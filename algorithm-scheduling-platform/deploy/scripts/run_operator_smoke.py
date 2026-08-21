@@ -24,11 +24,19 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 import httpx
 import websockets
+
+SCRIPT_ROOT = Path(__file__).resolve().parent
+if str(SCRIPT_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_ROOT))
+if TYPE_CHECKING:
+    from .operator_topology import CURRENT_TOPOLOGY
+else:
+    from operator_topology import CURRENT_TOPOLOGY
 
 PLATFORM_ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE_ROOT = PLATFORM_ROOT.parent
@@ -44,7 +52,7 @@ ActivityEmitter = Callable[[str], None]
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="直接调用八类算子的 Smoke Harness")
+    parser = argparse.ArgumentParser(description="直接调用七类算子的 Smoke Harness")
     parser.add_argument("--release-tag", required=True)
     parser.add_argument("--git-sha", required=True)
     parser.add_argument("--reports-root", type=Path, required=True)
@@ -231,8 +239,11 @@ def load_cases(path: Path) -> list[dict[str, Any]]:
     if set(document) != {"schema_version", "cases"} or document["schema_version"] != 1:
         raise ValueError("Smoke case manifest schema 不受支持")
     cases = document["cases"]
-    if not isinstance(cases, list) or len(cases) != 8:
-        raise ValueError("Smoke case manifest 必须精确包含八类算子")
+    if (
+        not isinstance(cases, list)
+        or len(cases) != CURRENT_TOPOLOGY.totals["operator_smoke_types"]
+    ):
+        raise ValueError("Smoke case manifest 必须精确包含七类算子")
     codes: set[str] = set()
     ids: set[str] = set()
     for case in cases:
@@ -984,35 +995,6 @@ def smoke_ppt(
         }
 
 
-def smoke_text(
-    http: httpx.Client,
-    endpoint: str,
-    _: dict[str, Path],
-    __: float,
-    *,
-    activity: ActivityEmitter | None = None,
-) -> dict[str, Any]:
-    del activity
-    keywords = require_http(
-        http.post(
-            endpoint.rstrip("/") + "/v1/extract_keywords", json={"text": "函数与图像课堂内容"}
-        ),
-        "Text Analysis keywords",
-    )
-    overview = require_http(
-        http.post(
-            endpoint.rstrip("/") + "/v1/course_overviews",
-            json={
-                "textSegments": [{"text": "函数课程", "bg": 0, "ed": 10}]
-            },
-        ),
-        "Text Analysis overview",
-    )
-    if not (keywords.get("result") and overview.get("result")):
-        raise RuntimeError("Text Analysis 两个接口未返回结果")
-    return {"extract_keywords": True, "course_overviews": True}
-
-
 RUNNERS: dict[str, Callable[..., dict[str, Any]]] = {
     "asr_offline": smoke_asr_offline,
     "asr_online": smoke_asr_online,
@@ -1021,17 +1003,10 @@ RUNNERS: dict[str, Callable[..., dict[str, Any]]] = {
     "facerec": smoke_facerec,
     "screen_det": smoke_screen_det,
     "ppt_slice": smoke_ppt,
-    "text_analysis": smoke_text,
 }
 INSTANCE_PREFIXES = {
-    "asr_offline": "asr-offline-",
-    "asr_online": "asr-online-",
-    "ocr": "ocr-",
-    "vbas": "vbas-",
-    "facerec": "facerec-",
-    "screen_det": "screen-det-",
-    "ppt_slice": "ppt-slice-",
-    "text_analysis": "text-analysis-",
+    entry.operator_code: f"{entry.service_prefix}-"
+    for entry in CURRENT_TOPOLOGY.operators
 }
 
 

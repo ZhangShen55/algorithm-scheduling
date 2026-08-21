@@ -1,3 +1,9 @@
+> **后续范围调整已废止（2026-08-21）**
+>
+> Text Analysis 的共享容量、工作项租约和八算子拓扑是本设计实施时的历史范围，原设计与证据
+> 保留。当前运行时和最终 release 以 `retire-text-analysis-from-scheduling-platform` 的七算子、
+> PPT/OCR 与 ASR-only 合同为准。
+
 ## 背景
 
 平台已经具备算子注册、5 秒心跳、Redis 原子租约、离线节点调度和在线同步路由，但当前容量事实存在三处混淆：

@@ -33,10 +33,5 @@
     "ppt-slice-cpu0": "http://127.0.0.1:19001",
     "ppt-slice-cpu1": "http://127.0.0.1:29001",
     "ppt-slice-cpu2": "http://127.0.0.1:39001"
-  },
-  "text_analysis": {
-    "text-analysis-cpu0": "http://127.0.0.1:18000",
-    "text-analysis-cpu1": "http://127.0.0.1:28000",
-    "text-analysis-cpu2": "http://127.0.0.1:38000"
   }
 }

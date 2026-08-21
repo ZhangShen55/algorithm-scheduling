@@ -51,7 +51,8 @@ async def test_ppt_command_initializes_only_ppt_pipeline_nodes() -> None:
     assert task_id == "course-001"
     assert task_type is TaskType.PPT
     assert submission_id == "submission-001"
-    assert [node.node_code for node in nodes] == ["PPT_SLICE", "PPT_OCR", "PPT_KEYWORDS"]
+    assert [node.node_code for node in nodes] == ["PPT_SLICE", "PPT_OCR"]
+    assert [node.required_capability for node in nodes] == ["ppt_slice", "ocr"]
 
 
 @pytest.mark.asyncio
@@ -62,7 +63,39 @@ async def test_asr_command_does_not_initialize_visual_or_ppt_nodes() -> None:
     await initializer.handle(command_bytes("ASR"))
 
     _, _, _, nodes = repository.calls[0]
-    assert [node.node_code for node in nodes] == ["ASR_TRANSCRIPTION", "COURSE_OVERVIEW"]
+    assert [node.node_code for node in nodes] == ["ASR_TRANSCRIPTION"]
+    assert [node.required_capability for node in nodes] == ["asr_offline"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("task_type", "expected_nodes"),
+    [
+        ("PPT", ["PPT_SLICE", "PPT_OCR"]),
+        ("ASR", ["ASR_TRANSCRIPTION"]),
+    ],
+)
+async def test_replayed_course_command_keeps_the_current_pipeline_definition(
+    task_type: str,
+    expected_nodes: list[str],
+) -> None:
+    repository = RecordingPipelineRepository()
+    initializer = PipelineInitializer(repository)
+    command = command_bytes(task_type)
+
+    await initializer.handle(command)
+    await initializer.handle(command)
+
+    assert len(repository.calls) == 2
+    assert all(
+        [node.node_code for node in nodes] == expected_nodes
+        for _, _, _, nodes in repository.calls
+    )
+    assert all(
+        "PPT_KEYWORDS" not in [node.node_code for node in nodes]
+        and "COURSE_OVERVIEW" not in [node.node_code for node in nodes]
+        for _, _, _, nodes in repository.calls
+    )
 
 
 @pytest.mark.asyncio

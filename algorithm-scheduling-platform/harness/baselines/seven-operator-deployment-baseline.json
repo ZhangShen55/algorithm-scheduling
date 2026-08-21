@@ -1,0 +1,42 @@
+{
+  "schema": "seven-operator-deployment-baseline",
+  "schema_version": 1,
+  "change": "retire-text-analysis-from-scheduling-platform",
+  "starting_git_sha": "56d42f5cc5e88f271935e0a5c99dadd54e0e07a6",
+  "operators": [
+    "asr_offline",
+    "asr_online",
+    "facerec",
+    "ocr",
+    "ppt_slice",
+    "screen_det",
+    "vbas"
+  ],
+  "excluded_platform_projects": ["text_analysis"],
+  "topology": {
+    "operator_types": 7,
+    "instances": 21,
+    "gpu_instances": 18,
+    "cpu_instances": 3,
+    "config_authority_processes": 14,
+    "operator_smoke_types": 7
+  },
+  "pipelines": {
+    "PPT": ["PPT_SLICE", "PPT_OCR"],
+    "ASR": ["ASR_TRANSCRIPTION"]
+  },
+  "text_analysis_snapshot": {
+    "file_count": 101,
+    "sha256": "96ea62765502e043443d44f9ba23d7eddf027a60ba0948eebf82b8e0428ca4e1"
+  },
+  "remote_old_release": {
+    "git_sha": "778515596b42123a3061daeb9a1c3bb446f1de1b",
+    "operator_ledger_count": 24,
+    "operator_running_count": 0,
+    "active_retired_task_count": 0,
+    "redis_text_analysis_key_count": 0,
+    "status": "restored_historical_evidence_only"
+  },
+  "local_status": "baseline_recorded",
+  "remote_new_release_status": "not_started"
+}

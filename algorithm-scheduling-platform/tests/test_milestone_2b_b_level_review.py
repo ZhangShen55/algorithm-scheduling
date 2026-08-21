@@ -92,10 +92,8 @@ def test_review_wait_publishes_request_and_accepts_complete_index(tmp_path: Path
         "PPT-012",
         "PPT-013",
         "PPT-014",
-        "KEY-005",
         "ASR-012",
         "ASR-013",
-        "ASR-017",
     )
     _review_document(
         review_document,

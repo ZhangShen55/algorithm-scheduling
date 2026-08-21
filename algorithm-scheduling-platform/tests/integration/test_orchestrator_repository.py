@@ -88,7 +88,7 @@ def test_task_type_status_is_derived_from_node_facts(repository: CourseRepositor
         repository,
         task_id="course-derived-state",
     )
-    asr_node_id, overview_node_id = node_ids
+    (asr_node_id,) = node_ids
 
     waiting = repository.aggregate_task_type_state(task_type_id)
     assert waiting.status is NodeStatus.PENDING
@@ -112,24 +112,15 @@ def test_task_type_status_is_derived_from_node_facts(repository: CourseRepositor
         NodeResultWrite(result={"text": "课堂内容", "segments": []}),
         reason="语音转写完成",
     )
-    partially_completed = repository.aggregate_task_type_state(task_type_id)
-    assert partially_completed.status is NodeStatus.RUNNING
-    assert partially_completed.reason == "正在处理节点: COURSE_OVERVIEW"
-
-    overview = repository.claim_ready_node("course_overviews", "worker-a")
-    assert overview is not None and overview.id == overview_node_id
-    repository.transition_node(overview_node_id, NodeStatus.RUNNING, "正在生成课程脑图")
-    repository.complete_node(
-        overview_node_id,
-        NodeResultWrite(result={"result": {"overview": {"title": "课程"}}}),
-        reason="课程脑图生成完成",
-    )
-
     completed = repository.aggregate_task_type_state(task_type_id)
     duplicate = repository.aggregate_task_type_state(task_type_id)
 
     assert completed.status is NodeStatus.COMPLETED
     assert completed.reason == "ASR 所有节点处理完成"
+    assert repository.get_node(asr_node_id).result == {
+        "text": "课堂内容",
+        "segments": [],
+    }
     assert duplicate.status is NodeStatus.COMPLETED
     assert duplicate.reason == completed.reason
 

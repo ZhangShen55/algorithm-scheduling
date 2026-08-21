@@ -38,36 +38,33 @@ def _git_sha() -> str:
     ).stdout.strip()
 
 
-def test_profile_matrix_covers_exactly_eight_operators() -> None:
+def test_profile_matrix_covers_exactly_seven_operators() -> None:
     assert [profile.operator_code for profile in authority.OPERATOR_PROFILES] == [
         "asr_offline",
         "asr_online",
         "facerec",
         "ocr",
-        "screen_det",
         "ppt_slice",
+        "screen_det",
         "vbas",
-        "text_analysis",
     ]
     assert [profile.default_capacity for profile in authority.OPERATOR_PROFILES] == [
         4,
         10,
         128,
         256,
-        128,
         10,
         128,
-        256,
+        128,
     ]
     assert [profile.deploy_require_gpu for profile in authority.OPERATOR_PROFILES] == [
         True,
         True,
         True,
         True,
-        True,
         False,
         True,
-        False,
+        True,
     ]
     assert [profile.local_config_name for profile in authority.OPERATOR_PROFILES] == [
         "config.toml",
@@ -77,7 +74,6 @@ def test_profile_matrix_covers_exactly_eight_operators() -> None:
         "config.toml",
         "config.toml",
         "config.toml",
-        "config.example.toml",
     ]
 
 
@@ -105,16 +101,16 @@ def test_local_profiles_are_version_control_eligible() -> None:
         assert completed.stdout.splitlines() == [relative_path.as_posix()]
 
 
-def test_real_workspace_configs_are_loaded_by_sixteen_child_processes() -> None:
+def test_real_workspace_configs_are_loaded_by_fourteen_child_processes() -> None:
     payload = authority.run_authority_probe(WORKSPACE_ROOT, git_sha=_git_sha())
 
     assert payload["status"] == "PASS"
-    assert payload["operator_count"] == 8
-    assert payload["process_count"] == 16
+    assert payload["operator_count"] == 7
+    assert payload["process_count"] == 14
     assert payload["legacy_environment_names"] == sorted(
         authority.LEGACY_ENVIRONMENT
     )
-    assert len(payload["results"]) == 16
+    assert len(payload["results"]) == 14
     for row in payload["results"]:
         assert row["child_pid"] != os.getpid()
         assert row["legacy_environment_injected"] is True
@@ -185,7 +181,7 @@ def test_cli_publishes_and_reuses_same_sha_evidence(tmp_path: Path) -> None:
     assert output.stat().st_mode & 0o777 == 0o600
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["status"] == "PASS"
-    assert payload["process_count"] == 16
+    assert payload["process_count"] == 14
 
 
 def test_cli_rejects_tampered_existing_evidence(tmp_path: Path) -> None:

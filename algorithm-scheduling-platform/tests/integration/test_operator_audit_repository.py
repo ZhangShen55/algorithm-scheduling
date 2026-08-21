@@ -210,6 +210,53 @@ def test_registration_and_reregistration_update_snapshot_and_append_history(
     assert event_types == ["REGISTERED", "REREGISTERED"]
 
 
+def test_historical_text_analysis_snapshot_remains_readable_as_string(
+    clean_audit_database: Engine,
+) -> None:
+    repository_type, _ = _load_audit_types()
+    repository = repository_type(clean_audit_database)
+    with clean_audit_database.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO operator_instances (
+                    instance_id,
+                    operator_code,
+                    capabilities,
+                    service_url,
+                    model_version,
+                    api_version,
+                    declared_capacity,
+                    labels,
+                    desired_state,
+                    unregistered_at
+                )
+                VALUES (
+                    'text-analysis-cpu0',
+                    'text_analysis',
+                    CAST('["extract_keywords","course_overviews"]' AS jsonb),
+                    'http://text-analysis-cpu0:8000',
+                    'historical-v1',
+                    'v1',
+                    256,
+                    CAST('{"deployment":"retired"}' AS jsonb),
+                    'OFFLINE',
+                    now()
+                )
+                """
+            )
+        )
+
+    snapshot = repository.get_instance_snapshot("text-analysis-cpu0")
+
+    assert snapshot.instance_id == "text-analysis-cpu0"
+    assert snapshot.operator_code == "text_analysis"
+    assert isinstance(snapshot.operator_code, str)
+    assert snapshot.capabilities == ("extract_keywords", "course_overviews")
+    assert snapshot.desired_state == "OFFLINE"
+    assert snapshot.unregistered_at is not None
+
+
 def test_heartbeat_summaries_are_throttled_atomically_across_concurrent_calls(
     clean_audit_database: Engine,
 ) -> None:

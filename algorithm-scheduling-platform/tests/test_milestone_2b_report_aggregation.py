@@ -39,7 +39,7 @@ REASON = (
     "本 release 未执行，现有本地单元测试或正向健康检查不等价于现场执行。"
 )
 EXPECTED_COUNTS = {
-    "DEP": 20,
+    "DEP": 19,
     "GPU": 20,
     "REG": 20,
     "INF": 16,
@@ -47,11 +47,11 @@ EXPECTED_COUNTS = {
     "FILE": 16,
     "PPT": 15,
     "OCR": 5,
-    "KEY": 5,
-    "ASR": 18,
+    "ASR": 14,
     "VIS": 28,
     "ONL": 20,
     "FACE": 14,
+    "RET": 10,
     "LOAD": 26,
 }
 EXPECTED_COVERAGE_KEYS = (
@@ -74,9 +74,9 @@ EXPECTED_COVERAGE_AUTHORITY = {
     "registration_facerec": 1,
     "gpu_running": 18,
     "gpu_stopped": 18,
-    "smoke_full": 8,
+    "smoke_full": 7,
     "smoke_gpu_trigger": 18,
-    "smoke_cpu_instance": 6,
+    "smoke_cpu_instance": 3,
     "negative_declarations": 217,
     "load_declarations": 26,
 }
@@ -142,9 +142,9 @@ class ReleaseTree:
             for instance_id, instance in self.instances.items()
             if instance["profile"] == "cpu"
         )
-        assert len(self.instances) == 24
+        assert len(self.instances) == 21
         assert len(self.gpu_instances) == 18
-        assert len(self.cpu_instances) == 6
+        assert len(self.cpu_instances) == 3
 
     def _load_compose_instances(self) -> dict[str, dict[str, Any]]:
         document = yaml.safe_load(self.compose_path.read_text(encoding="utf-8"))
@@ -232,7 +232,7 @@ class ReleaseTree:
         self._write_registration(
             "registration/operator-registration.json",
             selection={"mode": "full", "values": []},
-            expected=24,
+            expected=21,
         )
 
     def write_profile_registrations(self, profiles: tuple[str, ...]) -> None:
@@ -557,7 +557,7 @@ class ReleaseTree:
                 self._write_json(
                     relative_path,
                     {
-                        "schema_version": 2,
+                        "schema_version": 3,
                         "evidence_type": "case_evidence",
                         "case_id": case_id,
                         "release_tag": self.release_tag,
@@ -569,7 +569,7 @@ class ReleaseTree:
         self._write_json(
             f"{category}/executions/{case_id}.json",
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "evidence_type": f"{category}_case",
                 "case_id": case_id,
                 "status": status,
@@ -735,9 +735,9 @@ def test_task6_renderer_accepts_headerless_gpu_v1_and_publishes_unexecuted_concl
     report_bytes = (release_tree.root / "summary/report.json").read_bytes()
     markdown = (release_tree.root / "summary/report.md").read_text(encoding="utf-8")
     report = json.loads(report_bytes)
-    assert envelope["schema_version"] == 1
-    assert report["schema_version"] == 2
-    assert report["cases_schema_version"] == 1
+    assert envelope["schema_version"] == 2
+    assert report["schema_version"] == 3
+    assert report["cases_schema_version"] == 2
     assert report["overall_status"] == "未执行及原因"
     assert report["coverage"] == envelope["coverage"]
     assert report["cases_input"] == {
@@ -745,7 +745,7 @@ def test_task6_renderer_accepts_headerless_gpu_v1_and_publishes_unexecuted_concl
         "sha256": hashlib.sha256(cases_bytes).hexdigest(),
     }
     evidence_index = report["evidence_index"]
-    assert len(evidence_index) == 94
+    assert len(evidence_index) == 90
     assert list(evidence_index) == sorted(evidence_index)
     assert {
         item["type"] for item in evidence_index.values()
@@ -809,9 +809,9 @@ def test_task6_renderer_publishes_legal_real_smoke_failure_as_overall_failure(
     report = release_tree.read_json("summary/report.json")
     assert report["overall_status"] == "失败"
     assert report["coverage"]["smoke_full"] == {
-        "expected": 8,
-        "observed": 8,
-        "passed": 7,
+        "expected": 7,
+        "observed": 7,
+        "passed": 6,
     }
     assert (release_tree.root / "summary/report.md").is_file()
 
@@ -1319,7 +1319,7 @@ def test_task6_renderer_declaration_requires_exact_canonical_path() -> None:
     renderer = _renderer_module()
     case = _valid_case("DEP-001")
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "evidence_type": "execution_declaration",
         "category": "negative",
         "status": "NOT_EXECUTED",
@@ -1643,7 +1643,7 @@ def _valid_observed_case(
 
 def _valid_observed_cases() -> list[dict[str, Any]]:
     gpu_targets = tuple(f"gpu-target-{index:02d}" for index in range(1, 19))
-    cpu_targets = tuple(f"cpu-target-{index:02d}" for index in range(1, 7))
+    cpu_targets = tuple(f"cpu-target-{index:02d}" for index in range(1, 4))
     smoke_manifest = json.loads(SMOKE_MANIFEST_PATH.read_text(encoding="utf-8"))
     smoke_authority = tuple(
         (case["case_id"], case["operator_code"])
@@ -1730,13 +1730,13 @@ def _valid_observed_cases() -> list[dict[str, Any]]:
         )
         for index, target in enumerate(cpu_targets, start=1)
     )
-    assert len(cases) == 92
+    assert len(cases) == 88
     return cases
 
 
 def _valid_envelope() -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "release_tag": RELEASE_TAG,
         "git_sha": GIT_SHA,
         "plan_sha256": PLAN_SHA256,
@@ -1752,9 +1752,10 @@ def _valid_envelope() -> dict[str, Any]:
         },
         "cases": [
             *(
-                _valid_case(f"{prefix}-{number:03d}")
-                for prefix, count in EXPECTED_COUNTS.items()
-                for number in range(1, count + 1)
+                _valid_case(case_id)
+                for case_id in sorted(
+                    _contract_module().DECLARATION_CATEGORY_BY_CASE_ID
+                )
             ),
             *_valid_observed_cases(),
         ],
@@ -1811,8 +1812,8 @@ def _set_range_bound(
     document["declarations"]["negative"][0][field] = value
 
 
-def _duplicate_prefix(document: dict[str, Any]) -> None:
-    document["declarations"]["negative"][1]["prefix"] = "DEP"
+def _overlap_declaration_range(document: dict[str, Any]) -> None:
+    document["declarations"]["negative"][1]["first"] = 7
 
 
 def _replace_load_prefix(document: dict[str, Any]) -> None:
@@ -1839,11 +1840,9 @@ def test_report_plan_expands_exact_243_design_cases() -> None:
     assert Counter(
         case["source_case_id"].split("-", maxsplit=1)[0] for case in expanded
     ) == EXPECTED_COUNTS
-    assert {case["source_case_id"] for case in expanded} == {
-        f"{prefix}-{number:03d}"
-        for prefix, count in EXPECTED_COUNTS.items()
-        for number in range(1, count + 1)
-    }
+    assert {case["source_case_id"] for case in expanded} == set(
+        contract.DECLARATION_CATEGORY_BY_CASE_ID
+    )
     assert {case["status"] for case in expanded} == {"未执行及原因"}
     assert {case["reason"] for case in expanded} == {REASON}
 
@@ -1860,7 +1859,8 @@ def test_cases_envelope_rejects_missing_coverage_key() -> None:
 def test_contract_exports_frozen_constants_and_typed_dicts() -> None:
     contract = _contract_module()
 
-    assert contract.SCHEMA_VERSION == 1
+    assert contract.SCHEMA_VERSION == 2
+    assert contract.EXECUTION_SCHEMA_VERSION == 3
     assert contract.STATUSES == ("通过", "失败", "未执行及原因")
     assert contract.COVERAGE_KEYS == EXPECTED_COVERAGE_KEYS
     assert contract.COVERAGE_EXPECTED == EXPECTED_COVERAGE_AUTHORITY
@@ -1894,7 +1894,7 @@ def test_report_plan_freezes_registration_smoke_and_declaration_authority() -> N
     document = _plan_document()
 
     assert set(document) == {"schema_version", "registration", "smoke", "declarations"}
-    assert document["schema_version"] == 1
+    assert document["schema_version"] == 2
     assert document["registration"] == {
         "profiles": ["gpu0", "gpu1", "gpu2", "cpu"],
         "require_full": True,
@@ -1950,7 +1950,7 @@ def test_report_plan_rejects_missing_or_unknown_nested_fields(
 @pytest.mark.parametrize(
     "mutation",
     (
-        lambda value: value.__setitem__("schema_version", 2),
+        lambda value: value.__setitem__("schema_version", 1),
         lambda value: value.__setitem__("schema_version", True),
         _set_registration_profile,
         _set_facerec_instance,
@@ -1983,7 +1983,7 @@ def test_report_plan_rejects_noncanonical_fixed_values(
         lambda value: _set_range_bound(value, "last", -1),
         lambda value: _set_range_bound(value, "first", 2),
         lambda value: _set_range_bound(value, "last", 21),
-        _duplicate_prefix,
+        _overlap_declaration_range,
         _replace_load_prefix,
         _drop_declaration_range,
     ),
@@ -2015,8 +2015,8 @@ def test_report_plan_bytes_loader_uses_strict_utf8_and_json() -> None:
     with pytest.raises(ValueError, match="duplicate JSON field: schema_version"):
         contract.load_report_plan_bytes(
             PLAN_PATH.read_bytes().replace(
-                b'"schema_version": 1,',
-                b'"schema_version": 2, "schema_version": 1,',
+                b'"schema_version": 2,',
+                b'"schema_version": 2, "schema_version": 2,',
                 1,
             )
         )
@@ -2095,8 +2095,8 @@ def test_strict_json_loads_does_not_swallow_fatal_exceptions(
     (
         (
             "schema_version",
-            '{\n  "schema_version": 1,',
-            '{\n  "schema_version": 999,\n  "schema_version": 1,',
+            '{\n  "schema_version": 2,',
+            '{\n  "schema_version": 999,\n  "schema_version": 2,',
         ),
         (
             "require_full",
@@ -2133,7 +2133,7 @@ def test_cases_envelope_accepts_strict_valid_document() -> None:
 
     contract.validate_cases_envelope(envelope)
 
-    assert len(envelope["cases"]) == 335
+    assert len(envelope["cases"]) == 331
 
 
 def test_cases_envelope_rejects_legacy_single_declaration_partial_document() -> None:
@@ -2199,13 +2199,23 @@ def test_cases_envelope_rejects_top_level_field_drift(action: str) -> None:
         contract.validate_cases_envelope(envelope)
 
 
-@pytest.mark.parametrize("schema_version", (True, 0, 3, "1"))
+@pytest.mark.parametrize("schema_version", (True, 0, 1, 4, "2"))
 def test_cases_envelope_rejects_wrong_schema_version(schema_version: object) -> None:
     contract = _contract_module()
     envelope = _valid_envelope()
     envelope["schema_version"] = schema_version
 
     with pytest.raises(ValueError, match="schema_version"):
+        contract.validate_cases_envelope(envelope)
+
+
+def test_schema2_declaration_envelope_rejects_execution_case_kind() -> None:
+    contract = _contract_module()
+    envelope = _valid_envelope()
+    case = next(case for case in envelope["cases"] if case["case_id"] == "DEP-001")
+    case["case_kind"] = "negative_execution"
+
+    with pytest.raises(ValueError, match="negative_execution"):
         contract.validate_cases_envelope(envelope)
 
 
@@ -2571,7 +2581,8 @@ def test_cases_envelope_requires_real_bool_mock(mock: object) -> None:
 def test_cases_envelope_rejects_duplicate_execution_declaration_case_id() -> None:
     contract = _contract_module()
     envelope = _valid_envelope()
-    envelope["cases"].append(copy.deepcopy(envelope["cases"][0]))
+    duplicate = next(case for case in envelope["cases"] if case["case_id"] == "DEP-001")
+    envelope["cases"].append(copy.deepcopy(duplicate))
 
     with pytest.raises(ValueError, match=r"case_id.*DEP-001"):
         contract.validate_cases_envelope(envelope)
@@ -2973,9 +2984,9 @@ def test_operator_inventory_has_exact_frozen_types_and_topology() -> None:
         "path": Path,
         "return": aggregate.OperatorInventory,
     }
-    assert len(inventory.instances) == 24
+    assert len(inventory.instances) == 21
     assert len(inventory.gpu_instances) == 18
-    assert len(inventory.cpu_instances) == 6
+    assert len(inventory.cpu_instances) == 3
     assert tuple(item.instance_id for item in inventory.instances) == tuple(
         sorted(item.instance_id for item in inventory.instances)
     )
@@ -2985,7 +2996,6 @@ def test_operator_inventory_has_exact_frozen_types_and_topology() -> None:
         for item in inventory.cpu_instances
     } == {
         ("ppt_slice", None, None),
-        ("text_analysis", None, None),
     }
     with pytest.raises(FrozenInstanceError):
         inventory.instances[0].profile = "cpu"
@@ -3030,7 +3040,7 @@ def test_registration_gpu_collector_has_exact_keyword_only_signature() -> None:
             ),
             "environment.*object",
         ),
-        (lambda document: document["services"].pop("asr-offline-gpu0"), "24"),
+        (lambda document: document["services"].pop("asr-offline-gpu0"), "21"),
         (
             lambda document: document["services"]["asr-offline-gpu0"].__setitem__(
                 "profiles", []
@@ -3260,7 +3270,7 @@ def test_failed_registration_is_observed_but_not_passed(
     }
 
 
-@pytest.mark.parametrize("payload_observed", (23, 25))
+@pytest.mark.parametrize("payload_observed", (20, 22))
 def test_failed_registration_preserves_observed_count_drift(
     release_tree: ReleaseTree,
     payload_observed: int,
@@ -3270,7 +3280,7 @@ def test_failed_registration_preserves_observed_count_drift(
     payload = release_tree.read_json(relative)
     payload["status"] = "失败"
     payload["summary"] = {
-        "expected": 24,
+        "expected": 21,
         "observed": payload_observed,
         "valid": 0,
     }
@@ -4033,7 +4043,7 @@ def test_task4_cli_publishes_complete_deterministic_envelope(
         "coverage",
         "cases",
     }
-    assert envelope["schema_version"] == 1
+    assert envelope["schema_version"] == 2
     assert envelope["release_tag"] == release_tree.release_tag
     assert envelope["git_sha"] == release_tree.git_sha
     assert envelope["plan_sha256"] == hashlib.sha256(
@@ -4050,13 +4060,13 @@ def test_task4_cli_publishes_complete_deterministic_envelope(
         "registration_facerec": {"expected": 1, "observed": 1, "passed": 1},
         "gpu_running": {"expected": 18, "observed": 18, "passed": 18},
         "gpu_stopped": {"expected": 18, "observed": 18, "passed": 18},
-        "smoke_full": {"expected": 8, "observed": 8, "passed": 8},
+        "smoke_full": {"expected": 7, "observed": 7, "passed": 7},
         "smoke_gpu_trigger": {
             "expected": 18,
             "observed": 18,
             "passed": 18,
         },
-        "smoke_cpu_instance": {"expected": 6, "observed": 6, "passed": 6},
+        "smoke_cpu_instance": {"expected": 3, "observed": 3, "passed": 3},
         "negative_declarations": {
             "expected": 217,
             "observed": 217,
@@ -4064,7 +4074,7 @@ def test_task4_cli_publishes_complete_deterministic_envelope(
         },
         "load_declarations": {"expected": 26, "observed": 26, "passed": 0},
     }
-    assert len(envelope["cases"]) == 335
+    assert len(envelope["cases"]) == 331
 
     def sort_key(case: dict[str, Any]) -> tuple[int, str, str, str]:
         kind = case["case_kind"]
@@ -4088,7 +4098,7 @@ def test_task4_cli_publishes_complete_deterministic_envelope(
         return group, case["target"], case["run_id"], case["case_id"]
 
     assert envelope["cases"] == sorted(envelope["cases"], key=sort_key)
-    assert len({case["case_id"] for case in envelope["cases"]}) == 335
+    assert len({case["case_id"] for case in envelope["cases"]}) == 331
 
     rerun = release_tree.run_aggregator()
     assert rerun.returncode == 0, rerun.stderr
@@ -4132,7 +4142,7 @@ def test_smoke_manifest_loader_matches_the_real_compose_operator_set() -> None:
     manifest = aggregate.load_smoke_manifest(SMOKE_MANIFEST_PATH)
     inventory = aggregate.load_operator_inventory(COMPOSE_PATH)
 
-    assert len(manifest) == 8
+    assert len(manifest) == 7
     assert {case["operator_code"] for case in manifest} == {
         instance.operator_code for instance in inventory.instances
     }
@@ -4245,7 +4255,7 @@ def test_full_smoke_collects_exact_manifest_cases_without_writing(
     } == {
         (f"smoke/{source['operator_code']}.json",) for source in manifest
     }
-    assert coverage["smoke_full"] == {"expected": 8, "observed": 8, "passed": 8}
+    assert coverage["smoke_full"] == {"expected": 7, "observed": 7, "passed": 7}
     assert _release_file_snapshot(release_tree.root) == before
     assert not (release_tree.root / "summary").exists()
     assert not (release_tree.root / "negative").exists()
@@ -4270,7 +4280,7 @@ def test_full_smoke_preserves_failed_and_unexecuted_evidence(
     assert full_by_source["INF-OCR"]["status"] == "失败"
     assert full_by_source["INF-VBAS"]["status"] == "未执行及原因"
     assert full_by_source["INF-VBAS"]["evidence"] == ["smoke/vbas.json"]
-    assert coverage["smoke_full"] == {"expected": 8, "observed": 8, "passed": 6}
+    assert coverage["smoke_full"] == {"expected": 7, "observed": 7, "passed": 5}
 
 
 def test_full_smoke_rejects_partial_cases_as_full(
@@ -4283,7 +4293,7 @@ def test_full_smoke_rejects_partial_cases_as_full(
     logical_cases.pop()
     release_tree._write_json("smoke/cases.json", logical_cases)
 
-    with pytest.raises(ValueError, match="8|manifest|cases"):
+    with pytest.raises(ValueError, match="7|manifest|cases"):
         release_tree.collect_smoke()
 
     assert not (release_tree.root / "summary").exists()
@@ -4354,7 +4364,7 @@ def test_smoke_case_ids_are_unique_and_cpu_retry_history_is_preserved(
 
     cases, coverage = release_tree.collect_smoke()
 
-    assert len(cases) == 8 + 18 + 6 + 1
+    assert len(cases) == 7 + 18 + 3 + 1
     assert len({case["case_id"] for case in cases}) == len(cases)
     cpu_cases = [
         case
@@ -4373,9 +4383,9 @@ def test_smoke_case_ids_are_unique_and_cpu_retry_history_is_preserved(
         "passed": 18,
     }
     assert coverage["smoke_cpu_instance"] == {
-        "expected": 6,
-        "observed": 6,
-        "passed": 6,
+        "expected": 3,
+        "observed": 3,
+        "passed": 3,
     }
 
 
@@ -4416,9 +4426,9 @@ def test_cpu_instance_with_only_failed_run_is_observed_but_not_passed(
     assert len(failed) == 1
     assert failed[0]["status"] == "失败"
     assert coverage["smoke_cpu_instance"] == {
-        "expected": 6,
-        "observed": 6,
-        "passed": 5,
+        "expected": 3,
+        "observed": 3,
+        "passed": 2,
     }
 
 
@@ -4814,7 +4824,7 @@ def test_declarations_materialize_exact_batches_and_never_pass(
             "cases",
         }
         assert declaration == {
-            "schema_version": 1,
+            "schema_version": 2,
             "evidence_type": "execution_declaration",
             "category": category,
             "status": "NOT_EXECUTED",
@@ -4861,7 +4871,7 @@ def test_declarations_materialize_exact_batches_and_never_pass(
     }
 
 
-def test_schema2_execution_replaces_same_id_declaration(
+def test_schema3_execution_replaces_same_id_declaration(
     release_tree: ReleaseTree,
 ) -> None:
     release_tree.write_complete_sources()
@@ -4872,7 +4882,7 @@ def test_schema2_execution_replaces_same_id_declaration(
 
     assert completed.returncode == 0, completed.stderr
     envelope = release_tree.read_json("summary/cases.json")
-    assert envelope["schema_version"] == 2
+    assert envelope["schema_version"] == 3
     assert envelope["coverage"]["negative_cases"] == {
         "expected": 217,
         "observed": 217,
@@ -4898,7 +4908,7 @@ def test_schema2_execution_replaces_same_id_declaration(
     assert "DEP-001" not in {case["case_id"] for case in declaration["cases"]}
 
 
-def test_schema2_load_execution_uses_load_kind_and_coverage(
+def test_schema3_load_execution_uses_load_kind_and_coverage(
     release_tree: ReleaseTree,
 ) -> None:
     release_tree.write_complete_sources()
@@ -4917,7 +4927,7 @@ def test_schema2_load_execution_uses_load_kind_and_coverage(
     assert envelope["coverage"]["negative_cases"]["passed"] == 0
 
 
-def test_schema2_execution_rejects_missing_raw_evidence(
+def test_schema3_execution_rejects_missing_raw_evidence(
     release_tree: ReleaseTree,
 ) -> None:
     release_tree.write_complete_sources()
@@ -4928,6 +4938,24 @@ def test_schema2_execution_rejects_missing_raw_evidence(
 
     assert completed.returncode == 1
     assert "evidence" in completed.stderr.lower()
+    assert not (release_tree.root / "summary/cases.json").exists()
+
+
+def test_schema2_execution_record_cannot_masquerade_as_current_evidence(
+    release_tree: ReleaseTree,
+) -> None:
+    release_tree.write_complete_sources()
+    release_tree.write_complete_smoke_sources()
+    release_tree.write_case_execution("DEP-001")
+    execution_path = "negative/executions/DEP-001.json"
+    execution = release_tree.read_json(execution_path)
+    execution["schema_version"] = 2
+    release_tree.replace_json(execution_path, execution)
+
+    completed = release_tree.run_aggregator()
+
+    assert completed.returncode == 1
+    assert "schema_version must equal 3" in completed.stderr
     assert not (release_tree.root / "summary/cases.json").exists()
 
 
@@ -5086,7 +5114,7 @@ def test_execution_rejects_declaration_timestamp_placeholder(
     assert not (release_tree.root / "summary/cases.json").exists()
 
 
-def test_schema2_failed_execution_renders_raw_evidence_and_overall_failure(
+def test_schema3_failed_execution_renders_raw_evidence_and_overall_failure(
     release_tree: ReleaseTree,
 ) -> None:
     release_tree.write_complete_sources()
@@ -5107,13 +5135,13 @@ def test_schema2_failed_execution_renders_raw_evidence_and_overall_failure(
     assert completed.returncode == 3, completed.stderr
     report = release_tree.read_json("summary/report.json")
     assert report["overall_status"] == "失败"
-    assert report["cases_schema_version"] == 2
+    assert report["cases_schema_version"] == 3
     assert report["evidence_index"][
         "negative/evidence/DEP-001/result.json"
     ]["type"] == "negative_case_evidence"
 
 
-def test_schema2_renderer_validates_every_raw_execution_evidence(
+def test_schema3_renderer_validates_every_raw_execution_evidence(
     release_tree: ReleaseTree,
 ) -> None:
     evidence = [
@@ -5152,7 +5180,7 @@ def _non_raw_execution_evidence_payload(
         return payload
     if payload_kind == "missing_evidence_type":
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "release_tag": release_tree.release_tag,
             "git_sha": release_tree.git_sha,
         }
@@ -5161,7 +5189,7 @@ def _non_raw_execution_evidence_payload(
         "disguised_execution_declaration",
     }
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "evidence_type": "execution_declaration",
         "category": category,
         "status": "NOT_EXECUTED",
@@ -5232,7 +5260,7 @@ def test_aggregator_rejects_invalid_raw_execution_evidence_envelope(
     relative_path = "negative/evidence/DEP-001/result.json"
     evidence = release_tree.read_json(relative_path)
     if mutation == "schema_version":
-        evidence["schema_version"] = 1
+        evidence["schema_version"] = 2
     elif mutation == "case_id":
         evidence["case_id"] = "DEP-002"
     elif mutation == "recorded_at":
@@ -5261,7 +5289,7 @@ def test_aggregator_rejects_invalid_raw_execution_evidence_envelope(
         "disguised_execution_declaration",
     ),
 )
-def test_schema2_renderer_rejects_non_raw_execution_evidence_payload(
+def test_schema3_renderer_rejects_non_raw_execution_evidence_payload(
     release_tree: ReleaseTree,
     case_id: str,
     payload_kind: str,
@@ -5293,7 +5321,7 @@ def test_schema2_renderer_rejects_non_raw_execution_evidence_payload(
     _assert_renderer_published_nothing(release_tree)
 
 
-def test_schema2_renderer_rejects_executed_id_in_declaration_batch(
+def test_schema3_renderer_rejects_executed_id_in_declaration_batch(
     release_tree: ReleaseTree,
 ) -> None:
     release_tree.write_complete_sources()
@@ -5318,7 +5346,7 @@ def test_schema2_renderer_rejects_executed_id_in_declaration_batch(
     _assert_renderer_published_nothing(release_tree)
 
 
-def test_schema2_renderer_rejects_duplicate_id_in_declaration_batch(
+def test_schema3_renderer_rejects_duplicate_id_in_declaration_batch(
     release_tree: ReleaseTree,
 ) -> None:
     release_tree.write_complete_sources()
@@ -5337,13 +5365,13 @@ def test_schema2_renderer_rejects_duplicate_id_in_declaration_batch(
 
     completed = _run_task6_renderer(release_tree)
 
-    assert envelope["schema_version"] == 2
+    assert envelope["schema_version"] == 3
     assert completed.returncode == 1
     _assert_renderer_published_nothing(release_tree)
 
 
 @pytest.mark.parametrize("tamper", ("release_sha", "symlink"))
-def test_schema2_renderer_rejects_tampered_raw_execution_evidence(
+def test_schema3_renderer_rejects_tampered_raw_execution_evidence(
     release_tree: ReleaseTree,
     tamper: str,
 ) -> None:

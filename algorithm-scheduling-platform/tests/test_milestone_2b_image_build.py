@@ -16,12 +16,11 @@ SCRIPTS_ROOT = DEPLOY_ROOT / "scripts"
 EXPECTED_MATRIX = (
     ("asr_offline", "docker/Dockerfile", "seacraft-asr-offline"),
     ("asr_online", "docker/Dockerfile", "seacraft-asr-online"),
-    ("ocr", "docker/Dockerfile", "algorithm-ocr"),
-    ("vbas", "docker/Dockerfile", "algorithm-vbas"),
     ("facerec", "docker/Dockerfile", "algorithm-facerec"),
-    ("screen_det", "docker/Dockerfile", "algorithm-screen-det"),
+    ("ocr", "docker/Dockerfile", "algorithm-ocr"),
     ("ppt_slice", "Dockerfile", "algorithm-ppt-slice"),
-    ("text_analysis", "Dockerfile", "algorithm-text-analysis"),
+    ("screen_det", "docker/Dockerfile", "algorithm-screen-det"),
+    ("vbas", "docker/Dockerfile", "algorithm-vbas"),
 )
 
 SAFE_DOCKERIGNORE = """\
@@ -62,10 +61,12 @@ def _make_workspace(tmp_path: Path) -> Path:
         "verify-operator-build-contexts",
         "verify-model-assets",
         "model_asset_transaction.py",
+        "operator_topology.py",
     ):
         shutil.copy2(SCRIPTS_ROOT / name, scripts / name)
     shutil.copy2(DEPLOY_ROOT / "operator-images.tsv", platform / "deploy/operator-images.tsv")
     shutil.copy2(DEPLOY_ROOT / "model-assets.json", platform / "deploy/model-assets.json")
+    shutil.copy2(DEPLOY_ROOT / "operator-topology.json", platform / "deploy/operator-topology.json")
     wheel_script = platform / "scripts/build_and_stage_operator_registry_wheel.py"
     wheel_script.parent.mkdir(parents=True)
     wheel_script.write_text("raise SystemExit('test stub must not execute')\n", encoding="utf-8")
@@ -271,7 +272,7 @@ def test_build_images_runs_from_arbitrary_cwd_and_verifies_every_image(
     assert commands[0][2] == "verify"
     assert commands[1] == ["python3", "scripts/build_and_stage_operator_registry_wheel.py"]
     builds = [command for command in commands if command[:2] == ["docker", "build"]]
-    assert len(builds) == 8
+    assert len(builds) == 7
     for build, (context, dockerfile, image) in zip(builds, EXPECTED_MATRIX, strict=True):
         expected_build = [
             "docker",
@@ -293,8 +294,8 @@ def test_build_images_runs_from_arbitrary_cwd_and_verifies_every_image(
         expected_build.append(str(workspace / context))
         assert build == expected_build
     assert sum("--secret" in build for build in builds) == 1
-    assert sum(command[:3] == ["docker", "image", "inspect"] for command in commands) == 24
-    assert (fake_bin / "df-count").read_text(encoding="utf-8") == "9"
+    assert sum(command[:3] == ["docker", "image", "inspect"] for command in commands) == 21
+    assert (fake_bin / "df-count").read_text(encoding="utf-8") == "8"
 
 
 def test_build_images_accepts_one_explicit_version_tag(tmp_path: Path) -> None:
@@ -385,7 +386,7 @@ def test_build_images_rejects_expected_git_sha_that_differs_from_head(
         ({"DF_FAIL_CALL": "1"}, 0),
         ({"WHEEL_EXIT": "1"}, 0),
         ({"DF_FAIL_CALL": "3"}, 1),
-        ({"FAIL_BUILD_REF": "algorithm-ocr:v1.0_260812"}, 3),
+        ({"FAIL_BUILD_REF": "algorithm-ocr:v1.0_260812"}, 4),
         ({"INSPECT_REVISION": "b" * 40}, 1),
         ({"INSPECT_REPO_TAGS": '["unexpected:v1"]'}, 1),
     ],
@@ -937,42 +938,6 @@ def test_facerec_image_uses_a_configurable_resilient_pypi_source() -> None:
     assert dockerfile.count("--retries 10") == 2
     assert dockerfile.count("--prefer-binary") == 2
     assert "files.pythonhosted.org" not in dockerfile
-
-
-def test_text_analysis_image_uses_a_configurable_resilient_pypi_source() -> None:
-    dockerfile = (
-        PLATFORM_ROOT.parent / "text_analysis/Dockerfile"
-    ).read_text(encoding="utf-8")
-
-    assert (
-        dockerfile.count(
-            "ARG PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple"
-        )
-        == 2
-    )
-    assert dockerfile.count('--index-url "$PYPI_INDEX_URL"') == 3
-    assert dockerfile.count("--timeout 300") == 3
-    assert dockerfile.count("--retries 10") == 3
-    assert dockerfile.count("--prefer-binary") == 3
-    assert "files.pythonhosted.org" not in dockerfile
-
-
-def test_text_analysis_obfuscates_large_entities_with_trial_compatible_mode() -> None:
-    dockerfile = (
-        PLATFORM_ROOT.parent / "text_analysis/Dockerfile"
-    ).read_text(encoding="utf-8")
-
-    assert "ARG PYARMOR_VERSION=8.5.12" in dockerfile
-    assert 'pyarmor=="$PYARMOR_VERSION"' in dockerfile
-    assert "--exclude app/models/entities.py app" in dockerfile
-    assert "--obf-code 0 app/models/entities.py" in dockerfile
-    assert (
-        "install -m 0644 /build/entities-obf/entities.py "
-        "/build/obf/app/models/entities.py"
-        in dockerfile
-    )
-    assert "COPY app/models/entities.py" not in dockerfile
-    assert "cp app/models/entities.py" not in dockerfile
 
 
 def test_all_real_contexts_only_reinclude_the_exact_registry_wheel() -> None:

@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 cases:
   - {case_id: DEP-001, category: negative, phase: deployment, title: "x86_64 服务器误用 ARM 镜像", expected: "预检或构建失败，不能启动到业务探针", runner: deployment.dep_001, timeout_seconds: 120, safety: isolated_mutation}
   - {case_id: DEP-002, category: negative, phase: deployment, title: "镜像缺少源 commit label", expected: "发布预检失败", runner: deployment.dep_002, timeout_seconds: 120, safety: isolated_mutation}
@@ -7,7 +7,7 @@ cases:
   - {case_id: DEP-005, category: negative, phase: deployment, title: "两个实例占用同一宿主机端口", expected: "Compose 启动失败且指出冲突实例", runner: deployment.dep_005, timeout_seconds: 120, safety: isolated_mutation}
   - {case_id: DEP-006, category: negative, phase: deployment, title: "VBas 容器仍监听旧 8881", expected: "健康检查失败，不能注册为可用实例", runner: deployment.dep_006, timeout_seconds: 120, safety: isolated_mutation}
   - {case_id: DEP-007, category: negative, phase: deployment, title: "算子以两个 Uvicorn worker 启动", expected: "部署预检失败", runner: deployment.dep_007, timeout_seconds: 120, safety: isolated_mutation}
-  - {case_id: DEP-008, category: negative, phase: deployment, title: "text_analysis 默认两个 worker 未被覆盖", expected: "部署预检失败", runner: deployment.dep_008, timeout_seconds: 120, safety: isolated_mutation}
+  - {case_id: RET-001, category: negative, phase: final, title: "新 PPT 任务仍创建退役文本节点", expected: "DAG 门禁拒绝 PPT_KEYWORDS，只保留切片和 OCR", runner: retirement.ret_001, timeout_seconds: 120, safety: read_only}
   - {case_id: DEP-009, category: negative, phase: deployment, title: "Compose 只设置 NVIDIA_VISIBLE_DEVICES 而没有 GPU reservation", expected: "GPU 预检失败", runner: deployment.dep_009, timeout_seconds: 120, safety: isolated_mutation}
   - {case_id: DEP-010, category: negative, phase: deployment, title: "算子镜像缺少注册客户端 wheel", expected: "镜像导入测试失败", runner: deployment.dep_010, timeout_seconds: 120, safety: isolated_mutation}
   - {case_id: DEP-011, category: negative, phase: deployment, title: "wheel 版本不是 0.2.0", expected: "镜像构建或运行预检失败", runner: deployment.dep_011, timeout_seconds: 120, safety: isolated_mutation}
@@ -132,11 +132,11 @@ cases:
   - {case_id: OCR-003, category: negative, phase: offline, title: "OCR 返回非 JSON 或 schema 错误", expected: "对应子项失败", runner: offline.ocr_003, timeout_seconds: 300, safety: canonical_runtime}
   - {case_id: OCR-004, category: negative, phase: offline, title: "部分 PPT 图片 OCR 失败", expected: "保存成功项和失败进度，节点结果不丢失", runner: offline.ocr_004, timeout_seconds: 300, safety: canonical_runtime}
   - {case_id: OCR-005, category: negative, phase: offline, title: "OCR 重复返回同一 ppt_image_id", expected: "幂等覆盖或拒绝，不产生重复结果", runner: offline.ocr_005, timeout_seconds: 300, safety: canonical_runtime}
-  - {case_id: KEY-001, category: negative, phase: offline, title: "OCR 文本为空", expected: "关键词返回空结果或明确原因，不调用无意义 LLM", runner: offline.key_001, timeout_seconds: 300, safety: canonical_runtime}
-  - {case_id: KEY-002, category: negative, phase: offline, title: "LLM 不可达或超时", expected: "关键词节点失败或等待，不影响已保存 OCR", runner: offline.key_002, timeout_seconds: 300, safety: canonical_runtime}
-  - {case_id: KEY-003, category: negative, phase: offline, title: "LLM 返回非法 JSON", expected: "关键词子项失败并记录原始错误摘要", runner: offline.key_003, timeout_seconds: 300, safety: canonical_runtime}
-  - {case_id: KEY-004, category: negative, phase: offline, title: "部分关键词请求失败", expected: "保存成功项和失败进度", runner: offline.key_004, timeout_seconds: 300, safety: canonical_runtime}
-  - {case_id: KEY-005, category: negative, phase: offline, title: "关键词与当前页明显无关", expected: "B 级人工复核标记明显误检", runner: offline.key_005, timeout_seconds: 300, safety: canonical_runtime}
+  - {case_id: RET-002, category: negative, phase: final, title: "新 ASR 任务仍创建课程脑图节点", expected: "DAG 门禁拒绝 COURSE_OVERVIEW，只保留离线转写", runner: retirement.ret_002, timeout_seconds: 120, safety: read_only}
+  - {case_id: RET-003, category: negative, phase: final, title: "重复 Kafka 消息补建退役节点", expected: "重复消费保持新 DAG 幂等，不产生退役节点", runner: retirement.ret_003, timeout_seconds: 120, safety: read_only}
+  - {case_id: RET-004, category: negative, phase: final, title: "退役算子尝试重新注册", expected: "Control 拒绝注册且 Redis 不产生状态", runner: retirement.ret_004, timeout_seconds: 120, safety: read_only}
+  - {case_id: RET-005, category: negative, phase: final, title: "Compose 仍包含退役算子实例", expected: "七算子拓扑预检失败关闭", runner: retirement.ret_005, timeout_seconds: 120, safety: read_only}
+  - {case_id: RET-006, category: negative, phase: final, title: "镜像或 Smoke 清单仍包含退役算子", expected: "部署权威一致性门禁失败关闭", runner: retirement.ret_006, timeout_seconds: 120, safety: read_only}
   - {case_id: ASR-001, category: negative, phase: offline, title: "FFmpeg 不存在", expected: "启动或部署预检失败", runner: offline.asr_001, timeout_seconds: 600, safety: canonical_runtime}
   - {case_id: ASR-002, category: negative, phase: offline, title: "提取出的 WAV 不是 16kHz 单声道 16-bit PCM", expected: "校验失败，不调用 ASR", runner: offline.asr_002, timeout_seconds: 600, safety: canonical_runtime}
   - {case_id: ASR-003, category: negative, phase: offline, title: "WAV 文件为空", expected: "校验失败", runner: offline.asr_003, timeout_seconds: 600, safety: canonical_runtime}
@@ -150,10 +150,10 @@ cases:
   - {case_id: ASR-011, category: negative, phase: offline, title: "相同节点消息重复执行", expected: "结果幂等，不重复持久化", runner: offline.asr_011, timeout_seconds: 600, safety: canonical_runtime}
   - {case_id: ASR-012, category: negative, phase: offline, title: "ASR 文本有明显整段漏识别", expected: "B 级人工复核标记明显漏检", runner: offline.asr_012, timeout_seconds: 600, safety: canonical_runtime}
   - {case_id: ASR-013, category: negative, phase: offline, title: "中英文混合内容错误严重", expected: "B 级人工复核单独记录", runner: offline.asr_013, timeout_seconds: 600, safety: canonical_runtime}
-  - {case_id: ASR-014, category: negative, phase: offline, title: "课程脑图在 ASR 未完成前被领取", expected: "前置依赖必须阻止", runner: offline.asr_014, timeout_seconds: 600, safety: canonical_runtime}
-  - {case_id: ASR-015, category: negative, phase: offline, title: "课程脑图 LLM 不可达", expected: "保留 ASR 完成结果，脑图节点失败或等待", runner: offline.asr_015, timeout_seconds: 600, safety: canonical_runtime}
-  - {case_id: ASR-016, category: negative, phase: offline, title: "课程脑图返回非法 GenericResponse", expected: "schema 校验失败", runner: offline.asr_016, timeout_seconds: 600, safety: canonical_runtime}
-  - {case_id: ASR-017, category: negative, phase: offline, title: "课程脑图主题与 ASR 内容明显无关", expected: "B 级人工复核标记明显误检", runner: offline.asr_017, timeout_seconds: 600, safety: canonical_runtime}
+  - {case_id: RET-007, category: negative, phase: final, title: "Redis 仍暴露退役实例或租约", expected: "当前路由和活跃租约中不存在 Text Analysis", runner: retirement.ret_007, timeout_seconds: 120, safety: read_only}
+  - {case_id: RET-008, category: negative, phase: final, title: "范围收敛破坏历史结果查询", expected: "历史完成或失败结果保持原样可读", runner: retirement.ret_008, timeout_seconds: 120, safety: read_only}
+  - {case_id: RET-009, category: negative, phase: final, title: "活动退役节点未阻断新版本切换", expected: "状态 10 至 50 的退役节点使预检失败关闭", runner: retirement.ret_009, timeout_seconds: 120, safety: read_only}
+  - {case_id: RET-010, category: negative, phase: final, title: "旧八算子 release 被当作当前通过证据", expected: "新 schema 和七算子证据门禁明确拒绝旧 release", runner: retirement.ret_010, timeout_seconds: 120, safety: read_only}
   - {case_id: ASR-018, category: negative, phase: offline, title: "effective_params 与 A 实际请求不一致", expected: "查询验收失败", runner: offline.asr_018, timeout_seconds: 600, safety: canonical_runtime}
   - {case_id: VIS-001, category: negative, phase: vision, title: "Kafka 视觉命令包含 Base64 或视频字节", expected: "契约拒绝", runner: vision.vis_001, timeout_seconds: 600, safety: canonical_runtime}
   - {case_id: VIS-002, category: negative, phase: vision, title: "视觉命令使用相对视频路径", expected: "契约拒绝", runner: vision.vis_002, timeout_seconds: 600, safety: canonical_runtime}

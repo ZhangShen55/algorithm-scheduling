@@ -374,27 +374,9 @@ def test_completed_asr_reuses_large_result_and_original_effective_params(
         NodeResultWrite(result=large_result, effective_params=original_params),
         reason="离线语音转写完成",
     )
-    overview_node = repository.get_node(by_code["COURSE_OVERVIEW"].id)
-    repository.transition_node(overview_node.id, NodeStatus.QUEUED, "课程脑图已排队")
-    repository.transition_node(overview_node.id, NodeStatus.RUNNING, "正在生成课程脑图")
-    repository.complete_node(
-        overview_node.id,
-        NodeResultWrite(
-            result={
-                "model": "qwen-course",
-                "id": "chatcmpl-large",
-                "result": {
-                    "overview": {},
-                    "finished_time": 1_750_000_000,
-                    "process_time_ms": 100,
-                    "finished_reason": "stop",
-                },
-                "usage": {},
-            }
-        ),
-        reason="课程脑图生成完成",
-    )
-    repository.update_task_type_state(task_type.id, NodeStatus.COMPLETED, "ASR 任务全部完成")
+    completed_task_type = repository.aggregate_task_type_state(task_type.id)
+    assert completed_task_type.status is NodeStatus.COMPLETED
+    assert completed_task_type.reason == "ASR 所有节点处理完成"
 
     app = create_control_app(
         repository=repository,
@@ -701,10 +683,7 @@ def test_pipeline_initialization_rejects_mismatched_submission_id(
         pipeline_nodes(task_type.task_type, task_type.priority),
         submission_id=task_type.submission_id,
     )
-    assert [node.node_code for node in nodes] == [
-        "ASR_TRANSCRIPTION",
-        "COURSE_OVERVIEW",
-    ]
+    assert [node.node_code for node in nodes] == ["ASR_TRANSCRIPTION"]
 
 
 def test_duplicate_pipeline_initialization_creates_each_node_once(
@@ -727,7 +706,7 @@ def test_duplicate_pipeline_initialization_creates_each_node_once(
         definitions,
     )
 
-    assert [node.node_code for node in first] == ["PPT_SLICE", "PPT_OCR", "PPT_KEYWORDS"]
+    assert [node.node_code for node in first] == ["PPT_SLICE", "PPT_OCR"]
     assert [node.id for node in second] == [node.id for node in first]
 
 
@@ -760,7 +739,6 @@ def test_completed_prerequisite_releases_only_direct_dependent_node(
     assert released == {
         "PPT_SLICE": NodeStatus.COMPLETED,
         "PPT_OCR": NodeStatus.PENDING,
-        "PPT_KEYWORDS": NodeStatus.WAITING_PREREQUISITE,
     }
 
 
@@ -999,20 +977,6 @@ def test_ppt_pipeline_exposes_slices_while_ocr_waits_then_preserves_image_identi
                 "text": f"第 {work.ordinal + 1} 页",
             }
 
-    class E2eKeywordAdapter:
-        async def extract(
-            self,
-            instance_url: str,
-            *,
-            ppt_image_id: str,
-            text: str,
-        ) -> dict[str, object]:
-            del instance_url
-            return {
-                "ppt_image_id": ppt_image_id,
-                "keyword_response": {"result": {"keywords": [text]}},
-            }
-
     class E2eLeaseClient:
         async def acquire(
             self,
@@ -1023,15 +987,12 @@ def test_ppt_pipeline_exposes_slices_while_ocr_waits_then_preserves_image_identi
         ) -> CapacityLease:
             del ttl_seconds
             assert work_context is not None
+            assert capability == "ocr"
             return CapacityLease(
                 lease_id=f"lease-{capability}-{uuid4().hex}",
                 instance_id=f"{capability}-instance",
                 capability=capability,
-                service_url=(
-                    "http://ocr:8000"
-                    if capability == "ocr"
-                    else "http://text-analysis:8000"
-                ),
+                service_url="http://ocr:8000",
                 expires_at=datetime.now(UTC) + timedelta(seconds=60),
             )
 
@@ -1055,10 +1016,9 @@ def test_ppt_pipeline_exposes_slices_while_ocr_waits_then_preserves_image_identi
         repository,
         E2eLeaseClient(),
         E2eOcrAdapter(),
-        E2eKeywordAdapter(),
         PptWorkLimits(batch_size=2, max_concurrency=2),
     )
-    ocr_results = asyncio.run(
+    asyncio.run(
         pipeline.run_ocr(
             task_id="course-ppt-e2e",
             node_id=claimed_ocr.id,
@@ -1066,21 +1026,8 @@ def test_ppt_pipeline_exposes_slices_while_ocr_waits_then_preserves_image_identi
         )
     )
 
-    claimed_keywords = dispatcher.claim_next("extract_keywords", "ppt-worker")
-    assert claimed_keywords is not None
-    repository.transition_node(
-        claimed_keywords.id,
-        NodeStatus.RUNNING,
-        "正在提取 PPT 关键词",
-    )
-    asyncio.run(
-        pipeline.run_keywords(
-            task_id="course-ppt-e2e",
-            node_id=claimed_keywords.id,
-            work=work,
-            ocr_results=ocr_results,
-        )
-    )
+    terminal = repository.aggregate_task_type_state(claimed_ocr.course_task_type_id)
+    assert terminal.status is NodeStatus.COMPLETED
 
     with TestClient(app) as client:
         completed_body = client.get("/api/course-jobs/course-ppt-e2e").json()
@@ -1093,12 +1040,8 @@ def test_ppt_pipeline_exposes_slices_while_ocr_waits_then_preserves_image_identi
         "total_count": 2,
     }
     assert set(completed_nodes["PPT_OCR"]["result"]) == {"ppt-001", "ppt-002"}
-    assert completed_nodes["PPT_KEYWORDS"]["result"]["ppt-001"]["ppt_image_id"] == (
-        "ppt-001"
-    )
-    assert completed_nodes["PPT_KEYWORDS"]["result"]["ppt-002"]["ppt_image_id"] == (
-        "ppt-002"
-    )
+    assert completed_task["status"] == 60
+    assert set(completed_nodes) == {"PPT_SLICE", "PPT_OCR"}
 
 
 def test_concurrent_outbox_scans_do_not_overlap(
@@ -1164,14 +1107,6 @@ def _complete_acceptance_pipeline(
                 },
                 progress={"completed_count": 2, "total_count": 2},
             )
-        elif node.node_code == "PPT_KEYWORDS":
-            result = NodeResultWrite(
-                result={
-                    "ppt-001": {"ppt_image_id": "ppt-001", "keywords": ["集合"]},
-                    "ppt-002": {"ppt_image_id": "ppt-002", "keywords": ["函数"]},
-                },
-                progress={"completed_count": 2, "total_count": 2},
-            )
         elif node.node_code == "ASR_TRANSCRIPTION":
             result = NodeResultWrite(
                 result={
@@ -1192,20 +1127,6 @@ def _complete_acceptance_pipeline(
                     "wordTimestamps": False,
                     "hotWords": [],
                 },
-            )
-        elif node.node_code == "COURSE_OVERVIEW":
-            result = NodeResultWrite(
-                result={
-                    "model": "course-model",
-                    "id": "overview-001",
-                    "result": {
-                        "overview": {"title": "函数"},
-                        "finished_time": 1_750_000_000,
-                        "process_time_ms": 30,
-                        "finished_reason": "stop",
-                    },
-                    "usage": {"total_tokens": 12},
-                }
             )
         elif node.node_code == "TEACHER_BEHAVIOR_ANALYSIS":
             result = NodeResultWrite(

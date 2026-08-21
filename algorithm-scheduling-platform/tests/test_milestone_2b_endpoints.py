@@ -23,7 +23,6 @@ OPERATOR_INSTANCES = {
     "facerec": ("facerec", "gpu", "http"),
     "screen_det": ("screen-det", "gpu", "http"),
     "ppt_slice": ("ppt-slice", "cpu", "http"),
-    "text_analysis": ("text-analysis", "cpu", "http"),
 }
 
 SMOKE_SPEC = importlib.util.spec_from_file_location(
@@ -58,7 +57,7 @@ def test_instance_endpoints_match_all_compose_instances_and_published_ports() ->
     services = compose["services"]
 
     assert set(endpoints) == set(OPERATOR_INSTANCES)
-    assert sum(len(value) for value in endpoints.values()) == 24
+    assert sum(len(value) for value in endpoints.values()) == 21
     expected_instances = {
         f"{prefix}-{device_kind}{index}"
         for prefix, device_kind, _ in OPERATOR_INSTANCES.values()
@@ -85,7 +84,7 @@ def test_instance_endpoints_match_all_compose_instances_and_published_ports() ->
             assert service["environment"]["PLATFORM_INSTANCE_ID"] == instance_id
             seen_instances.add(instance_id)
 
-    assert len(seen_instances) == 24
+    assert len(seen_instances) == 21
 
 
 def test_full_endpoints_select_gpu0_cpu0_and_three_facerec_origins() -> None:

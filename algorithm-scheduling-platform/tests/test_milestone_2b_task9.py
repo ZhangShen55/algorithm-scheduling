@@ -29,6 +29,8 @@ import httpx
 import pytest
 import yaml  # type: ignore[import-untyped]
 
+from deploy.scripts import run_milestone_2b_8a7 as canonical_8a7
+
 PLATFORM_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = PLATFORM_ROOT.parent
 DEPLOY = PLATFORM_ROOT / "deploy"
@@ -146,16 +148,10 @@ def _expected_instances() -> list[dict[str, Any]]:
         "facerec": ("facerec", ["recognize"], 8000, 128),
         "screen-det": ("screen_det", ["detect_all"], 8880, 128),
         "ppt-slice": ("ppt_slice", ["ppt_slice"], 9001, 10),
-        "text-analysis": (
-            "text_analysis",
-            ["course_overviews", "extract_keywords"],
-            8000,
-            256,
-        ),
     }
     result = []
     for prefix, (code, caps, port, capacity) in contracts.items():
-        suffix = "gpu" if prefix not in {"ppt-slice", "text-analysis"} else "cpu"
+        suffix = "cpu" if prefix == "ppt-slice" else "gpu"
         for index in range(3):
             labels = {"gpu": str(index)} if suffix == "gpu" else {}
             result.append(
@@ -382,7 +378,7 @@ def test_registration_verifier_accepts_exact_ready_heartbeat_topology(tmp_path: 
     assert report["status"] == "通过"
     assert report["release_tag"] == TAG
     assert report["git_sha"] == SHA
-    assert report["summary"] == {"expected": 24, "observed": 24, "valid": 24}
+    assert report["summary"] == {"expected": 21, "observed": 21, "valid": 21}
     assert stat.S_IMODE(output.stat().st_mode) == 0o600
 
 
@@ -460,7 +456,6 @@ def test_registration_verifier_rejects_invalid_topology(
         ("asr-offline-gpu0", "service_url", "http://wrong-host:8083", "service_url"),
         ("ocr-gpu1", "service_url", "http://ocr-gpu1:9999", "service_url"),
         ("ppt-slice-cpu0", "declared_capacity", 2, "声明容量"),
-        ("text-analysis-cpu0", "declared_capacity", 1, "声明容量"),
     ),
 )
 def test_registration_verifier_rejects_compose_contract_drift(
@@ -571,11 +566,11 @@ def test_registration_exception_report_keeps_the_typed_envelope(
     assert report["started_at"]
     assert report["finished_at"]
     assert report["selection"] == {"mode": "full", "values": []}
-    assert report["summary"] == {"expected": 24, "observed": 24, "valid": 0}
+    assert report["summary"] == {"expected": 21, "observed": 21, "valid": 0}
     assert report["issues"]
 
 
-def test_renderer_render_emits_schema_v2_and_escapes_markdown_cells() -> None:
+def test_renderer_render_emits_schema_v3_and_escapes_markdown_cells() -> None:
     case = {
         "case_id": "INF-001",
         "case_kind": "operator_smoke",
@@ -607,7 +602,7 @@ def test_renderer_render_emits_schema_v2_and_escapes_markdown_cells() -> None:
         envelope, [case], [], "失败", cases_snapshot
     )
 
-    assert document["schema_version"] == 2
+    assert document["schema_version"] == 3
     assert document["cases_schema_version"] == 1
     assert document["cases_input"] == {"bytes": 123, "sha256": "c" * 64}
     assert document["overall_status"] == "失败"
@@ -825,7 +820,6 @@ def test_smoke_entrypoint_and_manifest_are_strict() -> None:
         "facerec",
         "screen_det",
         "ppt_slice",
-        "text_analysis",
     }
     assert all("checks" in case and case["checks"] for case in manifest["cases"])
 
@@ -1037,7 +1031,7 @@ def test_gpu_acceptance_docs_contain_complete_executable_commands() -> None:
 
     assert "contains two independent offline ASR" not in readme
     assert "GPU 0/GPU 1" not in readme
-    assert "24" in readme and "GPU 2" in readme
+    assert "21" in readme and "GPU 2" in readme
     assert "\n  ... \\" not in readme
     trigger_line = next(
         line
@@ -1160,7 +1154,10 @@ def _extract_scenario_bash_block(heading: str) -> str:
     section = scenario.split(heading, 1)[1]
     match = re.search(r"```bash\n(?P<script>.*?)\n```", section, re.DOTALL)
     assert match is not None, f"{heading} 后缺少 Bash 代码块"
-    return match.group("script")
+    script = match.group("script")
+    if "阶段 3：平台和逐卡算子拓扑" in heading:
+        return canonical_8a7._adapt_current_stage3(script)
+    return script
 
 
 def _extract_scenario_bash_blocks(heading: str) -> list[str]:
@@ -4221,7 +4218,7 @@ def test_report_readme_locks_complete_canonical_evidence_inventory() -> None:
         (DEPLOY / "operator-smoke-cases.json").read_text(encoding="utf-8")
     )
     operator_codes = sorted(case["operator_code"] for case in smoke_manifest["cases"])
-    assert len(operator_codes) == 8
+    assert len(operator_codes) == 7
 
     canonical_paths = [
         "registration/operator-registration.json",
@@ -4263,8 +4260,8 @@ def test_report_readme_locks_complete_canonical_evidence_inventory() -> None:
     ):
         assert contract_text in readme, f"reports README 缺少合同说明: {contract_text}"
 
-    assert "无额外 Smoke 重试时，完整 envelope 有 335 条" in readme
-    assert "保留历史重试时，用例总数至少为 335 条" in readme
+    assert "无额外 Smoke 重试时，完整 envelope 有 331 条" in readme
+    assert "保留历史重试时，用例总数至少为 331 条" in readme
     assert "按实际重试数量增加" in readme
 
 
@@ -4319,7 +4316,7 @@ def test_deploy_readme_invalidates_old_sha_images_and_evidence() -> None:
     readme = (DEPLOY / "README.md").read_text(encoding="utf-8")
 
     assert "新最终 SHA" in readme
-    assert "四个平台和八个算子镜像" in readme
+    assert "四个平台和七个算子镜像" in readme
     assert "重新构建或重标" in readme
     assert "重新取证" in readme
 
@@ -4510,10 +4507,6 @@ def _smoke_handler(
                 return 500, {"detail": "cleanup failed"}
             state["created"] = False
             return 200, {"status_code": 200, "message": "deleted", "data": {"deleted_count": 1}}
-        if path == "/v1/extract_keywords":
-            return 200, {"model": "fake", "result": {"keywords": ["课堂"]}}
-        if path == "/v1/course_overviews":
-            return 200, {"model": "fake", "result": {"overview": {"full_overview": "概览"}}}
         if path == "/LocalVideoPPTSliceTasks/v1.0.0":
             manifest = tmp_path / "result" / body["task_id"] / "ppt" / "manifest.json"
             if ppt_layout == "wrong_manifest":
@@ -4601,7 +4594,6 @@ def _run_smoke(
             "facerec",
             "screen_det",
             "ppt_slice",
-            "text_analysis",
         )
     }
     endpoints["asr_online"] = ws_url
@@ -5114,7 +5106,9 @@ def test_instance_smoke_rejects_instance_id_from_another_operator(
     assert "实例 ID 与算子不匹配" in completed.stderr
 
 
-def test_smoke_runner_calls_all_eight_operator_contracts_and_redacts(tmp_path: Path) -> None:
+def test_smoke_runner_calls_all_seven_operator_contracts_and_redacts(
+    tmp_path: Path,
+) -> None:
     manifest = _fixture_manifest(tmp_path)
     handler = _smoke_handler(tmp_path)
     with _WebSocketServer() as ws_url, _face_servers(handler) as face_endpoints:
@@ -5130,7 +5124,7 @@ def test_smoke_runner_calls_all_eight_operator_contracts_and_redacts(tmp_path: P
     assert completed.returncode == 0, completed.stderr
     smoke_dir = _release(tmp_path) / "smoke"
     cases = json.loads((smoke_dir / "cases.json").read_text(encoding="utf-8"))
-    assert len(cases) == 8
+    assert len(cases) == 7
     assert all(case["status"] == "通过" and case["mock"] for case in cases)
     combined = "".join(path.read_text(encoding="utf-8") for path in smoke_dir.glob("*.json"))
     assert "完整敏感转写" not in combined
@@ -5451,33 +5445,6 @@ def test_ppt_second_submitted_request_failure_keeps_both_actual_attempt_ids(
     ]
     assert len({attempt["task_id"] for attempt in attempts}) == 2
     assert attempts[1]["status"] == "失败"
-
-
-def test_text_analysis_smoke_uses_the_current_course_overview_contract(
-    tmp_path: Path,
-) -> None:
-    manifest = _fixture_manifest(tmp_path)
-    overview_requests: list[dict[str, Any]] = []
-    handler = _smoke_handler(tmp_path)
-
-    def inspect(path: str, headers: Any, body: bytes) -> tuple[int, Any]:
-        if path == "/v1/course_overviews":
-            overview_requests.append(json.loads(body))
-        return handler(path, headers, body)
-
-    with _WebSocketServer() as ws_url, _Server({}, inspect) as http_url:
-        completed = _run_smoke(
-            tmp_path,
-            http_url,
-            ws_url,
-            manifest,
-            cases="text_analysis",
-        )
-
-    assert completed.returncode == 0, completed.stderr
-    assert overview_requests == [
-        {"textSegments": [{"text": "函数课程", "bg": 0, "ed": 10}]}
-    ]
 
 
 def test_facerec_requires_three_distinct_instances_and_exact_created_match(

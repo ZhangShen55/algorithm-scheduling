@@ -22,6 +22,11 @@
 - PPT 是已批准的内部破坏性契约变更：共享文件位于 `/data/result/{task_id}/ppt`，使用原子 manifest，只发送一次终态回调，不再发送 Base64 幻灯片回调。
 - PPT 提交使用规范字段 `video_path`。Orchestrator 输出准备完成的绝对本地路径；算子同时接受远程 URL，并仅将旧字段 `uri` 保留为兼容输入。
 - Kafka 消息只能包含标识符、路径和元数据，不得包含媒体字节。
+- 当前新任务 DAG 固定为 `PPT_SLICE -> PPT_OCR` 和 `ASR_TRANSCRIPTION`。不得为新任务创建
+  `PPT_KEYWORDS` 或 `COURSE_OVERVIEW`；历史任务和结果中的退役节点仍须原样可查询。
+- 当前可注册算子集合固定为 ASR Online、ASR Offline、FaceRec、OCR、ScreenDet、PPT Slice 和
+  VBas 七类。`text_analysis` 只允许作为 PostgreSQL 历史审计字符串读取，不得进入当前注册、
+  路由、租约、构建、Smoke 或部署权威。
 
 ## 依赖归属
 
@@ -63,9 +68,14 @@ stdout；默认单文件上限 100 MiB、归档保留 7 日，字段由各自根
 
 ## 里程碑 2B 部署合同
 
-- A/远程主机只访问 `control-service:18100` 和 `online-gateway-service:18103`。`18101`、`18102`、PostgreSQL `5432`、Kafka `9092`、Redis `6379`、MongoDB `27017` 和全部 24 个算子宿主机端口必须绑定 `127.0.0.1`；容器间继续使用 `algorithm-platform` 网络和服务名。
+- 当前拓扑权威为 7 类算子、21 个实例、18 个 GPU 实例、3 个 CPU PPT Slice 实例和 14 个
+  配置解析进程。发布证据必须包含 7/7 算子 Smoke、217 条反例、26 条压力/恢复用例和 6 项
+  B 级人工复核，且全部绑定同一最终 Git SHA。
+- A/远程主机只访问 `control-service:18100` 和 `online-gateway-service:18103`。`18101`、`18102`、PostgreSQL `5432`、Kafka `9092`、Redis `6379`、MongoDB `27017` 和全部 21 个算子宿主机端口必须绑定 `127.0.0.1`；容器间继续使用 `algorithm-platform` 网络和服务名。
 - Kafka 同时提供 `EXTERNAL://:9092` 与 `INTERNAL://:29092`，分别广播 `EXTERNAL://127.0.0.1:9092` 与 `INTERNAL://kafka:29092`。容器不得使用宿主机广播地址。
-- 发布构建必须显式传入完整 `EXPECTED_GIT_SHA`。四个平台运行容器通过 `preflight runtime --git-sha SHA` 校验最终镜像 revision；每个算子 profile 以及全 24 实例分别通过 `preflight operators --profile PROFILE --git-sha SHA` 和 `preflight operators --full --git-sha SHA` 校验。Smoke 的 `--git-sha` 只标记报告归属，不替代镜像 attestation。
+- 发布构建必须显式传入完整 `EXPECTED_GIT_SHA`。四个平台运行容器通过 `preflight runtime --git-sha SHA` 校验最终镜像 revision；每个算子 profile 以及全 21 实例分别通过 `preflight operators --profile PROFILE --git-sha SHA` 和 `preflight operators --full --git-sha SHA` 校验。Smoke 的 `--git-sha` 只标记报告归属，不替代镜像 attestation。
+- 旧八算子、24 实例 release 是不可改写的历史证据，只能用于追溯当时事实；它不能补足当前
+  七算子发布的任何缺失门禁，也不能被重标或复制成当前通过证据。
 - 外部 `model-assets.manifest.json` 是交付可信基线。部署阶段只能执行 `stage-model-assets` 和 `verify-model-assets`，不得运行生成器覆盖基线；OCR 镜像内派生 manifest 仅供运行时校验，不是第二个交付权威。
 - canonical 2B 场景不得对 platform/infrastructure 执行 `down`，不得宽泛停止预存业务。host preflight 和 snapshot/pause 前必须通过 `O_NOFOLLOW`、UID、`0600`、单链接和 inode 校验获取同 release tag 共享的非阻塞锁，并持有到阶段 6 唯一 restore 成功。fresh host preflight 强制空 `AUTHORIZED_OCCUPIED_ENDPOINTS`；续跑只从权威 platform/operator Compose 配置和经身份、running、端口映射核验的容器 Docker inspect 实际绑定精确派生“监听地址+端口”授权端点，preflight 逐条核对 `ss` 监听，旧纯数字端口授权不生效。首次发布只按同一账本暂停用户明确允许的原 `ocr-v6-amd`；同 SHA 续跑复用已有完整本地账本。换 SHA 续跑必须显式给出同 `REPORT_ROOT`/release tag 的立即前驱 `PREVIOUS_RELEASE_ROOT`。前驱仍有 active snapshot/paused 时，可通过 provenance 继承更早的权威账本，当前 release 不得重新 snapshot/pause 或复制可变 paused ledger；前驱已经成功 restore 时，只有在严格验证 `0600` 单链接 snapshot、唯一 `0400` 单链接终态 audit、无残留 archive metadata 及被选容器当前恢复事实后，当前新 SHA 才可开启全新的 snapshot/pause 事务。两种路径均不得改写旧 release。
 - baseline/current/new 容器 ID 账本必须经同目录临时文件、排序、完整 ID/`docker inspect` 与 Compose 身份校验和原子替换发布。同 SHA 已有完整 baseline/new 时保留 baseline 并刷新 new，只有一份时 fail closed。换 SHA 的算子账本来源不得假定等于立即前驱：只读 resolver 必须从 `PREVIOUS_RELEASE_ROOT` 开始，遇到最近的完整 baseline/new 对即返回；无账本时优先沿严格校验的 `0400` maintenance provenance `source_release_root` 回溯。若候选是合法 direct maintenance、尚无完整算子账本且存在当前 UID 所有、单链接、`0400` 的 predecessor marker，允许沿 marker 的同 tag 前驱继续寻找；缺 marker、partial、环或最终无完整账本祖先均 fail closed。该解析不得改写当前或祖先 marker/provenance；只有在 `current - resolved baseline` 与 resolved new 精确一致后才原子继承 baseline 并立即刷新 new。每次 profile `up` 无论成功、失败或 partial-up 都要先刷新账本再返回原状态；账本刷新失败时禁止 cleanup，待 Docker 恢复后基于 baseline 重新刷新。清理只停止本轮记录的新增算子容器，不删除容器，然后恢复原业务。禁止 prune、`down -v`、删除卷和删除 `/data/result`。

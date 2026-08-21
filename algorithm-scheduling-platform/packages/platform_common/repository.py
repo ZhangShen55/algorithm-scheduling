@@ -406,11 +406,14 @@ class CourseRepository:
             rows = connection.execute(
                 text(
                     """
-                    SELECT DISTINCT required_capability
-                    FROM task_nodes
-                    WHERE status IN (10, 30)
-                      AND required_capability IS NOT NULL
-                    ORDER BY required_capability
+                    SELECT DISTINCT node.required_capability
+                    FROM task_nodes AS node
+                    JOIN course_task_types AS task_type
+                      ON task_type.id = node.course_task_type_id
+                    WHERE node.status IN (10, 30)
+                      AND node.required_capability IS NOT NULL
+                      AND task_type.status IN (10, 20, 30, 40, 50)
+                    ORDER BY node.required_capability
                     """
                 )
             ).scalars()
@@ -432,6 +435,12 @@ class CourseRepository:
             ).mappings().one_or_none()
             if task_type_row is None:
                 raise RepositoryNotFoundError(f"任务类型不存在: {course_task_type_id}")
+            if NodeStatus(task_type_row["status"]) in {
+                NodeStatus.COMPLETED,
+                NodeStatus.FAILED,
+                NodeStatus.CANCELLED,
+            }:
+                return _task_type_record(task_type_row, created=False)
 
             nodes = list(
                 connection.execute(
@@ -487,12 +496,15 @@ class CourseRepository:
             task_type_ids = list(
                 connection.execute(
                     text(
-                        """
-                        SELECT DISTINCT course_task_type_id
-                        FROM task_nodes
-                        WHERE required_capability = :capability
-                          AND status IN (10, 30)
-                        ORDER BY course_task_type_id
+                    """
+                        SELECT DISTINCT node.course_task_type_id
+                        FROM task_nodes AS node
+                        JOIN course_task_types AS task_type
+                          ON task_type.id = node.course_task_type_id
+                        WHERE node.required_capability = :capability
+                          AND node.status IN (10, 30)
+                          AND task_type.status IN (10, 20, 30, 40, 50)
+                        ORDER BY node.course_task_type_id
                         """
                     ),
                     {"capability": capability},
@@ -760,15 +772,18 @@ class CourseRepository:
                 text(
                     """
                     WITH candidate AS (
-                        SELECT id
-                        FROM task_nodes
-                        WHERE status = 10
-                          AND required_capability = :capability
+                        SELECT node.id
+                        FROM task_nodes AS node
+                        JOIN course_task_types AS task_type
+                          ON task_type.id = node.course_task_type_id
+                        WHERE node.status = 10
+                          AND node.required_capability = :capability
+                          AND task_type.status IN (10, 20, 30, 40, 50)
                         ORDER BY
-                            CASE priority WHEN 'URGENT' THEN 0 ELSE 1 END,
-                            ready_at,
-                            id
-                        FOR UPDATE SKIP LOCKED
+                            CASE node.priority WHEN 'URGENT' THEN 0 ELSE 1 END,
+                            node.ready_at,
+                            node.id
+                        FOR UPDATE OF node SKIP LOCKED
                         LIMIT 1
                     )
                     UPDATE task_nodes AS node
@@ -801,19 +816,22 @@ class CourseRepository:
                 text(
                     """
                     WITH candidate AS (
-                        SELECT id
-                        FROM task_nodes
-                        WHERE status = 10
-                          AND required_capability IS NULL
-                          AND node_code IN (
+                        SELECT node.id
+                        FROM task_nodes AS node
+                        JOIN course_task_types AS task_type
+                          ON task_type.id = node.course_task_type_id
+                        WHERE node.status = 10
+                          AND node.required_capability IS NULL
+                          AND node.node_code IN (
                               'TEACHER_BEHAVIOR_ANALYSIS',
                               'STUDENT_BEHAVIOR_ANALYSIS'
                           )
+                          AND task_type.status IN (10, 20, 30, 40, 50)
                         ORDER BY
-                            CASE priority WHEN 'URGENT' THEN 0 ELSE 1 END,
-                            ready_at,
-                            id
-                        FOR UPDATE SKIP LOCKED
+                            CASE node.priority WHEN 'URGENT' THEN 0 ELSE 1 END,
+                            node.ready_at,
+                            node.id
+                        FOR UPDATE OF node SKIP LOCKED
                         LIMIT 1
                     )
                     UPDATE task_nodes AS node
@@ -840,17 +858,20 @@ class CourseRepository:
             updated = connection.execute(
                 text(
                     """
-                    UPDATE task_nodes
+                    UPDATE task_nodes AS node
                     SET status = 10,
                         reason = '视觉编排已恢复，等待重新发布命令',
                         ready_at = now(),
                         updated_at = now()
-                    WHERE status = 30
-                      AND required_capability IS NULL
-                      AND node_code IN (
+                    FROM course_task_types AS task_type
+                    WHERE task_type.id = node.course_task_type_id
+                      AND node.status = 30
+                      AND node.required_capability IS NULL
+                      AND node.node_code IN (
                           'TEACHER_BEHAVIOR_ANALYSIS',
                           'STUDENT_BEHAVIOR_ANALYSIS'
                       )
+                      AND task_type.status IN (10, 20, 30, 40, 50)
                     """
                 )
             ).rowcount
@@ -861,12 +882,15 @@ class CourseRepository:
             updated = connection.execute(
                 text(
                     """
-                    UPDATE task_nodes
+                    UPDATE task_nodes AS node
                     SET status = 30,
                         reason = :reason,
                         updated_at = now()
-                    WHERE status = 10
-                      AND required_capability = :capability
+                    FROM course_task_types AS task_type
+                    WHERE task_type.id = node.course_task_type_id
+                      AND node.status = 10
+                      AND node.required_capability = :capability
+                      AND task_type.status IN (10, 20, 30, 40, 50)
                     """
                 ),
                 {
@@ -881,13 +905,16 @@ class CourseRepository:
             updated = connection.execute(
                 text(
                     """
-                    UPDATE task_nodes
+                    UPDATE task_nodes AS node
                     SET status = 10,
                         reason = '算子容量已恢复，等待调度',
                         ready_at = now(),
                         updated_at = now()
-                    WHERE status = 30
-                      AND required_capability = :capability
+                    FROM course_task_types AS task_type
+                    WHERE task_type.id = node.course_task_type_id
+                      AND node.status = 30
+                      AND node.required_capability = :capability
+                      AND task_type.status IN (10, 20, 30, 40, 50)
                     """
                 ),
                 {"capability": capability},

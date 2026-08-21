@@ -79,7 +79,6 @@ def _assert_clean_clone(expected_sha: str) -> dict[str, Any]:
     required_profiles = {
         "facerec/config.example.toml",
         "ocr/config.toml.example",
-        "text_analysis/config.example.toml",
     }
     tracked_paths = set(tracked.splitlines())
     missing = sorted(required_profiles - tracked_paths)
@@ -134,6 +133,11 @@ def _commands() -> tuple[tuple[Path, tuple[str, ...], float], ...]:
                 "vision_orchestrator_service/app",
                 "online_gateway_service/app",
             ),
+            300,
+        ),
+        (
+            PLATFORM_ROOT,
+            (python, "scripts/verify_retired_text_analysis_exclusion.py"),
             300,
         ),
     )
@@ -273,7 +277,7 @@ def run_gate(*, release_root: Path, expected_sha: str) -> dict[str, Any]:
             "machine": platform.machine(),
         },
         "layers": {
-            "static": {"status": "通过", "command_indexes": [6]},
+            "static": {"status": "通过", "command_indexes": [6, 7]},
             "unit": {"status": "通过", "command_indexes": [0, 1, 2, 3, 4, 5]},
             "postgres_redis_integration": {
                 "status": "通过",
@@ -289,7 +293,7 @@ def run_gate(*, release_root: Path, expected_sha: str) -> dict[str, Any]:
             },
             "operator_contract": {
                 "status": "等待同 release 证据",
-                "required_evidence": "24 实例注册与八算子 Smoke",
+                "required_evidence": "21 实例注册与七算子 Smoke",
             },
         },
         "commands": command_results,

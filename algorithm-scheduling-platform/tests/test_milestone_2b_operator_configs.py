@@ -13,7 +13,6 @@ CONFIGS = {
     "facerec.gpu.toml": "facerec/config.example.toml",
     "screen_det.gpu.toml": "screen_det/config.toml",
     "ppt_slice.cpu.toml": "ppt_slice/config.toml",
-    "text_analysis.cpu.toml": "text_analysis/config.example.toml",
 }
 
 
@@ -107,11 +106,3 @@ def test_server_configs_keep_required_external_dependencies_and_paths() -> None:
     assert ppt_slice["paths"]["result_root"] == "/data/result"
     assert "max_concurrent_tasks" not in ppt_slice["task"]
     assert ppt_slice["platform"]["max_concurrent_requests"] == 10
-    source_text_analysis = _load(WORKSPACE_ROOT / "text_analysis/config.example.toml")
-    text_analysis = _load(CONFIG_ROOT / "text_analysis.cpu.toml")
-    assert source_text_analysis["api_key"] == ""
-    assert source_text_analysis["mt_api_key"] == ""
-    assert source_text_analysis["base_url"].startswith("http://127.0.0.1:")
-    assert source_text_analysis["mt_base_url"].startswith("http://127.0.0.1:")
-    assert text_analysis["base_url"].startswith(("http://", "https://"))
-    assert text_analysis["model"]

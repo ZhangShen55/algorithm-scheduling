@@ -184,10 +184,7 @@ EXPECTED_OPERATOR_PORTS = {
             "tcp",
             "127.0.0.1",
         )
-        for operator, target, suffix in (
-            ("ppt-slice", 9001, 9001),
-            ("text-analysis", 8000, 8000),
-        )
+        for operator, target, suffix in (("ppt-slice", 9001, 9001),)
         for index in range(3)
     },
 }
@@ -310,7 +307,7 @@ def _operator_compose_config() -> dict[str, Any]:
         ("facerec", 8000),
         ("screen-det", 8880),
     )
-    cpu_operators = (("ppt-slice", 9001, 10), ("text-analysis", 8000, 256))
+    cpu_operators = (("ppt-slice", 9001, 10),)
     for operator, target in gpu_operators:
         for gpu in range(3):
             instance_id = f"{operator}-gpu{gpu}"
@@ -479,16 +476,10 @@ def _registered_operator_instances() -> list[dict[str, Any]]:
         "facerec": ("facerec", ["recognize"], 8000, 128),
         "screen-det": ("screen_det", ["detect_all"], 8880, 128),
         "ppt-slice": ("ppt_slice", ["ppt_slice"], 9001, 10),
-        "text-analysis": (
-            "text_analysis",
-            ["course_overviews", "extract_keywords"],
-            8000,
-            256,
-        ),
     }
     instances: list[dict[str, Any]] = []
     for prefix, (code, capabilities, port, capacity) in contracts.items():
-        kind = "cpu" if prefix in {"ppt-slice", "text-analysis"} else "gpu"
+        kind = "cpu" if prefix == "ppt-slice" else "gpu"
         for index in range(3):
             instance_id = f"{prefix}-{kind}{index}"
             instances.append(
@@ -1480,7 +1471,7 @@ def test_preflight_rejects_any_gpu_count_other_than_three(
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
-        ("missing-service", "24"),
+        ("missing-service", "21"),
         ("mismatched-instance-id", "instance ID"),
         ("gpu-profile", "GPU"),
         ("gpu-environment", "GPU"),
@@ -1981,6 +1972,11 @@ def test_preflight_fails_closed_when_the_host_socket_parser_exits_nonzero(
     shutil.copy2(
         SCRIPTS / "deployment_contracts.py",
         scripts / "deployment_contracts.py",
+    )
+    shutil.copy2(SCRIPTS / "operator_topology.py", scripts / "operator_topology.py")
+    shutil.copy2(
+        PLATFORM_ROOT / "deploy/operator-topology.json",
+        project_root / "deploy/operator-topology.json",
     )
     shutil.copy2(
         PLATFORM_ROOT / "deploy/docker-compose.operators.yml",
@@ -2744,15 +2740,15 @@ def test_preflight_operators_full_checks_running_topology_and_registration(
     commands = _commands(environment)
     ps_command = next(command for command in commands if "ps" in command)
     assert "--no-trunc" in ps_command
-    assert len(ps_command[ps_command.index("-q") + 1 :]) == 24
+    assert len(ps_command[ps_command.index("-q") + 1 :]) == 21
     inspect_command = next(command for command in commands if command[1] == "inspect")
-    assert len(inspect_command[2:]) == 24
+    assert len(inspect_command[2:]) == 21
     image_command = next(
         command for command in commands if command[1:3] == ["image", "inspect"]
     )
-    assert len(image_command[3:]) == 8
+    assert len(image_command[3:]) == 7
     exec_commands = [command for command in commands if command[1:2] == ["exec"]]
-    assert len(exec_commands) == 24
+    assert len(exec_commands) == 21
     assert {command[2] for command in exec_commands} == set(
         _operator_runtime_fixtures()[0].values()
     )
@@ -2852,7 +2848,7 @@ def test_preflight_operators_profile_checks_only_selected_running_containers(
     }
 
 
-def test_preflight_operators_cpu_profile_verifies_all_six_instances_and_two_images(
+def test_preflight_operators_cpu_profile_verifies_three_instances_and_one_image(
     fake_bin: Path, tmp_path: Path, readiness_server: Any
 ) -> None:
     base_url, state = readiness_server
@@ -2873,11 +2869,11 @@ def test_preflight_operators_cpu_profile_verifies_all_six_instances_and_two_imag
     assert completed.returncode == 0, completed.stderr
     commands = _commands(environment)
     ps_command = next(command for command in commands if "ps" in command)
-    assert len(ps_command[ps_command.index("-q") + 1 :]) == 6
+    assert len(ps_command[ps_command.index("-q") + 1 :]) == 3
     image_command = next(
         command for command in commands if command[1:3] == ["image", "inspect"]
     )
-    assert len(image_command[3:]) == 2
+    assert len(image_command[3:]) == 1
 
 
 def test_preflight_operators_ignores_wrong_revision_on_unselected_profile(

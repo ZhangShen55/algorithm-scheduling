@@ -74,31 +74,6 @@ class OcrAdapter:
         }
 
 
-class KeywordAdapter:
-    def __init__(self, http_client: httpx.AsyncClient) -> None:
-        self._http = http_client
-
-    async def extract(
-        self,
-        instance_url: str,
-        *,
-        ppt_image_id: str,
-        text: str,
-    ) -> dict[str, Any]:
-        response = await self._http.post(
-            f"{instance_url.rstrip('/')}/v1/extract_keywords",
-            json={"text": text},
-        )
-        response.raise_for_status()
-        body = response.json()
-        if not isinstance(body, dict) or "result" not in body:
-            raise PptTextAdapterError("关键词响应缺少 result")
-        return {
-            "ppt_image_id": ppt_image_id,
-            "keyword_response": body,
-        }
-
-
 class PptTextRepository(Protocol):
     def create_node_work_items(
         self,
@@ -139,16 +114,6 @@ class OcrClient(Protocol):
     ) -> dict[str, Any]: ...
 
 
-class KeywordClient(Protocol):
-    async def extract(
-        self,
-        instance_url: str,
-        *,
-        ppt_image_id: str,
-        text: str,
-    ) -> dict[str, Any]: ...
-
-
 class PptLeaseClient(Protocol):
     async def acquire(
         self,
@@ -176,25 +141,21 @@ class PptTextPipeline:
         repository: PptTextRepository,
         lease_client: PptLeaseClient,
         ocr_adapter: OcrClient,
-        keyword_adapter: KeywordClient,
         limits: PptWorkLimits,
         *,
         lease_ttl_seconds: int = 60,
         ocr_hard_timeout_seconds: float = 600.0,
-        keyword_hard_timeout_seconds: float = 600.0,
     ) -> None:
         self._repository = repository
         self._lease_client = lease_client
         self._ocr_adapter = ocr_adapter
-        self._keyword_adapter = keyword_adapter
         self._limits = limits
         if lease_ttl_seconds <= 0:
             raise ValueError("PPT 工作项租约时长必须大于 0")
-        if ocr_hard_timeout_seconds <= 0 or keyword_hard_timeout_seconds <= 0:
+        if ocr_hard_timeout_seconds <= 0:
             raise ValueError("PPT 工作项 HTTP 硬超时必须大于 0")
         self._lease_ttl_seconds = lease_ttl_seconds
         self._ocr_hard_timeout_seconds = ocr_hard_timeout_seconds
-        self._keyword_hard_timeout_seconds = keyword_hard_timeout_seconds
 
     async def run_ocr(
         self,
@@ -251,74 +212,6 @@ class PptTextPipeline:
         }
         if complete_node:
             await self._complete_node(node_id, results, reason="PPT 图片 OCR 全部完成")
-        return results
-
-    async def run_keywords(
-        self,
-        *,
-        task_id: str,
-        node_id: int,
-        work: Iterable[PptImageWork],
-        ocr_results: dict[str, dict[str, Any]],
-        trace_id: str | None = None,
-        complete_node: bool = True,
-    ) -> dict[str, dict[str, Any]]:
-        work_items = list(work)
-        pending_work, retained_results = await self._prepare_work_items(
-            node_id,
-            work_items,
-        )
-
-        async def extract(item: PptImageWork) -> dict[str, Any]:
-            ocr_result = ocr_results.get(item.ppt_image_id)
-            if ocr_result is None:
-                raise PptTextAdapterError(f"缺少 PPT 图片 OCR 结果: {item.ppt_image_id}")
-            text_value = ocr_result.get("text")
-            if not isinstance(text_value, str):
-                raise PptTextAdapterError(f"PPT 图片 OCR 文本格式错误: {item.ppt_image_id}")
-            lease = await self._lease_client.acquire(
-                "extract_keywords",
-                ttl_seconds=self._lease_ttl_seconds,
-                work_context=self._work_context(
-                    task_id=task_id,
-                    node_id=node_id,
-                    item=item,
-                    work_type="ppt_keyword_item",
-                    trace_id=trace_id,
-                ),
-            )
-            try:
-                result = await self._lease_client.run_with_renewal(
-                    lease,
-                    self._keyword_adapter.extract(
-                        lease.service_url,
-                        ppt_image_id=item.ppt_image_id,
-                        text=text_value,
-                    ),
-                    ttl_seconds=self._lease_ttl_seconds,
-                    hard_timeout_seconds=self._keyword_hard_timeout_seconds,
-                )
-                await asyncio.to_thread(
-                    self._repository.complete_node_work_item,
-                    node_id,
-                    item.ppt_image_id,
-                    result,
-                    reason="单张 PPT 图片关键词提取完成",
-                )
-                return result
-            finally:
-                await self._lease_client.release(lease.lease_id)
-
-        completed = await run_bounded_work(pending_work, self._limits, extract)
-        results = dict(retained_results)
-        results.update({str(item["ppt_image_id"]): item for item in completed})
-        results = {
-            item.ppt_image_id: results[item.ppt_image_id]
-            for item in work_items
-            if item.ppt_image_id in results
-        }
-        if complete_node:
-            await self._complete_node(node_id, results, reason="PPT 关键词全部提取完成")
         return results
 
     async def _prepare_work_items(

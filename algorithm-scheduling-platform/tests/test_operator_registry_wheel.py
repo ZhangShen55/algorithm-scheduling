@@ -157,7 +157,7 @@ def test_registry_client_real_pip_build_is_validated_and_staged(tmp_path: Path) 
 
     assert result.dist_path == dist_dir / EXPECTED_WHEEL_NAME
     assert result.sha256 == hashlib.sha256(result.dist_path.read_bytes()).hexdigest()
-    assert len(result.staged_paths) == 8
+    assert len(result.staged_paths) == 7
     assert {path.read_bytes() for path in result.staged_paths} == {
         result.dist_path.read_bytes()
     }

@@ -677,7 +677,7 @@ async def _run_selected_case(
             / f"{authority_case_id}.json"
         )
         document: dict[str, Any] = {
-            "schema_version": 2,
+            "schema_version": 3,
             "evidence_type": f"{authority_category}_case",
             "case_id": authority_case_id,
             "status": outcome.status,

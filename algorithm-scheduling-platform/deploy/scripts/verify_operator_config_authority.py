@@ -14,6 +14,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .operator_topology import CURRENT_TOPOLOGY
+
 GIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 PROCESS_TIMEOUT_SECONDS = 30
 CONTROL_SERVICE_URL = "http://control-service:18100"
@@ -36,41 +38,16 @@ class OperatorProfile:
     deploy_require_gpu: bool
 
 
-OPERATOR_PROFILES = (
+OPERATOR_PROFILES = tuple(
     OperatorProfile(
-        "asr_offline", "asr_offline", "config.toml", "asr_offline.gpu.toml", 4, True
-    ),
-    OperatorProfile(
-        "asr_online", "asr_online", "config.toml", "asr_online.gpu.toml", 10, True
-    ),
-    OperatorProfile(
-        "facerec",
-        "facerec",
-        "config.example.toml",
-        "facerec.gpu.toml",
-        128,
-        True,
-    ),
-    OperatorProfile(
-        "ocr", "ocr", "config.toml.example", "ocr.gpu.toml", 256, True
-    ),
-    OperatorProfile(
-        "screen_det", "screen_det", "config.toml", "screen_det.gpu.toml", 128, True
-    ),
-    OperatorProfile(
-        "ppt_slice", "ppt_slice", "config.toml", "ppt_slice.cpu.toml", 10, False
-    ),
-    OperatorProfile(
-        "vbas", "vbas", "config.toml", "vbas.gpu.toml", 128, True
-    ),
-    OperatorProfile(
-        "text_analysis",
-        "text_analysis",
-        "config.example.toml",
-        "text_analysis.cpu.toml",
-        256,
-        False,
-    ),
+        entry.operator_code,
+        entry.project_directory,
+        entry.local_config_name,
+        entry.deploy_config_name,
+        entry.declared_capacity,
+        entry.device_kind == "gpu",
+    )
+    for entry in CURRENT_TOPOLOGY.operators
 )
 
 
@@ -131,7 +108,6 @@ def load_actual_operator_settings(operator_code, config_path, default_capacity):
         "asr_online",
         "facerec",
         "ppt_slice",
-        "text_analysis",
     }:
         module = importlib.import_module("app.core.config")
         deployment = module.operator_deployment
@@ -528,7 +504,7 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     default_workspace = Path(__file__).resolve().parents[3]
     parser = argparse.ArgumentParser(
-        description="以独立进程验证八算子 TOML 配置权威和旧环境变量失效合同",
+        description="以独立进程验证七算子 TOML 配置权威和旧环境变量失效合同",
         allow_abbrev=False,
     )
     parser.add_argument("--workspace-root", type=Path, default=default_workspace)

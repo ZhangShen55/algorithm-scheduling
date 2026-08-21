@@ -1,3 +1,9 @@
+> **后续范围调整已废止（2026-08-21）**
+>
+> 本设计保留最初八算子、PPT 关键词和课程脑图架构的历史决策。当前范围以
+> `retire-text-analysis-from-scheduling-platform` 为准：`text_analysis/` 保留为非平台项目，
+> 新任务和新部署不得再创建、注册、租赁或调用相关能力。
+
 ## 背景
 
 当前工作区包含八个独立算法项目：`asr_online`、`asr_offline`、`facerec`、`ocr`、`screen_det`、`ppt_slice`、`vbas`、`text_analysis`。它们主要通过同步 HTTP 或 WebSocket 提供推理能力，以 Docker 单独部署；同一算法可能在不同 GPU 和端口运行多个实例。当前没有 Kubernetes，也没有统一的课程任务状态、依赖编排、容量路由和文件生命周期。

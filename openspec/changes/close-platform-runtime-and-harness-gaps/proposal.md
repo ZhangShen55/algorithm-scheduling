@@ -1,3 +1,8 @@
+> **后续范围调整已废止（2026-08-21）**
+>
+> 本文的 Text Analysis、PPT 关键词和课程脑图目标保留为旧基础闭环与历史规划。当前未完成范围
+> 已由 `retire-text-analysis-from-scheduling-platform` 收敛为七算子、PPT/OCR 和 ASR-only。
+
 ## 为什么
 
 `build-algorithm-scheduling-platform` 已实现大量独立组件并通过单元/数据库测试，但复审发现其 70/70 状态高估了可部署完成度：两个 Worker 入口尚未装配 Kafka 和执行循环，验收测试直接伪造节点完成，部分部署、清理、审计和指标能力也未进入真实运行路径。现在需要建立可重复的 Harness 证据链，并补齐从 A 提交到真实 Worker/算子替身/结果查询的运行闭环。

@@ -105,4 +105,4 @@ PY
     --host x86_64 --image-architecture "$inspected_architecture" || exit 1
 done < "$matrix"
 
-printf 'build-images: PASS: eight images built and inspected at %s\n' "$git_sha"
+printf 'build-images: PASS: seven images built and inspected at %s\n' "$git_sha"

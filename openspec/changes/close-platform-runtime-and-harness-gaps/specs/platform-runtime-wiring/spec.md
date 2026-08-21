@@ -1,3 +1,9 @@
+> **后续范围调整已废止（2026-08-21）**
+>
+> 本规格中 `PPT_KEYWORDS`、`COURSE_OVERVIEW` 与 Text Analysis 运行时目标不再属于当前平台；
+> PPT/OCR、ASR-only 及其他运行时合同继续有效，现行边界见
+> `retire-text-analysis-from-scheduling-platform`。
+
 ## ADDED Requirements
 
 ### Requirement: Control 只在事务内写入 Outbox

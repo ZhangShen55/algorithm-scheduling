@@ -71,7 +71,7 @@ def test_standalone_stub_records_complete_calls_and_returns_structured_result() 
             json={
                 "task_id": "course-002",
                 "task_type": "ASR",
-                "node_code": "COURSE_OVERVIEW",
+                "node_code": "ASR_TRANSCRIPTION",
                 "request_payload": {"teacher_video_path": "http://media/teacher.mp4"},
                 "effective_params": {"showEmotion": True},
             },
@@ -79,13 +79,13 @@ def test_standalone_stub_records_complete_calls_and_returns_structured_result() 
         calls = client.get("/ops/calls")
 
     assert response.status_code == 200
-    assert response.json()["result"]["node_code"] == "COURSE_OVERVIEW"
+    assert response.json()["result"]["node_code"] == "ASR_TRANSCRIPTION"
     assert response.json()["effective_params"] == {"showEmotion": True}
     assert calls.json() == [
         {
             "task_id": "course-002",
             "task_type": "ASR",
-            "node_code": "COURSE_OVERVIEW",
+            "node_code": "ASR_TRANSCRIPTION",
             "request_payload": {"teacher_video_path": "http://media/teacher.mp4"},
             "effective_params": {"showEmotion": True},
         }

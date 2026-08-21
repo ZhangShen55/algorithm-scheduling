@@ -51,7 +51,7 @@ def test_all_previously_missing_campaign_runners_resolve() -> None:
         if case.phase in {"offline", "vision", "online"}
         or case.case_id in {f"LOAD-{number:03d}" for number in range(1, 10)}
     ]
-    assert len(selected) == 150
+    assert len(selected) == 141
     for case in selected:
         runner = resolve_runner(case.runner)
         assert callable(runner.run), case.runner

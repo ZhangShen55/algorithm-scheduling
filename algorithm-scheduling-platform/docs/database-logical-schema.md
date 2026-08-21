@@ -13,6 +13,11 @@ Redis 只保存带 TTL 的算子心跳、实时容量和租约，不作为任务
 所有时间字段使用带时区时间 `timestamptz`，统一保存 UTC；所有可变业务响应使用 JSONB，
 但可调度字段、状态、优先级、时间和幂等键必须使用普通列，避免把调度查询隐藏在 JSONB 中。
 
+当前新任务只创建 `PPT_SLICE -> PPT_OCR` 和 `ASR_TRANSCRIPTION`，视觉任务边界保持不变。
+历史 `PPT_KEYWORDS`、`COURSE_OVERVIEW` 节点、结果及 `operator_code=text_analysis` 审计行继续
+作为字符串事实可查询；它们不进入当前注册、路由和新 DAG，也不得通过删除或改写历史数据来
+完成范围切换。
+
 ## 2. 实体关系
 
 ```mermaid
@@ -149,8 +154,8 @@ erDiagram
 
 与节点一对零或一，隔离调度热行和可能很大的算法结果。
 
-- `result`：OCR、关键词、完整 ASR v1.1.8、完整课程脑图、行为区间、人数统计等结构化
-  JSONB 数据。
+- `result`：当前保存 OCR、完整 ASR v1.1.8、行为区间、人数统计等结构化 JSONB 数据；
+  历史行可能包含关键词和完整课程脑图结果，查询层须兼容读取。
 - `artifact_path`、`artifact_count`：只表达确实存在于共享文件系统的文件，也就是响应中的
   `path/count`；PPT 切片和精选视觉证据可以使用，OCR 等结构化结果不得伪装为文件。
 - `progress`：保存 `completed_count`、`total_count` 等可查询进度。
@@ -159,7 +164,7 @@ erDiagram
 
 ### 3.5 `node_work_items`
 
-保存动态子项，例如每张 PPT 切片的 OCR 与关键词工作。
+当前保存每张 PPT 切片的 OCR 动态子项。历史关键词工作项仍保留并可查询，但新任务不得创建。
 
 - `(task_node_id, item_key)` 唯一，其中 `item_key` 使用稳定的 `ppt_image_id`。
 - `status`、`reason`、`result` 允许单项完成可见和部分进度聚合。
@@ -180,8 +185,9 @@ erDiagram
 保存实例的声明信息和最后已知审计快照，不承担实时容量判断。
 
 - `instance_id` 对应一个独立端点/进程/端口/GPU。
-- `operator_code` 使用 `asr_offline`、`asr_online`、`ppt_slice`、`ocr`、
-  `text_analysis`、`vbas`、`facerec`、`screen_det` 等平台代码。
+- 当前可注册的 `operator_code` 使用 `asr_offline`、`asr_online`、`ppt_slice`、`ocr`、
+  `vbas`、`facerec`、`screen_det`。历史审计行中的 `text_analysis` 允许原样读取，但不是当前
+  注册代码。
 - `capabilities`、`service_url`、模型/API 版本、`declared_capacity`、`labels` 保存注册声明。
 - `desired_state` 保存 `ONLINE`、`DRAINING`、`OFFLINE` 运维意图。
 - `last_registered_at`、`last_heartbeat_at`、`unregistered_at` 仅用于审计显示。
@@ -239,12 +245,19 @@ erDiagram
 | `0002_scheduling_indexes.sql` | Outbox 并发领取字段和调度热路径索引 |
 | `0003_node_dependencies.sql` | DAG 节点直接依赖表和反向查询索引 |
 | `0004_schema_comments.sql` | 10 张调度表及全部物理字段的 PostgreSQL 中文注释 |
+| `0005_operator_audit_and_status_comments.sql` | 算子实例事件历史查询索引，以及任务类型、节点和子项的统一整数状态注释 |
+| `0006_course_task_type_submission.sql` | 任务类型提交批次 `submission_id` 字段、历史数据回填及中文注释 |
+| `0007_retire_text_analysis_comments.sql` | Text Analysis 退役后的结果、子项和算子实例历史兼容边界注释 |
 
 表和字段说明直接写入 PostgreSQL catalog，运维人员可以通过 `obj_description`、
 `col_description` 或数据库客户端查看。新增字段必须通过新的前向迁移同时补充字段注释，不能仅修改
 已经在环境中执行过的迁移。
 
+Text Analysis 退役没有回改已经执行过的历史迁移。`0007_retire_text_analysis_comments.sql`
+已通过新的前向迁移更新 `node_results`、`node_work_items` 和 `operator_instances` 的中文注释，
+明确当前数据用途与历史兼容边界；该迁移只更新 catalog 注释，不删除历史行。
+
 2026-08-07 对本机 PostgreSQL 容器做了只读审计：`algorithm` 业务库没有用户表；
 `algorithm_migration_test` 有 9 张调度测试表；`algorithm_repository_test` 有全部 10 张调度测试表。
 未发现非调度业务表，也未删除、改名或修改任何现有表和数据。正式业务库后续应通过迁移工具执行
-`0001-0004`，测试库只作为测试证据保留。
+`0001-0007`，测试库只作为测试证据保留。

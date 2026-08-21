@@ -725,9 +725,7 @@ def _services(
     ]
 ]:
     suffix = uuid4().hex
-    control_port, orchestrator_port, asr_stub_port, text_stub_port = (
-        _free_port() for _ in range(4)
-    )
+    control_port, orchestrator_port, asr_stub_port = (_free_port() for _ in range(3))
     redis_prefix = f"milestone-2a:{suffix}:"
     topic = f"algorithm.test.milestone2a.runtime.{suffix}"
     visual_command_topic = f"{topic}.visual.commands"
@@ -750,14 +748,6 @@ def _services(
             "capabilities": ["asr_offline"],
             "service_url": f"http://127.0.0.1:{asr_stub_port}",
             "model_version": "asr-offline-stub-v1",
-            "api_version": "v1",
-        },
-        "course_overviews": {
-            "instance_id": f"text_analysis-{suffix[:8]}",
-            "operator_code": "text_analysis",
-            "capabilities": ["course_overviews"],
-            "service_url": f"http://127.0.0.1:{text_stub_port}",
-            "model_version": "text-analysis-stub-v1",
             "api_version": "v1",
         },
     }
@@ -783,7 +773,7 @@ def _services(
     stubs = {
         operator_code: UvicornProcess(
             "tests.stubs.operator_stub:app",
-            asr_stub_port if operator_code == "asr_offline" else text_stub_port,
+            asr_stub_port,
             {
                 "MILESTONE_2A_STUB_DELAY_SECONDS": "0.25",
                 "MILESTONE_2A_STUB_INSTANCE_ID": stub_metadata["instance_id"],
@@ -1081,7 +1071,7 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
                 .mappings()
                 .one()
             )
-        assert counts == {"task_type_count": 2, "node_count": 4}
+        assert counts == {"task_type_count": 2, "node_count": 2}
         evidence["idempotency_counts"] = counts
 
         for _capability, stub_metadata in metadata["operator_stubs"].items():
@@ -1150,7 +1140,7 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
                 lambda payloads: all(
                     _task(payload)["status"] == 60
                     and [node["status"] for node in _task(payload)["nodes"]]
-                    == [60, 60]
+                    == [60]
                     for payload in payloads.values()
                 ),
                 timeout_seconds=30,
@@ -1164,10 +1154,7 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
         )
 
         selected_instances = evidence["selected_instances"]
-        assert {item["capability"] for item in selected_instances} == {
-            "asr_offline",
-            "course_overviews",
-        }
+        assert {item["capability"] for item in selected_instances} == {"asr_offline"}
         assert {
             (item["capability"], item["instance_id"])
             for item in selected_instances
@@ -1197,20 +1184,14 @@ def test_real_milestone_2a_runtime_closes_and_recovers(
             for operator_calls in calls_by_operator.values()
             for call in operator_calls
         ]
-        assert len(calls) == 4
+        assert len(calls) == 2
         asr_calls = [call for call in calls if call["node_code"] == "ASR_TRANSCRIPTION"]
         assert len(asr_calls) == 2
         assert all(call["request_size"] > 0 for call in asr_calls)
-        assert {call["node_code"] for call in calls} == {
-            "ASR_TRANSCRIPTION",
-            "COURSE_OVERVIEW",
-        }
+        assert {call["node_code"] for call in calls} == {"ASR_TRANSCRIPTION"}
         assert {
             call["node_code"] for call in calls_by_operator["asr_offline"]
         } == {"ASR_TRANSCRIPTION"}
-        assert {
-            call["node_code"] for call in calls_by_operator["course_overviews"]
-        } == {"COURSE_OVERVIEW"}
         assert all(
             node["result"] is not None
             for payload in completed_payloads.values()

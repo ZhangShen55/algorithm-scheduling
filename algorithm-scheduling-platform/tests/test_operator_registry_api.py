@@ -16,6 +16,7 @@ from packages.platform_common.operator_registry import (
     CapacityUnavailableError,
     LeaseContextStatus,
     OperatorActiveLeases,
+    OperatorCode,
     OperatorInstance,
     OperatorInstanceNotFoundError,
     WorkContext,
@@ -410,6 +411,50 @@ def test_legacy_operator_code_is_rejected(tmp_path: Path) -> None:
 
     assert response.status_code == 422
     assert registry.instances == {}
+
+
+def test_retired_text_analysis_operator_code_is_rejected_and_absent_from_openapi(
+    tmp_path: Path,
+) -> None:
+    registry = FakeOperatorRegistry()
+    settings = PlatformSettings(
+        course_root=tmp_path / "course",
+        result_root=tmp_path / "result",
+        operator_registry_token=REGISTRY_TOKEN,
+        trusted_operator_service_urls={
+            "text-analysis-cpu0": "http://text-analysis-cpu0:8000",
+        },
+    )
+    app = create_control_app(operator_registry=registry, settings=settings)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/operator-instances/register",
+            headers=REGISTRY_HEADERS,
+            json={
+                "instance_id": "text-analysis-cpu0",
+                "operator_code": "text_analysis",
+                "capabilities": ["extract_keywords", "course_overviews"],
+                "service_url": "http://text-analysis-cpu0:8000",
+                "declared_capacity": 1,
+            },
+        )
+        openapi = client.get("/openapi.json").json()
+
+    assert response.status_code == 422
+    assert registry.instances == {}
+    assert "text_analysis" not in openapi["components"]["schemas"]["OperatorCode"][
+        "enum"
+    ]
+    assert {code.value for code in OperatorCode} == {
+        "asr_offline",
+        "asr_online",
+        "ppt_slice",
+        "ocr",
+        "vbas",
+        "facerec",
+        "screen_det",
+    }
 
 
 def test_unknown_heartbeat_returns_http_404(tmp_path: Path) -> None:

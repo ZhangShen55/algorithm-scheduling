@@ -2,15 +2,12 @@
 
 from .asr import OfflineAsrAdapter
 from .audio import FFmpegAudioExtractor
-from .course_overview import CourseOverviewAdapter
 from .ppt_slice import PptSliceAdapter
-from .ppt_text import KeywordAdapter, OcrAdapter
+from .ppt_text import OcrAdapter
 
 __all__ = [
-    "CourseOverviewAdapter",
     "FFmpegAudioExtractor",
-    "KeywordAdapter",
-    "OfflineAsrAdapter",
     "OcrAdapter",
+    "OfflineAsrAdapter",
     "PptSliceAdapter",
 ]

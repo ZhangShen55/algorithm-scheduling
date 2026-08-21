@@ -42,12 +42,6 @@
       "operator_code": "ppt_slice",
       "fixtures": ["ppt_video"],
       "checks": ["accepted_50", "terminal_callback_60", "manifest"]
-    },
-    {
-      "case_id": "INF-TEXT-ANALYSIS",
-      "operator_code": "text_analysis",
-      "fixtures": [],
-      "checks": ["extract_keywords", "course_overviews"]
     }
   ]
 }

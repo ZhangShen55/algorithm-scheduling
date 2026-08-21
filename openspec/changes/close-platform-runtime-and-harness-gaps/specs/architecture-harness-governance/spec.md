@@ -1,3 +1,8 @@
+> **后续范围调整说明（2026-08-21）**
+>
+> 历史 Harness 数量和旧 release 保持不可变；当前七算子目录与 Text Analysis 退役边界见
+> `retire-text-analysis-from-scheduling-platform`，不得用旧八算子证据满足新范围。
+
 ## ADDED Requirements
 
 ### Requirement: 平台具有明确范围的持久化 Agent 指令

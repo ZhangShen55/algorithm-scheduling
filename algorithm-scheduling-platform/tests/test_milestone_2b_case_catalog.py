@@ -15,7 +15,7 @@ LOADER_PATH = PLATFORM_ROOT / "scripts/milestone_2b_case_catalog.py"
 CATALOG_PATH = PLATFORM_ROOT / "deploy/milestone-2b-case-catalog.yaml"
 
 EXPECTED_PREFIX_COUNTS = {
-    "DEP": 20,
+    "DEP": 19,
     "GPU": 20,
     "REG": 20,
     "INF": 16,
@@ -23,11 +23,11 @@ EXPECTED_PREFIX_COUNTS = {
     "FILE": 16,
     "PPT": 15,
     "OCR": 5,
-    "KEY": 5,
-    "ASR": 18,
+    "ASR": 14,
     "VIS": 28,
     "ONL": 20,
     "FACE": 14,
+    "RET": 10,
     "LOAD": 26,
 }
 

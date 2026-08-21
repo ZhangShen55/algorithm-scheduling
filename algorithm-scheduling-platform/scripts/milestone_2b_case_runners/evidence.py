@@ -63,7 +63,7 @@ def publish_case_evidence(
         release_root=context.release_root,
         relative_path=relative_path,
         document={
-            "schema_version": 2,
+            "schema_version": 3,
             "evidence_type": "case_evidence",
             "case_id": case_id,
             "release_tag": release_tag,

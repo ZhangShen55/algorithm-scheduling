@@ -37,7 +37,6 @@ from .asr import OfflineAsrAdapter
 from .audio import FFmpegAudioExtractor
 from .contract_stub import ContractStubAdapter
 from .control_client import ControlLeaseClient
-from .course_overview import CourseOverviewAdapter
 from .node_execution import NodeExecutionRouter
 from .ppt_runtime import PptRuntimeCoordinator
 from .ppt_slice import (
@@ -45,7 +44,7 @@ from .ppt_slice import (
     PptSliceManifestValidator,
     PptSliceTerminalHandler,
 )
-from .ppt_text import KeywordAdapter, OcrAdapter, PptTextPipeline
+from .ppt_text import OcrAdapter, PptTextPipeline
 
 
 class CourseConsumer(Protocol):
@@ -157,8 +156,8 @@ class OrchestratorRuntime:
             timeout=httpx.Timeout(
                 max(
                     settings.asr.request_timeout_seconds,
-                    settings.text_analysis.request_timeout_seconds,
                     settings.ppt.processing_timeout_seconds,
+                    settings.ppt.ocr_request_timeout_seconds,
                 )
             )
         )
@@ -262,27 +261,12 @@ class OrchestratorRuntime:
             repository,
             lease_client,
             OcrAdapter(operator_http_client),
-            KeywordAdapter(operator_http_client),
             PptWorkLimits(
                 batch_size=self.settings.ppt.ocr_batch_size,
                 max_concurrency=self.settings.ppt.ocr_max_concurrency,
             ),
             lease_ttl_seconds=self.settings.control.default_lease_ttl_seconds,
             ocr_hard_timeout_seconds=self.settings.ppt.ocr_request_timeout_seconds,
-            keyword_hard_timeout_seconds=self.settings.text_analysis.request_timeout_seconds,
-        )
-        keyword_pipeline = PptTextPipeline(
-            repository,
-            lease_client,
-            OcrAdapter(operator_http_client),
-            KeywordAdapter(operator_http_client),
-            PptWorkLimits(
-                batch_size=self.settings.ppt.keyword_batch_size,
-                max_concurrency=self.settings.ppt.keyword_max_concurrency,
-            ),
-            lease_ttl_seconds=self.settings.control.default_lease_ttl_seconds,
-            ocr_hard_timeout_seconds=self.settings.ppt.ocr_request_timeout_seconds,
-            keyword_hard_timeout_seconds=self.settings.text_analysis.request_timeout_seconds,
         )
         terminal_handler = PptSliceTerminalHandler(
             repository=repository,
@@ -304,14 +288,12 @@ class OrchestratorRuntime:
         adapter = NodeExecutionRouter(
             repository,
             ocr_pipeline=ocr_pipeline,
-            keyword_pipeline=keyword_pipeline,
             fallback=ContractStubAdapter(operator_http_client),
             media_downloader=media_downloader,
             audio_extractor=FFmpegAudioExtractor(
                 course_root=self.settings.storage.course_root,
             ),
             asr_adapter=OfflineAsrAdapter(operator_http_client),
-            course_overview_adapter=CourseOverviewAdapter(operator_http_client),
             ppt_slice_adapter=PptSliceAdapter(operator_http_client),
             ppt_callback_base_url=self.settings.ppt.callback_base_url,
             ppt_terminal_callback_path=self.settings.ppt.terminal_callback_path,
@@ -325,8 +307,8 @@ class OrchestratorRuntime:
             concurrency=self.settings.worker.node_concurrency,
             operator_hard_timeout_seconds=max(
                 self.settings.asr.request_timeout_seconds,
-                self.settings.text_analysis.request_timeout_seconds,
                 self.settings.ppt.processing_timeout_seconds,
+                self.settings.ppt.ocr_request_timeout_seconds,
             ),
             async_node_coordinator=ppt_coordinator,
         )

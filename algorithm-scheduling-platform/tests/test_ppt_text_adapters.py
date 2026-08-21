@@ -4,7 +4,7 @@ from pathlib import Path
 import httpx
 import pytest
 from orchestrator_service.app.domain.ppt_work import PptImageWork
-from orchestrator_service.app.infrastructure.ppt_text import KeywordAdapter, OcrAdapter
+from orchestrator_service.app.infrastructure.ppt_text import OcrAdapter
 
 
 @pytest.mark.asyncio
@@ -39,32 +39,3 @@ async def test_ocr_adapter_preserves_real_ocr_contract(tmp_path: Path) -> None:
     assert result["ppt_image_id"] == "ppt-001"
     assert result["text"] == "第一章"
     assert result["ocr_response"]["err_no"] == 0
-
-
-@pytest.mark.asyncio
-async def test_keyword_adapter_uses_v1_text_endpoint_and_preserves_response() -> None:
-    captured: dict[str, object] = {}
-    response_body = {
-        "model": "qwen",
-        "id": "chatcmpl-001",
-        "result": {"keywords": ["函数", "映射"]},
-        "usage": {"prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13},
-    }
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured["path"] = request.url.path
-        captured["body"] = json.loads(request.content)
-        return httpx.Response(200, json=response_body)
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        result = await KeywordAdapter(client).extract(
-            "http://text-analysis:8000",
-            ppt_image_id="ppt-001",
-            text="第一章 函数与映射",
-        )
-
-    assert captured == {
-        "path": "/v1/extract_keywords",
-        "body": {"text": "第一章 函数与映射"},
-    }
-    assert result == {"ppt_image_id": "ppt-001", "keyword_response": response_body}

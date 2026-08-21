@@ -6,8 +6,11 @@ from threading import Barrier, Event
 from uuid import uuid4
 
 import pytest
+from control_service.app.api.control import create_control_app
+from fastapi.testclient import TestClient
 from redis import Redis
 
+from packages.platform_common.config import PlatformSettings
 from packages.platform_common.operator_registry import (
     CapacityLeaseContextConflictError,
     CapacityLeaseNotFoundError,
@@ -23,6 +26,7 @@ from packages.platform_common.redis_operator_registry import RedisOperatorRegist
 
 pytestmark = pytest.mark.integration
 TEST_REDIS_URL = "redis://127.0.0.1:6379/15"
+REGISTRY_HEADERS = {"X-Operator-Registry-Token": "registry-test-token"}
 
 
 def _unique_key_prefix() -> str:
@@ -91,6 +95,94 @@ def test_registration_requires_first_heartbeat_before_routing(
 
     redis_registry.heartbeat("vbas-gpu0", inflight=0, model_ready=True)
     assert redis_registry.lease("teacher_behavior", 30).instance_id == "vbas-gpu0"
+
+
+def test_retired_text_analysis_registration_writes_no_redis_state(tmp_path) -> None:
+    client = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
+    key_prefix = _unique_key_prefix()
+    try:
+        client.ping()
+    except Exception as exc:
+        client.close()
+        pytest.skip(f"Redis 集成测试环境不可用: {exc}")
+    registry = RedisOperatorRegistry(
+        client,
+        heartbeat_ttl_seconds=2,
+        key_prefix=key_prefix,
+    )
+    app = create_control_app(
+        operator_registry=registry,
+        settings=PlatformSettings(
+            course_root=tmp_path / "course",
+            result_root=tmp_path / "result",
+            operator_registry_token="registry-test-token",
+            trusted_operator_service_urls={
+                "text-analysis-cpu0": "http://text-analysis-cpu0:8000",
+            },
+        ),
+    )
+    try:
+        with TestClient(app) as test_client:
+            response = test_client.post(
+                "/api/operator-instances/register",
+                headers=REGISTRY_HEADERS,
+                json={
+                    "instance_id": "text-analysis-cpu0",
+                    "operator_code": "text_analysis",
+                    "capabilities": ["extract_keywords", "course_overviews"],
+                    "service_url": "http://text-analysis-cpu0:8000",
+                    "declared_capacity": 1,
+                },
+            )
+
+        assert response.status_code == 422
+        assert list(client.scan_iter(match=f"{key_prefix}*")) == []
+    finally:
+        _cleanup_redis_client(client, key_prefix)
+
+
+def test_retired_operator_left_in_redis_is_not_listed_or_routable() -> None:
+    client = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
+    key_prefix = _unique_key_prefix()
+    try:
+        client.ping()
+    except Exception as exc:
+        client.close()
+        pytest.skip(f"Redis 集成测试环境不可用: {exc}")
+    registry = RedisOperatorRegistry(
+        client,
+        heartbeat_ttl_seconds=30,
+        key_prefix=key_prefix,
+    )
+    instance_id = "text-analysis-cpu0"
+    instance_key = f"{key_prefix}instance:{instance_id}"
+    try:
+        client.hset(
+            instance_key,
+            mapping={
+                "operator_code": "text_analysis",
+                "capabilities": '["extract_keywords","course_overviews"]',
+                "service_url": "http://text-analysis-cpu0:8000",
+                "model_version": "historical",
+                "api_version": "v1",
+                "declared_capacity": "256",
+                "labels": "{}",
+                "lifecycle": "ONLINE",
+                "inflight": "0",
+                "model_ready": "1",
+                "last_heartbeat_at": "2026-08-21T00:00:00+00:00",
+            },
+        )
+        client.sadd(f"{key_prefix}instances", instance_id)
+        client.sadd(f"{key_prefix}capability:extract_keywords", instance_id)
+        client.set(f"{key_prefix}heartbeat:{instance_id}", "1", ex=30)
+
+        assert registry.list_instances() == []
+        with pytest.raises(CapacityUnavailableError):
+            registry.lease("extract_keywords", 30)
+        assert list(client.scan_iter(match=f"{key_prefix}lease:*")) == []
+    finally:
+        _cleanup_redis_client(client, key_prefix)
 
 
 def test_atomic_capacity_lease_allows_only_one_final_slot(

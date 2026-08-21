@@ -23,11 +23,7 @@ from online_gateway_service.app.infrastructure.capacity import (
 from orchestrator_service.app.domain.errors import CapacityUnavailableError
 from orchestrator_service.app.domain.ppt_work import PptImageWork, PptWorkLimits
 from orchestrator_service.app.infrastructure.control_client import ControlLeaseClient
-from orchestrator_service.app.infrastructure.ppt_text import (
-    KeywordAdapter,
-    OcrAdapter,
-    PptTextPipeline,
-)
+from orchestrator_service.app.infrastructure.ppt_text import OcrAdapter, PptTextPipeline
 from redis import Redis
 from vision_orchestrator_service.app.infrastructure.cache import VisionStream
 from vision_orchestrator_service.app.infrastructure.capacity import (
@@ -392,12 +388,6 @@ async def test_online_and_ppt_ocr_share_one_pool_without_losing_offline_work(
             await unblock.wait()
         return _ocr_response(body["key"][0])
 
-    text_analysis = FastAPI()
-
-    @text_analysis.post("/v1/extract_keywords")
-    async def extract_keywords() -> dict[str, Any]:
-        return {"result": {"keywords": ["数学"]}}
-
     _register_ready(
         redis_registry,
         instance_id="ocr-shared-0",
@@ -411,14 +401,13 @@ async def test_online_and_ppt_ocr_share_one_pool_without_losing_offline_work(
 
     async with _gateway_runtime(
         redis_registry,
-        {"ocr.test": ocr, "text.test": text_analysis},
+        {"ocr.test": ocr},
     ) as (gateway, control, routed_http):
         lease_client = ControlLeaseClient(control, default_ttl_seconds=30)
         pipeline = PptTextPipeline(
             repository,
             lease_client,
             OcrAdapter(routed_http),
-            KeywordAdapter(routed_http),
             PptWorkLimits(batch_size=1, max_concurrency=1),
             lease_ttl_seconds=30,
         )
@@ -491,11 +480,8 @@ async def test_ppt_items_use_independent_leases_and_multiple_instances(
     tmp_path: Path,
 ) -> None:
     ocr_started = asyncio.Event()
-    keyword_started = asyncio.Event()
     unblock_ocr = asyncio.Event()
-    unblock_keywords = asyncio.Event()
     ocr_hosts: list[str] = []
-    keyword_hosts: list[str] = []
     counter_lock = asyncio.Lock()
     operators = FastAPI()
 
@@ -509,15 +495,6 @@ async def test_ppt_items_use_independent_leases_and_multiple_instances(
         await unblock_ocr.wait()
         return _ocr_response(body["key"][0])
 
-    @operators.post("/v1/extract_keywords")
-    async def extract_keywords(request: Request) -> dict[str, Any]:
-        async with counter_lock:
-            keyword_hosts.append(str(request.url.hostname))
-            if len(keyword_hosts) == 2:
-                keyword_started.set()
-        await unblock_keywords.wait()
-        return {"result": {"keywords": ["数学"]}}
-
     for index in range(2):
         _register_ready(
             redis_registry,
@@ -526,17 +503,7 @@ async def test_ppt_items_use_independent_leases_and_multiple_instances(
             capabilities=["ocr"],
             service_url=f"http://ocr-{index}.test",
         )
-        _register_ready(
-            redis_registry,
-            instance_id=f"text-contract-{index}",
-            operator_code=OperatorCode.TEXT_ANALYSIS,
-            capabilities=["extract_keywords"],
-            service_url=f"http://text-{index}.test",
-        )
-    applications = {
-        **{f"ocr-{index}.test": operators for index in range(2)},
-        **{f"text-{index}.test": operators for index in range(2)},
-    }
+    applications = {f"ocr-{index}.test": operators for index in range(2)}
     work: list[PptImageWork] = []
     for index in range(2):
         path = tmp_path / f"slide-{index}.jpg"
@@ -552,7 +519,6 @@ async def test_ppt_items_use_independent_leases_and_multiple_instances(
             repository,
             ControlLeaseClient(control, default_ttl_seconds=30),
             OcrAdapter(routed_http),
-            KeywordAdapter(routed_http),
             PptWorkLimits(batch_size=2, max_concurrency=2),
             lease_ttl_seconds=30,
         )
@@ -583,42 +549,10 @@ async def test_ppt_items_use_independent_leases_and_multiple_instances(
         unblock_ocr.set()
         ocr_results = await ocr_task
 
-        keyword_task = asyncio.create_task(
-            pipeline.run_keywords(
-                task_id="course-ppt",
-                node_id=22,
-                work=work,
-                ocr_results=ocr_results,
-                trace_id="trace-ppt",
-            )
-        )
-        await asyncio.wait_for(keyword_started.wait(), timeout=1)
-        keyword_snapshots = [
-            redis_registry.list_active_leases(f"text-contract-{index}")
-            for index in range(2)
-        ]
-        assert [snapshot.active_lease_count for snapshot in keyword_snapshots] == [
-            1,
-            1,
-        ]
-        assert {
-            snapshot.leases[0].work_context.item_id
-            for snapshot in keyword_snapshots
-            if snapshot.leases[0].work_context is not None
-        } == {"ppt-0", "ppt-1"}
-        unblock_keywords.set()
-        keyword_results = await keyword_task
-
     assert set(ocr_hosts) == {"ocr-0.test", "ocr-1.test"}
-    assert set(keyword_hosts) == {"text-0.test", "text-1.test"}
     assert list(ocr_results) == ["ppt-0", "ppt-1"]
-    assert list(keyword_results) == ["ppt-0", "ppt-1"]
     assert all(
         redis_registry.list_active_leases(f"ocr-contract-{index}").active_lease_count
-        == 0
-        and redis_registry.list_active_leases(
-            f"text-contract-{index}"
-        ).active_lease_count
         == 0
         for index in range(2)
     )

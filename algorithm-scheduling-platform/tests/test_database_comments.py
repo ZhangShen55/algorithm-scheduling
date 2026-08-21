@@ -8,6 +8,9 @@ FOUNDATION_FORWARD_MIGRATION = (
 SUBMISSION_FORWARD_MIGRATION = (
     PROJECT_ROOT / "migrations/0006_course_task_type_submission.sql"
 )
+TEXT_ANALYSIS_RETIREMENT_MIGRATION = (
+    PROJECT_ROOT / "migrations/0007_retire_text_analysis_comments.sql"
+)
 
 EXPECTED_COLUMNS = {
     "course_jobs": (
@@ -192,4 +195,40 @@ def test_0006_forward_migration_persists_and_documents_submission_id() -> None:
     assert "alter column submission_id set not null" in sql
     assert "comment on column course_task_types.submission_id is '" in sql
     for forbidden in ("drop table", "drop column", "delete from", "truncate"):
+        assert forbidden not in sql
+
+
+def test_0007_forward_migration_documents_current_and_historical_result_scope() -> None:
+    sql = " ".join(
+        TEXT_ANALYSIS_RETIREMENT_MIGRATION.read_text(encoding="utf-8")
+        .lower()
+        .split()
+    )
+
+    for target in (
+        "comment on table node_results is '",
+        "comment on column node_results.result is '",
+        "comment on table node_work_items is '",
+        "comment on column node_work_items.result is '",
+        "comment on table operator_instances is '",
+        "comment on column operator_instances.operator_code is '",
+    ):
+        assert target in sql
+    assert "ocr、asr 与视觉" in sql
+    assert "text_analysis 仅作为退役前历史审计值" in sql
+
+
+def test_0007_forward_migration_is_comment_only_and_preserves_historical_rows() -> None:
+    sql = TEXT_ANALYSIS_RETIREMENT_MIGRATION.read_text(encoding="utf-8").lower()
+
+    assert "begin;" in sql
+    assert "commit;" in sql
+    for forbidden in (
+        "alter table",
+        "drop ",
+        "delete from",
+        "truncate",
+        "update ",
+        "insert into",
+    ):
         assert forbidden not in sql

@@ -122,8 +122,13 @@
 
 - [x] 14.1 在 clean clone 环境按 Harness 准备 `.venv` 和依赖，执行静态、单元、真实 Redis/PostgreSQL、服务运行、算子契约六层验证并原子记录 revision 与环境证据。
 - [x] 14.2 对八种 profile 及全 24 实例执行镜像 preflight、启动、注册核验和 operator Smoke，确认每个实例从实际挂载 TOML 取得注册开关、Control URL、心跳、容量和 GPU 要求，Compose 展开后的实例身份、GPU 标签、单 worker、端口绑定和模型 revision 正确。
-- [ ] 14.3 运行里程碑 2B 的 PPT、ASR、教师/学生视觉及在线链路回归，确认新增 OCR 不破坏当前 `ppt-ocr-关键字` 泳道和既有 A 服务接口；真实课程创建前必须从 Orchestrator 容器连续三轮并发读取 T/S/P 首块且通过 HTTP 状态、声明长度和实际长度门禁，失败时不得创建 `task_id`；真实长 ASR 推理即使短暂阻塞算子心跳也必须持续续租同一在途租约、心跳缺失期间不得接收新租约；教师/学生长视频粗扫还必须证明 ffmpeg/ffprobe 进程受 `media.max_concurrent_processes` 约束，Vision Orchestrator 的 `4G` cgroup 无 OOM 且 `/ready` 保持就绪；平台先于 VBas 启动时，已取得命令必须不提交 offset 地等待容量，VBas 实例本地 `429` 必须释放当前尝试租约、仅重试失败批次并保留成功批次，非容量致命错误必须取消和收割兄弟批次，关闭时立即打断等待，Consumer 和 `/ready` 不得因两类容量等待失败；视觉终态持久化与迟到进度事件发生竞态时，Orchestrator 必须幂等提交迟到事件、保留终态且 Consumer 继续就绪；Kafka 重启用例必须同时恢复 Orchestrator 和 Vision Orchestrator readiness，deployment 结束后还须通过只重启不健康离线服务的精确门禁；真实长课程产生 `31` 个候选窗口时必须全部进入加密检测，超过可配置上限时仍失败关闭；offline/vision 结果产生后还必须分别发布当前 SHA 与课程 `task_id` 的 B 级复核请求，8 项独立证据全部通过安全索引校验后才允许聚合。
-- [ ] 14.4 执行容量并发/释放稳定性观察，确认短 OCR/关键词租约可快速复用、跨 TTL 的同步 HTTP 与长 WebSocket/PPT 租约持续续期、无 Redis 孤立租约和无新增 PostgreSQL 写放大。
+- [ ] 14.3 运行七算子里程碑 2B 的 PPT/OCR、ASR-only、教师/学生视觉及在线链路回归，确认既有 A 服务接口不变且新任务不出现退役节点或租约；真实课程创建前必须从 Orchestrator 容器连续三轮并发读取 T/S/P 首块且通过 HTTP 状态、声明长度和实际长度门禁，失败时不得创建 `task_id`；真实长 ASR 推理即使短暂阻塞算子心跳也必须持续续租同一在途租约、心跳缺失期间不得接收新租约；教师/学生长视频粗扫还必须证明 ffmpeg/ffprobe 进程受 `media.max_concurrent_processes` 约束，Vision Orchestrator 的 `4G` cgroup 无 OOM且 `/ready` 保持就绪；容量等待、VBas 本地 `429`、迟到视觉事件、Kafka 重启、候选窗口上限和离线服务精确恢复合同继续适用；offline/vision 结果产生后只发布当前范围的 6 项 B 级复核请求并通过安全索引校验。
+- [ ] 14.4 执行容量并发/释放稳定性观察，确认短 OCR 租约可快速复用、跨 TTL 的同步 HTTP 与长 WebSocket/PPT 租约持续续期、无 Redis 孤立租约和无新增 PostgreSQL 写放大；平台不得出现 Text Analysis 租约。
 - [ ] 14.5 演练排空、服务重启和回滚顺序，确认新格式租约在回滚前已释放/过期，旧部署容量配置能成套恢复且不执行破坏性清理。
-- [ ] 14.6 汇总 Harness 报告、路由兼容清单、八算子真实推理结果和剩余风险；只有所有强制门禁有可复现证据时才完成本 OpenSpec 实施任务。
-- [ ] 14.7 在 `192.168.29.11` 构建前记录旧平台/算子镜像引用、精确 ID、revision、大小和容器引用；最终 SHA 新镜像完成构建、revision 校验、容器替换、基础健康、24 实例注册和算子 Smoke 后，只删除无容器引用且由本工作区 Compose 槽位和旧 release revision 共同证明身份的旧平台/算子镜像，记录删除清单与释放空间，并以自动测试禁止强制删除、宽泛 prune 及基础镜像/基础设施/原业务镜像/模型/数据/证据越界清理。
+- [ ] 14.6 汇总 Harness 报告、路由兼容清单、七算子真实推理结果和剩余风险；只有所有强制门禁有可复现证据时才完成本 OpenSpec 实施任务，旧八算子 release 不得充当当前通过证据。
+- [ ] 14.7 在 `192.168.29.11` 构建前记录旧平台/算子镜像引用、精确 ID、revision、大小和容器引用；最终 SHA 新镜像完成构建、revision 校验、容器替换、基础健康、21 实例注册和七算子 Smoke 后，只删除无容器引用且由本工作区 Compose 槽位和旧 release revision 共同证明身份的旧平台/算子镜像，记录删除清单与释放空间，并以自动测试禁止强制删除、宽泛 prune 及基础镜像/基础设施/原业务镜像/模型/数据/证据越界清理。
+> **后续范围调整已废止（2026-08-21）**
+>
+> 已完成的 Text Analysis、关键词、课程脑图和八算子任务保持原勾选与原文，作为真实历史证据。
+> 未完成的 14.3 至 14.7 已按 `retire-text-analysis-from-scheduling-platform` 调整为七算子、
+> PPT/OCR、ASR-only 和 6 项人工复核范围。

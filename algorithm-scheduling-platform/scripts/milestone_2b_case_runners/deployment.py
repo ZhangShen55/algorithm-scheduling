@@ -81,7 +81,6 @@ CASE_SPECS: Mapping[str, FoundationCaseSpec] = {
     "DEP-005": _spec("两个实例占用同一宿主机端口", "Compose 启动失败且指出冲突实例"),
     "DEP-006": _spec("VBas 容器仍监听旧 8881", "健康检查失败，不能注册为可用实例"),
     "DEP-007": _spec("算子以两个 Uvicorn worker 启动", "部署预检失败"),
-    "DEP-008": _spec("text_analysis 默认两个 worker 未被覆盖", "部署预检失败"),
     "DEP-009": _spec(
         "Compose 只设置 NVIDIA_VISIBLE_DEVICES 而没有 GPU reservation",
         "GPU 预检失败",
@@ -387,10 +386,6 @@ async def dep_007(context: CaseContext, case: CaseDefinition) -> CaseOutcome:
     return await _run(context, case, "DEP-007")
 
 
-async def dep_008(context: CaseContext, case: CaseDefinition) -> CaseOutcome:
-    return await _run(context, case, "DEP-008")
-
-
 async def dep_009(context: CaseContext, case: CaseDefinition) -> CaseOutcome:
     return await _run(context, case, "DEP-009")
 
@@ -620,20 +615,6 @@ def _check_dep_007() -> dict[str, Any]:
     )
 
 
-def _check_dep_008() -> dict[str, Any]:
-    return _expect_error(
-        lambda: deployment_contracts.validate_operator_service_contracts(
-            {
-                "text-analysis-cpu0": _operator_service(
-                    "text-analysis-cpu0", workers="2"
-                )
-            }
-        ),
-        exception=deployment_contracts.DeploymentContractError,
-        fragment="exactly one Uvicorn worker",
-    )
-
-
 def _check_dep_009() -> dict[str, Any]:
     service = {"deploy": {}, "environment": {"NVIDIA_VISIBLE_DEVICES": "0"}}
     return _expect_error(
@@ -844,7 +825,6 @@ _DEPLOYMENT_CHECKERS: Mapping[str, Callable[..., dict[str, Any]]] = {
     "DEP-005": _check_dep_005,
     "DEP-006": _check_dep_006,
     "DEP-007": _check_dep_007,
-    "DEP-008": _check_dep_008,
     "DEP-009": _check_dep_009,
     "DEP-010": _check_dep_010,
     "DEP-011": _check_dep_011,

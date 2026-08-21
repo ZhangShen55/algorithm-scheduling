@@ -70,6 +70,28 @@ def test_8a7_runtime_orders_all_strict_gates_before_restore(tmp_path: Path) -> N
     assert runtime.index("preflight-course-media") < runtime.index("--phase offline")
 
 
+def test_8a7_runtime_uses_current_seven_operator_authority(tmp_path: Path) -> None:
+    runtime = runner.build_runtime(_arguments(tmp_path))
+    contract = runner._load_current_scenario()
+    totals = runner.CURRENT_TOPOLOGY.totals
+
+    assert runner.SCENARIO.name == "milestone-2b-seven-operator-release.md"
+    assert totals == {
+        "operator_types": 7,
+        "instances": 21,
+        "gpu_instances": 18,
+        "cpu_instances": 3,
+        "config_authority_processes": 14,
+        "operator_smoke_types": 7,
+    }
+    assert "CODEX_CURRENT_TOPOLOGY" in runtime
+    assert "必须精确包含 21 个 service" in runtime
+    assert "= 21" in runtime
+    assert all(
+        marker not in runtime for marker in contract["forbidden_runtime_markers"]
+    )
+
+
 def test_8a7_stabilizes_orchestrator_before_deployment_cases(tmp_path: Path) -> None:
     runtime = runner.build_runtime(_arguments(tmp_path))
 
@@ -146,14 +168,7 @@ def test_8a7_cleanup_is_exact_and_lifecycle_guarded(tmp_path: Path) -> None:
 def test_stage3_early_failure_uses_outer_restore_before_operator_trap(
     tmp_path: Path,
 ) -> None:
-    document = runner.SCENARIO.read_text(encoding="utf-8")
-    stage3 = runner.bash_blocks(
-        runner.section(
-            document,
-            "## 阶段 3：平台和逐卡算子拓扑",
-            "## 阶段 4：GPU 真实性证据",
-        )
-    )[0]
+    _, _, _, stage3, _ = runner._current_stage_blocks()
     release_root = tmp_path / "reports/milestone-2b/releases/v1.0_260812" / ("a" * 40)
     ledger_dir = release_root / "container-maintenance"
     ledger_dir.mkdir(parents=True)

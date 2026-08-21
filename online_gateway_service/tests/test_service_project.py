@@ -3,9 +3,9 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
+import tomllib
 from fastapi.testclient import TestClient
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +77,7 @@ def test_config_has_only_online_gateway_concerns() -> None:
 
     assert set(parsed) == {
         "service",
+        "logging",
         "control",
         "face_persons",
         "http",

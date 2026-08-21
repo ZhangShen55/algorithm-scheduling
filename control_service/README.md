@@ -42,6 +42,10 @@ Control Service 是算子实例注册和平台容量租约的唯一权威。平�
 时间、绑定状态和心跳差异。工作上下文只保存短标识，不保存图片、音频或识别文本。活跃租约
 明细只在 Redis 中维护，不为每次申请、续租和释放增加 PostgreSQL 高频写入。
 
+当前注册集合仅包含 `asr_online`、`asr_offline`、`facerec`、`ocr`、`screen_det`、
+`ppt_slice` 和 `vbas`。新的 `text_analysis` 注册请求必须被拒绝且不得创建 Redis 实例、心跳
+或租约键；PostgreSQL 中历史 `operator_code=text_analysis` 审计行仍须可查询。
+
 ## 数据库迁移
 
 启动 `control-service` 前，必须先按文件名顺序将

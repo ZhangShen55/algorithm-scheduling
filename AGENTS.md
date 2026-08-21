@@ -15,12 +15,18 @@ This workspace contains independently deployable algorithm operators and the alg
 | `screen_det` | Single-image quality detection through `detect_all` | `screen_det` | `8880` |
 | `ppt_slice` | PPT video slide slicing | `ppt_slice` | `9001` |
 | `vbas` | Teacher/student visual behavior inference | `jy-tias` | `8981` |
-| `text_analysis` | Course mind-map and PPT keyword text analysis | `ai_report` | `8000` |
 | `control_service` | Course task control API, task facts, Outbox and operator registry | platform `.venv` | `18100` |
 | `orchestrator_service` | Outbox publication, offline DAG and general node execution | platform `.venv` | `18101` |
 | `vision_orchestrator_service` | Offline teacher/student adaptive visual orchestration | platform `.venv` | `8010` (`18102` through Compose) |
 | `online_gateway_service` | Online image routing and realtime ASR WebSocket gateway | platform `.venv` | `8001` (`18103` through Compose) |
 | `algorithm-scheduling-platform` | Shared packages, migrations, deployment definitions, cross-service tests and Harness | project `.venv` | N/A |
+
+## Retained Non-Platform Project
+
+`text_analysis/` remains in this repository as an independently maintained, non-platform project. The
+scheduling platform must not build, deploy, register, route, lease, invoke or include it in platform
+verification. Historical task results and audit records that mention Text Analysis remain readable and
+must not be rewritten or deleted merely because the current platform has seven operators.
 
 The old VBas orchestration and aggregation implementation has moved to a separate project:
 

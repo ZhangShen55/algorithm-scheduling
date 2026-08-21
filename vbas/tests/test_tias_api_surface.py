@@ -1,10 +1,13 @@
 import importlib
 import sys
 import types
+from pathlib import Path
 
 
 def _install_lightweight_tias_settings():
     sys.modules["app.core.settings"] = types.SimpleNamespace(
+        LOGGING_CONFIG={},
+        PROJECT_ROOT=Path(__file__).resolve().parents[1],
         operator_deployment=types.SimpleNamespace(
             platform=types.SimpleNamespace(
                 registration_enabled=False,

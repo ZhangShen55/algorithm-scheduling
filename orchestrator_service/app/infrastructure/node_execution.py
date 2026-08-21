@@ -47,16 +47,6 @@ class OfflineAsrClient(Protocol):
     ) -> dict[str, Any]: ...
 
 
-class CourseOverviewClient(Protocol):
-    async def generate(
-        self,
-        instance_url: str,
-        asr_response: dict[str, Any],
-        *,
-        model: str | None = None,
-    ) -> dict[str, Any]: ...
-
-
 class PptSliceClient(Protocol):
     async def submit(
         self,
@@ -84,12 +74,10 @@ class NodeExecutionRouter:
         repository: NodeLookupRepository,
         *,
         ocr_pipeline: PptTextPipeline,
-        keyword_pipeline: PptTextPipeline,
         fallback: FallbackNodeAdapter,
         media_downloader: MediaDownloadClient | None = None,
         audio_extractor: AudioExtractor | None = None,
         asr_adapter: OfflineAsrClient | None = None,
-        course_overview_adapter: CourseOverviewClient | None = None,
         ppt_slice_adapter: PptSliceClient | None = None,
         ppt_callback_base_url: str = "",
         ppt_terminal_callback_path: str = "/internal/ppt-slice/callback",
@@ -97,12 +85,10 @@ class NodeExecutionRouter:
     ) -> None:
         self._repository = repository
         self._ocr_pipeline = ocr_pipeline
-        self._keyword_pipeline = keyword_pipeline
         self._fallback = fallback
         self._media_downloader = media_downloader
         self._audio_extractor = audio_extractor
         self._asr_adapter = asr_adapter
-        self._course_overview_adapter = course_overview_adapter
         self._ppt_slice_adapter = ppt_slice_adapter
         self._ppt_callback_base_url = ppt_callback_base_url.rstrip("/")
         self._ppt_terminal_callback_path = "/" + ppt_terminal_callback_path.strip("/")
@@ -117,12 +103,8 @@ class NodeExecutionRouter:
             return await self._execute_ppt_slice(service_url, context)
         if context.node_code == "PPT_OCR":
             return await self._execute_ocr(context)
-        if context.node_code == "PPT_KEYWORDS":
-            return await self._execute_keywords(context)
         if context.node_code == "ASR_TRANSCRIPTION":
             return await self._execute_asr(service_url, context)
-        if context.node_code == "COURSE_OVERVIEW":
-            return await self._execute_course_overview(service_url, context)
         return await self._fallback.execute(service_url, context)
 
     async def _execute_ppt_slice(
@@ -210,24 +192,6 @@ class NodeExecutionRouter:
             },
         )
 
-    async def _execute_course_overview(
-        self,
-        service_url: str | None,
-        context: NodeExecutionContext,
-    ) -> NodeResultWrite:
-        if service_url is None:
-            raise RuntimeError("课程脑图节点缺少算子实例地址")
-        if self._course_overview_adapter is None:
-            raise RuntimeError("课程脑图真实执行适配器尚未装配")
-        asr_node = self._node(context, "ASR_TRANSCRIPTION")
-        if not isinstance(asr_node.result, dict):
-            raise RuntimeError("ASR 转写节点缺少结构化结果")
-        response = await self._course_overview_adapter.generate(
-            service_url,
-            asr_node.result,
-        )
-        return NodeResultWrite(result=response)
-
     async def _execute_ocr(self, context: NodeExecutionContext) -> NodeResultWrite:
         node_id = self._require_node_id(context)
         work = self._ppt_work(context, source_node_code="PPT_SLICE")
@@ -235,29 +199,6 @@ class NodeExecutionRouter:
             task_id=context.task_id,
             node_id=node_id,
             work=work,
-            complete_node=False,
-        )
-        return self._node_result(results)
-
-    async def _execute_keywords(
-        self,
-        context: NodeExecutionContext,
-    ) -> NodeResultWrite:
-        node_id = self._require_node_id(context)
-        work = self._ppt_work(context, source_node_code="PPT_SLICE")
-        ocr_node = self._node(context, "PPT_OCR")
-        if not isinstance(ocr_node.result, dict):
-            raise RuntimeError("PPT OCR 节点缺少结构化结果")
-        ocr_results = {
-            str(key): value
-            for key, value in ocr_node.result.items()
-            if isinstance(value, dict)
-        }
-        results = await self._keyword_pipeline.run_keywords(
-            task_id=context.task_id,
-            node_id=node_id,
-            work=work,
-            ocr_results=ocr_results,
             complete_node=False,
         )
         return self._node_result(results)

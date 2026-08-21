@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from packages.platform_common.repository import NodeRecord, NodeResultWrite
+from packages.platform_contracts.status import NodeStatus
 
 from orchestrator_service.app.infrastructure.contract_stub import NodeExecutionContext
 from orchestrator_service.app.infrastructure.node_execution import NodeExecutionRouter
 from orchestrator_service.app.infrastructure.ppt_slice import PptSliceAccepted
-from packages.platform_common.repository import NodeRecord, NodeResultWrite
-from packages.platform_contracts.status import NodeStatus, Priority
 
 
 class Repository:
@@ -83,22 +82,6 @@ class AsrAdapter:
         return self.response
 
 
-class OverviewAdapter:
-    def __init__(self, response: dict[str, Any]) -> None:
-        self.response = response
-        self.calls: list[tuple[str, dict[str, Any], str | None]] = []
-
-    async def generate(
-        self,
-        instance_url: str,
-        asr_response: dict[str, Any],
-        *,
-        model: str | None = None,
-    ) -> dict[str, Any]:
-        self.calls.append((instance_url, asr_response, model))
-        return self.response
-
-
 class PptAdapter:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -133,24 +116,6 @@ def _context(node_code: str) -> NodeExecutionContext:
     )
 
 
-def _node(node_code: str, result: dict[str, Any]) -> NodeRecord:
-    return NodeRecord(
-        id=10,
-        course_task_type_id=7,
-        node_code=node_code,
-        status=NodeStatus.COMPLETED,
-        priority=Priority.NORMAL,
-        reason="完成",
-        required_capability="asr_offline",
-        result=result,
-        artifact_path=None,
-        artifact_count=None,
-        progress={},
-        effective_params=None,
-        updated_at=datetime.now(UTC),
-    )
-
-
 @pytest.mark.asyncio
 async def test_asr_node_downloads_extracts_and_calls_one_real_adapter(tmp_path: Path) -> None:
     video_path = tmp_path / "teacher.mp4"
@@ -162,7 +127,6 @@ async def test_asr_node_downloads_extracts_and_calls_one_real_adapter(tmp_path: 
     router = NodeExecutionRouter(
         Repository(),
         ocr_pipeline=UnusedPipeline(),  # type: ignore[arg-type]
-        keyword_pipeline=UnusedPipeline(),  # type: ignore[arg-type]
         fallback=Fallback(),
         media_downloader=downloader,
         audio_extractor=extractor,
@@ -183,31 +147,6 @@ async def test_asr_node_downloads_extracts_and_calls_one_real_adapter(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_course_overview_uses_persisted_asr_result_without_extra_work() -> None:
-    asr_result = {
-        "text": "课堂文本",
-        "segments": [{"segment_text": "课堂文本", "bg": 0, "ed": 1}],
-    }
-    overview_result = {"id": "overview-1", "result": {"overview": {}}}
-    overview = OverviewAdapter(overview_result)
-    router = NodeExecutionRouter(
-        Repository([_node("ASR_TRANSCRIPTION", asr_result)]),
-        ocr_pipeline=UnusedPipeline(),  # type: ignore[arg-type]
-        keyword_pipeline=UnusedPipeline(),  # type: ignore[arg-type]
-        fallback=Fallback(),
-        course_overview_adapter=overview,
-    )
-
-    result = await router.execute(
-        "http://text-analysis-cpu0:8000",
-        _context("COURSE_OVERVIEW"),
-    )
-
-    assert result.result == overview_result
-    assert overview.calls == [("http://text-analysis-cpu0:8000", asr_result, None)]
-
-
-@pytest.mark.asyncio
 async def test_ppt_slice_downloads_local_video_and_returns_async_acceptance(
     tmp_path: Path,
 ) -> None:
@@ -217,7 +156,6 @@ async def test_ppt_slice_downloads_local_video_and_returns_async_acceptance(
     router = NodeExecutionRouter(
         Repository(),
         ocr_pipeline=UnusedPipeline(),  # type: ignore[arg-type]
-        keyword_pipeline=UnusedPipeline(),  # type: ignore[arg-type]
         fallback=Fallback(),
         media_downloader=downloader,
         ppt_slice_adapter=ppt,

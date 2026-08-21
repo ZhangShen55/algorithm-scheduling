@@ -33,9 +33,9 @@
 - [x] 4.6 建立不依赖真实 PPT 的通用 HTTP 契约 Stub，验证 Stub 注册、选择、调用和结构化结果持久化
 - [ ] 4.7 实现按 `submission_id` 隔离的执行上下文和共享下载协调，使同一次 ASR/教师组合提交只共享一次 T 下载
 - [ ] 4.8 等 PPT 契约冻结后接入共享路径切片、原子 manifest、幂等终态通知、manifest 对账、容量续约和 OCR 释放
-- [ ] 4.9 实现 `PPT_OCR` 与 `PPT_KEYWORDS`，按 `ppt_image_id` 子项、配置并发、租约和部分进度持久化
+- [ ] 4.9 实现 `PPT_OCR`，按 `ppt_image_id` 子项、配置并发、租约和部分进度持久化；OCR 完成后 PPT 直接终态
 - [ ] 4.10 实现 `ASR_TRANSCRIPTION` 的媒体/WAV/租约执行，校验 v1.1.8 业务响应并持久化完整结果
-- [ ] 4.11 从已保存 ASR segments 执行 `COURSE_OVERVIEW`，持久化完整嵌套 GenericResponse
+- [ ] 4.11 ~~从已保存 ASR segments 执行 `COURSE_OVERVIEW`，持久化完整嵌套 GenericResponse~~ **后续范围调整已废止：该任务未实施且不再执行。**
 - [ ] 4.12 将教师/学生视觉节点发布到 `algorithm.visual.commands`，并幂等消费视觉进度/完成事件
 - [x] 4.13 从节点状态推导任务类型状态和当前节点中文原因，禁止测试或算子直接更新任务终态
 - [x] 4.14 增加 orchestrator 就绪和关闭测试，证明必需循环启动、异常可见、停止消费并关闭资源
@@ -79,14 +79,14 @@
 - [x] 8A.1 将 217 条反例和 26 条压力用例固化为严格结构化目录，验证 243 个稳定 ID、分类、阶段、runner、超时和安全级别
 - [x] 8A.2 实现兼容历史声明的真实执行证据合同、安全有界 case runner 及部署/GPU/注册/基础设施执行器
 - [x] 8A.3 在新 Git SHA 和不可变 release 下重跑 FaceRec 三实例、18 个 GPU 实例和部署阶段用例
-- [ ] 8A.4 贯通 PPT/OCR/关键词和离线 ASR/课程脑图，执行对应反例和压力用例
+- [ ] 8A.4 贯通 PPT/OCR 和 ASR-only，执行当前七算子 schema 对应的反例和压力用例
 - [ ] 8A.5 贯通课程级视觉命令、抽帧、自适应 VBas、聚合、证据和完成事件，执行对应用例
 - [ ] 8A.6 贯通在线图片、实时 ASR WebSocket 和 FaceRec 人物管理代理，执行对应用例
-- [ ] 8A.7 在同一新 release 中重新执行全部 217 条反例和 26 条压力用例，最终报告不允许失败或“未执行及原因”
+- [ ] 8A.7 在同一七算子新 release 中重新执行新版全部 217 条反例和 26 条压力/恢复用例，最终报告不允许失败或未执行项，旧八算子 schema 不得复用
 
 ## 9. 完整产品端到端验收
 
-- [ ] 9.1 建立契约兼容的 PPT、OCR、文本分析、离线/实时 ASR、VBas、人脸和图像质量 HTTP/WebSocket 算子替身
+- [ ] 9.1 建立契约兼容的 PPT、OCR、离线/实时 ASR、VBas、人脸和图像质量 HTTP/WebSocket 算子替身；不得启动或调用 Text Analysis
 - [ ] 9.2 使用真实 PostgreSQL、Redis、Kafka、四平台服务和算子替身运行 PPT-only、ASR-only、teacher-only、student-only 和组合请求
 - [ ] 9.3 验证同任务完成结果复用、后续任务类型追加、同提交 T 下载复用、后续提交重新下载和准确 `effective_params`
 - [ ] 9.4 验证视觉细化、空行为、图像不足、稳定区域兜底、证据留存和终态临时文件清理
@@ -99,3 +99,8 @@
 - [x] 10.2 维护 `docs/算法功能调度平台总体设计-v2.md` 及视觉检查后的 PDF，并同步 README、A 服务指南、运行手册、部署命令和图；旧离线文档只作历史基线
 - [ ] 10.3 运行 lint、严格类型检查、单元、契约、PostgreSQL/Redis 集成、真实 Kafka、镜像构建、Compose 和全部 Harness 场景
 - [ ] 10.4 记录最终符合性结论和剩余非目标，再决定是否同步或归档原变更与本变更
+> **后续范围调整已废止（2026-08-21）**
+>
+> 已完成的旧基础闭环勾选和证据保持原样。未完成的关键词、课程脑图和 Text Analysis 替身目标
+> 已由 `retire-text-analysis-from-scheduling-platform` 废止；当前剩余范围为七算子、PPT/OCR、
+> ASR-only、视觉和在线泳道。

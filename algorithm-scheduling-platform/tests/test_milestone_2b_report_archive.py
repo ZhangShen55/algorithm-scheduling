@@ -33,7 +33,9 @@ EVIDENCE_CATEGORIES = {
 }
 
 
-def test_historical_schema1_release_fixture_still_renders(tmp_path: Path) -> None:
+def test_current_schema2_declaration_fixture_renders_as_not_executed(
+    tmp_path: Path,
+) -> None:
     from tests.test_milestone_2b_report_aggregation import (
         ReleaseTree,
         _prepare_renderer_release,
@@ -45,14 +47,37 @@ def test_historical_schema1_release_fixture_still_renders(tmp_path: Path) -> Non
 
     completed = _run_task6_renderer(release_tree)
 
-    assert envelope["schema_version"] == 1
+    assert envelope["schema_version"] == 2
     assert completed.returncode == 3, completed.stderr
     report = json.loads(
         (release_tree.root / "summary/report.json").read_text(encoding="utf-8")
     )
-    assert report["schema_version"] == 2
-    assert report["cases_schema_version"] == 1
+    assert report["schema_version"] == 3
+    assert report["cases_schema_version"] == 2
     assert report["overall_status"] == "未执行及原因"
+
+
+def test_historical_schema1_release_cannot_publish_current_report(
+    tmp_path: Path,
+) -> None:
+    from tests.test_milestone_2b_report_aggregation import (
+        ReleaseTree,
+        _prepare_renderer_release,
+        _run_task6_renderer,
+        _write_renderer_envelope,
+    )
+
+    release_tree = ReleaseTree(tmp_path)
+    envelope = _prepare_renderer_release(release_tree)
+    envelope["schema_version"] = 1
+    _write_renderer_envelope(release_tree, envelope)
+
+    completed = _run_task6_renderer(release_tree)
+
+    assert completed.returncode == 1
+    assert "schema_version" in completed.stderr
+    assert not (release_tree.root / "summary/report.json").exists()
+    assert not (release_tree.root / "summary/report.md").exists()
 
 
 def _run_prepare(

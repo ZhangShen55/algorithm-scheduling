@@ -13,6 +13,16 @@ A 服务只通过 `control-service` 提交/查询离线课程任务，通过 `on
 
 在线图片由 A 服务直接传 Base64。平台不从 RTSP 或其他流中截图。
 
+当前离线 DAG 为：
+
+- `PPT`：`PPT_SLICE -> PPT_OCR`。
+- `ASR`：`ASR_TRANSCRIPTION`。
+- 教师/学生行为：各自一个视觉分析节点，由视觉编排服务完成。
+
+新任务不会创建 `PPT_KEYWORDS` 或 `COURSE_OVERVIEW` 占位节点。历史任务中已经存在的退役节点
+和结果仍可通过课程查询接口读取。A 服务无需直连数据库，也不应把历史节点是否出现作为新任务
+完成条件。
+
 ## 2. 在线单图 OCR
 
 ```http

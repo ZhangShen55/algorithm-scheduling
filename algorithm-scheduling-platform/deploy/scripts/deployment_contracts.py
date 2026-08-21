@@ -16,7 +16,14 @@ import sys
 import tempfile
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .operator_topology import CURRENT_TOPOLOGY
+elif __package__:
+    from .operator_topology import CURRENT_TOPOLOGY
+else:
+    from operator_topology import CURRENT_TOPOLOGY
 
 RELEASE_TAG_PATTERN = re.compile(r"^v[0-9]+\.[0-9]+_[0-9]{6}$")
 REGISTRY_WHEEL = "algorithm_operator_registry_client-0.2.0-py3-none-any.whl"
@@ -24,27 +31,15 @@ REGISTRY_WHEEL_PATTERN = re.compile(
     r"algorithm_operator_registry_client-[0-9]+(?:\.[0-9]+){2}-py3-none-any\.whl"
 )
 CONFIG_TARGETS = {
-    "asr-offline": "/config.toml",
-    "asr-online": "/config.toml",
-    "ocr": "/app/config.toml",
-    "vbas": "/workspace/config.toml",
-    "facerec": "/config/config.toml",
-    "screen-det": "/app/config.toml",
-    "ppt-slice": "/workspace/config.toml",
-    "text-analysis": "/app/config.toml",
+    entry.service_prefix: entry.config_target for entry in CURRENT_TOPOLOGY.operators
 }
 OPERATOR_CAPACITIES = {
-    "asr-offline": 4,
-    "asr-online": 10,
-    "ocr": 256,
-    "vbas": 128,
-    "facerec": 128,
-    "screen-det": 128,
-    "ppt-slice": 10,
-    "text-analysis": 256,
+    entry.service_prefix: entry.declared_capacity for entry in CURRENT_TOPOLOGY.operators
 }
 GPU_OPERATORS = frozenset(
-    {"asr-offline", "asr-online", "ocr", "vbas", "facerec", "screen-det"}
+    entry.service_prefix
+    for entry in CURRENT_TOPOLOGY.operators
+    if entry.device_kind == "gpu"
 )
 FORBIDDEN_OPERATOR_ENVIRONMENT = frozenset(
     {

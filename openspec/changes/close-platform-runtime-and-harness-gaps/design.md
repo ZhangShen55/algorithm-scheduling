@@ -1,3 +1,8 @@
+> **后续范围调整已废止（2026-08-21）**
+>
+> 本设计中的 Text Analysis 后置节点与八算子验收不再是当前目标；已完成基础闭环证据保持原样。
+> 当前运行时、部署和最终验收范围以 `retire-text-analysis-from-scheduling-platform` 为准。
+
 ## 背景
 
 原设计确定四个可部署服务：`control-service`、`orchestrator-service`、`vision-orchestrator-service`、`online-gateway-service`；PostgreSQL 保存业务事实和 Outbox，Kafka 传课程级命令，Redis 保存算子 TTL 运行态和容量租约，算法实例继续使用现有 HTTP/WebSocket 协议。

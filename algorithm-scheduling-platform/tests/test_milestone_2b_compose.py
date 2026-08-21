@@ -21,7 +21,6 @@ GPU_OPERATORS = {
 }
 CPU_OPERATORS = {
     "ppt-slice": (9001, 19001, "ppt_slice.cpu.toml"),
-    "text-analysis": (8000, 18000, "text_analysis.cpu.toml"),
 }
 OPERATOR_CAPACITIES = {
     "asr-offline": 4,
@@ -31,7 +30,6 @@ OPERATOR_CAPACITIES = {
     "facerec": 128,
     "screen-det": 128,
     "ppt-slice": 10,
-    "text-analysis": 256,
 }
 TOML_OWNED_ENVIRONMENT = {
     "PLATFORM_REGISTRATION_ENABLED",
@@ -76,7 +74,7 @@ def _load_operator_config(source: str) -> dict[str, Any]:
 def assert_operator_compose_matrix(compose: dict[str, Any]) -> None:
     services = compose["services"]
     assert set(services) == expected_service_names()
-    assert len(services) == 24
+    assert len(services) == 21
     assert compose["networks"]["algorithm-platform"]["external"] is True
 
     for operator, (container_port, base_port, _process_name, config_name) in GPU_OPERATORS.items():
@@ -188,7 +186,6 @@ def _config_target(operator: str) -> str:
         "facerec": "/config/config.toml",
         "screen-det": "/app/config.toml",
         "ppt-slice": "/workspace/config.toml",
-        "text-analysis": "/app/config.toml",
     }[operator]
 
 

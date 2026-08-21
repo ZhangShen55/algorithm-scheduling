@@ -59,7 +59,6 @@ def test_unified_capacity_change_has_machine_readable_compatibility_baseline() -
         "screen_det": "screen_det.gpu.toml",
         "ppt_slice": "ppt_slice.cpu.toml",
         "vbas": "vbas.gpu.toml",
-        "text_analysis": "text_analysis.cpu.toml",
     }
 
     for project, contract in baseline["operators"].items():
@@ -83,14 +82,25 @@ def test_unified_capacity_change_has_machine_readable_compatibility_baseline() -
         }
         assert root_config["runtime"]["require_gpu"] is False
 
-        deploy_config = tomllib.loads(
-            (
+        if project in deploy_names:
+            deploy_config = tomllib.loads(
+                (
+                    WORKSPACE_ROOT
+                    / "algorithm-scheduling-platform/deploy/config/operators"
+                    / deploy_names[project]
+                ).read_text(encoding="utf-8")
+            )
+            assert (
+                deploy_config["platform"]["max_concurrent_requests"]
+                == capacities[project]
+            )
+        else:
+            assert project == "text_analysis"
+            assert not (
                 WORKSPACE_ROOT
-                / "algorithm-scheduling-platform/deploy/config/operators"
-                / deploy_names[project]
-            ).read_text(encoding="utf-8")
-        )
-        assert deploy_config["platform"]["max_concurrent_requests"] == capacities[project]
+                / "algorithm-scheduling-platform/deploy/config/operators/"
+                "text_analysis.cpu.toml"
+            ).exists()
 
     compose = yaml.safe_load(
         (
@@ -343,11 +353,7 @@ def test_operator_compose_declares_restart_health_mounts_and_instance_identity()
             )
             for index in range(3)
         ),
-        *(
-            f"{operator}-cpu{index}"
-            for operator in ("ppt-slice", "text-analysis")
-            for index in range(3)
-        ),
+        *(f"ppt-slice-cpu{index}" for index in range(3)),
     }
     assert set(services) == expected
     capacities = {
@@ -358,7 +364,6 @@ def test_operator_compose_declares_restart_health_mounts_and_instance_identity()
         "facerec": 128,
         "screen-det": 128,
         "ppt-slice": 10,
-        "text-analysis": 256,
     }
     gpu_operators = {
         "asr-offline",

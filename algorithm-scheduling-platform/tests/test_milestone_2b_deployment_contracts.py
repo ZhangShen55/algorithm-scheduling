@@ -29,9 +29,9 @@ OPERATOR_COMPOSE = PLATFORM_ROOT / "deploy/docker-compose.operators.yml"
 
 
 def _valid_service(
-    name: str = "text-analysis-cpu0",
+    name: str = "ppt-slice-cpu0",
     *,
-    config_path: str = "/app/config.toml",
+    config_path: str = "/workspace/config.toml",
 ) -> dict[str, Any]:
     return {
         "environment": {
@@ -41,7 +41,7 @@ def _valid_service(
         "volumes": [
             {
                 "type": "bind",
-                "source": "/release/config/operators/text_analysis.cpu.toml",
+                "source": "/release/config/operators/ppt_slice.cpu.toml",
                 "target": config_path,
                 "read_only": True,
             }
@@ -68,8 +68,8 @@ def test_dep_003_rejects_noncanonical_release_tags(tag: str) -> None:
     assert validate_release_tag("v1.0_260818") == "v1.0_260818"
 
 
-@pytest.mark.parametrize("service_name", ["vbas-gpu0", "text-analysis-cpu0"])
-def test_dep_007_and_008_reject_multi_worker_operator_services(
+@pytest.mark.parametrize("service_name", ["vbas-gpu0", "ppt-slice-cpu0"])
+def test_dep_007_rejects_multi_worker_operator_services(
     service_name: str,
 ) -> None:
     service = _valid_service(service_name)
@@ -165,7 +165,7 @@ def test_dep_014_requires_one_read_only_config_path_bind(
         )
 
     with pytest.raises(DeploymentContractError, match=expected):
-        validate_operator_service_contracts({"text-analysis-cpu0": service})
+        validate_operator_service_contracts({"ppt-slice-cpu0": service})
 
 
 def test_dep_015_and_016_probe_directory_writability_without_leaving_files(

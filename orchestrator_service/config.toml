@@ -141,18 +141,10 @@ ocr_batch_size = 8
 ocr_max_concurrency = 2
 # 单张 PPT 图片 OCR HTTP 调用的绝对硬超时秒数。
 ocr_request_timeout_seconds = 600.0
-# LLM 关键词单批处理的 PPT 图片数。
-keyword_batch_size = 8
-# 单个关键词节点同时发起的请求数。
-keyword_max_concurrency = 2
 
 [asr]
 # 离线 ASR 转写请求的最长超时秒数。
 request_timeout_seconds = 7200.0
-
-[text_analysis]
-# 课程脑图和 PPT 关键词请求的最长超时秒数。
-request_timeout_seconds = 600.0
 
 [readiness]
 # readiness 检查 PostgreSQL、Kafka 和 control-service 时的单项超时秒数。

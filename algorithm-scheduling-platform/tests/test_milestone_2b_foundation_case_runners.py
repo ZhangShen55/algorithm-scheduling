@@ -644,11 +644,6 @@ def test_infrastructure_case_has_a_concrete_isolated_injector(case_id: str) -> N
             "DEP-007",
             "deployment_contracts.validate_operator_service_contracts",
         ),
-        (
-            "deployment",
-            "DEP-008",
-            "deployment_contracts.validate_operator_service_contracts",
-        ),
         ("deployment", "DEP-009", "preflight_checks._validate_gpu_service"),
         (
             "deployment",
@@ -2428,9 +2423,9 @@ def test_inf_009_uses_real_isolated_postgres_and_kafka_flow() -> None:
     assert "_reopened_repository(database)" in replay_source
 
 
-def test_foundation_catalog_resolves_all_76_explicit_runner_functions() -> None:
+def test_foundation_catalog_resolves_all_75_explicit_runner_functions() -> None:
     cases = _foundation_cases()
-    assert len(cases) == 76
+    assert len(cases) == 75
     resolved: list[object] = []
     for case in cases:
         module_name, method_name = case.runner.split(".", 1)
@@ -2449,7 +2444,7 @@ def test_foundation_catalog_resolves_all_76_explicit_runner_functions() -> None:
         assert spec.status == "通过"
         assert "反例" in spec.reason
         assert case.expected in spec.reason
-    assert len({id(runner) for runner in resolved}) == 76
+    assert len({id(runner) for runner in resolved}) == 75
 
 
 def test_all_foundation_functions_resolve_with_explicit_async_cleanup() -> None:

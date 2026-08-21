@@ -1,5 +1,11 @@
 # 统一算子配置、容量租约、在线 OCR 与镜像清理验证场景
 
+> **后续范围调整已废止（2026-08-21）**
+>
+> 本场景中的 Text Analysis、八算子及相关节点内容记录当时的真实实现与验收事实，后续已由
+> `retire-text-analysis-from-scheduling-platform` 调整为七算子当前范围。当前权威基线见
+> `text-analysis-scheduling-retirement.md`；下文旧命令、数量、结果、SHA 和 release 路径保持原样。
+
 ## 当前状态
 
 本场景对应 OpenSpec `unify-operator-capacity-leases-and-online-ocr`。2026-08-19 已进入 apply：

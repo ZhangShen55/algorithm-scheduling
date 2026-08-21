@@ -91,21 +91,6 @@ class FakeOcrAdapter:
         return {"ppt_image_id": work.ppt_image_id, "text": f"文本-{work.ordinal}"}
 
 
-class FakeKeywordAdapter:
-    async def extract(
-        self,
-        instance_url: str,
-        *,
-        ppt_image_id: str,
-        text: str,
-    ) -> dict[str, Any]:
-        assert instance_url.startswith("http://text-analysis-")
-        return {
-            "ppt_image_id": ppt_image_id,
-            "keyword_response": {"result": {"keywords": [text]}},
-        }
-
-
 class FakeLeaseClient:
     def __init__(self) -> None:
         self.acquired: list[tuple[str, WorkContext]] = []
@@ -126,11 +111,8 @@ class FakeLeaseClient:
         self.active += 1
         self.peak = max(self.peak, self.active)
         index = len(self.acquired) - 1
-        service_url = (
-            f"http://ocr-{index % 2}:8000"
-            if capability == "ocr"
-            else f"http://text-analysis-{index % 2}:8000"
-        )
+        assert capability == "ocr"
+        service_url = f"http://ocr-{index % 2}:8000"
         return CapacityLease(
             lease_id=f"lease-{index}",
             instance_id=f"instance-{index}",
@@ -158,14 +140,13 @@ class FakeLeaseClient:
 
 
 @pytest.mark.asyncio
-async def test_ppt_text_pipeline_persists_per_slide_results_and_progress() -> None:
+async def test_ppt_ocr_pipeline_persists_per_slide_results_and_progress() -> None:
     repository = FakeRepository()
     leases = FakeLeaseClient()
     pipeline = PptTextPipeline(
         repository,
         leases,
         FakeOcrAdapter(),
-        FakeKeywordAdapter(),
         PptWorkLimits(batch_size=2, max_concurrency=2),
     )
     work = [
@@ -178,38 +159,19 @@ async def test_ppt_text_pipeline_persists_per_slide_results_and_progress() -> No
         node_id=11,
         work=work,
     )
-    keyword_results = await pipeline.run_keywords(
-        task_id="course-001",
-        node_id=12,
-        work=work,
-        ocr_results=ocr_results,
-    )
-
     assert list(ocr_results) == ["ppt-001", "ppt-002"]
-    assert keyword_results["ppt-001"]["ppt_image_id"] == "ppt-001"
     assert repository.completed_nodes[11].result == ocr_results
     assert repository.completed_nodes[11].progress == {
         "completed_count": 2,
         "total_count": 2,
     }
-    assert repository.completed_nodes[12].result == keyword_results
-    assert repository.completed_nodes[12].progress == {
-        "completed_count": 2,
-        "total_count": 2,
-    }
-    assert repository.items[12]["ppt-002"] == keyword_results["ppt-002"]
-    assert [capability for capability, _ in leases.acquired] == [
-        "ocr",
-        "ocr",
-        "extract_keywords",
-        "extract_keywords",
-    ]
+    assert [capability for capability, _ in leases.acquired] == ["ocr", "ocr"]
     assert {context.item_id for _, context in leases.acquired} == {
         "ppt-001",
         "ppt-002",
     }
     assert leases.peak == 2
-    assert len(leases.released) == 4
+    assert len(leases.released) == 2
 
 
 @pytest.mark.asyncio
@@ -239,7 +201,6 @@ async def test_ppt_text_pipeline_keeps_completed_items_when_later_item_fails() -
         repository,
         leases,
         FailingOcrAdapter(),
-        FakeKeywordAdapter(),
         PptWorkLimits(batch_size=1, max_concurrency=1),
     )
     work = [
@@ -300,7 +261,6 @@ async def test_ppt_text_pipeline_releases_item_lease_when_cancelled() -> None:
         repository,
         leases,
         BlockingOcrAdapter(),
-        FakeKeywordAdapter(),
         PptWorkLimits(batch_size=1, max_concurrency=1),
     )
     task = asyncio.create_task(
@@ -320,76 +280,3 @@ async def test_ppt_text_pipeline_releases_item_lease_when_cancelled() -> None:
     assert leases.active == 0
     assert repository.items[11]["ppt-001"] is None
     assert 11 not in repository.completed_nodes
-
-
-@pytest.mark.asyncio
-async def test_ppt_keyword_pipeline_recovers_only_unfinished_items() -> None:
-    class FailingKeywordAdapter(FakeKeywordAdapter):
-        failed = False
-
-        async def extract(
-            self,
-            instance_url: str,
-            *,
-            ppt_image_id: str,
-            text: str,
-        ) -> dict[str, Any]:
-            if ppt_image_id == "ppt-002" and not self.failed:
-                self.failed = True
-                raise RuntimeError("关键词服务暂时不可用")
-            return await super().extract(
-                instance_url,
-                ppt_image_id=ppt_image_id,
-                text=text,
-            )
-
-    repository = FakeRepository()
-    leases = FakeLeaseClient()
-    pipeline = PptTextPipeline(
-        repository,
-        leases,
-        FakeOcrAdapter(),
-        FailingKeywordAdapter(),
-        PptWorkLimits(batch_size=1, max_concurrency=1),
-    )
-    work = [
-        PptImageWork("ppt-001", Path("/ppt-001.jpg"), 0),
-        PptImageWork("ppt-002", Path("/ppt-002.jpg"), 1),
-    ]
-    ocr_results = {
-        item.ppt_image_id: {
-            "ppt_image_id": item.ppt_image_id,
-            "text": f"文本-{item.ordinal}",
-        }
-        for item in work
-    }
-
-    with pytest.raises(RuntimeError, match="关键词服务暂时不可用"):
-        await pipeline.run_keywords(
-            task_id="course-001",
-            node_id=12,
-            work=work,
-            ocr_results=ocr_results,
-        )
-
-    completed_first = repository.items[12]["ppt-001"]
-    assert completed_first is not None
-    assert repository.items[12]["ppt-002"] is None
-    assert len(leases.released) == 2
-
-    recovered = await pipeline.run_keywords(
-        task_id="course-001",
-        node_id=12,
-        work=work,
-        ocr_results=ocr_results,
-    )
-
-    assert repository.items[12]["ppt-001"] == completed_first
-    assert list(recovered) == ["ppt-001", "ppt-002"]
-    assert [context.item_id for _, context in leases.acquired] == [
-        "ppt-001",
-        "ppt-002",
-        "ppt-002",
-    ]
-    assert len(leases.released) == 3
-    assert repository.completed_nodes[12].result == recovered

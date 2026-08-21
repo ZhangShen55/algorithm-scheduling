@@ -62,7 +62,7 @@ class LeaseScope(StrEnum):
     WORK_ITEM = "WORK_ITEM"
 
 
-WORK_ITEM_CAPABILITIES = frozenset({"ocr", "extract_keywords"})
+WORK_ITEM_CAPABILITIES = frozenset({"ocr"})
 
 
 @dataclass(frozen=True, slots=True)

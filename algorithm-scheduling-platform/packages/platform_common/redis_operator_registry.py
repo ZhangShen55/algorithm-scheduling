@@ -113,11 +113,16 @@ end
 local redis_time = redis.call('TIME')
 local now_ms = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2]) / 1000)
 local instance_ids = redis.call('SMEMBERS', KEYS[1])
+local allowed_operator_codes = {}
+for _, operator_code in ipairs(cjson.decode(ARGV[9])) do
+    allowed_operator_codes[operator_code] = true
+end
 table.sort(instance_ids)
 for _, instance_id in ipairs(instance_ids) do
     local instance_key = ARGV[3] .. instance_id
     local heartbeat_key = ARGV[4] .. instance_id
-    if redis.call('EXISTS', heartbeat_key) == 1
+    if allowed_operator_codes[redis.call('HGET', instance_key, 'operator_code')]
+        and redis.call('EXISTS', heartbeat_key) == 1
         and redis.call('HGET', instance_key, 'lifecycle') == 'ONLINE'
         and redis.call('HGET', instance_key, 'model_ready') == '1' then
         local leases_key = ARGV[5] .. instance_id
@@ -485,6 +490,7 @@ class RedisOperatorRegistry:
                     if work_context is not None
                     else ""
                 ),
+                json.dumps([operator_code.value for operator_code in OperatorCode]),
             ),
         )
         if not result:
@@ -668,9 +674,13 @@ class RedisOperatorRegistry:
         lifecycle = OperatorLifecycle(raw["lifecycle"])
         if not self._client.exists(self._heartbeat_key(instance_id)):
             lifecycle = OperatorLifecycle.OFFLINE
+        try:
+            operator_code = OperatorCode(raw["operator_code"])
+        except ValueError as exc:
+            raise OperatorInstanceNotFoundError(instance_id) from exc
         return OperatorInstance(
             instance_id=instance_id,
-            operator_code=OperatorCode(raw["operator_code"]),
+            operator_code=operator_code,
             capabilities=json.loads(raw["capabilities"]),
             service_url=raw["service_url"],
             model_version=raw["model_version"] or None,

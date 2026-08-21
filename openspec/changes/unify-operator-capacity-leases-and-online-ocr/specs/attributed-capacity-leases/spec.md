@@ -1,3 +1,9 @@
+> **后续范围调整已废止（2026-08-21）**
+>
+> 本规格中 Text Analysis、`extract_keywords`、`course_overviews` 和 `PPT_KEYWORDS` 租约场景
+> 仅保留为已完成历史事实；当前平台不得再申请这些租约，现行边界见
+> `retire-text-analysis-from-scheduling-platform`。
+
 ## ADDED Requirements
 
 ### Requirement: 活跃租约是平台分发占用的权威事实

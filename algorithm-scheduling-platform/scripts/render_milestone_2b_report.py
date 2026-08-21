@@ -20,8 +20,15 @@ from typing import TYPE_CHECKING, Any, cast
 
 import yaml  # type: ignore[import-untyped]
 
+_PLATFORM_ROOT = Path(__file__).resolve().parents[1]
+if str(_PLATFORM_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PLATFORM_ROOT))
+
+from deploy.scripts.operator_topology import CURRENT_TOPOLOGY  # noqa: E402
+
 if TYPE_CHECKING:
     from scripts.milestone_2b_report_contract import (
+        SCHEMA_VERSION,
         overall_status,
         strict_json_loads,
         validate_cases_envelope,
@@ -33,13 +40,14 @@ else:
         if __package__
         else "milestone_2b_report_contract"
     )
+    SCHEMA_VERSION = _contract.SCHEMA_VERSION
     overall_status = _contract.overall_status
     strict_json_loads = _contract.strict_json_loads
     validate_cases_envelope = _contract.validate_cases_envelope
     validate_raw_execution_evidence = _contract.validate_raw_execution_evidence
 
 STATUSES = ("通过", "失败", "未执行及原因")
-REPORT_SCHEMA_VERSION = 2
+REPORT_SCHEMA_VERSION = 3
 RootIdentity = tuple[int, int]
 EXPLICIT_EVIDENCE_TYPES = frozenset(
     {"operator_smoke", "operator_registration", "execution_declaration"}
@@ -420,8 +428,8 @@ def _load_smoke_authority(project_root: Path) -> tuple[
             raise ValueError("Smoke authority 包含重复 case/operator")
         by_source[source_case_id] = authority
         by_operator[operator_code] = authority
-    if len(by_source) != 8:
-        raise ValueError("Smoke authority 必须包含 8 个算子")
+    if len(by_source) != CURRENT_TOPOLOGY.totals["operator_smoke_types"]:
+        raise ValueError("Smoke authority 必须包含 7 个算子")
     return by_source, by_operator
 
 
@@ -487,8 +495,8 @@ def _load_operator_authority(
             physical_gpu=physical_gpu,
             process_name=process_name,
         )
-    if len(authorities) != 24:
-        raise ValueError("Compose authority 必须包含 24 个算子实例")
+    if len(authorities) != CURRENT_TOPOLOGY.totals["instances"]:
+        raise ValueError("Compose authority 必须包含 21 个算子实例")
     return authorities
 
 
@@ -1008,7 +1016,13 @@ def _validate_declaration_evidence(
 ) -> None:
     payload = snapshot.payload
     context = snapshot.relative_path
-    _require_schema_v1(payload, context)
+    if (
+        type(payload.get("schema_version")) is not int
+        or payload["schema_version"] != SCHEMA_VERSION
+    ):
+        raise ValueError(
+            f"{context}.schema_version 必须是 {SCHEMA_VERSION}"
+        )
     if payload.get("evidence_type") != "execution_declaration":
         raise ValueError(f"{context}.evidence_type 必须是 execution_declaration")
     if case.get("status") != "未执行及原因":

@@ -82,7 +82,7 @@ def test_gate_publishes_an_atomic_same_sha_summary(tmp_path: Path, monkeypatch) 
     assert document["git_sha"] == git_sha
     assert document["layers"]["operator_contract"] == {
         "status": "等待同 release 证据",
-        "required_evidence": "24 实例注册与八算子 Smoke",
+        "required_evidence": "21 实例注册与七算子 Smoke",
     }
 
 

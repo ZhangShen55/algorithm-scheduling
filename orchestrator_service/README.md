@@ -29,14 +29,20 @@ docker build -f orchestrator_service/docker/Dockerfile -t orchestrator-service .
 
 ## 租约和离线等待
 
+当前新任务 DAG 固定为 `PPT_SLICE -> PPT_OCR` 和 `ASR_TRANSCRIPTION`。新任务不创建
+`PPT_KEYWORDS`、`COURSE_OVERVIEW` 或占位结果；历史任务中的这些节点仍由查询层原样返回。
+
 普通节点先申请实例租约，再领取节点并绑定任务、节点和追踪上下文；一次真实 HTTP 调用只占
 一个租约。同步调用使用有限硬超时，超过单次租约 TTL 时续租同一个租约，完成、失败、超时或
 取消后释放。容量暂时不足时节点进入等待状态，由后续调度重试，不会把内部 `503` 直接作为课程
 终态返回 A 服务。
 
-`PPT_OCR` 和 `PPT_KEYWORDS` 是工作项型节点：协调节点不占用外层算子租约，每个
-`ppt_image_id` 独立申请 OCR 或关键词租约，持久化单图结果后释放。PPT Slice 是异步长任务，
+`PPT_OCR` 是工作项型节点：协调节点不占用外层算子租约，每个 `ppt_image_id` 独立申请 OCR
+租约，持久化单图结果后释放。全部 OCR 工作项完成后 PPT 任务直接进入终态。PPT Slice 是异步长任务，
 从算子受理到 manifest 终态持久化持续续租，终态事务完成后才释放。
+
+ASR 只调用离线转写算子并保存完整 v1.1.8 结果和 `effective_params`，转写完成后 ASR 任务
+直接进入终态。Orchestrator 不注册、租赁或调用 Text Analysis。
 
 Outbox Publisher、Kafka Consumer 和节点执行循环已经接入应用生命周期；`/ops/readiness`
 同时报告这些后台组件的状态。健康接口只说明进程存活，不能替代 readiness、真实基础设施和

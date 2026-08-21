@@ -25,6 +25,24 @@ class OperatorInstanceEvent:
     occurred_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class OperatorInstanceAuditSnapshot:
+    instance_id: str
+    operator_code: str
+    capabilities: tuple[str, ...]
+    service_url: str
+    model_version: str | None
+    api_version: str | None
+    declared_capacity: int
+    labels: JsonObject
+    desired_state: str
+    last_registered_at: datetime
+    last_heartbeat_at: datetime | None
+    unregistered_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
@@ -144,6 +162,53 @@ class OperatorAuditRepository:
         if desired_state is None:
             raise OperatorInstanceNotFoundError(instance_id)
         return OperatorLifecycle(str(desired_state))
+
+    def get_instance_snapshot(self, instance_id: str) -> OperatorInstanceAuditSnapshot:
+        """Read persisted audit facts without reinterpreting retired operator codes."""
+        with self._engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT instance_id,
+                           operator_code,
+                           capabilities,
+                           service_url,
+                           model_version,
+                           api_version,
+                           declared_capacity,
+                           labels,
+                           desired_state,
+                           last_registered_at,
+                           last_heartbeat_at,
+                           unregistered_at,
+                           created_at,
+                           updated_at
+                    FROM operator_instances
+                    WHERE instance_id = :instance_id
+                    """
+                ),
+                {"instance_id": instance_id},
+            ).mappings().one_or_none()
+        if row is None:
+            raise OperatorInstanceNotFoundError(instance_id)
+        return OperatorInstanceAuditSnapshot(
+            instance_id=str(row["instance_id"]),
+            operator_code=str(row["operator_code"]),
+            capabilities=tuple(str(value) for value in row["capabilities"]),
+            service_url=str(row["service_url"]),
+            model_version=(
+                None if row["model_version"] is None else str(row["model_version"])
+            ),
+            api_version=None if row["api_version"] is None else str(row["api_version"]),
+            declared_capacity=int(row["declared_capacity"]),
+            labels=dict(row["labels"]),
+            desired_state=str(row["desired_state"]),
+            last_registered_at=row["last_registered_at"],
+            last_heartbeat_at=row["last_heartbeat_at"],
+            unregistered_at=row["unregistered_at"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
 
     def record_heartbeat_summary(
         self,

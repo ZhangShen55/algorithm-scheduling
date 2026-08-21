@@ -20,6 +20,8 @@
 
 ```bash
 python -m pytest -q algorithm-scheduling-platform/tests/test_operator_logging.py
+python -m pytest -q \
+  algorithm-scheduling-platform/tests/integration/test_container_logging_modes.py
 python -m compileall -q algorithm-scheduling-platform/packages
 PYTHONPATH=algorithm-scheduling-platform python -m pytest -q \
   algorithm-scheduling-platform/tests/test_logging_config_contract.py \
@@ -69,3 +71,11 @@ openspec validate standardize-service-file-logging --strict
 - 本阶段没有修改 `text_analysis/`，也没有执行其镜像构建、注册或部署；其历史 dirty 状态属于独立退役变更。
 - 11 个项目的完整模型推理、真实进程轮转/重建和 `192.168.29.11` 远端构建尚未在本记录中宣称通过；
   必须等 `retire-text-analysis-from-scheduling-platform` 本地完成后，使用两个变更相同的最终 Git SHA 一次执行。
+- 使用本机已缓存的 `alpine:3.20` 执行两种真实容器日志模式测试：无挂载时容器可在
+  `logs/{instance_id}` 创建并读取日志；绑定临时宿主机实例目录后，删除首个容器并启动替代
+  容器，旧活动日志和归档均保留，新事件由容器内 shell 与宿主机路径读取一致。该专项及现有
+  日志配置合同共 `6 passed`，没有构建业务镜像、访问 `/data` 或遗留测试容器。
+- 使用 11 个独立 Python 进程和隔离的临时实例目录完成小阈值轮转专项，逐项目验证写入前轮转、
+  一日过期清理、未过期归档保留和目录隔离，结果为
+  `{"processes": 11, "status": "PASS"}`。该结果只覆盖日志进程行为；七算子真实模型推理及
+  HTTP/WebSocket 全链路敏感哨兵仍须在远端同一最终 SHA 下完成。

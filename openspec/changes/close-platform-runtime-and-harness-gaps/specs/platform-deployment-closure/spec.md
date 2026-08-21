@@ -1,3 +1,8 @@
+> **后续范围调整已废止（2026-08-21）**
+>
+> 本规格中的八算子/Text Analysis 部署要求保留为历史范围。当前部署基线为七算子、21 实例，
+> 由 `retire-text-analysis-from-scheduling-platform` 覆盖。
+
 ## ADDED Requirements
 
 ### Requirement: 四个平台服务可一起部署

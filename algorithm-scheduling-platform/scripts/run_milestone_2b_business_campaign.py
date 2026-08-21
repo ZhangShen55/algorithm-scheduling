@@ -34,7 +34,7 @@ from scripts.milestone_2b_case_runners.evidence import release_identity
 PLATFORM_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = PLATFORM_ROOT.parent
 PHASE_CASE_PREFIXES: Mapping[str, tuple[str, ...]] = {
-    "offline": ("JOB-", "FILE-", "PPT-", "OCR-", "KEY-", "ASR-"),
+    "offline": ("JOB-", "FILE-", "PPT-", "OCR-", "ASR-"),
     "vision": ("VIS-",),
     "online": ("ONL-", "FACE-"),
     "final": ("LOAD-",),
@@ -52,7 +52,6 @@ PHASE_REGRESSION_TARGETS: Mapping[str, tuple[str, ...]] = {
         "tests/test_ppt_text_adapters.py",
         "tests/test_ppt_text_pipeline.py",
         "tests/test_offline_asr_adapter.py",
-        "tests/test_course_overview_adapter.py",
         "tests/integration/test_course_repository.py",
     ),
     "vision": (
@@ -171,13 +170,6 @@ def _case_regression_patterns() -> dict[str, tuple[str, ...]]:
     bind(("OCR-004",), "test_ppt_text_pipeline_keeps_completed_items_when_later_item_fails")
     bind(("OCR-005",), "test_dynamic_ppt_work_items_are_idempotent")
 
-    bind(("KEY-001",), "test_ppt_keyword_pipeline_recovers_only_unfinished_items")
-    bind(
-        ("KEY-002", "KEY-003", "KEY-004"),
-        "test_ppt_keyword_pipeline_recovers_only_unfinished_items",
-    )
-    bind(("KEY-005",), "test_keyword_adapter_uses_v1_text_endpoint_and_preserves_response")
-
     bind(("ASR-001", "ASR-002", "ASR-003"), "test_failed_audio_extraction_removes_partial_output")
     bind(("ASR-004",), "test_capacity_lease_is_released_when_background_renewal_failed")
     bind(
@@ -189,11 +181,6 @@ def _case_regression_patterns() -> dict[str, tuple[str, ...]]:
     bind(
         ("ASR-012", "ASR-013"),
         "test_asr_pipeline_persists_complete_response_and_effective_params",
-    )
-    bind(("ASR-014",), "test_completed_prerequisite_releases_only_direct_dependent_node")
-    bind(
-        ("ASR-015", "ASR-016", "ASR-017"),
-        "test_course_overview_pipeline_preserves_complete_generic_response",
     )
     bind(("ASR-018",), "test_completed_asr_reuses_large_result_and_original_effective_params")
 
@@ -380,7 +367,7 @@ def _selected_cases(catalog: Path, phase: str) -> tuple[CaseDefinition, ...]:
         for case in load_case_catalog(catalog).cases
         if case.phase == phase and case.case_id.startswith(prefixes)
     )
-    expected_counts = {"offline": 79, "vision": 28, "online": 34, "final": 9}
+    expected_counts = {"offline": 70, "vision": 28, "online": 34, "final": 9}
     if len(cases) != expected_counts[phase]:
         raise RuntimeError(f"{phase} campaign 用例数量漂移: {len(cases)}/{expected_counts[phase]}")
     return cases

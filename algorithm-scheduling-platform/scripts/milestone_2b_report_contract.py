@@ -8,8 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import TypedDict, cast
 
-SCHEMA_VERSION = 1
-EXECUTION_SCHEMA_VERSION = 2
+SCHEMA_VERSION = 2
+EXECUTION_SCHEMA_VERSION = 3
 STATUSES = ("通过", "失败", "未执行及原因")
 COVERAGE_KEYS = (
     "registration_full",
@@ -31,9 +31,9 @@ COVERAGE_EXPECTED = {
     "registration_facerec": 1,
     "gpu_running": 18,
     "gpu_stopped": 18,
-    "smoke_full": 8,
+    "smoke_full": 7,
     "smoke_gpu_trigger": 18,
-    "smoke_cpu_instance": 6,
+    "smoke_cpu_instance": 3,
     "negative_declarations": 217,
     "load_declarations": 26,
 }
@@ -145,7 +145,8 @@ EXPECTED_FACEREC_INSTANCES = (
 )
 EXPECTED_RANGES = {
     "negative": (
-        ("DEP", 1, 20),
+        ("DEP", 1, 7),
+        ("DEP", 9, 20),
         ("GPU", 1, 20),
         ("REG", 1, 20),
         ("INF", 1, 16),
@@ -153,11 +154,12 @@ EXPECTED_RANGES = {
         ("FILE", 1, 16),
         ("PPT", 1, 15),
         ("OCR", 1, 5),
-        ("KEY", 1, 5),
-        ("ASR", 1, 18),
+        ("ASR", 1, 13),
+        ("ASR", 18, 18),
         ("VIS", 1, 28),
         ("ONL", 1, 20),
         ("FACE", 1, 14),
+        ("RET", 1, 10),
     ),
     "load": (("LOAD", 1, 26),),
 }
@@ -176,7 +178,6 @@ SMOKE_FULL_OPERATOR_BY_SOURCE_CASE_ID = {
     "INF-OCR": "ocr",
     "INF-PPT-SLICE": "ppt_slice",
     "INF-SCREEN-DET": "screen_det",
-    "INF-TEXT-ANALYSIS": "text_analysis",
     "INF-VBAS": "vbas",
 }
 
@@ -375,7 +376,7 @@ def _require_nonnegative_int(value: object, context: str) -> int:
 
 
 def _validate_ranges(
-    value: object, kind: str, seen_prefixes: set[str]
+    value: object, kind: str, seen_case_ids: set[str]
 ) -> list[tuple[str, int, int]]:
     ranges: list[tuple[str, int, int]] = []
     for index, raw_range in enumerate(_require_list(value, f"declarations.{kind}")):
@@ -384,13 +385,15 @@ def _validate_ranges(
         prefix = _require_string(range_document["prefix"], f"{context}.prefix")
         if _PREFIX_PATTERN.fullmatch(prefix) is None:
             raise ValueError(f"{context}.prefix has an invalid format")
-        if prefix in seen_prefixes:
-            raise ValueError(f"duplicate declaration prefix: {prefix}")
-        seen_prefixes.add(prefix)
         first = _require_positive_int(range_document["first"], f"{context}.first")
         last = _require_positive_int(range_document["last"], f"{context}.last")
         if first > last:
             raise ValueError(f"{context} first must not exceed last")
+        case_ids = {f"{prefix}-{number:03d}" for number in range(first, last + 1)}
+        overlap = seen_case_ids.intersection(case_ids)
+        if overlap:
+            raise ValueError(f"duplicate declaration case IDs: {sorted(overlap)}")
+        seen_case_ids.update(case_ids)
         ranges.append((prefix, first, last))
     return ranges
 
@@ -440,9 +443,9 @@ def _validate_report_plan(value: object) -> dict[str, object]:
     if reason != DECLARATION_REASON:
         raise ValueError("declarations.reason does not match the release authority")
 
-    seen_prefixes: set[str] = set()
+    seen_case_ids: set[str] = set()
     actual_ranges = {
-        kind: tuple(_validate_ranges(declarations[kind], kind, seen_prefixes))
+        kind: tuple(_validate_ranges(declarations[kind], kind, seen_case_ids))
         for kind in ("negative", "load")
     }
     if actual_ranges != EXPECTED_RANGES:
@@ -631,8 +634,14 @@ def validate_raw_execution_evidence(
             f"missing={sorted(RAW_EXECUTION_EVIDENCE_FIELDS - actual_fields)}, "
             f"unknown={sorted(actual_fields - RAW_EXECUTION_EVIDENCE_FIELDS)}"
         )
-    if type(payload["schema_version"]) is not int or payload["schema_version"] != 2:
-        raise ValueError(f"{context} raw execution evidence schema_version must equal 2")
+    if (
+        type(payload["schema_version"]) is not int
+        or payload["schema_version"] != EXECUTION_SCHEMA_VERSION
+    ):
+        raise ValueError(
+            f"{context} raw execution evidence schema_version must equal "
+            f"{EXECUTION_SCHEMA_VERSION}"
+        )
     if payload["evidence_type"] != "case_evidence":
         raise ValueError(
             f"{context} raw execution evidence evidence_type must equal case_evidence"
@@ -1090,7 +1099,9 @@ def validate_cases_envelope(document: object) -> None:
             f"{sorted(overlap)}"
         )
     if schema_version == SCHEMA_VERSION and execution_case_ids:
-        raise ValueError("schema_version 1 does not accept execution records")
+        raise ValueError(
+            f"schema_version {SCHEMA_VERSION} does not accept execution records"
+        )
 
     recomputed = _recompute_real_case_coverage(cases_by_kind)
     if schema_version == SCHEMA_VERSION:

@@ -22,7 +22,7 @@ CATALOG = ROOT / "deploy/milestone-2b-case-catalog.yaml"
 
 @pytest.mark.parametrize(
     ("phase", "expected"),
-    (("offline", 79), ("vision", 28), ("online", 34), ("final", 9)),
+    (("offline", 70), ("vision", 28), ("online", 34), ("final", 9)),
 )
 def test_business_campaign_selects_the_complete_phase_contract(
     phase: str,

@@ -1,3 +1,8 @@
+> **后续范围调整说明（2026-08-21）**
+>
+> 在线 OCR 与 50 MiB 图片边界继续有效；任何关联 PPT 关键词或 Text Analysis 的历史表述已由
+> `retire-text-analysis-from-scheduling-platform` 废止。当前 PPT 离线管道只执行切片和 OCR。
+
 ## ADDED Requirements
 
 ### Requirement: Online Gateway 提供单图 OCR 接口

@@ -93,14 +93,13 @@ smoke/facerec.json
 smoke/ocr.json
 smoke/ppt_slice.json
 smoke/screen_det.json
-smoke/text_analysis.json
 smoke/vbas.json
 ```
 
-24 个实例都必须有独立运行目录。canonical 路径为
+21 个实例都必须有独立运行目录。canonical 路径为
 `smoke/instances/{instance_id}/runs/{run_id}/cases.json`，同目录还必须有该实例对应的
 `{operator_code}.json`。18 个 GPU 实例运行用于关联 `gpu-instances/*.json` 的真实推理，
-6 个 CPU 实例为 `ppt-slice-cpu0/1/2` 和 `text-analysis-cpu0/1/2`。不得用 full Smoke
+3 个 CPU 实例为 `ppt-slice-cpu0/1/2`。不得用 full Smoke
 替代每实例 runs，也不得在同一路径覆盖重跑结果。
 
 反例和压力声明固定写入：
@@ -124,8 +123,8 @@ release/SHA、状态通过、固定三轮 T/S/P 摘要稳定且逐项状态/长�
 summary/cases.json
 ```
 
-无额外 Smoke 重试时，完整 envelope 有 335 条用例：60 条注册/GPU 证据、32 条 Smoke
-和 243 条执行声明。保留历史重试时，用例总数至少为 335 条，并按实际重试数量增加。
+无额外 Smoke 重试时，完整 envelope 有 331 条用例：60 条注册/GPU 证据、28 条 Smoke
+和 243 条执行声明。保留历史重试时，用例总数至少为 331 条，并按实际重试数量增加。
 每条用例保留 `mock` 字段；聚合覆盖率分别统计期望、观察和通过数量。renderer 只把
 `mock=false` 计入真实验证的通过、失败和未执行计数，同时在明细中明确标识“真实”或
 `Mock`；Mock 结果不能替代真实验收。

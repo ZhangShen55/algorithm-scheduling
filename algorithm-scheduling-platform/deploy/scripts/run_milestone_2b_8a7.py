@@ -8,13 +8,22 @@ import shlex
 from collections.abc import Sequence
 from pathlib import Path
 
+from deploy.scripts.operator_topology import CURRENT_TOPOLOGY, DEFAULT_TOPOLOGY_PATH
 from deploy.scripts.run_milestone_2b_8a3 import (
+    HISTORICAL_SCENARIO,
     ROOT,
-    SCENARIO,
     bash_blocks,
     execute_runtime,
     section,
 )
+
+SCENARIO = ROOT / "harness/scenarios/milestone-2b-seven-operator-release.md"
+_CURRENT_SCENARIO_FIELDS = {
+    "schema_version",
+    "topology_path",
+    "lifecycle_scaffold",
+    "forbidden_runtime_markers",
+}
 
 
 def _quoted(value: object) -> str:
@@ -95,8 +104,96 @@ def _case_batch(phase: str) -> str:
   --require-all-selected"""
 
 
-def build_runtime(args: argparse.Namespace) -> str:
+def _load_current_scenario() -> dict[str, object]:
     document = SCENARIO.read_text(encoding="utf-8")
+    marker = "```json\n"
+    if document.count(marker) != 1:
+        raise RuntimeError("当前七算子 canonical 场景必须包含一个 JSON 合同")
+    payload = document.split(marker, 1)[1].split("\n```", 1)[0]
+    parsed = json.loads(payload)
+    if type(parsed) is not dict or set(parsed) != _CURRENT_SCENARIO_FIELDS:
+        raise RuntimeError("当前七算子 canonical 场景字段不完整")
+    if parsed["schema_version"] != 1:
+        raise RuntimeError("当前七算子 canonical 场景版本不受支持")
+    topology_path = (ROOT / str(parsed["topology_path"])).resolve()
+    scaffold_path = (ROOT / str(parsed["lifecycle_scaffold"])).resolve()
+    if topology_path != DEFAULT_TOPOLOGY_PATH.resolve():
+        raise RuntimeError("当前七算子 canonical 场景没有引用拓扑权威")
+    if scaffold_path != HISTORICAL_SCENARIO.resolve():
+        raise RuntimeError("当前七算子 canonical 场景的生命周期脚手架不受信任")
+    markers = parsed["forbidden_runtime_markers"]
+    if (
+        type(markers) is not list
+        or not markers
+        or any(type(value) is not str or not value for value in markers)
+        or len(markers) != len(set(markers))
+    ):
+        raise RuntimeError("当前七算子 canonical 场景的禁止标识无效")
+    return parsed
+
+
+def _topology_guard() -> str:
+    totals = json.dumps(
+        CURRENT_TOPOLOGY.totals,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f""".venv/bin/python - <<'PY'
+import json
+
+from deploy.scripts.operator_topology import CURRENT_TOPOLOGY
+
+expected = json.loads({totals!r})
+if CURRENT_TOPOLOGY.totals != expected:
+    raise SystemExit(
+        f"operator topology changed: {{CURRENT_TOPOLOGY.totals!r}} != {{expected!r}}"
+    )
+ordered = (
+    "operator_types",
+    "instances",
+    "gpu_instances",
+    "cpu_instances",
+    "config_authority_processes",
+    "operator_smoke_types",
+)
+print(
+    "CODEX_CURRENT_TOPOLOGY "
+    + " ".join(f"{{key}}={{expected[key]}}" for key in ordered)
+)
+PY"""
+
+
+def _adapt_current_stage3(stage3: str) -> str:
+    instance_count = CURRENT_TOPOLOGY.totals["instances"]
+    legacy_service_gate = (
+        'if [[ "$(wc -l <"$OPERATOR_SERVICE_ALLOWLIST_TMP" | '
+        "tr -d ' ')\" != 24 ]]; then\n"
+        '  echo "权威算子 Compose 必须精确包含 24 个 service" >&2\n'
+        "  exit 1\n"
+        "fi"
+    )
+    current_service_gate = (
+        'if [[ "$(wc -l <"$OPERATOR_SERVICE_ALLOWLIST_TMP" | '
+        f"tr -d ' ')\" != {instance_count} ]]; then\n"
+        f'  echo "权威算子 Compose 必须精确包含 {instance_count} 个 service" >&2\n'
+        "  exit 1\n"
+        "fi"
+    )
+    legacy_ledger_gate = """test "$(wc -l <"$NEW_OPERATOR_IDS" | tr -d ' ')" = 24"""
+    current_ledger_gate = (
+        f"test \"$(wc -l <\"$NEW_OPERATOR_IDS\" | tr -d ' ')\" = {instance_count}"
+    )
+    if stage3.count(legacy_service_gate) != 1 or stage3.count(legacy_ledger_gate) != 1:
+        raise RuntimeError("历史生命周期脚手架中的实例数量门禁发生漂移")
+    return stage3.replace(legacy_service_gate, current_service_gate).replace(
+        legacy_ledger_gate,
+        current_ledger_gate,
+    )
+
+
+def _current_stage_blocks() -> tuple[list[str], str, str, str, list[str]]:
+    document = HISTORICAL_SCENARIO.read_text(encoding="utf-8")
     prelude = document.split("## 阶段 1：服务器预检、快照和暂停", 1)[0]
     selected_prelude = [
         block
@@ -138,7 +235,13 @@ def build_runtime(args: argparse.Namespace) -> str:
         and len(stage1) == len(stage2) == len(stage3) == 1
         and len(stage6) == 3
     ):
-        raise RuntimeError("无法唯一解析里程碑 2B canonical 阶段")
+        raise RuntimeError("无法唯一解析里程碑 2B canonical 生命周期脚手架")
+    return selected_prelude, stage1[0], stage2[0], _adapt_current_stage3(stage3[0]), stage6
+
+
+def build_runtime(args: argparse.Namespace) -> str:
+    current_scenario = _load_current_scenario()
+    selected_prelude, stage1, stage2, stage3, stage6 = _current_stage_blocks()
 
     infrastructure_and_clean_clone = """
 docker compose -f deploy/docker-compose.infrastructure.yml up -d --wait --wait-timeout 300
@@ -203,13 +306,14 @@ printf 'CODEX_8A7_TERMINAL stage45_failures=%s ' "$stage45_status"
 printf 'overall_status=通过 cleanup=complete restore=complete\n'
 test "$stage45_status" = 0
 """
-    return "\n\n".join(
+    runtime = "\n\n".join(
         [
             *selected_prelude,
-            stage1[0],
+            _topology_guard(),
+            stage1,
             infrastructure_and_clean_clone,
-            stage2[0],
-            stage3[0],
+            stage2,
+            stage3,
             stage45_and_deployment,
             _media_preflight_command(args),
             business,
@@ -219,6 +323,12 @@ test "$stage45_status" = 0
             terminal,
         ]
     )
+    forbidden = current_scenario["forbidden_runtime_markers"]
+    assert isinstance(forbidden, list)
+    present = [marker for marker in forbidden if marker in runtime]
+    if present:
+        raise RuntimeError(f"当前七算子 runtime 包含退役命令: {present}")
+    return runtime
 
 
 def _path(value: str) -> Path:

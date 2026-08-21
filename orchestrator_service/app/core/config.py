@@ -107,8 +107,6 @@ class PptConfig(BaseModel):
     ocr_batch_size: int = Field(default=8, ge=1)
     ocr_max_concurrency: int = Field(default=2, ge=1)
     ocr_request_timeout_seconds: float = Field(default=600.0, gt=0)
-    keyword_batch_size: int = Field(default=8, ge=1)
-    keyword_max_concurrency: int = Field(default=2, ge=1)
 
     @field_validator("lease_renew_interval_seconds")
     @classmethod
@@ -121,10 +119,6 @@ class PptConfig(BaseModel):
 
 class AsrConfig(BaseModel):
     request_timeout_seconds: float = Field(default=7200.0, gt=0)
-
-
-class TextAnalysisConfig(BaseModel):
-    request_timeout_seconds: float = Field(default=600.0, gt=0)
 
 
 class ReadinessConfig(BaseModel):
@@ -152,7 +146,6 @@ class OrchestratorSettings(BaseSettings):
     media: MediaConfig = Field(default_factory=MediaConfig)
     ppt: PptConfig = Field(default_factory=PptConfig)
     asr: AsrConfig = Field(default_factory=AsrConfig)
-    text_analysis: TextAnalysisConfig = Field(default_factory=TextAnalysisConfig)
     readiness: ReadinessConfig = Field(default_factory=ReadinessConfig)
 
     @classmethod

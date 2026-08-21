@@ -14,7 +14,14 @@ import tomllib
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from .operator_topology import CURRENT_TOPOLOGY
+elif __package__:
+    from .operator_topology import CURRENT_TOPOLOGY
+else:
+    from operator_topology import CURRENT_TOPOLOGY
 
 
 class PreflightError(ValueError):
@@ -167,36 +174,14 @@ EXPECTED_PLATFORM_PORT_MAPPINGS = {
     "online-gateway-service": (18103, 8001, "tcp", WILDCARD_HOST),
 }
 EXPECTED_OPERATOR_PORT_MAPPINGS = {
-    **{
-        f"{operator}-gpu{gpu}": (
-            (gpu + 1) * 10000 + suffix,
-            target,
-            "tcp",
-            "127.0.0.1",
-        )
-        for operator, target, suffix in (
-            ("asr-offline", 8083, 8083),
-            ("asr-online", 8084, 8084),
-            ("ocr", 8866, 8866),
-            ("vbas", 8981, 8981),
-            ("facerec", 8000, 8003),
-            ("screen-det", 8880, 8880),
-        )
-        for gpu in range(3)
-    },
-    **{
-        f"{operator}-cpu{index}": (
-            (index + 1) * 10000 + suffix,
-            target,
-            "tcp",
-            "127.0.0.1",
-        )
-        for operator, target, suffix in (
-            ("ppt-slice", 9001, 9001),
-            ("text-analysis", 8000, 8000),
-        )
-        for index in range(3)
-    },
+    entry.instance_id(index): (
+        entry.host_port(index),
+        entry.container_port,
+        "tcp",
+        "127.0.0.1",
+    )
+    for entry in CURRENT_TOPOLOGY.operators
+    for index in range(entry.instance_count)
 }
 
 
@@ -599,9 +584,11 @@ def _validate_operator_services(
     course_root: str,
     result_root: str,
 ) -> None:
-    if len(operator_services) != 24:
+    expected_instances = CURRENT_TOPOLOGY.totals["instances"]
+    if len(operator_services) != expected_instances:
         raise PreflightError(
-            f"operator Compose must define exactly 24 services; found {len(operator_services)}"
+            "operator Compose must define exactly "
+            f"{expected_instances} services; found {len(operator_services)}"
         )
 
     instance_ids: list[str] = []
@@ -635,7 +622,7 @@ def _validate_operator_services(
         _validate_bind_mount(
             service_name, service, target="/data/result", expected_source=result_root
         )
-    if len(set(instance_ids)) != 24:
+    if len(set(instance_ids)) != expected_instances:
         raise PreflightError("operator instance IDs must be unique")
 
 

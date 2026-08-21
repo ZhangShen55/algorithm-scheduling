@@ -105,30 +105,6 @@ async def seacraft_asr(request: Request) -> dict[str, object]:
     }
 
 
-@app.post("/v1/course_overviews")
-async def course_overviews(request: Request) -> dict[str, object]:
-    payload = await request.json()
-    received_calls.append(
-        {
-            "node_code": "COURSE_OVERVIEW",
-            "route": "/v1/course_overviews",
-            "request_payload": payload,
-        }
-    )
-    await _delay()
-    return {
-        "model": "milestone-2a-stub",
-        "id": "course-overview-stub",
-        "result": {
-            "overview": {"title": "课程"},
-            "finished_time": "2026-08-19T00:00:00Z",
-            "process_time_ms": 1,
-            "finished_reason": "stop",
-        },
-        "usage": {},
-    }
-
-
 async def _delay() -> None:
     delay_seconds = float(os.environ.get("MILESTONE_2A_STUB_DELAY_SECONDS", "0"))
     if delay_seconds > 0:

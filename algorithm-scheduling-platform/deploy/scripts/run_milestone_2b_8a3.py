@@ -12,7 +12,9 @@ from types import FrameType
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
-SCENARIO = ROOT / "harness/scenarios/milestone-2b-deploy.md"
+HISTORICAL_SCENARIO = ROOT / "harness/scenarios/milestone-2b-deploy.md"
+# 8A.3 remains the immutable historical eight-operator controller.
+SCENARIO = HISTORICAL_SCENARIO
 
 
 def bash_blocks(markdown: str) -> list[str]:

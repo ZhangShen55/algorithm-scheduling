@@ -55,7 +55,7 @@
 - [x] 6.3 更新 Canonical operator/platform Compose，提供可选的 `/data/logs/algorithm-scheduling/{service}/{instance_id}` 到容器 `logs/{instance_id}` 挂载；默认不挂载时仍使用容器内日志目录。
 - [x] 6.4 扩展主机/部署预检，仅在启用宿主机挂载时安全创建并校验日志目录归属、权限、非符号链接、可写性和磁盘余量；未挂载时不得因缺少宿主机目录失败，也不得修改无关目录或 `/data/result`。
 - [x] 6.5 更新配置权威、Compose 展开和 attestation 测试，确认日志字段/挂载完整且七算子 21 实例、GPU/CPU、端口、网络和模型挂载不变。
-- [ ] 6.6 增加两种运行模式测试：未挂载时容器内 `logs/{instance_id}` 能创建并写入；启用挂载时旧日志在容器替换后保留，新容器继续写入同一宿主机实例目录且不覆盖归档，并通过容器内 shell 和宿主机路径读取同一日志事件。
+- [x] 6.6 增加两种运行模式测试：未挂载时容器内 `logs/{instance_id}` 能创建并写入；启用挂载时旧日志在容器替换后保留，新容器继续写入同一宿主机实例目录且不覆盖归档，并通过容器内 shell 和宿主机路径读取同一日志事件。
 
 ## 7. 配置、文档与注释质量门禁
 
@@ -68,12 +68,12 @@
 
 ## 8. 本地分层验证
 
-- [ ] 8.1 在各项目规定 Conda/`.venv` 环境运行 11 项 `compileall` 和 `app.main:app` 导入，验证日志目录首次启动自动创建。
+- [x] 8.1 在各项目规定 Conda/`.venv` 环境运行 11 项 `compileall` 和 `app.main:app` 导入，验证日志目录首次启动自动创建。
 - [ ] 8.2 运行七算子完整相关测试、`pip check`、健康/就绪和真实推理，比较路由/OpenAPI/响应合同并记录日志未包含输入输出大字段。
-- [ ] 8.3 运行四服务完整相关测试、strict Mypy、Ruff、健康/就绪和跨服务闭环测试，确认任务状态机、Outbox、Kafka、租约和在线转发无回归。
-- [ ] 8.4 使用小型临时阈值执行 11 项真实进程轮转测试，验证单文件上限、七日清理模拟、未过期保留和越界保护。
+- [x] 8.3 运行四服务完整相关测试、strict Mypy、Ruff、健康/就绪和跨服务闭环测试，确认任务状态机、Outbox、Kafka、租约和在线转发无回归。
+- [x] 8.4 使用小型临时阈值执行 11 项真实进程轮转测试，验证单文件上限、七日清理模拟、未过期保留和越界保护。
 - [ ] 8.5 使用代表性 HTTP、WebSocket、ASR、OCR、FaceRec、ScreenDet、VBas 和 PPT 请求执行敏感哨兵检查，文件/stdout 原值检出数必须为零。
-- [ ] 8.6 展开 Compose 并运行配置权威、挂载、项目根、实例隔离、clean clone、镜像构建合同和 `git diff --check`。
+- [x] 8.6 展开 Compose 并运行配置权威、挂载、项目根、实例隔离、clean clone、镜像构建合同和 `git diff --check`。
 - [x] 8.7 运行 `openspec validate standardize-service-file-logging --strict` 及受影响活动变更的全部严格校验，解决所有失败后才进入远端阶段。
 
 ## 9. Harness 与变更协同

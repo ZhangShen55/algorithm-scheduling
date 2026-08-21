@@ -14,7 +14,7 @@ GPU_OPERATORS = (
     "facerec",
     "screen-det",
 )
-CPU_OPERATORS = ("ppt-slice", "text-analysis")
+CPU_OPERATORS = ("ppt-slice",)
 
 
 def _load_services() -> dict[str, Any]:

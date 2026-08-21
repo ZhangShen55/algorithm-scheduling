@@ -59,11 +59,14 @@ def _release_root(tmp_path: Path) -> Path:
         "evidence_type": "operator_config_authority",
         "status": "PASS",
         "git_sha": SHA,
-        "operator_count": 8,
-        "process_count": 16,
+        "operator_count": cleanup.CURRENT_TOPOLOGY.totals["operator_types"],
+        "process_count": cleanup.CURRENT_TOPOLOGY.totals[
+            "config_authority_processes"
+        ],
         "results": [
-            {"operator_code": f"operator-{index // 2}", "mode": ("root", "controlled")[index % 2]}
-            for index in range(16)
+            {"operator_code": entry.operator_code, "mode": mode}
+            for entry in cleanup.CURRENT_TOPOLOGY.operators
+            for mode in ("root", "controlled")
         ],
     }
     (root / "preflight/operator-config-authority.json").write_text(
@@ -74,12 +77,21 @@ def _release_root(tmp_path: Path) -> Path:
         "load_cases": {"expected": 26, "observed": 26, "passed": 26},
     }
     (root / "summary/cases.json").write_text(
-        json.dumps({"release_tag": TAG, "git_sha": SHA, "coverage": coverage}),
+        json.dumps(
+            {
+                "schema_version": cleanup.EXECUTION_SCHEMA_VERSION,
+                "release_tag": TAG,
+                "git_sha": SHA,
+                "coverage": coverage,
+            }
+        ),
         encoding="utf-8",
     )
     (root / "summary/report.json").write_text(
         json.dumps(
             {
+                "schema_version": cleanup.REPORT_SCHEMA_VERSION,
+                "cases_schema_version": cleanup.EXECUTION_SCHEMA_VERSION,
                 "release_tag": TAG,
                 "git_sha": SHA,
                 "overall_status": "通过",
@@ -95,8 +107,11 @@ def _release_root(tmp_path: Path) -> Path:
         "release_tag": TAG,
         "git_sha": SHA,
         "selection": {"mode": "full"},
-        "summary": {"valid": 24},
-        "validated_instances": [{"instance_id": str(index)} for index in range(24)],
+        "summary": {"valid": cleanup.CURRENT_TOPOLOGY.totals["instances"]},
+        "validated_instances": [
+            {"instance_id": instance_id}
+            for instance_id in cleanup.CURRENT_TOPOLOGY.instance_ids
+        ],
     }
     (root / "registration/operator-registration.json").write_text(
         json.dumps(registration), encoding="utf-8"
