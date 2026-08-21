@@ -154,3 +154,21 @@ DAG、注册、迁移、七算子部署权威、217 条反例、26 条压力/恢
   服务均 healthy。未执行 prune、`down -v`、卷、`/data/result`、历史 release 或镜像删除。
 - Attempt 5 仍不得计入最终通过；下一次必须以包含本修复的新完整 SHA 和本 release 为立即前驱
   执行完整 Canonical。
+
+## 2026-08-22 远端 Attempt 6：退役反例夹具仍引用 Text Analysis
+
+- Attempt 6 SHA 为 `5c68595c83a17d3938b3e4f3a30be0744ed9d75c`，立即前驱为 Attempt 5。
+  clean-clone `2740 passed, 8 skipped`，四服务、真实 PostgreSQL/Redis、真实 Kafka 和14进程
+  配置权威全部通过；Attempt 5 阻断的 24→21 previous/current 账本投影已在真实 Compose 上通过。
+- 七算子与四平台镜像均绑定本 SHA；四平台 healthy，21/21 实例注册、18/18 GPU 真实推理和
+  物理卡/PID 归属、3/3 PPT CPU 真实切片、7/7 综合 Smoke 全部通过，Stage 4/5 终态为
+  `CODEX_STAGE45_COMPLETE failures=0`。
+- deployment 反例已执行 75 项，74 项通过；`DEP-014` 失败为
+  `checker reason does not contain required detail: CONFIG_PATH`。只读复核确认该 runner 仍用
+  `text-analysis-cpu0` 构造错误配置，生产合同正确先拒绝未知退役算子，导致 checker 没有到达
+  `CONFIG_PATH` 校验。修复只把变异目标改为当前 `ppt-slice-cpu0`，不放宽生产合同。
+- 失败发生在业务 Campaign 和复核请求之前，未执行完整 217 条反例、26 条压力/恢复或 6 项
+  B 级复核。Canonical 自动输出 `restore: complete`；0/21 baseline/new 账本完整，21 个当前算子
+  与三个历史 Text Analysis 容器均 Exited，原 `ocr-v6-amd` 保持 Exited，四平台和基础设施全部
+  healthy。没有删除容器、镜像、卷、数据或历史证据。
+- Attempt 6 仍是失败诊断证据；修复必须形成新 SHA，并以本 release 为立即前驱完整重跑。

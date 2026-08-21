@@ -107,6 +107,28 @@
 - Attempt 5 仍是失败诊断证据；修复提交后必须使用新 SHA，并以本 release 为立即前驱重跑完整
   Canonical。
 
+## 2026-08-22 - 七算子远端 Attempt 6 退役反例夹具漂移
+
+- SHA `5c68595c83a17d3938b3e4f3a30be0744ed9d75c` 首次真实越过 24→21 账本投影门禁。
+  clean-clone 为 `2740 passed, 8 skipped`，四服务为 `25/55/33/20 passed`，真实
+  PostgreSQL/Redis 为 `69 passed`，真实 Kafka 为 `12 passed`，14 进程配置权威通过。
+- 七个算子和四个平台镜像均以本 SHA 构建并通过 `amd64`、revision 与精确镜像身份门禁；四平台
+  healthy，21/21 实例注册、18/18 GPU 真实推理与 GPU/PID 归属、3/3 PPT CPU 真实切片以及
+  7/7 综合 Smoke 全部通过，终态为 `CODEX_STAGE45_COMPLETE failures=0`。
+- deployment 批次已产生 92 份执行记录，其中 91 通过、`DEP-014` 失败。其受控错误配置仍使用
+  已退役的 `text-analysis-cpu0`，生产合同先返回“未知算子”，checker 因而无法观察要求的
+  `CONFIG_PATH` 细节。该问题属于当前反例夹具与七算子范围漂移，不是生产配置被错误接受。
+- 修复把 `DEP-014` 的变异目标改为现役 CPU 算子 `ppt-slice-cpu0`，并增加不替换生产校验器的
+  直接回归；保留原案例 ID、非法配置语义和失败关闭要求。
+- 本 Attempt 未进入三路课程媒体预检、真实课程业务 Campaign、217 条完整反例、26 条完整
+  压力/恢复或 6 项 B 级复核，也未创建外部复核索引。Canonical 已输出 `restore: complete`；
+  baseline/new 为 0/21，21 个现役算子和三个退役 Text Analysis 容器均为 Exited，原
+  `ocr-v6-amd` 保持 Exited，四平台与四基础设施均 healthy。唯一恢复审计为当前 UID、单链接、
+  `0400` 的 `existing-containers.jsonl.paused.jsonl.audit.0789d8284b7e4e228f1c0a27e2a63363.jsonl`；
+  未执行 prune、`down -v`、卷、数据、历史 release 或镜像删除。
+- Attempt 6 只证明上述已通过边界，不满足 OpenSpec `14.3-14.7` 的完整验收；修复后必须使用
+  新 SHA 并以本 release 为立即前驱重跑 Canonical。
+
 ## 2026-08-21 - `standardize-service-file-logging` 本地实施与验证
 
 - 本变更基于 `778515596b42123a3061daeb9a1c3bb446f1de1b` 开始，目标是七个当前算子和四个平台服务；

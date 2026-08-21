@@ -682,11 +682,11 @@ def _check_dep_013(scratch_directory: Path) -> dict[str, Any]:
 
 
 def _check_dep_014() -> dict[str, Any]:
-    service = _operator_service("text-analysis-cpu0")
+    service = _operator_service("ppt-slice-cpu0")
     service["environment"]["CONFIG_PATH"] = "/wrong/config.toml"
     return _expect_error(
         lambda: deployment_contracts.validate_operator_service_contracts(
-            {"text-analysis-cpu0": service}
+            {"ppt-slice-cpu0": service}
         ),
         exception=deployment_contracts.DeploymentContractError,
         fragment="CONFIG_PATH",

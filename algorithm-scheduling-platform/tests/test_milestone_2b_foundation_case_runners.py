@@ -564,6 +564,7 @@ def test_clean_clone_docs_record_aiokafka_import_and_version_evidence() -> None:
     ("case_id", "observed_key"),
     [
         ("DEP-001", "rejected"),
+        ("DEP-014", "rejected"),
         ("REG-007", "issues"),
         ("INF-016", "contract_rejection"),
     ],
@@ -1347,7 +1348,7 @@ def test_dep_014_uses_production_operator_service_contract(
         del services
         calls.append("operator-service")
         raise deployment.deployment_contracts.DeploymentContractError(
-            "text-analysis-cpu0 CONFIG_PATH must be /app/config.toml"
+            "ppt-slice-cpu0 CONFIG_PATH must be /workspace/config.toml"
         )
 
     monkeypatch.setattr(
@@ -1360,6 +1361,19 @@ def test_dep_014_uses_production_operator_service_contract(
 
     assert calls == ["operator-service"]
     assert observed["rejected"] is True
+
+
+def test_dep_014_uses_a_current_operator_with_the_real_contract() -> None:
+    deployment = importlib.import_module(
+        "scripts.milestone_2b_case_runners.deployment"
+    )
+
+    observed = deployment._check_dep_014()
+
+    assert observed == {
+        "rejected": True,
+        "detail": "ppt-slice-cpu0 CONFIG_PATH must be /workspace/config.toml",
+    }
 
 
 def test_dep_020_reports_checkout_wrapper_only_scope(tmp_path: Path) -> None:
