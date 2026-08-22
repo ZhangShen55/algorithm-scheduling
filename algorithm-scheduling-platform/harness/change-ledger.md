@@ -1503,6 +1503,22 @@
   B 级复核、最终聚合或镜像清理。修复必须提交为新 SHA 并续跑完整 8A.7，旧 release 不得
   补写或作为 OpenSpec `14.3-14.7` 的通过证据。
 
+## 2026-08-22 - 七算子 Canonical 的课程目录参数校正
+
+- 失败 release：`425a81ef9ef5219e987d116c7248fdaa0d36cd5a`；立即前驱为
+  `75e104a033a554c6184c2306630fa902e9b22279`。
+- 已通过门禁：clean-clone 六层、真实 PostgreSQL/Redis/Kafka、14 进程配置权威、七算子与
+  四平台镜像、21/21 注册、18/18 GPU 真实推理、3/3 PPT CPU Smoke、7/7 综合 Smoke、
+  75/75 deployment 反例和17/17基础压力/恢复用例；`LOAD-015` 已按 FaceRec 范围通过。
+- 失败门禁：三轮 T/S/P 媒体探测九次均返回 HTTP `404` 和153字节错误响应，失败类型为
+  `media_probe_failed`。只读目录对照确认 Canonical 参数遗漏了实际课程目录中的姓名与年份片段；
+  正确目录仍包含教师、学生和 PPT 三路视频。这是发布调用参数错误，不修改生产媒体探针合同。
+- 证据边界：本轮未创建课程任务、业务泳道或 B 级复核 request，不能把局部通过结果拼接为最终
+  release。同 SHA 的媒体证据为 write-once，必须保留失败事实并由新 SHA 完整重跑。
+- 恢复结论：Canonical 输出 `restore: complete`，生成唯一当前 UID、单硬链接、`0400` 的恢复
+  audit；21 个本轮算子停止，原业务状态保持，四平台和四基础设施继续健康。未执行镜像清理、
+  prune、`down -v`、卷、数据或历史证据删除。
+
 ## Record template
 
 - Date and scope:

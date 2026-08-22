@@ -282,3 +282,27 @@ DAG、注册、迁移、七算子部署权威、217 条反例、26 条压力/恢
   保持 Exited，四平台与四基础设施 healthy；未执行 prune、`down -v`、数据、
   证据或镜像删除。本 release 仅作真实失败与恢复证据，修复须以新完整 SHA
   继承该 release 并重跑全部 Canonical。
+
+## 2026-08-22 远端 Attempt 12：Canonical 参数使用失效课程目录
+
+- Attempt 12 SHA 为 `425a81ef9ef5219e987d116c7248fdaa0d36cd5a`，立即前驱为 Attempt 11。
+  clean-clone、真实 PostgreSQL/Redis/Kafka、14 进程配置权威、七个算子和四个平台镜像、
+  21/21 注册、18/18 GPU 真实推理、3/3 PPT CPU Smoke 与 7/7 综合 Smoke 全部通过。
+- deployment 的75条反例和17条基础压力/恢复用例全部通过；修复后的 `LOAD-015` 成功验证
+  FaceRec 租约 `0 -> 1 -> 0` 与 Redis 重启后实例重新注册，不再受其他算子合法在途租约影响。
+  这些部分结果仅作本轮诊断证据，不能补足后续业务泳道和最终新 schema 验收。
+- 三路课程媒体预检固定执行三轮，T/S/P 九次请求均返回 HTTP `404`，声明长度和首块长度均为
+  `153`，因此以 `media_probe_failed` 失败关闭。只读枚举媒体源确认正确目录是
+  `0912空中交通管理与签派_1223121_1223122_90020060,徐月芳,__2025年9月12号17时10分`，
+  且其中存在 `教师2.mp4`、`学生1.mp4` 和 `PPT.mp4`；本轮启动参数遗漏目录片段，不是探针、
+  Orchestrator 容器网络或媒体服务器不可用。
+- 失败发生在任何课程任务创建之前，未进入 PPT/OCR、ASR-only、教师/学生视觉、在线图片、
+  实时 ASR 或人物管理泳道，也未发布 offline/vision request、外部复核输入或 B 级结论。
+  `preflight/course-media.json` 保持 write-once，禁止用同 SHA 覆盖为通过。
+- Canonical 输出 `restore: complete`；唯一恢复审计
+  `existing-containers.jsonl.paused.jsonl.audit.35af2684dcc04f2eb817db427fb41534.jsonl`
+  为当前 UID、单硬链接、`0400`。21 个本轮算子均已停止，原 `ocr-v6-amd` 保持 Exited，
+  四个平台与 PostgreSQL、Redis、Kafka、MongoDB 继续运行；维护锁可获取，未执行 prune、
+  `down -v`、卷、数据、历史 release 或镜像删除。
+- 下一 Attempt 必须先在 Orchestrator 容器外做只读 URL 状态确认，再以新 SHA 和本 release
+  作为立即前驱完整重跑；不得复用本轮局部通过报告或覆盖失败媒体证据。
