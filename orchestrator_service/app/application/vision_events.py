@@ -92,24 +92,38 @@ class VisualNodeCoordinator:
         )
         if node is None:
             return 0
-        try:
-            command = await self._command(node)
-        except BaseException:
-            await self._transition_for_retry(
-                node,
-                NodeStatus.PENDING,
-                "视觉命令准备失败，等待重试",
-            )
-            raise
         await asyncio.to_thread(
             self._repository.transition_node,
             node.id,
             NodeStatus.RUNNING,
-            "本地视频已准备，正在发布视觉分析命令",
+            "视觉节点已领取，正在准备本地视频",
         )
         try:
+            command = await self._command(node)
+        except asyncio.CancelledError:
+            await self._transition_for_retry(
+                node,
+                NodeStatus.WAITING_OPERATOR,
+                "视觉命令准备被中断，等待重试",
+            )
+            raise
+        except Exception:
+            await self._transition_for_retry(
+                node,
+                NodeStatus.FAILED,
+                "视觉命令准备失败，任务已终止",
+            )
+            return 1
+        try:
             await self._publisher.publish(command)
-        except BaseException:
+        except asyncio.CancelledError:
+            await self._transition_for_retry(
+                node,
+                NodeStatus.WAITING_OPERATOR,
+                "视觉命令发布失败，等待 Kafka 恢复",
+            )
+            raise
+        except Exception:
             await self._transition_for_retry(
                 node,
                 NodeStatus.WAITING_OPERATOR,
@@ -128,6 +142,22 @@ class VisualNodeCoordinator:
         for node in nodes:
             try:
                 command = await self._command(node)
+            except asyncio.CancelledError:
+                await self._transition_for_retry(
+                    node,
+                    NodeStatus.WAITING_OPERATOR,
+                    "视觉运行中节点恢复被中断，等待重试",
+                )
+                raise
+            except Exception:
+                await self._transition_for_retry(
+                    node,
+                    NodeStatus.FAILED,
+                    "视觉运行中节点媒体准备失败，任务已终止",
+                )
+                recovered += 1
+                continue
+            try:
                 await self._publisher.publish(command)
             except BaseException:
                 await self._transition_for_retry(

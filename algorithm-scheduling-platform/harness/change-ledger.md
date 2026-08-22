@@ -194,6 +194,34 @@
   数据、历史证据或镜像删除。Attempt 9 仅作为输入失败诊断，下一新 SHA 以本 release 为立即
   前驱并使用已验证的正确三路 URL 完整重跑。
 
+## 2026-08-22 - 七算子远端 Attempt 10 视觉失败节点饿死队列
+
+- SHA `7fd453efe67ed8bcf7280e11a474488b4bedea58` 以 Attempt 9 为立即前驱。clean-clone 为
+  `2751 passed, 8 skipped`，四服务为 `25/55/33/20 passed`，真实 PostgreSQL/Redis 为
+  `69 passed`，真实 Kafka 为 `12 passed`；14 进程配置权威、七个算子和四个平台镜像、
+  21/21 注册、18/18 GPU 真实推理、3/3 PPT CPU 真实切片及 7/7 综合 Smoke 全部通过。
+- 75 条部署反例和 17 条基础压力/恢复用例通过，三路课程媒体预检连续三轮均为 HTTP `206`、
+  正声明长度和正首块长度，且每个角色的 URL 摘要跨轮稳定。真实 PPT 任务在 31 张切片全部完成
+  OCR 后进入状态60，真实 ASR 在完整转写持久化后进入状态60；查询没有
+  `PPT_KEYWORDS` 或 `COURSE_OVERVIEW`。
+- 教师和学生视觉节点始终停在状态10。只读数据库与 Kafka 对账确认，历史课程节点 `186`
+  引用失效媒体，旧实现每次媒体准备异常都把它从已领取状态退回 `PENDING`；URGENT/FIFO 排序
+  随即再次领取同一节点，累计重试达到 `80543`，后续视觉节点 attempt 始终为0，且当前课程没有
+  发布任何 visual command。这是无退避重试造成的队列饥饿，不是 VBas、Kafka 或 GPU 推理故障。
+- 修复将视觉节点领取后明确转换为 `RUNNING`；媒体准备的不可恢复异常进入 `FAILED` 并聚合所属
+  任务终态，Kafka 发布失败或取消仍进入 `WAITING_OPERATOR` 等待恢复。视觉运行时测试
+  `10 passed`、Orchestrator 全量 `57 passed`、平台仓储/媒体定向 `50 passed`，Ruff、strict
+  Mypy、`compileall` 和 `git diff --check` 通过；不需要数据库迁移。
+- 四泳道未全部终态，因此本 Attempt 没有发布 offline/vision review request、复核输入、artifact
+  或外部索引，也没有执行剩余用例或镜像清理。向 Canonical Controller 发送 `SIGINT` 后输出
+  `restore: complete`；唯一恢复审计为当前 UID、单硬链接、`0400` 的
+  `existing-containers.jsonl.paused.jsonl.audit.fa9746363b414d1ca2040f7b65fb3dbd.jsonl`。
+  21 个当前算子和3个历史 Text Analysis 容器均为 Exited，原 `ocr-v6-amd` 保持原有 Exited，
+  四平台与 PostgreSQL、Redis、Kafka、MongoDB 均 healthy；未执行 prune、`down -v` 或删除
+  容器、卷、结果、历史 release 和镜像。
+- Attempt 10 只能作为真实缺陷与恢复证据。视觉修复必须形成新的完整 Git SHA，并以本 release
+  为立即前驱重新执行全部 Canonical；不得手工改库、热补丁或复用本轮局部结果补足最终验收。
+
 ## 2026-08-21 - `standardize-service-file-logging` 本地实施与验证
 
 - 本变更基于 `778515596b42123a3061daeb9a1c3bb446f1de1b` 开始，目标是七个当前算子和四个平台服务；

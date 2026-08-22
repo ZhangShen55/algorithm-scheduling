@@ -182,6 +182,39 @@ class Downloader:
         return SimpleNamespace(path=self.path)
 
 
+class FailingOnceDownloader(Downloader):
+    def __init__(self, tmp_path: Path) -> None:
+        super().__init__(tmp_path)
+        self.failures_remaining = 1
+
+    async def download(
+        self,
+        task_id: str,
+        source_url: str,
+        media_role: str,
+        *,
+        download_group_id: str | None = None,
+    ) -> object:
+        self.calls.append((task_id, source_url, media_role, download_group_id))
+        if self.failures_remaining:
+            self.failures_remaining -= 1
+            raise RuntimeError("媒体不可用")
+        return SimpleNamespace(path=self.path)
+
+
+class FailingDownloader(Downloader):
+    async def download(
+        self,
+        task_id: str,
+        source_url: str,
+        media_role: str,
+        *,
+        download_group_id: str | None = None,
+    ) -> object:
+        self.calls.append((task_id, source_url, media_role, download_group_id))
+        raise RuntimeError("媒体不可用")
+
+
 class Producer:
     def __init__(self, *, error: Exception | None = None) -> None:
         self.error = error
@@ -225,6 +258,36 @@ async def test_visual_node_claim_prepares_shared_submission_and_publishes(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_visual_media_failure_is_terminal_and_next_node_can_run(tmp_path: Path) -> None:
+    repository = Repository(node=_node())
+    downloader = FailingOnceDownloader(tmp_path)
+    producer = Producer()
+    coordinator = VisualNodeCoordinator(
+        repository,
+        downloader,
+        VisualCommandPublisher(producer, topic="visual"),
+        worker_id="worker-visual",
+    )
+
+    assert await coordinator.run_once() == 1
+    assert [status for _, status, _ in repository.transitions] == [
+        NodeStatus.RUNNING,
+        NodeStatus.FAILED,
+    ]
+    assert repository.aggregated == [7]
+    assert producer.sent == []
+
+    repository.node = _node()
+    assert await coordinator.run_once() == 1
+    assert [status for _, status, _ in repository.transitions] == [
+        NodeStatus.RUNNING,
+        NodeStatus.FAILED,
+        NodeStatus.RUNNING,
+    ]
+    assert len(producer.sent) == 1
+
+
+@pytest.mark.asyncio
 async def test_visual_recovery_republishes_same_stable_command_without_reclaim(
     tmp_path: Path,
 ) -> None:
@@ -247,6 +310,21 @@ async def test_visual_recovery_republishes_same_stable_command_without_reclaim(
     assert first.command_id.version == 5
     assert repository.claims == []
     assert repository.transitions == []
+
+
+@pytest.mark.asyncio
+async def test_visual_recovery_terminalizes_unrecoverable_media(tmp_path: Path) -> None:
+    repository = Repository(running=[_node(NodeStatus.RUNNING)])
+    coordinator = VisualNodeCoordinator(
+        repository,
+        FailingDownloader(tmp_path),
+        VisualCommandPublisher(Producer(), topic="visual"),
+        worker_id="worker-visual",
+    )
+
+    assert await coordinator.recover() == 1
+    assert [status for _, status, _ in repository.transitions] == [NodeStatus.FAILED]
+    assert repository.aggregated == [7]
 
 
 @pytest.mark.asyncio

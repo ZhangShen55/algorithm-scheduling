@@ -233,3 +233,29 @@ DAG、注册、迁移、七算子部署权威、217 条反例、26 条压力/恢
   21 个当前算子与 3 个历史 Text Analysis 容器均为 Exited，原 `ocr-v6-amd` 保持原有 Exited
   状态，四平台和 PostgreSQL、Redis、Kafka、MongoDB 全部 healthy；未执行 prune、`down -v`、
   卷、数据、历史 release 或镜像删除。
+
+## 2026-08-22 远端 Attempt 10：视觉媒体失败节点导致队列饥饿
+
+- Attempt 10 SHA 为 `7fd453efe67ed8bcf7280e11a474488b4bedea58`，立即前驱为 Attempt 9。
+  clean-clone `2751 passed, 8 skipped`，四服务 `25/55/33/20 passed`，真实
+  PostgreSQL/Redis `69 passed`，真实 Kafka `12 passed`；七算子和四平台镜像、14 进程配置
+  权威、21/21 注册、18/18 GPU 真实推理、3/3 PPT CPU Smoke 和 7/7 综合 Smoke 均通过。
+- 75 条部署反例和 17 条基础压力/恢复用例通过；正确 T/S/P 地址的三轮媒体预检全部返回
+  HTTP `206`、正声明长度与正首块长度，逐角色摘要跨轮稳定。真实 PPT 的 31 张切片与逐图 OCR
+  已完成，真实 ASR 完整转写已持久化，两类任务均为状态60且没有退役节点。
+- 视觉任务未进入执行。历史课程的 `STUDENT_BEHAVIOR_ANALYSIS` 节点 `186` 使用失效媒体地址，
+  旧协调器在媒体准备异常后把已领取节点退回状态10；URGENT/FIFO 排序持续重领同一节点，attempt
+  累计达到 `80543`，当前课程教师/学生节点的 attempt 均为0。Kafka 中四条课程命令已消费，但
+  当前任务没有 visual command；Orchestrator 和 Vision readiness、VBas 实例与 GPU 均正常。
+- 修复把领取节点从 `QUEUED` 转为 `RUNNING` 后再准备媒体；不可恢复的媒体准备错误进入状态70并
+  聚合任务类型，Kafka 发布失败与取消仍按状态30恢复。定向视觉测试 `10 passed`、Orchestrator
+  全量 `57 passed`、平台仓储/媒体定向 `50 passed`，Ruff、strict Mypy、`compileall` 和差异检查
+  通过，不涉及迁移。
+- 四泳道没有全部终态，Campaign 未生成 offline/vision request，外部复核索引、输入与 artifact
+  均不存在，不能发布5项 offline 复核或 `VIS-025`。Canonical 受控 `SIGINT` 后输出
+  `restore: complete`；唯一恢复审计
+  `existing-containers.jsonl.paused.jsonl.audit.fa9746363b414d1ca2040f7b65fb3dbd.jsonl`
+  为当前 UID、单硬链接、`0400`。21 个当前算子停止，3 个历史 Text Analysis 容器继续 Exited，
+  原 `ocr-v6-amd` 保持 Exited，四平台和四基础设施 healthy；没有清理镜像、卷、结果或历史证据。
+- 本 Attempt 不满足任务 9.4 至 9.7。修复提交后必须以新的完整 SHA、本 release 为立即前驱重跑，
+  不能通过手工修改历史任务状态、热补丁或拼接本轮局部证据绕过。
