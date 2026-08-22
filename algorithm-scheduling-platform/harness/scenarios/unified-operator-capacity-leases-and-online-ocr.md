@@ -10,15 +10,16 @@
 
 本场景对应 OpenSpec `unify-operator-capacity-leases-and-online-ocr`。2026-08-19 已进入 apply：
 公共租约模型、Redis 原子容量、Control API、普通/工作项/VBas/在线租约客户端、在线单图 OCR、
-八算子 TOML 配置和 Compose 静态合同已经实现。真实 Redis 下的跨服务容量、逐图 PPT、在线
-容量耗尽、心跳差异和三类调用客户端跨 TTL 已取得自动化证据。最新失败 release
-`ea39759ad8abb7d970bef386d1f1de0dd0391c71` 已通过 clean-clone 六层门禁、16 进程配置权威、
-24 实例注册、18/18 GPU 真实推理、6/6 CPU Smoke、8/8 算子 full Smoke 和 PPT 三实例长视频
-切片；217 条反例和 26 条压力用例也均实际执行，唯一失败为 `LOAD-011`。失败时任务事实和
-Outbox 已创建，但 Orchestrator 从 Stage45 后持续 readiness 503，未生成 DAG。该 release 已
-完成精确恢复且未清理旧镜像；新的 Stage45→deployment 稳定门禁仍须进入新 SHA 并完整重跑。
-当前结论仍是“实现和已执行层级部分符合，最终 Canonical、全部业务泳道、B 级复核与精确旧镜像
-清理待验证”，不得据此宣称整个变更完成。
+八算子 TOML 配置和 Compose 静态合同已经实现，当前部署范围已由后续变更收敛为七算子。
+真实 Redis 下的跨服务容量、逐图 PPT、在线容量耗尽、心跳差异和三类调用客户端跨 TTL
+已取得自动化证据。最新失败 release `425a81ef9ef5219e987d116c7248fdaa0d36cd5a`
+已通过 clean-clone 六层门禁、14 进程配置权威、四平台/七算子镜像、21 实例注册、18/18 GPU
+真实推理、3/3 PPT CPU 长视频切片、七算子综合 Smoke、75/75 deployment 反例和 17/17
+压力/恢复用例。本轮在创建真实课程前被三路媒体门禁阻断：Canonical 启动参数误用了
+被截断的课程目录，T/S/P 在 Orchestrator 容器内三轮均返回 `404`。门禁没有创建 `task_id`，
+随后完成 21 实例精确恢复且未清理旧镜像。新 SHA 必须使用已从宿主和 Orchestrator 容器
+验证为 `206` 的完整目录重跑 Canonical。当前结论仍是“实现和已执行层级部分符合，
+真实业务泳道、6 项 B 级复核、最终聚合与精确旧镜像清理待验证”，不得据此宣称整个变更完成。
 
 本记录使用用户修改后的 OpenSpec 作为权威来源，固定以下新增约束：
 
@@ -609,6 +610,59 @@ summary.json
   `2709 passed, 3 skipped`；3 个 skip 只因本机缺少 Canonical FaceRec Token/容器，远端
   不得跳过。Ruff、Mypy、Bash 语法与 OpenSpec strict 通过；最终结论必须由新 SHA 的真实
   容器预检、四条离线/视觉泳道、在线链路和 B 级复核共同形成。
+
+### 2026-08-22 七算子 deployment 配置路径反例漂移
+
+- 受影响 release：`5c68595c83a17d3938b3e4f3a30be0744ed9d75c`；直接前驱为
+  `b10751800bd4cf7c4e638ab76a36e9e71d795ad0`。
+- 该 SHA 已通过 clean-clone、14 进程配置权威、四平台/七算子镜像、21 实例注册、18/18 GPU
+  真实推理、3/3 PPT CPU Smoke 和七算子综合 Smoke。deployment 共执行 92 项，其中 91 项
+  通过，只有 `DEP-014` 失败。
+- 根因是 `DEP-014` 仍以退役 `text-analysis-cpu0` 构造错误 `CONFIG_PATH`。生产校验器正确先
+  拒绝未知算子，导致 checker 没有观察到预期配置路径原因；mock 单测没有覆盖该拓扑漂移。
+- 修复改用当前 `ppt-slice-cpu0` 并增加真实生产校验器回归，不改变业务、部署或校验合同。
+- Canonical 已按 0 条 baseline/21 条 new ledger 精确恢复，21 个算子均停止，平台和基础设施
+  healthy；没有课程媒体预检、课程任务、人工复核或镜像清理证据。本 release 不得计入
+  OpenSpec `14.3-14.7`，新 SHA 必须完整重跑 8A.7。
+
+### 2026-08-22 Redis 世代用例误用了全平台租约前置条件
+
+- 受影响 release：`75e104a033a554c6184c2306630fa902e9b22279`；该 SHA 已通过 clean clone
+  六层验证、14 进程配置权威、四个平台与七类算子镜像、21 实例注册、18/18 GPU 真实推理、
+  3/3 PPT CPU Smoke 和七算子综合 Smoke。
+- deployment 批次的 75 条反例全部通过；17 条压力/恢复用例中 16 条通过，唯一失败为
+  `LOAD-015`。失败发生在 Redis 重启前，检查器发现全平台活跃租约数为 `1` 后直接拒绝执行。
+- 根因是前序恢复用例允许 Orchestrator 的其他能力节点继续运行，而 `LOAD-015` 错误地要求
+  全平台活跃租约总数为零。该用例实际只验证 FaceRec `recognize` 租约在 Redis 世代变化后的
+  `0 -> 1 -> 0`，其他算子的合法在途租约不属于它的隔离资源。
+- 修复将三次容量断言收窄到 `operator_code=facerec`，仍要求 FaceRec 初始为零、真实租约建立后
+  为一、Redis 重启后为零，并保留租约 receipt、幂等释放、实例重新注册和 readiness 门禁。
+  新增回归明确证明其他 operator 的活跃租约不会污染该用例，FaceRec 自身非零仍失败关闭。
+- Canonical 已生成唯一当前 UID、单硬链接、`0400` 恢复 audit，维护锁已释放，21 个本轮算子
+  均为 Exited，四个平台和 PostgreSQL、Redis、Kafka、MongoDB 保持 healthy。三路媒体门禁、
+  四条业务泳道、在线链路、6 项 B 级复核、最终聚合和旧镜像清理均未执行，因此该 release
+  不得计入 OpenSpec `14.3-14.7`；修复后必须使用新完整 SHA 续跑 Canonical。
+
+### 2026-08-22 Canonical 启动参数截断了真实课程目录
+
+- 受影响 release：`425a81ef9ef5219e987d116c7248fdaa0d36cd5a`；直接前驱为
+  `75e104a033a554c6184c2306630fa902e9b22279`。
+- 该 SHA 已通过 clean-clone 六层、14 进程配置权威、四平台/七算子镜像、21 实例注册、
+  18/18 GPU 真实推理、3/3 PPT CPU 长视频切片、七算子综合 Smoke、75/75 deployment
+  反例和 17/17 压力/恢复用例；上一轮暴露的 `LOAD-015` 已在真实 Redis 重启中通过。
+- 业务任务创建前的媒体门禁记录了固定三轮 T/S/P 并发探测；九项均返回 HTTP `404`、
+  `declared_length=153`、`first_chunk_bytes=153`，因此以 `media_probe_failed` 失败关闭。没有创建
+  `task_id`，也没有发布 offline/vision 复核请求。
+- 根因不在媒体服务、调度平台或算子。Canonical 本轮启动参数将课程目录中
+  “芳,__2025年9月”一段遗漏，三路因而指向不存在的路径。恢复后对完整目录重新做 Range 读取，
+  宿主机和 `orchestrator-service` 容器内的 T/S/P 六次读取均返回 HTTP `206` 并实际读取
+  `1024` 字节。
+- 失败后 Canonical 保留原退出码，精确停止 21 个 new ledger 算子并生成唯一当前 UID、
+  单硬链接、`0400` 终态 audit；维护锁可非阻塞获取，四平台和 PostgreSQL、Redis、Kafka、
+  MongoDB 均 healthy，原 `ocr-v6-amd` 保持 `exited + unless-stopped`。未执行宽泛停止、prune、
+  强制镜像删除、卷/课程结果/证据删除或旧镜像清理。
+- 本 release 只能证明镜像、实例、Smoke、deployment 反例和压力/恢复门禁通过，不能计入
+  OpenSpec `14.3-14.7`。下一轮必须以新完整 SHA 和已验证的完整目录重跑 Canonical。
 
 只有同时满足以下条件，本场景和 `DEC-025` 才能从“待验证”改为“符合”：
 
