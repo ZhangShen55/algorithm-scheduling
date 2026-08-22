@@ -1485,6 +1485,24 @@
 - 修复：新增 `preflight-course-media`，固定在 deployment 与课程提交之间，从 `orchestrator-service` 容器并发读取 T/S/P 首块；Canonical 固定三轮并全部要求 HTTP `200/206`、正声明长度和正读取长度。三路 URL 从 Canonical 到宿主预检、再到容器探针均通过 stdin 传递；外层连续 runtime 改由匿名受控脚本文件执行，不把完整正文放进 Bash argv 或可被子进程消费的 stdin。宿主逐角色对账探针摘要与实际输入，聚合器要求同一角色三轮摘要恒定。任一路失败、容器超时/不可用、stdout 为空/异常或退出码矛盾时，先原子记录不含 stderr、完整 URL 和媒体内容的脱敏失败证据，再返回非零、不创建新 `task_id` 并进入精确恢复。最终 aggregator 强制校验当前 release/SHA、通过状态、固定三轮、每轮恰好 T/S/P、摘要稳定以及逐项状态/长度，证据缺失或失败时不发布 `summary/cases.json`。该门禁不修改 `MediaDownloader` 的业务终态或增加无限下载重试。
 - 本地验证：媒体门禁与 8A.7 生成顺序定向 `26 passed`，媒体/总控/聚合/锁边界定向 `584 passed`，平台全量 `2709 passed, 3 skipped, 27 warnings`；3 个 skip 只因本机缺少 Canonical FaceRec Token/容器，远端不得跳过，warnings 为既有多线程进程中 `fork()` 的 Python 弃用提示。Ruff、Mypy、Bash 语法、OpenSpec strict 和 `git diff --check` 通过；独立只读复审确认失败证据、URL 传递、摘要绑定、固定三轮和最终聚合门禁没有剩余阻断或中等风险。真实容器门禁及全泳道仍必须由新 SHA 的完整 Canonical 证明。
 
+## 2026-08-22 - 七算子 Canonical 的 LOAD-015 隔离范围修正
+
+- 失败 release：`75e104a033a554c6184c2306630fa902e9b22279`。clean clone 六层、14 进程
+  配置权威、四平台/七算子镜像、21 实例注册、18/18 GPU 真实推理、3/3 PPT CPU Smoke、
+  七算子综合 Smoke 和 75/75 deployment 反例均通过。
+- 17 条压力/恢复用例中 16 条通过，唯一失败是 `LOAD-015`。它在执行 Redis 重启前把全平台
+  活跃租约汇总为前置条件；前序用例产生的其他 operator 合法在途租约使总数为一，因此检查器
+  在没有修改 Redis 前失败关闭。该失败不表示 FaceRec 租约泄漏或 Redis 世代隔离回归。
+- 修复保持生产代码不变，只把 `LOAD-015` 的三次 `0 -> 1 -> 0` 断言限定到
+  `operator_code=facerec`。测试夹具补充真实快照字段，并新增“其他 operator 有活跃租约仍可
+  执行”的回归；FaceRec 自身初始非零、真实租约未唯一建立、Redis 重启后租约仍存在等路径
+  继续失败关闭。用例组合回归 `794 passed`，Ruff、strict Mypy、OpenSpec strict 和
+  `git diff --check` 均通过。
+- 失败 release 已由 Canonical 精确恢复：唯一 `0400` restore audit 存在，维护锁可获取，
+  21 个测试算子均停止，平台和基础设施 healthy；没有执行三路媒体门禁、业务 Campaign、
+  B 级复核、最终聚合或镜像清理。修复必须提交为新 SHA 并续跑完整 8A.7，旧 release 不得
+  补写或作为 OpenSpec `14.3-14.7` 的通过证据。
+
 ## Record template
 
 - Date and scope:

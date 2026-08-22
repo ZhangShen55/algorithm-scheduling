@@ -1390,11 +1390,14 @@ def test_load_015_requires_real_lease_before_restart_and_zero_after(
     _stub_canonical_runtime(monkeypatch, load)
     instances = [{"instance_id": "facerec-gpu0", "lifecycle": "ONLINE"}]
     capacity = iter(
-        (
-            [{"instance_id": "facerec-gpu0", "active_lease_count": 0}],
-            [{"instance_id": "facerec-gpu0", "active_lease_count": 1}],
-            [{"instance_id": "facerec-gpu0", "active_lease_count": 0}],
-        )
+        [
+            {
+                "instance_id": "facerec-gpu0",
+                "operator_code": "facerec",
+                "active_lease_count": count,
+            }
+        ]
+        for count in (0, 1, 0)
     )
     monkeypatch.setattr(load, "_operator_instances", lambda: instances)
     monkeypatch.setattr(load, "_require_online_ids", lambda expected_ids: instances)
@@ -1432,10 +1435,14 @@ def test_load_015_rejects_release_that_reports_lease_was_still_active(
     _stub_canonical_runtime(monkeypatch, load)
     instances = [{"instance_id": "facerec-gpu0", "lifecycle": "ONLINE"}]
     capacity = iter(
-        (
-            [{"instance_id": "facerec-gpu0", "active_lease_count": 0}],
-            [{"instance_id": "facerec-gpu0", "active_lease_count": 1}],
-        )
+        [
+            {
+                "instance_id": "facerec-gpu0",
+                "operator_code": "facerec",
+                "active_lease_count": count,
+            }
+        ]
+        for count in (0, 1)
     )
     monkeypatch.setattr(load, "_operator_instances", lambda: instances)
     monkeypatch.setattr(load, "_require_online_ids", lambda expected_ids: instances)
@@ -1471,12 +1478,14 @@ def test_load_015_retries_capacity_503_before_receipt_and_redis_restart(
     events: list[str] = []
     lease_attempts = iter((503, 200))
     capacities = iter(
-        (
-            [{"instance_id": "facerec-gpu0", "active_lease_count": 0}],
-            [{"instance_id": "facerec-gpu0", "active_lease_count": 0}],
-            [{"instance_id": "facerec-gpu0", "active_lease_count": 1}],
-            [{"instance_id": "facerec-gpu0", "active_lease_count": 0}],
-        )
+        [
+            {
+                "instance_id": "facerec-gpu0",
+                "operator_code": "facerec",
+                "active_lease_count": count,
+            }
+        ]
+        for count in (0, 0, 1, 0)
     )
     instances = [
         {
@@ -1686,7 +1695,11 @@ def test_load_015_rejects_nonzero_initial_active_lease_before_acquire(
     _stub_canonical_runtime(monkeypatch, load)
     acquired: list[str] = []
     monkeypatch.setattr(load, "_operator_instances", lambda: [])
-    monkeypatch.setattr(load, "_http_json", lambda url: [{"active_lease_count": 1}])
+    monkeypatch.setattr(
+        load,
+        "_http_json",
+        lambda url: [{"operator_code": "facerec", "active_lease_count": 1}],
+    )
     monkeypatch.setattr(
         load,
         "_acquire_case_lease",
@@ -1697,6 +1710,49 @@ def test_load_015_rejects_nonzero_initial_active_lease_before_acquire(
         load._restart_and_recover("LOAD-015", _canonical_scenario(load, "LOAD-015"))
 
     assert acquired == []
+
+
+def test_load_015_ignores_active_leases_owned_by_other_operators(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load = importlib.import_module("scripts.milestone_2b_case_runners.load")
+    _stub_canonical_runtime(monkeypatch, load)
+    instances = [{"instance_id": "facerec-gpu0", "lifecycle": "ONLINE"}]
+    capacity = iter(
+        [
+            {"operator_code": "asr_offline", "active_lease_count": 1},
+            {"operator_code": "facerec", "active_lease_count": count},
+        ]
+        for count in (0, 1, 0)
+    )
+    monkeypatch.setattr(load, "_operator_instances", lambda: instances)
+    monkeypatch.setattr(load, "_require_online_ids", lambda expected_ids: instances)
+    monkeypatch.setattr(load, "_http_json", lambda url: next(capacity))
+    monkeypatch.setattr(load, "_write_lease_receipt", lambda scenario, lease: None)
+    monkeypatch.setattr(
+        load,
+        "_acquire_case_lease",
+        lambda case_id, scenario: {
+            "lease_id": "lease-1",
+            "instance_id": "facerec-gpu0",
+            "capability": "recognize",
+        },
+    )
+    monkeypatch.setattr(
+        load,
+        "_release_case_lease",
+        lambda lease_id: load.LeaseReleaseResult(
+            http_status=200,
+            status="ALREADY_RELEASED",
+        ),
+    )
+
+    observed = load._restart_and_recover(
+        "LOAD-015", _canonical_scenario(load, "LOAD-015")
+    )
+
+    assert observed["before_active_lease_count"] == 1
+    assert observed["lease_release_status"] == "ALREADY_RELEASED"
 
 
 def test_load_015_releases_exact_lease_when_first_post_acquire_snapshot_fails(
@@ -1712,7 +1768,7 @@ def test_load_015_releases_exact_lease_when_first_post_acquire_snapshot_fails(
         nonlocal capacity_calls
         capacity_calls += 1
         if capacity_calls == 1:
-            return [{"active_lease_count": 0}]
+            return [{"operator_code": "facerec", "active_lease_count": 0}]
         raise ValueError("snapshot failed")
 
     scenario = _canonical_scenario(load, "LOAD-015")

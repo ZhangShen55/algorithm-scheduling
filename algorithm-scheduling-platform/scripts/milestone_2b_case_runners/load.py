@@ -59,6 +59,7 @@ _RUNTIME_RECOVERY_MAX_TIMEOUT_SECONDS = 1200.0
 _LOAD_015_LEASE_ACQUIRE_TIMEOUT_SECONDS = 30.0
 _LOAD_015_LEASE_RETRY_INTERVAL_SECONDS = 1.0
 _LOAD_015_LEASE_CAPABILITY = "recognize"
+_LOAD_015_OPERATOR_CODE = "facerec"
 _LEASE_EVIDENCE_FIELDS = frozenset(
     {
         "instance_id",
@@ -1007,13 +1008,15 @@ def _require_database_facts_preserved(
         raise ValueError(f"database fact row counts regressed after recovery: {regressed}")
 
 
-def _active_lease_count(snapshot: Any) -> int:
+def _active_lease_count(snapshot: Any, *, operator_code: str | None = None) -> int:
     if not isinstance(snapshot, list):
         raise ValueError("operator capacity snapshot is not a list")
     total = 0
     for item in snapshot:
         if not isinstance(item, dict):
             raise ValueError("operator capacity snapshot contains a non-object")
+        if operator_code is not None and item.get("operator_code") != operator_code:
+            continue
         count = item.get("active_lease_count")
         if type(count) is not int or count < 0:
             raise ValueError("operator capacity snapshot has an invalid active lease count")
@@ -1644,7 +1647,10 @@ def _restart_and_recover(case_id: str, scenario: Mapping[str, Any]) -> dict[str,
     lease: dict[str, str] | None = None
     lease_release_result: LeaseReleaseResult | None = None
     if case_id == "LOAD-015":
-        initial_active = _active_lease_count(_http_json(_CAPACITY_SNAPSHOT_URL))
+        initial_active = _active_lease_count(
+            _http_json(_CAPACITY_SNAPSHOT_URL),
+            operator_code=_LOAD_015_OPERATOR_CODE,
+        )
         if initial_active != 0:
             raise ValueError("LOAD-015 initial active lease count must be zero")
         lease = _acquire_case_lease(case_id, scenario)
@@ -1652,7 +1658,8 @@ def _restart_and_recover(case_id: str, scenario: Mapping[str, Any]) -> dict[str,
         try:
             _write_lease_receipt(scenario, lease)
             before_active_lease_count = _active_lease_count(
-                _http_json(_CAPACITY_SNAPSHOT_URL)
+                _http_json(_CAPACITY_SNAPSHOT_URL),
+                operator_code=_LOAD_015_OPERATOR_CODE,
             )
             if before_active_lease_count != 1:
                 raise ValueError(
@@ -1856,7 +1863,8 @@ def _restart_and_recover(case_id: str, scenario: Mapping[str, Any]) -> dict[str,
                     raise ValueError("Redis restart incorrectly preserved the old active lease")
                 lease = None
                 after_active_lease_count = _active_lease_count(
-                    _http_json(_CAPACITY_SNAPSHOT_URL)
+                    _http_json(_CAPACITY_SNAPSHOT_URL),
+                    operator_code=_LOAD_015_OPERATOR_CODE,
                 )
                 if after_active_lease_count != 0:
                     raise ValueError("Redis restart fabricated active lease recovery")

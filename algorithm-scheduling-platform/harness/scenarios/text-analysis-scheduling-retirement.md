@@ -259,3 +259,26 @@ DAG、注册、迁移、七算子部署权威、217 条反例、26 条压力/恢
   原 `ocr-v6-amd` 保持 Exited，四平台和四基础设施 healthy；没有清理镜像、卷、结果或历史证据。
 - 本 Attempt 不满足任务 9.4 至 9.7。修复提交后必须以新的完整 SHA、本 release 为立即前驱重跑，
   不能通过手工修改历史任务状态、热补丁或拼接本轮局部证据绕过。
+
+## 2026-08-22 远端 Attempt 11：LOAD-015 错用全平台租约范围
+
+- Attempt 11 SHA 为 `75e104a033a554c6184c2306630fa902e9b22279`，立即前驱为 Attempt 10。
+  clean-clone 六层、真实 PostgreSQL/Redis/Kafka、七算子和四平台镜像、14 进程
+  配置权威、21/21 注册、18/18 GPU 真实推理、3/3 PPT CPU Smoke 和 7/7 综合
+  Smoke 均通过；75 条 deployment 反例全部通过。
+- 基础压力/恢复用例为 16/17 通过，唯一失败为 `LOAD-015`。前序 `LOAD-013`
+  仍有非 FaceRec 节点处于运行状态；`LOAD-015` 虽然的资源范围是
+  `algorithm:operator-lease:facerec` 和 `recognize`，检查器却累加全平台
+  `active_lease_count` 并要求为零，因而把其他能力的合法在途租约误判为
+  FaceRec 污染。检查器在 Redis 重启前即失败关闭，这不是 Redis 世代隔离或
+  FaceRec 租约释放回归。
+- 修复仅把 `LOAD-015` 的前置、建立后与重启后三次租约计数限定到
+  `operator_code=facerec`；其他算子有在途租约时可继续验证，FaceRec 自身初始
+  非零、未建立唯一真实租约或重启后租约仍存在时仍失败关闭。相关回归
+  `794 passed`，Ruff、strict Mypy、OpenSpec strict 与差异检查通过。
+- 本轮未进入三路媒体预检、业务 Campaign、B 级复核、最终汇总或镜像清理。
+  Canonical 输出 `restore: complete`，唯一 `0400` 恢复审计已生成，维护锁可获取，
+  21 个当前算子和3个历史 Text Analysis 容器均为 Exited，原 `ocr-v6-amd`
+  保持 Exited，四平台与四基础设施 healthy；未执行 prune、`down -v`、数据、
+  证据或镜像删除。本 release 仅作真实失败与恢复证据，修复须以新完整 SHA
+  继承该 release 并重跑全部 Canonical。
