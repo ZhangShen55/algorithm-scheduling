@@ -664,6 +664,24 @@ summary.json
 - 本 release 只能证明镜像、实例、Smoke、deployment 反例和压力/恢复门禁通过，不能计入
   OpenSpec `14.3-14.7`。下一轮必须以新完整 SHA 和已验证的完整目录重跑 Canonical。
 
+### 2026-08-22 离线复核等待期的受控恢复边界
+
+- 受影响 release：`5f973adae6a81580ecd285ee81e203275fa14ba1`；直接前驱为
+  `425a81ef9ef5219e987d116c7248fdaa0d36cd5a`。
+- 当前 SHA 已完成 clean-clone、配置权威、21 实例注册、18/18 GPU 真实推理、
+  3/3 PPT CPU Smoke、7/7 算子 Smoke、75/75 反例、17/17 压力/恢复用例和三轮
+  T/S/P 媒体门禁。真实课程的 PPT/OCR、ASR-only、教师视觉和学生视觉均为
+  状态 `60`。
+- Campaign 已在这些真实结果之后发布 offline review request；5 项受控复核产物与
+  Git 外安全索引已经校验。课程媒体、识别全文和复核图片未进入 Git 或普通 release
+  报告。
+- Controller 在等待 offline 索引期间收到外部终止信号，随后完成唯一 `0400`
+  restore audit 并精确停止 21 个算子。本轮未生成 vision request、online/final 结果、
+  `summary/cases.json` 或镜像清理证据，因此不能补勾 OpenSpec `14.3-14.7`。
+- 同 SHA 在 maintenance 已恢复后重入被约束失败关闭，这防止改写不可变发布事实。
+  下一轮必须使用新 SHA，显式把 `5f973ada...` 作为同 tag 直接前驱，并重新产生
+  当前 SHA 的课程、6 项 B 级复核、容量/排空/回滚、最终汇总和精确镜像清理证据。
+
 只有同时满足以下条件，本场景和 `DEC-025` 才能从“待验证”改为“符合”：
 
 1. OpenSpec 88 项任务均由对应代码和可复现证据关闭，严格校验通过。

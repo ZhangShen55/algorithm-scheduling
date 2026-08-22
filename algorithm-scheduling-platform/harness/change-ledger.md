@@ -1519,6 +1519,34 @@
   audit；21 个本轮算子停止，原业务状态保持，四平台和四基础设施继续健康。未执行镜像清理、
   prune、`down -v`、卷、数据或历史证据删除。
 
+## 2026-08-22 - 七算子 Canonical 离线复核等待期外部终止
+
+- 未完成 release：`5f973adae6a81580ecd285ee81e203275fa14ba1`；直接前驱为
+  `425a81ef9ef5219e987d116c7248fdaa0d36cd5a`。
+- 已通过门禁：clean-clone 六层验证、14 进程配置权威、四平台与七类算子镜像、
+  21/21 实例注册、18/18 GPU 真实推理、3/3 PPT CPU Smoke、7/7 算子综合 Smoke、
+  75/75 反例、17/17 压力/恢复用例和课程创建前的三轮 T/S/P 媒体可达性。
+- 真实课程中 PPT Slice/PPT OCR、ASR-only、教师视觉和学生视觉全部进入状态
+  `60`；PPT 生成 31 张切片和 31 项 OCR 结果，教师/学生视觉均生成结构化结果与
+  证据图。这些结果只用于当前 SHA 的受控复核，不得跨 release 复用。
+- Campaign 已发布当前 SHA/当前课程的 `business/review-requests/offline.json`。独立
+  复核核对了 PPT 起始页、3 个动态区间、31 张稳定切片、600 秒 ASR 均匀抽样、
+  251 个抽样分段和 31 个中英混合分段；5 项 offline B 级复核已经受控发布器写入
+  当前 release，外部索引为当前 UID、`0600`、单硬链接。
+- 未完成位置：Controller 在等待 offline 复核索引时收到外部终止信号，log 终态为
+  `Terminated`，随后 `EXIT` 恢复输出 `restore: complete`。终止发生在复核发布前；
+  复核发布后 Controller 已不在运行，因此没有发布 `vision.json`，也没有执行
+  online/final Campaign、最终汇总或镜像清理。
+- 恢复与续跑边界：唯一 `0400` 恢复 audit 为
+  `existing-containers.jsonl.paused.jsonl.audit.00e57f70dd884a539715026b25e4c654.jsonl`；21 个当前算子
+  容器已精确停止，四平台与 PostgreSQL、Redis、Kafka、MongoDB 保持健康，原
+  `ocr-v6-amd` 保持 `Exited(143)`。同 SHA 重进维护事务被约束以
+  `current release maintenance is already restored; use a new Git SHA release` 失败关闭，
+  没有重启算子或改写既有证据。
+- 结论：本 release 不得计入 OpenSpec `14.3-14.7`。后续必须使用新完整 Git SHA，
+  以 `5f973ada...` 作为同 tag 立即前驱重跑全部 Canonical；新 SHA 的课程任务、
+  offline/vision 复核和全部发布证据均必须重新产生。
+
 ## Record template
 
 - Date and scope:
