@@ -88,6 +88,7 @@ def test_ppt_async_contract_has_renewal_and_reconciliation_settings() -> None:
     settings = OrchestratorSettings()
 
     assert settings.ppt.lease_renew_interval_seconds < settings.ppt.lease_ttl_seconds
+    assert settings.ppt.slice_threshold == 0.99
     assert settings.ppt.terminal_callback_path == "/internal/ppt-slice/callback"
     assert settings.ppt.max_manifest_bytes > 0
     assert settings.ppt.reconcile_interval_seconds > 0

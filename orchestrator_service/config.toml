@@ -119,8 +119,8 @@ ffmpeg_path = "ffmpeg"
 ffprobe_path = "ffprobe"
 
 [ppt]
-# PPT 画面像素相似度切片阈值。
-slice_threshold = 0.98
+# PPT 画面像素相似度切片阈值；0.99 可识别约 1% 的稳定标注变化。
+slice_threshold = 0.99
 # PPT 算子发送一次终态通知时可访问的 orchestrator-service 地址。
 callback_base_url = "http://127.0.0.1:18101"
 # PPT 算子一次性终态通知使用的内部路由前缀，实际请求追加节点 ID。

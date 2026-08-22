@@ -306,3 +306,33 @@ DAG、注册、迁移、七算子部署权威、217 条反例、26 条压力/恢
   `down -v`、卷、数据、历史 release 或镜像删除。
 - 下一 Attempt 必须先在 Orchestrator 容器外做只读 URL 状态确认，再以新 SHA 和本 release
   作为立即前驱完整重跑；不得复用本轮局部通过报告或覆盖失败媒体证据。
+
+## 2026-08-22 远端 Attempt 13：离线质量复核失败与精确恢复
+
+- Attempt 13 SHA 为 `5f973adae6a81580ecd285ee81e203275fa14ba1`，release 为
+  `releases/v1.0_260812/5f973adae6a81580ecd285ee81e203275fa14ba1`，直接前驱为 Attempt 12。
+  11 个镜像均为 `amd64` 且 revision 精确绑定本 SHA；21/21 注册、14进程配置权威、18/18 GPU
+  真实推理、3/3 PPT CPU Smoke、7/7 综合 Smoke、75/75 deployment 反例和17/17基础压力/恢复
+  均通过。新任务未创建 `PPT_KEYWORDS`、`COURSE_OVERVIEW` 或 Text Analysis 租约。
+- 三路媒体预检通过，真实任务 `m2b-v1.0_260812-5f973adae6a8-full-course` 的 PPT/OCR、ASR-only、
+  教师行为和学生行为节点均为状态60。Campaign 只发布了
+  `business/review-requests/offline.json`；事实核对确认没有创建 review input、外部 index、
+  review artifact，也没有调用 publisher。先前记录中“5项复核产物和索引已经发布”的表述为
+  复核前的错误描述，以本条事实更正为准，但保留原文用于审计。
+- 独立复核结果为：`PPT-012`、`PPT-013`、`ASR-012` 通过；`PPT-014` 在约 `380–430s` 漏掉
+  1张稳定标注页；`ASR-013` 审阅24个中英混合术语片段，其中9个严重错误，集中在
+  `NOTAM/ATIS/TAF/WET/WET SNOW`。因此不得发布 offline 通过索引，Attempt 13 不满足9.5。
+- PPT 根因探针测得基础页与完整标注页相似度为 `0.984217`。完整55分钟 P 视频使用阈值
+  `0.99` 后由31张增至35张，补出约 `387s` 标注页，3个动态区间内仍无爆发误切；平台默认和
+  `config.toml` 因此收敛为 `0.99`，PPT 算子合同不变。
+- ASR 隔离探针在 GPU0 使用相同 `teacher.wav` 和5个领域热词，HTTP返回200且请求热词已进入
+  Paraformer 参数；独立复核仍为9/24严重错误并与原结果逐段一致。生产及受控配置继续保持
+  `ban_hotword=true`。探针容器已停止，临时配置和完整转写已删除，未写入 Git 或 release。
+- Controller 通过 `SIGINT` 有界结束并输出 `restore: complete`。唯一恢复 audit 为当前 UID、
+  单硬链接、`0400` 的
+  `existing-containers.jsonl.paused.jsonl.audit.00e57f70dd884a539715026b25e4c654.jsonl`；维护锁可获取，
+  21个当前算子和3个历史 Text Analysis 容器均为 Exited，原 `ocr-v6-amd` 保持 Exited，四平台
+  与 PostgreSQL、Redis、Kafka、MongoDB healthy。未执行 prune、`down -v`、卷、数据、历史
+  release 或镜像删除。
+- 下一次远端运行必须使用包含 PPT 修复的新完整 SHA 并重新产生全部证据；在 ASR 模型能力或
+  验收边界得到明确解决前，不应重复执行完整 Canonical 来制造必然相同的 `ASR-013` 失败。

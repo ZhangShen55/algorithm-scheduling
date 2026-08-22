@@ -81,7 +81,7 @@ class NodeExecutionRouter:
         ppt_slice_adapter: PptSliceClient | None = None,
         ppt_callback_base_url: str = "",
         ppt_terminal_callback_path: str = "/internal/ppt-slice/callback",
-        ppt_slice_threshold: float = 0.98,
+        ppt_slice_threshold: float = 0.99,
     ) -> None:
         self._repository = repository
         self._ocr_pipeline = ocr_pipeline

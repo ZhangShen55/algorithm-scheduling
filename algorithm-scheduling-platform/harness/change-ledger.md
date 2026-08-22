@@ -1547,6 +1547,30 @@
   以 `5f973ada...` 作为同 tag 立即前驱重跑全部 Canonical；新 SHA 的课程任务、
   offline/vision 复核和全部发布证据均必须重新产生。
 
+## 2026-08-22 - Attempt 13 离线质量复核事实更正与前置修复
+
+- 对 `5f973adae6a81580ecd285ee81e203275fa14ba1` 的服务器事实重新核对后确认：Campaign 只发布
+  `business/review-requests/offline.json`，没有生成 review input、Git 外 index、逐案 artifact，
+  也没有调用 publisher。上一条记录中的“5项复核产物与索引已经发布”为错误描述；按 Harness
+  追加式审计规则保留原文并以本条更正为准。
+- 独立复核实际结果：`PPT-012`、`PPT-013`、`ASR-012` 通过；`PPT-014` 漏掉约 `380–430s` 的
+  1张稳定标注页；`ASR-013` 的24个中英混合术语片段中有9个严重错误。未发布 offline 通过索引，
+  也未执行 vision、online、final、最终聚合或镜像清理。
+- PPT 漏切由平台显式阈值 `0.98` 导致：相似度 `0.984217` 的完整标注页被视为同页。完整 P 视频
+  改为 `0.99` 后切片从31张增至35张，约 `387s` 标注页恢复，3个动态区间继续保持零爆发误切；
+  平台默认、根配置和回归测试已同步。
+- ASR 在 GPU0 的隔离热词探针返回 HTTP 200，代码测试也证明请求热词进入 Paraformer 参数，但
+  同一24个片段仍为9个严重错误且逐段不变。`ban_hotword` 保持禁用；隔离容器已停止，临时配置和
+  完整转写已删除。后续需要模型/词表改进、合适测试媒体或用户批准的验收边界，不能用配置开关
+  伪造 ASR-013 通过。
+- Attempt 13 的唯一 `0400` 恢复 audit、维护锁释放、21个当前算子及3个历史 Text Analysis
+  容器 Exited、原 `ocr-v6-amd` Exited、四平台和四基础设施 healthy 均已复核。未执行 prune、
+  `down -v`、卷、数据、报告或镜像删除。
+- 修复后的本地验证：Orchestrator 全量 `57 passed`；ASR 全量 `59 passed`，包含真实 CPU 推理与
+  新增热词参数链路测试；Harness/业务 Campaign/B 级复核合同定向 `33 passed`。变更文件 Ruff、
+  strict Mypy、`compileall`、本变更 OpenSpec strict 和 `git diff --check` 通过。由于 ASR-013 尚未
+  解除，不勾选远端9.1至10.5，也不以这些本地结果替代新 SHA 的 Canonical。
+
 ## Record template
 
 - Date and scope:

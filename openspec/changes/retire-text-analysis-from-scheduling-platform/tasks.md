@@ -69,6 +69,8 @@
 - [x] 8.4 使用真实 Kafka 运行提交、Outbox、DAG 初始化、重复消息、重启恢复和新终态跨服务测试，测试不得直接调用 Repository 伪造节点完成。
 - [x] 8.5 展开四平台与七算子 Compose，运行配置权威、端点、镜像、Smoke、报告合同、Harness 一致性和 `git diff --check`。
 - [x] 8.6 运行 `openspec validate retire-text-analysis-from-scheduling-platform --strict` 及受影响活动变更的严格校验，记录达到的六层验证证据和未覆盖边界。
+- [x] 8.7 对 Attempt 13 的 `PPT-014` 漏切执行完整 P 视频阈值探针，把平台 PPT 相似度阈值收敛为 `0.99` 并增加配置回归；不得改变 PPT 算子 HTTP 字段。
+- [x] 8.8 对 Attempt 13 的 `ASR-013` 执行同一音频热词隔离探针，证明热词实际进入模型参数；无质量改善时保持受控配置禁用热词，并把结果记录为最终验收阻断而不是伪造通过。
 
 ## 9. 远端七算子部署验证
 

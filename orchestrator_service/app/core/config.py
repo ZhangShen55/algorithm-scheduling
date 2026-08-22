@@ -96,7 +96,7 @@ class MediaConfig(BaseModel):
 
 
 class PptConfig(BaseModel):
-    slice_threshold: float = Field(default=0.98, ge=0, le=1)
+    slice_threshold: float = Field(default=0.99, ge=0, le=1)
     callback_base_url: str = "http://127.0.0.1:18101"
     terminal_callback_path: str = "/internal/ppt-slice/callback"
     processing_timeout_seconds: float = Field(default=7200.0, gt=0)
