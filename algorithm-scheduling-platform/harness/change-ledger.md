@@ -1672,6 +1672,25 @@
 - 证据边界：根盘仍只剩约 103 GB/7%，新 SHA 预检、镜像精确清理 dry-run、模型
   manifest、媒体下载基线和正式发布尚未完成；不勾选 11.1/11.2。
 
+## 2026-08-24 - 构建前镜像精确清理通过但磁盘门禁未解除
+
+- 目标机使用 clean detached SHA `4acc7c44dab8a3eb639c9cfe87f1da971ac6f47b` 执行构建前清理。
+  独立只读复核确认计划、同目录 inventory 与 live Docker 指纹一致，37 个保护镜像与 396 个
+  候选镜像交集为零；候选全部是无 tag/digest、无容器引用的完整悬空镜像 ID。
+- 经人工确认的计划 SHA-256 为
+  `2fd76c3646477d90fa32a1e2330237a6d32f383cf257f2ad0eac3c0f0ed1504d`。执行器逐项重建库存和
+  二次 inspect 后完成 396 项删除，结果账本状态为 `PASS`，位于
+  `deploy/reports/milestone-2b/releases/prebuild-260824/4acc7c44dab8a3eb639c9cfe87f1da971ac6f47b/cleanup/prebuild-cleanup-result.json`。
+- 清理后镜像从 475 个降为 79 个；原四平台和四中间件仍为 8/8 healthy，NVIDIA Runtime 仍已
+  注册，三张 GPU UUID 均可见。没有删除容器、卷、模型、Git、`/data/result` 或历史证据。
+- 磁盘门禁没有解除：根盘实际可用 `110115663872` 字节，约 102.6 GiB/6.8%，仍同时低于
+  150 GiB 和 15% 警戒线。`docker buildx du` 显示 Build Cache 为 Shared 74.19 GB、Private
+  234 GB、Reclaimable 308.2 GB；已删镜像的大层仍由缓存引用，因此镜像库存下降没有转化为
+  文件系统可用空间。
+- 本轮没有执行 `docker buildx prune` 或其他缓存删除。现有 OpenSpec 镜像 ID 审核合同不覆盖
+  Build Cache；在获得缓存清理授权并补充可审核边界前，任务 11.2 保持未完成，禁止进入 11.3
+  镜像构建。
+
 ## Record template
 
 - Date and scope:

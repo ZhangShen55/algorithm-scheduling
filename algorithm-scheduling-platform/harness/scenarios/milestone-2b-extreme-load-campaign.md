@@ -123,6 +123,18 @@ Campaign/release/SHA/case/phase 身份校验发布。
 4. 禁止 `docker system prune -a`、`docker compose down -v`、删除卷、删除 `/data/result`、删除模型和改写历史 release。
 5. 每一阶段必须原子发布原始证据；未执行、证据缺失或重复 ID 不得聚合为通过。
 
+## 2026-08-24 构建前清理执行结论
+
+- clean detached SHA `4acc7c44dab8a3eb639c9cfe87f1da971ac6f47b` 下的精确镜像计划已执行，
+  396 个经审核的悬空镜像全部删除，Docker 镜像库存由 475 降至 79。
+- 清理结果账本为 `PASS`，原 8 个平台/中间件容器仍 8/8 healthy，三张 GPU 与 NVIDIA Runtime
+  仍可用；持久数据、模型、卷、Git 和历史证据未被触碰。
+- 根盘可用空间仍为 `110115663872` 字节（约 102.6 GiB/6.8%），未达到 15% 且 150 GiB 的
+  警戒线。BuildKit 仍持有 234 GB private cache 和 74.19 GB shared cache，合计声明可回收
+  308.2 GB。
+- 因此本场景继续失败关闭：11.2 不完成、11.3 不启动。缓存不属于已审核镜像 ID 计划，未获得
+  新的受控清理边界前不得通过宽泛 prune 绕过。
+
 ## 2026-08-23 目标机 Git 准备合同补强
 
 - 远端已证明默认 SSH 身份无法访问 GitHub；部署 Git 操作必须显式使用

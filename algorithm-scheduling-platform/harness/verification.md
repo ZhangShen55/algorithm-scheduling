@@ -1239,3 +1239,16 @@ git diff --check
 preflight 明确报“Git working tree inspection failed”且不得输出 host PASS。远端 NVIDIA
 Runtime 注册、8/8 原容器恢复与 3/3 GPU 容器可见性是当次目标机运行证据；根盘红线和
 最终 SHA preflight 仍未解除。
+
+## 2026-08-24 构建前镜像清理与磁盘门禁
+
+目标机使用计划 SHA-256
+`2fd76c3646477d90fa32a1e2330237a6d32f383cf257f2ad0eac3c0f0ed1504d` 执行
+`production-image-lifecycle execute`。结果账本 `status=PASS`，396 个候选镜像均按完整 ID
+删除，镜像总数由 475 降为 79；四平台和四中间件保持 8/8 healthy，三张 GPU 与 NVIDIA
+Runtime 保持可用。
+
+执行后的 `df -B1 /` 仍只有 `110115663872` 字节可用；`docker buildx du` 报告 Shared
+74.19 GB、Private 234 GB、Reclaimable 308.2 GB。这证明镜像差集实现和删除执行通过，但
+Build Cache 仍引用相关层，磁盘警戒线没有解除。因此 OpenSpec 11.2 仍为未完成，11.3 构建
+不得开始；本次没有执行缓存 prune、卷删除或持久目录清理。
