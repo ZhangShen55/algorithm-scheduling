@@ -87,6 +87,10 @@ async def test_async_runner_bounds_concurrency_and_records_safe_results() -> Non
     assert len(results) == 20
     assert all(result.category is ResultCategory.SUCCESS for result in results)
     assert all(
+        result.evidence["response_size_bytes"] > 0
+        for result in results
+    )
+    assert all(
         "敏感转写" not in json.dumps(result.evidence, ensure_ascii=False)
         for result in results
     )

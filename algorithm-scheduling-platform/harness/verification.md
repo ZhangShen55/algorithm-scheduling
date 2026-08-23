@@ -46,6 +46,59 @@ bash -n \
 `--allow-live-execution`，并对 SSH 媒体下载、真实主机指标、故障语义、混合和长稳用例返回
 blocked。不能据此宣称 `192.168.29.11` 的发布、Campaign 或清理通过。
 
+同日新增真实迁移账本与中间件联合门禁，从平台目录执行：
+
+```bash
+.venv/bin/python -m pytest -q -rs \
+  tests/integration/test_course_repository.py \
+  tests/integration/test_redis_operator_registry.py \
+  tests/integration/test_operator_audit_repository.py \
+  tests/integration/test_control_service_foundation.py \
+  tests/integration/test_kafka_runtime.py \
+  tests/integration/test_milestone_2a_runtime.py \
+  tests/integration/test_migration_executor_runtime.py
+```
+
+结果为 `94 passed`、无 skip。测试创建唯一 `_test` PostgreSQL 数据库、隔离 Redis 前缀和
+唯一 Kafka topic/group，覆盖任务突发、幂等、Outbox、DAG、租约、Orchestrator 重启恢复及
+`0001`–`0007` 迁移首次/重复账本；没有连接或清理 `algorithm` 业务数据库。该证据达到真实
+PostgreSQL/Redis/Kafka 集成层级，仍不代表真实算子、远端三卡部署或极限负载已经通过。
+
+本地生产运行时收口后执行：
+
+```bash
+.venv/bin/python -m pytest -q \
+  tests/extreme_load tests/deploy \
+  tests/integration/test_migration_executor_runtime.py
+.venv/bin/python -m ruff check \
+  scripts/extreme_load scripts/run_extreme_load_campaign.py \
+  deploy/scripts/image_lifecycle.py deploy/scripts/migration_executor.py \
+  tests/extreme_load tests/deploy/test_image_lifecycle.py \
+  tests/integration/test_migration_executor_runtime.py
+.venv/bin/python -m mypy --strict \
+  scripts/extreme_load scripts/run_extreme_load_campaign.py \
+  deploy/scripts/image_lifecycle.py deploy/scripts/migration_executor.py
+```
+
+结果为 `315 passed`，Ruff 通过，strict Mypy 对 24 个源文件通过；`compileall`、直接导入和
+Bash syntax 同样通过。覆盖 Campaign 查询/在线/人脸、连续观测、媒体下载、FaceRec 原图残留、
+镜像生命周期和迁移账本。本结果只证明本地实现与失败关闭边界，不代表远端适配器已经执行。
+
+随后执行完整平台回归：
+
+```bash
+.venv/bin/python -m pytest -q tests
+.venv/bin/pip check
+```
+
+结果为 `3073 passed, 3 skipped`、`No broken requirements found`。3 项 skip 均明确要求外部
+`OPERATOR_REGISTRY_TOKEN` 才能运行 Canonical FaceRec 集成；它们保持未执行，不计入远端
+FaceRec 三实例、共享 MongoDB 或原图残留通过证据。
+
+目标机 Docker 26 的只读格式兼容检查为：`docker system df -v --format json` 共 475 个
+Images 行、475 个唯一完整 `sha256:` ID、零个缺失 `UniqueSize`，与
+`docker image ls --all --no-trunc --quiet | sort -u` 的 475 个 ID 一致。未执行镜像删除。
+
 ## 2026-08-21 七算子当前验收入口
 
 当前发布范围由

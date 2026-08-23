@@ -36,6 +36,37 @@
   最终 Campaign SHA 远端运行，目标机仍受约 103 GiB/7% 磁盘红线约束。
 - `ASR-013` 的 9/24 严重中英混合术语错误保持质量阻断；极限性能结果不得覆盖该结论。
 
+## 2026-08-23 - `run-milestone-2b-extreme-load-campaign` 真实中间件集成补强
+
+- 修正迁移账本真实测试误用平台 Compose 的问题：隔离迁移库改用基础设施 Compose，不通过
+  写死 `OPERATOR_REGISTRY_TOKEN` 绕过平台服务配置。
+- 联合执行真实 PostgreSQL、Redis、Kafka 的任务事实、幂等、Outbox、DAG、租约、消费者提交、
+  Orchestrator 重启恢复和迁移账本门禁，结果为 `94 passed`、无 skip。每次运行使用唯一
+  `_test` 数据库、Redis 测试前缀及 Kafka topic/group；没有改动 `algorithm` 业务数据库。
+- 该记录只把 OpenSpec `10.3` 提升为真实中间件集成证据。远端媒体源资源证据、七算子镜像、
+  21 实例、阶段 0–6 和 ASR-013 质量阻断均保持未完成，不以本地集成结果替代。
+
+## 2026-08-23 - Campaign 生产适配器与失败关闭收口
+
+- Campaign 本地实现统一门禁为 `315 passed`，覆盖查询抖动/惊群与大 ASR 结果、人脸管理与
+  识别语义、连续运行指标、媒体下载、FaceRec 原图残留、镜像生命周期、迁移账本和部署静态合同。
+- 平台完整测试集结果为 `3073 passed, 3 skipped`；3 项 skip 都是明确要求外部
+  `OPERATOR_REGISTRY_TOKEN` 的 Canonical FaceRec 集成用例，不被计作通过，也不能补足远端
+  三实例验收。`pip check` 无损坏依赖。
+- 连续指标通过目标机健康 Kafka 容器读取两个真实 consumer group 的 lag；常规采样不超过
+  5 秒，在线突发为 0.5–1 秒。每个 live case 的规范证据绑定当前用例的不可变时序和 summary；
+  指标缺失、容器身份不唯一或 Kafka lag 畸形均失败关闭。
+- `/data/course` 与 `/data/result` 的递归大小只在长课 before/after 检查点采集，在线突发不执行
+  `du`；人脸原图残留适配器独立检查三 FaceRec 容器、MongoDB、日志和持久目录，但尚未在
+  远端真实数据集执行，OpenSpec `5.9` 保持未完成。
+- 镜像回收量改用 Docker 26 实测 `UniqueSize`。目标机只读检查确认 `docker system df -v
+  --format json` 返回 475 行、475 个唯一完整镜像 ID，与 `docker image ls --no-trunc` 一致；
+  旧约 2.8 TB 虚高清理计划继续禁止执行。
+- 清理计划现在必须显式保护非空回滚/基础镜像，并将每个待退役完整容器 ID 与精确
+  `compose_project/service`、已退役 Git revision 一一绑定；报告仅保留脱敏的 Docker 大小摘要。
+- 本轮仍未生成远端 Campaign 通过证据；`4.5` 因 Control 查询没有 `claimed_at/started_at`
+  在 URGENT 注入前失败关闭，媒体源 `192.168.29.12` 的源端资源证据和 `ASR-013` 仍为阻断。
+
 ## 2026-08-21 - `retire-text-analysis-from-scheduling-platform` 基线冻结
 
 - 本变更从 `56d42f5cc5e88f271935e0a5c99dadd54e0e07a6` 开始；`text_analysis/` 的 101 个非缓存

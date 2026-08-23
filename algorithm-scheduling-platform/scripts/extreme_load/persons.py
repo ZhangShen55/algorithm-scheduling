@@ -4,6 +4,7 @@ import base64
 import binascii
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from .core import HttpRequestSpec, NorthboundTargets, ReproducibleIdentity
 
@@ -56,6 +57,12 @@ def person_dataset_tiers() -> tuple[int, ...]:
     return (500, 1000, 5000)
 
 
+def person_dataset_id(count: int) -> str:
+    if count not in person_dataset_tiers():
+        raise ValueError("人物数据集只允许 500/1000/5000")
+    return f"FACE-DATASET-{count}"
+
+
 def build_person_dataset(
     identity: ReproducibleIdentity,
     case_id: str,
@@ -65,11 +72,14 @@ def build_person_dataset(
 ) -> tuple[PersonFixture, ...]:
     if count not in person_dataset_tiers():
         raise ValueError("人物数据集只允许 500/1000/5000")
+    if not case_id:
+        raise ValueError("人物用例 ID 不能为空")
     _validate_base64(encoded_photo)
+    dataset_id = person_dataset_id(count)
     return tuple(
         PersonFixture(
             name=f"压测人物-{index:05d}",
-            number=f"P-{identity.request_id(case_id, index)[-18:]}",
+            number=f"P-{identity.request_id(dataset_id, index)[-18:]}",
             photo=encoded_photo,
         )
         for index in range(count)
@@ -80,16 +90,87 @@ def _person_body(person: PersonFixture) -> dict[str, str]:
     return {"name": person.name, "number": person.number, "photo": person.photo}
 
 
+@dataclass(frozen=True)
+class PersonDatasetPartition:
+    retained: tuple[PersonFixture, ...]
+    deleted: tuple[PersonFixture, ...]
+
+    def __post_init__(self) -> None:
+        all_numbers = [person.number for person in (*self.retained, *self.deleted)]
+        if not self.retained or not self.deleted:
+            raise ValueError("人物数据集必须同时包含保留和删除分区")
+        if len(all_numbers) != len(set(all_numbers)):
+            raise ValueError("人物数据集编号不能重复")
+
+
+def partition_person_dataset(
+    persons: Sequence[PersonFixture],
+    *,
+    delete_count: int = 1,
+) -> PersonDatasetPartition:
+    if delete_count <= 0 or delete_count >= len(persons):
+        raise ValueError("删除分区必须为正且小于人物总数")
+    retained_count = len(persons) - delete_count
+    return PersonDatasetPartition(
+        retained=tuple(persons[:retained_count]),
+        deleted=tuple(persons[retained_count:]),
+    )
+
+
+@dataclass(frozen=True)
+class PersonManagementRequestPlan:
+    create_batch: tuple[HttpRequestSpec, ...]
+    read: tuple[HttpRequestSpec, ...]
+    delete: tuple[HttpRequestSpec, ...]
+    persons: tuple[PersonFixture, ...]
+    retained_persons: tuple[PersonFixture, ...]
+    deleted_persons: tuple[PersonFixture, ...]
+
+    @property
+    def phases(self) -> tuple[tuple[str, tuple[HttpRequestSpec, ...]], ...]:
+        return (
+            ("create_batch", self.create_batch),
+            ("list_search", self.read),
+            ("exact_delete", self.delete),
+        )
+
+    @property
+    def requests(self) -> tuple[HttpRequestSpec, ...]:
+        return (*self.create_batch, *self.read, *self.delete)
+
+    def expected_numbers(self, request: HttpRequestSpec) -> tuple[str, ...]:
+        if request.work_type == "face_person_list":
+            return tuple(person.number for person in self.persons)
+        body = request.json_body
+        if request.work_type == "face_person_batch_create":
+            raw_persons = body.get("persons") if body is not None else None
+            if not isinstance(raw_persons, Sequence) or isinstance(raw_persons, str):
+                raise ValueError("批量人物请求缺少 persons")
+            numbers = tuple(
+                str(item.get("number"))
+                for item in raw_persons
+                if isinstance(item, Mapping) and isinstance(item.get("number"), str)
+            )
+            if len(numbers) != len(raw_persons):
+                raise ValueError("批量人物请求缺少 number")
+            return numbers
+        number = body.get("number") if body is not None else None
+        if not isinstance(number, str) or not number:
+            raise ValueError("人物管理请求缺少 number")
+        return (number,)
+
+
 def build_person_management_requests(
     targets: NorthboundTargets,
     persons: Sequence[PersonFixture],
     *,
     batch_size: int,
-) -> tuple[HttpRequestSpec, ...]:
+) -> PersonManagementRequestPlan:
     if not persons or batch_size <= 0:
         raise ValueError("人物管理负载和 batch_size 必须为正")
+    partition = partition_person_dataset(persons)
     first = persons[0]
-    requests: list[HttpRequestSpec] = [
+    create_batch: list[HttpRequestSpec] = [
         HttpRequestSpec(
             request_id="person-create",
             method="POST",
@@ -101,7 +182,7 @@ def build_person_management_requests(
     ]
     for batch_index, start in enumerate(range(1, len(persons), batch_size)):
         batch = persons[start : start + batch_size]
-        requests.append(
+        create_batch.append(
             HttpRequestSpec(
                 request_id=f"person-batch-{batch_index}",
                 method="POST",
@@ -111,34 +192,44 @@ def build_person_management_requests(
                 expected_lease_acquisition=False,
             )
         )
-    requests.extend(
-        (
-            HttpRequestSpec(
-                request_id="person-list",
-                method="GET",
-                url=targets.gateway_url("/api/online/face/persons"),
-                work_type="face_person_list",
-                expected_lease_acquisition=False,
+    read = (
+        HttpRequestSpec(
+            request_id="person-list",
+            method="GET",
+            url=(
+                targets.gateway_url("/api/online/face/persons")
+                + f"?skip=0&limit={len(persons)}"
             ),
-            HttpRequestSpec(
-                request_id="person-search",
-                method="POST",
-                url=targets.gateway_url("/api/online/face/persons/search"),
-                json_body={"number": first.number},
-                work_type="face_person_search",
-                expected_lease_acquisition=False,
-            ),
-            HttpRequestSpec(
-                request_id="person-delete",
-                method="DELETE",
-                url=targets.gateway_url("/api/online/face/persons/delete"),
-                json_body={"number": persons[-1].number},
-                work_type="face_person_delete",
-                expected_lease_acquisition=False,
-            ),
-        )
+            work_type="face_person_list",
+            expected_lease_acquisition=False,
+        ),
+        HttpRequestSpec(
+            request_id="person-search",
+            method="POST",
+            url=targets.gateway_url("/api/online/face/persons/search"),
+            json_body={"number": first.number},
+            work_type="face_person_search",
+            expected_lease_acquisition=False,
+        ),
     )
-    return tuple(requests)
+    delete = (
+        HttpRequestSpec(
+            request_id="person-delete",
+            method="DELETE",
+            url=targets.gateway_url("/api/online/face/persons/delete"),
+            json_body={"number": partition.deleted[0].number},
+            work_type="face_person_delete",
+            expected_lease_acquisition=False,
+        ),
+    )
+    return PersonManagementRequestPlan(
+        create_batch=tuple(create_batch),
+        read=read,
+        delete=delete,
+        persons=tuple(persons),
+        retained_persons=partition.retained,
+        deleted_persons=partition.deleted,
+    )
 
 
 def build_recognition_requests(
@@ -162,6 +253,179 @@ def build_recognition_requests(
             expected_lease_acquisition=True,
         )
         for index in range(repeats)
+    )
+
+
+def recognition_expected_number(request: HttpRequestSpec) -> str:
+    body = request.json_body
+    targets = body.get("targets") if body is not None else None
+    if (
+        not isinstance(targets, Sequence)
+        or isinstance(targets, str)
+        or len(targets) != 1
+        or not isinstance(targets[0], str)
+        or not targets[0]
+    ):
+        raise ValueError("人脸识别请求必须包含唯一预期 number")
+    return targets[0]
+
+
+@dataclass(frozen=True)
+class PersonResponseValidation:
+    valid: bool
+    reason: str
+    successful_person_count: int
+    failed_person_count: int
+    observed_numbers: tuple[str, ...] = ()
+    instance_ids: tuple[str, ...] = ()
+    response_routes: tuple[str, ...] = ()
+
+
+_INSTANCE_EVIDENCE_KEYS = frozenset(
+    {"instance_id", "operator_instance_id", "selected_instance_id"}
+)
+_ROUTE_EVIDENCE_KEYS = frozenset(
+    {"route", "route_name", "endpoint", "operator_route"}
+)
+
+
+def _safe_response_evidence(value: Any) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    instances: set[str] = set()
+    routes: set[str] = set()
+
+    def visit(item: Any) -> None:
+        if isinstance(item, Mapping):
+            for raw_key, child in item.items():
+                key = str(raw_key).lower()
+                if key in _INSTANCE_EVIDENCE_KEYS and isinstance(child, str) and child:
+                    instances.add(child)
+                elif key in _ROUTE_EVIDENCE_KEYS and isinstance(child, str) and child:
+                    routes.add(child)
+                visit(child)
+        elif isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    return tuple(sorted(instances)), tuple(sorted(routes))
+
+
+def _operator_response(
+    response: Mapping[str, Any],
+) -> tuple[int | None, Mapping[str, Any] | None, tuple[str, ...], tuple[str, ...]]:
+    instances, routes = _safe_response_evidence(response)
+    gateway_code = response.get("code")
+    upstream = response.get("data")
+    if gateway_code != 0 or not isinstance(upstream, Mapping):
+        return None, None, instances, routes
+    status_code = upstream.get("status_code")
+    data = upstream.get("data")
+    return (
+        status_code if type(status_code) is int else None,
+        data if isinstance(data, Mapping) else None,
+        instances,
+        routes,
+    )
+
+
+def _person_numbers(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return ()
+    return tuple(
+        str(number)
+        for item in value
+        if isinstance(item, Mapping) and isinstance(number := item.get("number"), str)
+    )
+
+
+def validate_person_management_response(
+    request: HttpRequestSpec,
+    response: Mapping[str, Any],
+    *,
+    expected_numbers: Sequence[str],
+) -> PersonResponseValidation:
+    expected = tuple(expected_numbers)
+    status_code, data, instances, routes = _operator_response(response)
+    if status_code != 200 or data is None:
+        successful = 0
+        failed = len(expected)
+        if data is not None:
+            raw_success = data.get("success_count")
+            raw_failed = data.get("failed_count")
+            if type(raw_success) is int and raw_success >= 0:
+                successful = raw_success
+            if type(raw_failed) is int and raw_failed >= 0:
+                failed = raw_failed
+        return PersonResponseValidation(
+            False,
+            f"FaceRec 人物管理 status_code 非成功: {status_code}",
+            successful,
+            failed,
+            instance_ids=instances,
+            response_routes=routes,
+        )
+
+    observed: tuple[str, ...]
+    valid = False
+    if request.work_type == "face_person_create":
+        number = data.get("number")
+        observed = (number,) if isinstance(number, str) else ()
+        valid = observed == expected
+    elif request.work_type == "face_person_batch_create":
+        observed = _person_numbers(data.get("persons"))
+        raw_success = data.get("success_count", len(observed))
+        raw_failed = data.get("failed_count", 0)
+        valid = (
+            type(raw_success) is int
+            and raw_success == len(expected)
+            and type(raw_failed) is int
+            and raw_failed == 0
+            and len(observed) == len(set(observed))
+            and set(observed) == set(expected)
+        )
+    elif request.work_type in {"face_person_list", "face_person_search"}:
+        observed = _person_numbers(data.get("persons"))
+        valid = len(observed) == len(set(observed)) and set(expected).issubset(observed)
+        if request.work_type == "face_person_search":
+            valid = valid and set(observed) == set(expected)
+    elif request.work_type == "face_person_delete":
+        observed = _person_numbers(data.get("info"))
+        deleted_count = data.get("deleted_count")
+        valid = (
+            type(deleted_count) is int
+            and deleted_count == len(expected) == 1
+            and observed == expected
+        )
+    else:
+        raise ValueError(f"未知人物管理 work_type: {request.work_type}")
+
+    return PersonResponseValidation(
+        valid,
+        "人物管理响应事实符合预期" if valid else "人物管理响应数量或 number 事实不符合预期",
+        len(expected) if valid else len(set(observed).intersection(expected)),
+        0 if valid else len(set(expected).difference(observed)),
+        observed_numbers=observed,
+        instance_ids=instances,
+        response_routes=routes,
+    )
+
+
+def validate_person_recognition_response(
+    response: Mapping[str, Any],
+    *,
+    expected_number: str,
+) -> PersonResponseValidation:
+    status_code, data, instances, routes = _operator_response(response)
+    observed = () if data is None else _person_numbers(data.get("match"))
+    valid = status_code == 200 and expected_number in observed
+    return PersonResponseValidation(
+        valid,
+        "识别结果包含预期 number" if valid else "识别结果缺少预期 number",
+        1 if valid else 0,
+        0 if valid else 1,
+        observed_numbers=observed,
+        instance_ids=instances,
+        response_routes=routes,
     )
 
 

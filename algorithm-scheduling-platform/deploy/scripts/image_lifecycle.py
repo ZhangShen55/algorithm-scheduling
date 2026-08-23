@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -42,6 +43,24 @@ FORBIDDEN_TEXT = (
     "deploy/reports",
 )
 GLOB_CHARACTERS = frozenset("*?[]{}")
+DOCKER_DF_COMMAND = ("docker", "system", "df", "-v", "--format", "json")
+DOCKER_SIZE_PATTERN = re.compile(
+    r"(?P<amount>(?:0|[1-9][0-9]*)(?:\.[0-9]+)?)(?P<unit>B|kB|MB|GB|TB|PB)"
+)
+DOCKER_SIZE_FACTORS: Mapping[str, int] = {
+    "B": 1,
+    "kB": 1_000,
+    "MB": 1_000_000,
+    "GB": 1_000_000_000,
+    "TB": 1_000_000_000_000,
+    "PB": 1_000_000_000_000_000,
+}
+RETIRED_CONTAINER_PROJECTS = frozenset(
+    {"algorithm-scheduling-platform", "algorithm-operators"}
+)
+RETIRED_COMPOSE_IDENTITY_PATTERN = re.compile(
+    r"(?:algorithm-scheduling-platform|algorithm-operators)/[a-z0-9][a-z0-9-]*"
+)
 
 JsonObject = dict[str, Any]
 Stage = Literal["prebuild", "postacceptance"]
@@ -171,6 +190,97 @@ def _labels(raw: object) -> dict[str, str]:
     return cast(dict[str, str], raw)
 
 
+def parse_docker_size_bytes(value: object) -> int:
+    """Parse Docker's decimal human-size output without binary-unit inflation."""
+
+    if type(value) is not str:
+        raise ImageLifecycleError("Docker UniqueSize 必须是字符串")
+    match = DOCKER_SIZE_PATTERN.fullmatch(value)
+    if match is None:
+        raise ImageLifecycleError(f"Docker UniqueSize 无法解析: {value}")
+    bytes_value = Decimal(match.group("amount")) * DOCKER_SIZE_FACTORS[match.group("unit")]
+    integral = bytes_value.to_integral_value()
+    if bytes_value != integral:
+        raise ImageLifecycleError(f"Docker UniqueSize 不能表示完整字节: {value}")
+    return int(integral)
+
+
+def _docker_df_image_sizes(
+    raw_output: str,
+    expected_ids: Sequence[str],
+) -> tuple[dict[str, tuple[str, int]], JsonObject]:
+    try:
+        document: object = json.loads(raw_output)
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise ImageLifecycleError("docker system df 返回无效 JSON") from error
+    if type(document) is not dict or type(document.get("Images")) is not list:
+        raise ImageLifecycleError("docker system df 缺少 Images 数组")
+    rows = cast(list[object], document["Images"])
+    sizes: dict[str, tuple[str, int]] = {}
+    summary: list[JsonObject] = []
+    for raw in rows:
+        if type(raw) is not dict:
+            raise ImageLifecycleError("docker system df Images 记录不是对象")
+        image_id = raw.get("ID")
+        unique_size = raw.get("UniqueSize")
+        if IMAGE_ID_PATTERN.fullmatch(str(image_id)) is None:
+            raise ImageLifecycleError("docker system df 返回了非完整镜像 ID")
+        image_id = str(image_id)
+        if image_id in sizes:
+            raise ImageLifecycleError(f"docker system df 镜像 ID 重复: {image_id}")
+        unique_size_bytes = parse_docker_size_bytes(unique_size)
+        sizes[image_id] = (cast(str, unique_size), unique_size_bytes)
+        summary.append(
+            {
+                "image_id": image_id,
+                "unique_size": unique_size,
+                "unique_size_bytes": unique_size_bytes,
+            }
+        )
+    expected = set(expected_ids)
+    actual = set(sizes)
+    missing = sorted(expected - actual)
+    unknown = sorted(actual - expected)
+    if missing or unknown:
+        details = []
+        if missing:
+            details.append("缺失=" + ",".join(missing))
+        if unknown:
+            details.append("未知=" + ",".join(unknown))
+        raise ImageLifecycleError("docker system df 镜像 ID 集合不完整: " + "；".join(details))
+    evidence: JsonObject = {
+        "command": list(DOCKER_DF_COMMAND),
+        "raw_sha256": hashlib.sha256(raw_output.encode()).hexdigest(),
+        "images": sorted(summary, key=lambda item: str(item["image_id"])),
+    }
+    return sizes, evidence
+
+
+def summarize_docker_df(raw_output: str) -> JsonObject:
+    """Keep only the image-size facts needed by cleanup evidence."""
+
+    try:
+        document: object = json.loads(raw_output)
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise ImageLifecycleError("docker system df 返回无效 JSON") from error
+    if type(document) is not dict or type(document.get("Images")) is not list:
+        raise ImageLifecycleError("docker system df 缺少 Images 数组")
+    expected_ids: list[str] = []
+    for raw in cast(list[object], document["Images"]):
+        if type(raw) is not dict or type(raw.get("ID")) is not str:
+            raise ImageLifecycleError("docker system df Images 记录缺少完整镜像 ID")
+        expected_ids.append(cast(str, raw["ID"]))
+    _, evidence = _docker_df_image_sizes(raw_output, expected_ids)
+    images = cast(list[JsonObject], evidence["images"])
+    return {
+        **evidence,
+        "image_count": len(images),
+        "unique_size_bytes_total": sum(
+            cast(int, image["unique_size_bytes"]) for image in images
+        ),
+    }
+
+
 def capture_inventory(*, output: CommandOutput = _docker_output) -> JsonObject:
     """Inspect every container and image; any partial result fails closed."""
 
@@ -190,6 +300,7 @@ def capture_inventory(*, output: CommandOutput = _docker_output) -> JsonObject:
         raise ImageLifecycleError("docker ps 返回了非完整容器 ID")
     if any(IMAGE_ID_PATTERN.fullmatch(item) is None for item in image_ids):
         raise ImageLifecycleError("docker image ls 返回了非完整镜像 ID")
+    df_sizes, df_evidence = _docker_df_image_sizes(output(DOCKER_DF_COMMAND), image_ids)
 
     containers: list[JsonObject] = []
     for record in _inspect_list(("docker", "container", "inspect"), container_ids, output=output):
@@ -232,23 +343,25 @@ def capture_inventory(*, output: CommandOutput = _docker_output) -> JsonObject:
         labels = _labels(config.get("Labels"))
         repo_tags = record.get("RepoTags") or []
         repo_digests = record.get("RepoDigests") or []
-        size = record.get("Size")
         if (
             IMAGE_ID_PATTERN.fullmatch(str(image_id)) is None
             or type(repo_tags) is not list
             or any(type(item) is not str for item in repo_tags)
             or type(repo_digests) is not list
             or any(type(item) is not str for item in repo_digests)
-            or type(size) is not int
-            or size < 0
         ):
-            raise ImageLifecycleError("镜像 ID、标签、digest 或大小快照无效")
+            raise ImageLifecycleError("镜像 ID、标签或 digest 快照无效")
+        image_id = str(image_id)
+        if image_id not in df_sizes:
+            raise ImageLifecycleError("镜像 inspect 与 system df ID 绑定不一致")
+        unique_size, unique_size_bytes = df_sizes[image_id]
         images.append(
             {
-                "image_id": str(image_id),
+                "image_id": image_id,
                 "repo_tags": sorted(set(repo_tags)),
                 "repo_digests": sorted(set(repo_digests)),
-                "size_bytes": size,
+                "unique_size": unique_size,
+                "unique_size_bytes": unique_size_bytes,
                 "revision": labels.get(REVISION_LABEL),
                 "release_tag": labels.get(VERSION_LABEL),
                 "labels": dict(sorted(labels.items())),
@@ -259,6 +372,7 @@ def capture_inventory(*, output: CommandOutput = _docker_output) -> JsonObject:
         "captured_at": datetime.now(UTC).isoformat(),
         "containers": sorted(containers, key=lambda item: str(item["container_id"])),
         "images": sorted(images, key=lambda item: str(item["image_id"])),
+        "docker_system_df": df_evidence,
     }
     validate_inventory(inventory)
     return inventory
@@ -269,16 +383,41 @@ def validate_inventory(inventory: Mapping[str, object]) -> None:
         raise ImageLifecycleError("Docker inventory schema_version 无效")
     containers = inventory.get("containers")
     images = inventory.get("images")
-    if type(containers) is not list or type(images) is not list:
-        raise ImageLifecycleError("Docker inventory 缺少容器或镜像数组")
+    docker_df = inventory.get("docker_system_df")
+    if type(containers) is not list or type(images) is not list or type(docker_df) is not dict:
+        raise ImageLifecycleError("Docker inventory 缺少容器、镜像或 system df 证据")
+    if (
+        docker_df.get("command") != list(DOCKER_DF_COMMAND)
+        or re.fullmatch(r"[0-9a-f]{64}", str(docker_df.get("raw_sha256"))) is None
+        or type(docker_df.get("images")) is not list
+    ):
+        raise ImageLifecycleError("Docker system df 证据摘要无效")
+    df_sizes: dict[str, tuple[str, int]] = {}
+    for raw in cast(list[object], docker_df["images"]):
+        if type(raw) is not dict:
+            raise ImageLifecycleError("Docker system df 镜像摘要无效")
+        image_id = raw.get("image_id")
+        unique_size = raw.get("unique_size")
+        unique_size_bytes = raw.get("unique_size_bytes")
+        if (
+            IMAGE_ID_PATTERN.fullmatch(str(image_id)) is None
+            or image_id in df_sizes
+            or type(unique_size) is not str
+            or type(unique_size_bytes) is not int
+            or parse_docker_size_bytes(unique_size) != unique_size_bytes
+        ):
+            raise ImageLifecycleError("Docker system df 镜像摘要不完整或重复")
+        df_sizes[str(image_id)] = (unique_size, unique_size_bytes)
     image_ids: set[str] = set()
+    inventory_sizes: dict[str, tuple[str, int]] = {}
     for raw in images:
         if type(raw) is not dict:
             raise ImageLifecycleError("Docker inventory 镜像记录无效")
         image_id = raw.get("image_id")
         tags = raw.get("repo_tags")
         digests = raw.get("repo_digests")
-        size = raw.get("size_bytes")
+        unique_size = raw.get("unique_size")
+        unique_size_bytes = raw.get("unique_size_bytes")
         revision = raw.get("revision")
         if (
             IMAGE_ID_PATTERN.fullmatch(str(image_id)) is None
@@ -287,12 +426,17 @@ def validate_inventory(inventory: Mapping[str, object]) -> None:
             or any(type(item) is not str for item in tags)
             or type(digests) is not list
             or any(type(item) is not str for item in digests)
-            or type(size) is not int
-            or size < 0
+            or type(unique_size) is not str
+            or type(unique_size_bytes) is not int
+            or parse_docker_size_bytes(unique_size) != unique_size_bytes
             or (revision is not None and SHA_PATTERN.fullmatch(str(revision)) is None)
         ):
             raise ImageLifecycleError("Docker inventory 镜像元数据不完整")
-        image_ids.add(str(image_id))
+        image_id = str(image_id)
+        image_ids.add(image_id)
+        inventory_sizes[image_id] = (unique_size, unique_size_bytes)
+    if inventory_sizes != df_sizes:
+        raise ImageLifecycleError("Docker inventory 镜像与 system df UniqueSize 绑定不一致")
     container_ids: set[str] = set()
     for raw in containers:
         if type(raw) is not dict:
@@ -317,10 +461,18 @@ def validate_inventory(inventory: Mapping[str, object]) -> None:
 
 def inventory_fingerprint(inventory: Mapping[str, object]) -> str:
     validate_inventory(inventory)
+    docker_df = cast(dict[str, object], inventory["docker_system_df"])
     stable = {
         "schema_version": inventory["schema_version"],
         "containers": inventory["containers"],
         "images": inventory["images"],
+        "docker_system_df": {
+            "command": docker_df["command"],
+            "images": sorted(
+                cast(list[JsonObject], docker_df["images"]),
+                key=lambda item: str(item["image_id"]),
+            ),
+        },
     }
     return _sha256(stable)
 
@@ -359,6 +511,7 @@ def build_cleanup_plan(
     base_image_ids: Sequence[str],
     allow_image_ids: Sequence[str],
     retire_container_ids: Sequence[str],
+    retire_compose_identities: Sequence[str],
     retired_release_shas: Sequence[str],
     acceptance_status: str | None = None,
 ) -> JsonObject:
@@ -375,7 +528,22 @@ def build_cleanup_plan(
         "base_images": _exact_ids(base_image_ids, IMAGE_ID_PATTERN, "基础镜像"),
         "allowlist": _exact_ids(allow_image_ids, IMAGE_ID_PATTERN, "允许列表镜像"),
     }
+    if not protected_inputs["rollback_baseline"]:
+        raise ImageLifecycleError("回滚镜像保护集不得为空")
+    if not protected_inputs["base_images"]:
+        raise ImageLifecycleError("基础镜像保护集不得为空")
     retire_ids = _exact_ids(retire_container_ids, CONTAINER_ID_PATTERN, "待退役容器")
+    retire_identities = list(retire_compose_identities)
+    if (
+        len(retire_identities) != len(retire_ids)
+        or len(retire_identities) != len(set(retire_identities))
+        or any(
+            RETIRED_COMPOSE_IDENTITY_PATTERN.fullmatch(identity) is None
+            for identity in retire_identities
+        )
+    ):
+        raise ImageLifecycleError("待退役容器必须逐项绑定唯一受控 Compose 身份")
+    approved_retire_identities = dict(zip(retire_ids, retire_identities, strict=True))
     retired_shas = list(retired_release_shas)
     if any(SHA_PATTERN.fullmatch(value) is None for value in retired_shas) or len(
         retired_shas
@@ -398,6 +566,19 @@ def build_cleanup_plan(
         record = containers[container_id]
         if record.get("running") is True:
             raise ImageLifecycleError(f"待退役容器仍在运行: {container_id}")
+        image = images[str(record["image_id"])]
+        compose_project = record.get("compose_project")
+        compose_service = record.get("compose_service")
+        compose_identity = f"{compose_project}/{compose_service}"
+        if (
+            compose_project not in RETIRED_CONTAINER_PROJECTS
+            or type(compose_service) is not str
+            or not compose_service
+            or approved_retire_identities[container_id] != compose_identity
+        ):
+            raise ImageLifecycleError(f"待退役容器不属于受控 Compose 服务: {container_id}")
+        if image.get("revision") not in retired_shas:
+            raise ImageLifecycleError(f"待退役容器镜像不属于已退役 release: {container_id}")
         candidate_containers.append(
             {
                 key: record.get(key)
@@ -409,7 +590,10 @@ def build_cleanup_plan(
                     "state",
                 )
             }
-            | {"before_snapshot_sha256": _sha256(record)}
+            | {
+                "approved_compose_identity": compose_identity,
+                "before_snapshot_sha256": _sha256(record),
+            }
         )
 
     protected_reasons: dict[str, set[str]] = {}
@@ -444,7 +628,8 @@ def build_cleanup_plan(
                 "release_tag": record.get("release_tag"),
                 "repo_tags": record.get("repo_tags"),
                 "repo_digests": record.get("repo_digests"),
-                "size_bytes": record.get("size_bytes"),
+                "unique_size": record.get("unique_size"),
+                "unique_size_bytes": record.get("unique_size_bytes"),
                 "before_snapshot_sha256": _sha256(record),
             }
         )
@@ -466,6 +651,7 @@ def build_cleanup_plan(
         "planning_inputs": {
             **protected_inputs,
             "retire_container_ids": retire_ids,
+            "retire_compose_identities": retire_identities,
             "retired_release_shas": retired_shas,
         },
         "protected_image_ids": sorted(protected_ids),
@@ -476,7 +662,9 @@ def build_cleanup_plan(
             candidate_containers, key=lambda item: str(item["container_id"])
         ),
         "candidate_images": candidate_images,
-        "estimated_reclaim_bytes": sum(cast(int, item["size_bytes"]) for item in candidate_images),
+        "estimated_reclaim_bytes": sum(
+            cast(int, item["unique_size_bytes"]) for item in candidate_images
+        ),
     }
     validate_no_forbidden_targets(plan)
     return plan
@@ -549,6 +737,7 @@ def _replanned_images(plan: Mapping[str, object], inventory: JsonObject) -> list
         base_image_ids=cast(list[str], inputs.get("base_images") or []),
         allow_image_ids=cast(list[str], inputs.get("allowlist") or []),
         retire_container_ids=[],
+        retire_compose_identities=[],
         retired_release_shas=cast(list[str], inputs.get("retired_release_shas") or []),
     )
     return _candidate_ids(replanned, "candidate_images", "image_id")
@@ -572,6 +761,9 @@ def _validate_plan_authority(plan: Mapping[str, object]) -> None:
         base_image_ids=cast(list[str], inputs.get("base_images") or []),
         allow_image_ids=cast(list[str], inputs.get("allowlist") or []),
         retire_container_ids=cast(list[str], inputs.get("retire_container_ids") or []),
+        retire_compose_identities=cast(
+            list[str], inputs.get("retire_compose_identities") or []
+        ),
         retired_release_shas=cast(list[str], inputs.get("retired_release_shas") or []),
         acceptance_status=cast(str | None, plan.get("acceptance_status")),
     )
@@ -596,8 +788,8 @@ def execute_plan(
     result_path: Path,
     inventory_loader: InventoryLoader | None = None,
     target_verifier: TargetVerifier | None = None,
-    docker_df_before: str | None = None,
-    docker_df_after: Callable[[], str] | None = None,
+    docker_df_before: Mapping[str, object] | None = None,
+    docker_df_after: Callable[[], Mapping[str, object]] | None = None,
 ) -> JsonObject:
     """Execute an approved immutable plan after full state and per-target checks."""
 
@@ -709,7 +901,7 @@ def execute_plan(
         if failure is not None
         else ("AWAITING_REVALIDATION" if plan.get("stage") == "postacceptance" else "PASS")
     )
-    df_after_value: str | None = None
+    df_after_value: Mapping[str, object] | None = None
     if docker_df_after is not None:
         try:
             df_after_value = docker_df_after()
@@ -834,8 +1026,8 @@ def _target_exists(kind: str, target_id: str) -> bool:
     raise ImageLifecycleError(f"无法验证删除结果: {kind} {target_id}")
 
 
-def _docker_df() -> str:
-    return _docker_output(("docker", "system", "df"))
+def _docker_df() -> JsonObject:
+    return summarize_docker_df(_docker_output(DOCKER_DF_COMMAND))
 
 
 def _ids_argument(parser: argparse.ArgumentParser, name: str, *, required: bool = False) -> None:
@@ -858,10 +1050,11 @@ def _build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--release-tag", required=True)
     plan.add_argument("--git-sha", required=True)
     _ids_argument(plan, "--current-image-id", required=True)
-    _ids_argument(plan, "--rollback-image-id")
-    _ids_argument(plan, "--base-image-id")
+    _ids_argument(plan, "--rollback-image-id", required=True)
+    _ids_argument(plan, "--base-image-id", required=True)
     _ids_argument(plan, "--allow-image-id")
     _ids_argument(plan, "--retire-container-id")
+    plan.add_argument("--retire-compose-identity", action="append", default=[])
     plan.add_argument("--retired-release-sha", action="append", default=[])
     plan.add_argument("--acceptance-status")
 
@@ -898,6 +1091,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             base_image_ids=args.base_image_id,
             allow_image_ids=args.allow_image_id,
             retire_container_ids=args.retire_container_id,
+            retire_compose_identities=args.retire_compose_identity,
             retired_release_shas=args.retired_release_sha,
             acceptance_status=args.acceptance_status,
         )

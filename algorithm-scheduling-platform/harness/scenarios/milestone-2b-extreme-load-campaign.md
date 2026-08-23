@@ -51,6 +51,31 @@
   4 小时长稳和最终清理。
 - 已知质量阻断：`ASR-013` 仍为 24 个中英混合术语片段中 9 个严重错误。性能测试可以继续，但最终结论必须保持质量阻断，除非同一最终 SHA 的新证据解除它。
 
+## 2026-08-23 真实中间件集成补充
+
+- 新增迁移账本真实 PostgreSQL 用例，使用隔离 `_test` 数据库和基础设施 Compose；首次执行
+  `0001`–`0007`，重复执行不再重放，账本版本、文件、摘要和完整 Git SHA 均逐项核验。
+- PostgreSQL、Redis、Kafka 联合专项为 `94 passed`、无 skip，覆盖课程任务、幂等、Outbox、
+  DAG、租约、Kafka 提交及 Orchestrator 重启恢复。测试使用唯一数据库、Redis 前缀和
+  topic/group，没有把仓储层完成方法当作算子输出，也没有改动业务数据库。
+- 该证据达到真实中间件集成层级；缩小版四服务/算子运行、远端媒体下载、三卡发布和 Campaign
+  仍未执行，因此不能将本节解读为里程碑 2B 已交付。
+
+## 2026-08-23 本地生产运行时收口
+
+- 已接入显式 Stage Adapter factory、连续 metrics sidecar、媒体下载 SSH 适配器和独立
+  FaceRec 原图残留适配器。远端执行默认关闭，外部 runtime TOML 与源端证据必须位于整个
+  Git 工作区外、当前 UID 所有、普通单链接文件且权限精确为 `0600`。
+- live case 只有在业务证据、前后护栏、连续指标 summary 和当前 case 不可变 sample 路径
+  同时有效时才能通过。常规/突发采样分别不超过 5 秒和 0.5–1 秒；长课目录字节只采 before/after。
+- 查询执行器覆盖 50/100/300/1000 QPS、2/5 秒抖动、无抖动惊群、大 ASR 响应大小、整数状态
+  与合法单调迁移。当前 Control 北向结果没有 `claimed_at/started_at`，所以优先级领取顺序用例
+  会在提交 URGENT 前阻断，不会用提交顺序冒充领取顺序。
+- 本地 Campaign/部署专项为 `315 passed`；Ruff、strict Mypy、compile/import、Bash syntax、
+  OpenSpec strict 和 diff check 通过。远端 11–13 阶段、原图残留真实扫描和 4 小时长稳仍未执行。
+- 平台完整 `tests/` 回归为 `3073 passed, 3 skipped`。3 项 skip 均为缺少外部
+  `OPERATOR_REGISTRY_TOKEN` 的 Canonical FaceRec 集成，保持未执行语义，不以其他单元测试替代。
+
 ## 本地实施入口与失败关闭边界
 
 Campaign 元数据模板位于

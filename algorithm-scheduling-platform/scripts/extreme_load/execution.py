@@ -10,7 +10,7 @@ import urllib.parse
 import wave
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,7 +18,23 @@ from typing import Any
 import httpx
 
 from .catalog import CaseSpec, FixtureDescriptor
-from .control_query import build_negative_query_mix, build_query_requests
+from .control_query import (
+    ControlReadinessEvidence,
+    CourseQueryObservation,
+    ObservedCourseQuery,
+    PriorityCheckpointAssessment,
+    QueryMode,
+    ScheduledQueryRequest,
+    assess_priority_normal_checkpoint,
+    build_negative_query_mix,
+    build_scheduled_query_requests,
+    parse_course_query_response,
+    query_qps_tiers,
+    validate_control_readiness_response,
+    validate_course_query_response,
+    validate_monotonic_query_observations,
+    validate_priority_claim_order,
+)
 from .core import (
     AsyncLoadRunner,
     HttpClientPool,
@@ -27,6 +43,7 @@ from .core import (
     ReproducibleIdentity,
     ResultCategory,
 )
+from .media_download import MediaDownloadAdapter
 from .offline import (
     CourseMedia,
     TaskCombination,
@@ -48,9 +65,16 @@ from .online_images import (
     image_syntax_and_format_cases,
 )
 from .persons import (
+    FaceManagementBoundary,
     build_person_dataset,
     build_person_management_requests,
     build_recognition_requests,
+    partition_person_dataset,
+    person_dataset_id,
+    recognition_expected_number,
+    validate_cross_instance_person_views,
+    validate_person_management_response,
+    validate_person_recognition_response,
 )
 from .plan import CampaignPlan, execution_path, read_case_evidence
 from .realtime_asr import (
@@ -322,6 +346,43 @@ async def _poll_tasks(
     return dict(sorted(Counter(states).items()))
 
 
+@dataclass(frozen=True, slots=True)
+class PriorityCheckpointResult:
+    assessment: PriorityCheckpointAssessment
+    observations: tuple[CourseQueryObservation, ...]
+
+
+async def _fetch_course_query_observations(
+    client: httpx.AsyncClient,
+    plan: CampaignPlan,
+    task_ids: Sequence[str],
+) -> tuple[tuple[CourseQueryObservation, ...], tuple[str, ...]]:
+    semaphore = asyncio.Semaphore(min(64, max(1, len(task_ids))))
+
+    async def fetch(task_id: str) -> tuple[CourseQueryObservation | None, str | None]:
+        url = plan.targets.control_url(f"/api/course-jobs/{task_id}")
+        try:
+            async with semaphore:
+                response = await client.get(url)
+            body = response.json()
+        except (httpx.HTTPError, ValueError):
+            return None, f"{task_id}:任务查询失败"
+        if response.status_code != 200 or not isinstance(body, Mapping):
+            return None, f"{task_id}:任务查询响应不合法"
+        try:
+            observation = parse_course_query_response(body)
+        except ValueError as error:
+            return None, f"{task_id}:{error}"
+        if observation.task_id != task_id:
+            return None, f"{task_id}:响应 task_id 不一致"
+        return observation, None
+
+    fetched = await asyncio.gather(*(fetch(task_id) for task_id in task_ids))
+    observations = tuple(item for item, error in fetched if item is not None and error is None)
+    errors = tuple(error for _item, error in fetched if error is not None)
+    return observations, errors
+
+
 def _case_allows_overload(case: CaseSpec) -> bool:
     kind = case.load.get("kind")
     if kind in {"online_image", "mixed_image", "s_stream", "realtime_asr"}:
@@ -338,12 +399,14 @@ class CampaignCaseExecutor:
         request_timeout_seconds: float = 300,
         sleep: SleepCallable = asyncio.sleep,
         clock: ClockCallable = time.monotonic,
+        media_download_adapter: MediaDownloadAdapter | None = None,
     ) -> None:
         self.plan = plan
         self.release_root = release_root
         self.identity = ReproducibleIdentity(plan.campaign_id, plan.seed)
         self._sleep = sleep
         self._clock = clock
+        self._media_download_adapter = media_download_adapter
         self.pool = HttpClientPool(
             max_connections=2048,
             max_keepalive_connections=512,
@@ -351,6 +414,76 @@ class CampaignCaseExecutor:
             write_timeout_seconds=request_timeout_seconds,
             pool_timeout_seconds=5,
         )
+
+    async def _control_readiness(self) -> ControlReadinessEvidence:
+        url = self.plan.targets.control_url("/ops/readiness")
+        try:
+            async with self.pool.build_client() as client:
+                response = await client.get(url)
+            body = response.json()
+        except (httpx.HTTPError, ValueError):
+            return ControlReadinessEvidence(
+                False,
+                None,
+                None,
+                (),
+                (),
+                "Control readiness 请求失败",
+            )
+        if not isinstance(body, Mapping):
+            return ControlReadinessEvidence(
+                False,
+                response.status_code,
+                None,
+                (),
+                (),
+                "Control readiness 响应不是对象",
+            )
+        return validate_control_readiness_response(response.status_code, body)
+
+    async def _wait_priority_normal_checkpoint(
+        self,
+        client: httpx.AsyncClient,
+        normal_task_ids: Sequence[str],
+        *,
+        timeout_seconds: float,
+    ) -> PriorityCheckpointResult:
+        deadline = self._clock() + timeout_seconds
+        latest = PriorityCheckpointAssessment(
+            "waiting",
+            "尚未取得 NORMAL 任务领取检查点",
+            0,
+            0,
+            0,
+        )
+        latest_observations: tuple[CourseQueryObservation, ...] = ()
+        while self._clock() < deadline:
+            observations, errors = await _fetch_course_query_observations(
+                client,
+                self.plan,
+                normal_task_ids,
+            )
+            if not errors:
+                latest_observations = observations
+                latest = assess_priority_normal_checkpoint(observations, normal_task_ids)
+                if latest.state != "waiting":
+                    return PriorityCheckpointResult(latest, observations)
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                break
+            await self._sleep(min(1.0, remaining))
+        blocked = PriorityCheckpointAssessment(
+            "blocked",
+            (
+                latest.reason
+                if latest.state != "waiting"
+                else "超时前未同时观察到运行中与未领取的 NORMAL 节点"
+            ),
+            latest.observed_node_count,
+            latest.running_normal_node_count,
+            latest.unclaimed_normal_node_count,
+        )
+        return PriorityCheckpointResult(blocked, latest_observations)
 
     def _case(self, case_id: str) -> CaseSpec:
         case = next((item for item in self.plan.catalog.cases if item.case_id == case_id), None)
@@ -395,6 +528,7 @@ class CampaignCaseExecutor:
         *,
         max_concurrency: int,
         requests_per_second: float | None = None,
+        poll_terminal: bool = True,
     ) -> tuple[CaseRunOutcome, tuple[str, ...]]:
         async with self.pool.build_client() as client:
             runner = AsyncLoadRunner(
@@ -409,7 +543,7 @@ class CampaignCaseExecutor:
                 allow_overload=_case_allows_overload(case),
             )
             task_ids = _accepted_task_ids(requests, results)
-            if outcome.status == "passed" and task_ids:
+            if outcome.status == "passed" and task_ids and poll_terminal:
                 terminal = await _poll_tasks(
                     client,
                     self.plan,
@@ -449,6 +583,138 @@ class CampaignCaseExecutor:
                 return first
             reused, _ = await self._run_http(case, requests[1:], max_concurrency=1)
             return _combine_outcomes(first, reused)
+        if kind == "priority":
+            normal = tuple(
+                request
+                for request in requests
+                if request.json_body is not None
+                and request.json_body.get("priority") == "NORMAL"
+            )
+            urgent = tuple(
+                request
+                for request in requests
+                if request.json_body is not None
+                and request.json_body.get("priority") == "URGENT"
+            )
+            if len(normal) + len(urgent) != len(requests) or not normal or not urgent:
+                raise ValueError("优先级用例必须只包含非空 NORMAL/URGENT 两组")
+            normal_outcome, normal_ids = await self._run_http(
+                case,
+                normal,
+                max_concurrency=min(2048, len(normal)),
+                poll_terminal=False,
+            )
+            if normal_outcome.status != "passed":
+                return normal_outcome
+            async with self.pool.build_client() as client:
+                checkpoint = await self._wait_priority_normal_checkpoint(
+                    client,
+                    normal_ids,
+                    timeout_seconds=case.timeout_seconds,
+                )
+            if checkpoint.assessment.state != "ready":
+                status = (
+                    "failed" if checkpoint.assessment.state == "failed" else "blocked"
+                )
+                return CaseRunOutcome(
+                    status,
+                    checkpoint.assessment.reason,
+                    normal_outcome.request_count,
+                    normal_outcome.categories,
+                    normal_outcome.latency_seconds,
+                    normal_ids,
+                    extra={
+                        "normal_task_ids": normal_ids,
+                        "urgent_task_ids": (),
+                        "submission_order": ("NORMAL",),
+                        "normal_checkpoint": checkpoint.assessment.to_evidence(),
+                        "claim_order_evidence_required": True,
+                    },
+                )
+            urgent_outcome, urgent_ids = await self._run_http(
+                case,
+                urgent,
+                max_concurrency=min(2048, len(urgent)),
+                poll_terminal=False,
+            )
+            combined = _combine_outcomes(normal_outcome, urgent_outcome)
+            task_ids = (*normal_ids, *urgent_ids)
+            if urgent_outcome.status != "passed":
+                return CaseRunOutcome(
+                    "failed",
+                    urgent_outcome.reason,
+                    combined.request_count,
+                    combined.categories,
+                    combined.latency_seconds,
+                    task_ids,
+                    extra={
+                        "normal_task_ids": normal_ids,
+                        "urgent_task_ids": urgent_ids,
+                        "submission_order": ("NORMAL", "URGENT"),
+                        "normal_checkpoint": checkpoint.assessment.to_evidence(),
+                        "claim_order_evidence_required": True,
+                    },
+                )
+            async with self.pool.build_client() as client:
+                terminal = await _poll_tasks(
+                    client,
+                    self.plan,
+                    task_ids,
+                    timeout_seconds=case.timeout_seconds,
+                )
+                final_observations, evidence_errors = (
+                    await _fetch_course_query_observations(client, self.plan, task_ids)
+                )
+            if terminal != {"success": len(task_ids)}:
+                return CaseRunOutcome(
+                    "failed",
+                    "优先级用例未全部进入成功终态",
+                    combined.request_count,
+                    combined.categories,
+                    combined.latency_seconds,
+                    task_ids,
+                    terminal,
+                )
+            if evidence_errors:
+                return CaseRunOutcome(
+                    "blocked",
+                    "优先级终态查询证据不足: " + "；".join(evidence_errors[:10]),
+                    combined.request_count,
+                    combined.categories,
+                    combined.latency_seconds,
+                    task_ids,
+                    terminal,
+                    extra={
+                        "normal_task_ids": normal_ids,
+                        "urgent_task_ids": urgent_ids,
+                        "submission_order": ("NORMAL", "URGENT"),
+                        "normal_checkpoint": checkpoint.assessment.to_evidence(),
+                        "claim_order_evidence_required": True,
+                    },
+                )
+            claim_order = validate_priority_claim_order(
+                checkpoint.observations,
+                final_observations,
+                normal_task_ids=normal_ids,
+                urgent_task_ids=urgent_ids,
+            )
+            return CaseRunOutcome(
+                claim_order.status,
+                claim_order.reason,
+                combined.request_count,
+                combined.categories,
+                combined.latency_seconds,
+                task_ids,
+                terminal,
+                extra={
+                    "normal_task_ids": normal_ids,
+                    "urgent_task_ids": urgent_ids,
+                    "submission_order": ("NORMAL", "URGENT"),
+                    "normal_checkpoint": checkpoint.assessment.to_evidence(),
+                    "claim_order": claim_order.to_evidence(),
+                    "claim_order_evidence_required": claim_order.status != "passed",
+                },
+            )
         concurrency = 1 if kind == "append_task_types" else min(2048, len(requests))
         outcome, _ = await self._run_http(
             case,
@@ -656,10 +922,33 @@ class CampaignCaseExecutor:
     async def _run_scheduled_http(
         self,
         case: CaseSpec,
-        scheduled: Sequence[ScheduledImageRequest],
+        scheduled: Sequence[ScheduledImageRequest | ScheduledQueryRequest],
     ) -> CaseRunOutcome:
+        requests, results, offsets = await self._execute_scheduled_http(case, scheduled)
+        outcome = _http_outcome(
+            requests,
+            results,
+            allow_overload=_case_allows_overload(case),
+        )
+        return CaseRunOutcome(
+            status=outcome.status,
+            reason=outcome.reason,
+            request_count=outcome.request_count,
+            categories=outcome.categories,
+            latency_seconds=outcome.latency_seconds,
+            extra={
+                "scheduled_offsets_seconds": offsets,
+                "scheduled_duration_seconds": max(offsets),
+            },
+        )
+
+    async def _execute_scheduled_http(
+        self,
+        case: CaseSpec,
+        scheduled: Sequence[ScheduledImageRequest | ScheduledQueryRequest],
+    ) -> tuple[tuple[HttpRequestSpec, ...], list[LoadResult], tuple[float, ...]]:
         if not scheduled:
-            raise ValueError("S 流调度不能为空")
+            raise ValueError("定时 HTTP 调度不能为空")
         batches: dict[float, list[HttpRequestSpec]] = {}
         for item in scheduled:
             if item.scheduled_offset_seconds < 0:
@@ -680,22 +969,7 @@ class CampaignCaseExecutor:
                     await self._sleep(delay)
                 results.extend(await runner.run(batch))
         requests = tuple(item.request for item in scheduled)
-        outcome = _http_outcome(
-            requests,
-            results,
-            allow_overload=_case_allows_overload(case),
-        )
-        return CaseRunOutcome(
-            status=outcome.status,
-            reason=outcome.reason,
-            request_count=outcome.request_count,
-            categories=outcome.categories,
-            latency_seconds=outcome.latency_seconds,
-            extra={
-                "scheduled_offsets_seconds": tuple(sorted(batches)),
-                "scheduled_duration_seconds": max(batches),
-            },
-        )
+        return requests, results, tuple(sorted(batches))
 
     async def _run_s_stream(self, case: CaseSpec) -> CaseRunOutcome:
         _, fixture = await self._online_fixture()
@@ -776,28 +1050,247 @@ class CampaignCaseExecutor:
             encoded_photo=encoded,
         )
         if _load_string(case, "kind") == "face_management":
-            requests = build_person_management_requests(
+            plan = build_person_management_requests(
                 self.plan.targets,
                 persons,
                 batch_size=50,
             )
-            concurrency = 4
-        else:
-            requests = build_recognition_requests(
-                self.plan.targets,
-                persons,
-                repeats=count,
+            all_results: list[LoadResult] = []
+            phase_results: dict[str, object] = {
+                name: {
+                    "status": "not_run",
+                    "request_count": 0,
+                    "categories": {},
+                    "successful_person_count": 0,
+                    "failed_person_count": 0,
+                    "invalid_response_count": 0,
+                    "observed_instance_ids": [],
+                    "response_routes": [],
+                }
+                for name, _ in plan.phases
+            }
+            management_failures: list[str] = []
+            observed_management_instances: set[str] = set()
+            async with self.pool.build_client() as client:
+                runner = AsyncLoadRunner(
+                    client,
+                    max_concurrency=4,
+                    request_timeout_seconds=min(case.timeout_seconds, 900),
+                )
+                for phase_name, requests in plan.phases:
+                    results = await runner.run(requests)
+                    all_results.extend(results)
+                    http_outcome = _http_outcome(
+                        requests,
+                        results,
+                        allow_overload=False,
+                    )
+                    request_by_id = {request.request_id: request for request in requests}
+                    validations = []
+                    invalid_ids: list[str] = []
+                    for result in results:
+                        request = request_by_id.get(result.request_id)
+                        response = result.evidence.get("response")
+                        if (
+                            request is None
+                            or result.category is not ResultCategory.SUCCESS
+                            or not isinstance(response, Mapping)
+                        ):
+                            invalid_ids.append(result.request_id)
+                            continue
+                        validation = validate_person_management_response(
+                            request,
+                            response,
+                            expected_numbers=plan.expected_numbers(request),
+                        )
+                        validations.append(validation)
+                        observed_management_instances.update(validation.instance_ids)
+                        if not validation.valid:
+                            invalid_ids.append(f"{result.request_id}:{validation.reason}")
+                    categories, _ = _result_summary(results)
+                    phase_results[phase_name] = {
+                        "status": (
+                            "passed"
+                            if http_outcome.status == "passed" and not invalid_ids
+                            else "failed"
+                        ),
+                        "request_count": len(results),
+                        "categories": categories,
+                        "successful_person_count": sum(
+                            item.successful_person_count for item in validations
+                        ),
+                        "failed_person_count": sum(
+                            item.failed_person_count for item in validations
+                        ),
+                        "invalid_response_count": len(invalid_ids),
+                        "observed_instance_ids": sorted(
+                            {
+                                instance_id
+                                for item in validations
+                                for instance_id in item.instance_ids
+                            }
+                        ),
+                        "response_routes": sorted(
+                            {route for item in validations for route in item.response_routes}
+                        ),
+                    }
+                    if http_outcome.status != "passed" or invalid_ids:
+                        if http_outcome.status != "passed":
+                            management_failures.append(http_outcome.reason)
+                        management_failures.extend(invalid_ids)
+                        break
+            if len(observed_management_instances) > 1:
+                management_failures.append("人物管理响应显示请求经过多个 FaceRec 实例")
+            categories, latency = _result_summary(all_results)
+            boundary = FaceManagementBoundary()
+            return CaseRunOutcome(
+                "failed" if management_failures else "passed",
+                (
+                    "；".join(management_failures[:20])
+                    if management_failures
+                    else "人物新增/批量新增、查询/搜索和精确删除已按阶段顺序完成"
+                ),
+                len(all_results),
+                categories,
+                latency,
+                extra={
+                    "dataset_id": person_dataset_id(count),
+                    "dataset_person_count": len(plan.persons),
+                    "retained_person_count": len(plan.retained_persons),
+                    "deleted_person_count": len(plan.deleted_persons),
+                    "deleted_numbers": [person.number for person in plan.deleted_persons],
+                    "management_instance_count": boundary.management_instance_count,
+                    "observed_management_instance_ids": sorted(
+                        observed_management_instances
+                    ),
+                    "recognition_instance_count": boundary.recognition_instance_count,
+                    "request_summary": {
+                        phase_name: {
+                            "request_count": len(requests),
+                            "routes": dict(
+                                sorted(
+                                    Counter(
+                                        urllib.parse.urlsplit(request.url).path
+                                        for request in requests
+                                    ).items()
+                                )
+                            ),
+                        }
+                        for phase_name, requests in plan.phases
+                    },
+                    "result_summary": phase_results,
+                    "instance_consistency": {
+                        "status": "pending_unproven",
+                        "reason": "管理响应不能替代三个识别实例的共享 MongoDB 观察证据",
+                    },
+                },
             )
-            concurrency = min(1000, count)
-        outcome, _ = await self._run_http(
-            case,
-            requests,
-            max_concurrency=concurrency,
+
+        partition = partition_person_dataset(persons)
+        requests = build_recognition_requests(
+            self.plan.targets,
+            partition.retained,
+            repeats=count,
         )
-        return outcome
+        async with self.pool.build_client() as client:
+            runner = AsyncLoadRunner(
+                client,
+                max_concurrency=min(1000, count),
+                request_timeout_seconds=min(case.timeout_seconds, 900),
+            )
+            results = await runner.run(requests)
+        http_outcome = _http_outcome(requests, results, allow_overload=False)
+        request_by_id = {request.request_id: request for request in requests}
+        validations = []
+        failures: list[str] = []
+        instance_views: dict[str, set[str]] = {}
+        for result in results:
+            request = request_by_id.get(result.request_id)
+            response = result.evidence.get("response")
+            if (
+                request is None
+                or result.category is not ResultCategory.SUCCESS
+                or not isinstance(response, Mapping)
+            ):
+                failures.append(result.request_id)
+                continue
+            expected_number = recognition_expected_number(request)
+            validation = validate_person_recognition_response(
+                response,
+                expected_number=expected_number,
+            )
+            validations.append(validation)
+            if not validation.valid:
+                failures.append(f"{result.request_id}:{validation.reason}")
+            for instance_id in validation.instance_ids:
+                instance_views.setdefault(instance_id, set()).add(expected_number)
+        expected_numbers = tuple(person.number for person in partition.retained)
+        consistency = validate_cross_instance_person_views(
+            {
+                instance_id: tuple(sorted(numbers))
+                for instance_id, numbers in instance_views.items()
+            },
+            expected_numbers,
+        )
+        categories, latency = _result_summary(results)
+        boundary = FaceManagementBoundary()
+        return CaseRunOutcome(
+            "failed" if http_outcome.status != "passed" or failures else "passed",
+            (
+                http_outcome.reason
+                if http_outcome.status != "passed"
+                else (
+                    "识别响应缺少预期 number"
+                    if failures
+                    else "所有识别响应均包含各自预期 number"
+                )
+            ),
+            len(results),
+            categories,
+            latency,
+            extra={
+                "dataset_id": person_dataset_id(count),
+                "dataset_person_count": len(persons),
+                "retained_person_count": len(partition.retained),
+                "deleted_person_count": len(partition.deleted),
+                "recognition_instance_count": boundary.recognition_instance_count,
+                "request_summary": {
+                    "request_count": len(requests),
+                    "route": "/api/online/face/recognize",
+                    "unique_expected_number_count": len(
+                        {recognition_expected_number(request) for request in requests}
+                    ),
+                    "deleted_target_count": sum(
+                        recognition_expected_number(request)
+                        in {person.number for person in partition.deleted}
+                        for request in requests
+                    ),
+                },
+                "result_summary": {
+                    "request_count": len(results),
+                    "categories": categories,
+                    "matched_expected_count": sum(item.valid for item in validations),
+                    "invalid_response_count": len(failures),
+                    "observed_instance_ids": sorted(instance_views),
+                    "response_routes": sorted(
+                        {route for item in validations for route in item.response_routes}
+                    ),
+                },
+                "instance_consistency": {
+                    "status": "proven" if consistency.consistent else "pending_unproven",
+                    "reason": (
+                        "三个实例均观察到完整保留人物集合"
+                        if consistency.consistent
+                        else consistency.reason
+                    ),
+                    "observed_instance_count": len(instance_views),
+                },
+            },
+        )
 
     async def _query(self, case: CaseSpec) -> CaseRunOutcome:
-        task_ids: list[str] = []
+        asr_task_ids: list[str] = []
+        other_task_ids: list[str] = []
         for item in self.plan.catalog.cases:
             if item.phase.value != "offline":
                 continue
@@ -805,34 +1298,199 @@ class CampaignCaseExecutor:
             if not path.is_file():
                 continue
             body = read_case_evidence(self.release_root, self.plan, item)
-            task_ids.extend(str(value) for value in body.get("task_ids", []))
-            if len(task_ids) >= 100:
-                break
-        task_ids = list(dict.fromkeys(task_ids))[:100]
+            recorded_ids = [str(value) for value in body.get("task_ids", [])]
+            combination = item.load.get("combination")
+            contains_asr = combination in {"asr_only", "ppt_asr", "all"} or item.load.get(
+                "kind"
+            ) in {"long_course", "idempotent_submission", "conflicting_submission"}
+            (asr_task_ids if contains_asr else other_task_ids).extend(recorded_ids)
+        asr_task_ids = list(dict.fromkeys(asr_task_ids))[:50]
+        other_task_ids = list(dict.fromkeys(other_task_ids))[:50]
+        task_ids = [*asr_task_ids, *other_task_ids]
         if not task_ids:
             return CaseRunOutcome("blocked", "没有已提交任务供查询", 0, {}, ())
+        readiness_before = await self._control_readiness()
+        external_metrics_boundary = {
+            "source": "runtime_metrics_adapter",
+            "collected_by_query_executor": False,
+            "reason": "PostgreSQL 主机负载由外部运行时指标采集，不由北向查询响应推断",
+        }
+        if not readiness_before.ready:
+            return CaseRunOutcome(
+                "blocked",
+                "查询前 Control Service 未能证明就绪",
+                0,
+                {},
+                (),
+                extra={
+                    "control_readiness": {
+                        "before": readiness_before.to_evidence(),
+                        "after": None,
+                    },
+                    "postgresql_load_evidence": external_metrics_boundary,
+                },
+            )
         qps = _load_int(case, "qps", default=50)
-        nearest = min((50, 100, 300, 1000), key=lambda value: abs(value - qps))
-        requests = build_query_requests(
+        if qps not in query_qps_tiers():
+            raise ValueError("查询 QPS 只允许 50/100/300/1000")
+        raw_mode_value = case.load.get("mode", "jittered")
+        if not isinstance(raw_mode_value, str) or not raw_mode_value:
+            raise ValueError(f"用例 {case.case_id} 的 mode 必须是非空字符串")
+        raw_mode = raw_mode_value
+        mode = QueryMode(raw_mode)
+        interval = _load_int(case, "interval", default=2)
+        scheduled = build_scheduled_query_requests(
             self.plan.targets,
+            self.identity,
+            case.case_id,
             task_ids,
-            qps=nearest,
+            qps=qps,
             duration_seconds=10,
+            polling_interval_seconds=interval,
+            mode=mode,
+            large_asr_task_ids=asr_task_ids,
         )
         if _load_string(case, "kind") == "negative_query":
-            requests = build_negative_query_mix(
-                requests,
+            mixed = build_negative_query_mix(
+                tuple(item.request for item in scheduled),
                 self.plan.targets,
                 ratio=_load_float(case, "ratio"),
                 seed=self.plan.seed,
             )
-        outcome, _ = await self._run_http(
-            case,
+            scheduled = tuple(
+                replace(item, request=request)
+                for item, request in zip(scheduled, mixed, strict=True)
+            )
+        requests, results, offsets = await self._execute_scheduled_http(case, scheduled)
+        readiness_after = await self._control_readiness()
+        outcome = _http_outcome(
             requests,
-            max_concurrency=min(2048, qps),
-            requests_per_second=qps,
+            results,
+            allow_overload=False,
         )
-        return outcome
+        response_failures: list[str] = []
+        request_by_id = {request.request_id: request for request in requests}
+        scheduled_by_id = {item.request.request_id: item for item in scheduled}
+        query_observations: list[ObservedCourseQuery] = []
+        for result in results:
+            request = request_by_id.get(result.request_id)
+            if (
+                request is None
+                or request.expected_business_rejection
+                or result.category is not ResultCategory.SUCCESS
+            ):
+                continue
+            response = result.evidence.get("response")
+            if not isinstance(response, Mapping):
+                response_failures.append(result.request_id)
+                continue
+            validation = validate_course_query_response(response)
+            if not validation.valid:
+                response_failures.append(f"{result.request_id}:{validation.reason}")
+                continue
+            scheduled_request = scheduled_by_id.get(result.request_id)
+            if scheduled_request is None:
+                response_failures.append(f"{result.request_id}:缺少调度证据")
+                continue
+            try:
+                observation = parse_course_query_response(response)
+            except ValueError as error:
+                response_failures.append(f"{result.request_id}:{error}")
+                continue
+            query_observations.append(
+                ObservedCourseQuery(
+                    scheduled_request.scheduled_offset_seconds,
+                    result.request_id,
+                    observation,
+                )
+            )
+        transition_validation = validate_monotonic_query_observations(query_observations)
+        status = "failed" if outcome.status != "passed" or response_failures else "passed"
+        reason = outcome.reason
+        if response_failures:
+            status = "failed"
+            reason = "查询响应结构或整数状态不合法"
+        elif not transition_validation.valid:
+            status = "failed"
+            reason = transition_validation.reason
+        elif not readiness_after.ready:
+            status = "failed"
+            reason = "查询突发停止后 Control Service 未恢复就绪"
+        response_sizes = [
+            int(size)
+            for result in results
+            if type(size := result.evidence.get("response_size_bytes")) is int
+        ]
+        return CaseRunOutcome(
+            status,
+            reason,
+            outcome.request_count,
+            outcome.categories,
+            outcome.latency_seconds,
+            extra={
+                "mode": mode.value,
+                "requested_qps": qps,
+                "polling_interval_seconds": interval,
+                "logical_poller_count": qps * interval,
+                "queried_task_count": len(task_ids),
+                "large_asr_task_count": len(asr_task_ids),
+                "successful_query_observation_count": len(query_observations),
+                "response_size_sample_count": len(response_sizes),
+                "response_size_missing_count": len(results) - len(response_sizes),
+                "response_size_bytes_total": sum(response_sizes),
+                "response_size_bytes_max": max(response_sizes, default=0),
+                "scheduled_offsets_seconds": offsets,
+                "scheduled_duration_seconds": max(offsets),
+                "invalid_response_count": len(response_failures),
+                "node_state_transitions": transition_validation.to_evidence(),
+                "control_readiness": {
+                    "before": readiness_before.to_evidence(),
+                    "after": readiness_after.to_evidence(),
+                },
+                "postgresql_load_evidence": external_metrics_boundary,
+            },
+        )
+
+    async def _run_media_download(self, case: CaseSpec) -> CaseRunOutcome:
+        adapter = self._media_download_adapter
+        if adapter is None:
+            return CaseRunOutcome(
+                "blocked",
+                "媒体下载基线需要显式远程适配器",
+                0,
+                {},
+                (),
+            )
+        planned_hostname = urllib.parse.urlsplit(self.plan.control_origin).hostname
+        if (
+            planned_hostname is None
+            or adapter.target_hostname.casefold() != planned_hostname.casefold()
+        ):
+            return CaseRunOutcome(
+                "blocked",
+                "媒体下载适配器目标主机与 Control Service 目标不一致",
+                0,
+                {},
+                (),
+            )
+        result = await adapter.run(
+            tuple(_fixture(self.plan, fixture_id) for fixture_id in case.fixture_ids),
+            concurrency=_load_int(case, "concurrency"),
+        )
+        failures = result.attempts - result.successes
+        latency_seconds = (
+            ()
+            if result.document is None
+            else tuple(sample.elapsed_seconds for sample in result.document.samples)
+        )
+        return CaseRunOutcome(
+            result.status,
+            result.reason,
+            result.attempts,
+            {"failure": failures, "success": result.successes},
+            latency_seconds,
+            extra=result.to_evidence(),
+        )
 
     async def execute(self, case_id: str) -> Path:
         case = self._case(case_id)
@@ -844,6 +1502,8 @@ class CampaignCaseExecutor:
             kind = _load_string(case, "kind")
             if kind == "phase_gate":
                 outcome = CaseRunOutcome("passed", "阶段全部必需用例已经通过", 0, {}, ())
+            elif kind == "media_download":
+                outcome = await self._run_media_download(case)
             elif kind in {
                 "unique_submission",
                 "long_course",

@@ -1,0 +1,72 @@
+# 复制到整个 Git 工作区外，并设置为当前用户所有、权限精确 0600。
+# 运行时通过 ALGORITHM_CAMPAIGN_RUNTIME_CONFIG 指向副本；本部署不使用 .env。
+# 加载指标适配器：metrics=scripts.extreme_load.production_adapters:metrics_factory
+schema_version = 1
+
+[media_download]
+# 只有明确改为 true 才允许目标机发起媒体下载；模板默认禁止远端执行。
+enabled = false
+target_hostname = "192.168.29.11"
+ssh_user = "root"
+ssh_port = 22
+download_timeout_seconds = 1800
+# JSON 同样必须位于工作区外、归当前 UID 所有且权限精确为 0600。
+# 它只包含 evidence_id、collected_at、CPU/内存/网络和连接数，不得包含 URL 或凭据。
+source_resource_evidence_path = "/absolute/external/source-resource-evidence.json"
+
+[face_photo_residue]
+# 仅在三枚 FaceRec 与 MongoDB 完整容器 ID 已由当前预检确认后显式启用。
+enabled = false
+target_hostname = "192.168.29.11"
+ssh_user = "root"
+ssh_port = 22
+probe_timeout_seconds = 120
+fixture_evidence_id = "external-person-photo-manifest-1"
+# 摘要与大小必须精确匹配 Campaign person-photo manifest；普通报告不复制该摘要。
+person_photo_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+person_photo_size_bytes = 1
+facerec_compose_project = "algorithm-operators"
+mongodb_compose_project = "algorithm-scheduling-platform"
+mongodb_compose_service = "mongodb"
+mongodb_container_id = "0000000000000000000000000000000000000000000000000000000000000000"
+mongodb_database = "facerecapi"
+mongodb_collection = "persons"
+container_photo_paths = ["/app/media/person_photos"]
+container_log_paths = ["/app/logs"]
+persistent_paths = ["/data/result"]
+
+[face_photo_residue.facerec_container_ids]
+facerec-gpu0 = "0000000000000000000000000000000000000000000000000000000000000000"
+facerec-gpu1 = "1111111111111111111111111111111111111111111111111111111111111111"
+facerec-gpu2 = "2222222222222222222222222222222222222222222222222222222222222222"
+
+[runtime_metrics]
+# 只有明确改为 true 才允许通过 BatchMode SSH 读取目标机指标。
+enabled = false
+target_hostname = "192.168.29.11"
+ssh_user = "root"
+ssh_port = 22
+filesystem_paths = ["/", "/data/course", "/data/result"]
+# 必须与目标机 docker inspect 中的 Compose project 精确一致。
+compose_projects = ["algorithm-scheduling-platform", "algorithm-operators"]
+kafka_compose_project = "algorithm-scheduling-platform"
+kafka_compose_service = "kafka"
+kafka_consumer_groups = [
+  "algorithm-orchestrator",
+  "algorithm-orchestrator-visual-events",
+]
+regular_seconds = 5.0
+burst_seconds = 0.5
+probe_timeout_seconds = 5.0
+restart_loop_threshold = 3
+restart_loop_window_seconds = 60.0
+database_services = ["postgres", "kafka", "redis", "mongodb"]
+critical_container_services = [
+  "control-service",
+  "orchestrator-service",
+  "vision-orchestrator-service",
+  "online-gateway-service",
+]
+
+# 执行前可由受控预检写入当前 PID 到 GPU UUID 的期望归属；空表不伪造归属。
+[runtime_metrics.expected_gpu_by_pid]

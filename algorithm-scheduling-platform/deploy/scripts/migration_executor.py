@@ -17,6 +17,7 @@ MIGRATIONS_ROOT = PLATFORM_ROOT / "migrations"
 COMPOSE_PATH = PLATFORM_ROOT / "deploy/docker-compose.platform.yml"
 MIGRATION_PATTERN = re.compile(r"(?P<version>[0-9]{4})_[a-z0-9_]+\.sql")
 SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
+DATABASE_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}")
 
 
 class MigrationError(RuntimeError):
@@ -136,12 +137,16 @@ class DockerComposePostgres:
         platform_root: Path,
         compose_path: Path,
         git_sha: str,
+        database_name: str = "algorithm",
     ) -> None:
         if SHA_PATTERN.fullmatch(git_sha) is None:
             raise MigrationError("git_sha 必须是完整小写 Git SHA")
+        if DATABASE_NAME_PATTERN.fullmatch(database_name) is None:
+            raise MigrationError("PostgreSQL 数据库名称不安全")
         self._platform_root = platform_root
         self._compose_path = compose_path
         self._git_sha = git_sha
+        self._database_name = database_name
 
     def _psql(self, sql: str, *, tuples_only: bool = False) -> str:
         command = [
@@ -158,7 +163,7 @@ class DockerComposePostgres:
             "--username",
             "algorithm",
             "--dbname",
-            "algorithm",
+            self._database_name,
             "--no-psqlrc",
             "--set=ON_ERROR_STOP=1",
         ]
@@ -223,6 +228,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--platform-root", type=Path, default=PLATFORM_ROOT)
     parser.add_argument("--migrations-root", type=Path, default=MIGRATIONS_ROOT)
     parser.add_argument("--compose-path", type=Path, default=COMPOSE_PATH)
+    parser.add_argument("--database-name", default="algorithm")
     parser.add_argument("--plan", action="store_true")
     return parser
 
@@ -238,6 +244,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         platform_root=args.platform_root,
         compose_path=args.compose_path,
         git_sha=args.git_sha,
+        database_name=args.database_name,
     )
     executed = MigrationExecutor(database, migrations).run()
     if executed:

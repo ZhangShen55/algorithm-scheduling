@@ -413,6 +413,8 @@ class AsyncLoadRunner:
                 timeout=self._request_timeout_seconds,
             )
             status_code = response.status_code
+            # 查询大 ASR 结果时只记录响应字节数，不把完整文本写入普通证据。
+            evidence["response_size_bytes"] = len(response.content)
             try:
                 parsed = response.json()
             except ValueError:

@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import json
 import stat
+import sys
+from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
 from typing import Never
 
 import pytest
 
 from scripts.extreme_load.catalog import (
     CampaignPhase,
+    CaseSpec,
     FixtureDescriptor,
     FixtureKind,
     FixtureManifest,
@@ -17,12 +21,15 @@ from scripts.extreme_load.coordinator import (
     CampaignCoordinator,
     CoordinatorBlockedError,
 )
+from scripts.extreme_load.guardrails import GuardrailAssessment, GuardrailLevel
 from scripts.extreme_load.plan import (
     CampaignPlan,
     build_campaign_plan,
     execution_path,
     load_campaign_plan,
+    publish_campaign_plan,
 )
+from scripts.extreme_load.stage_runtime import StageCaseOutcome
 from scripts.run_extreme_load_campaign import main
 
 _GIT_SHA = "a" * 40
@@ -88,6 +95,7 @@ def _write_evidence(
                     case.phase.value for case in plan.catalog.cases if case.case_id == case_id
                 ),
                 "status": status,
+                "reason": "测试用例证据",
             }
         ),
         encoding="utf-8",
@@ -112,9 +120,88 @@ def _pass_all_required(release_root: Path, plan: CampaignPlan) -> None:
             _write_evidence(release_root, plan, case.case_id)
 
 
+def _clear_guardrail() -> GuardrailAssessment:
+    return GuardrailAssessment(GuardrailLevel.CLEAR, ())
+
+
+class FakeMetricsAdapter:
+    def __init__(
+        self,
+        assessments: list[GuardrailAssessment] | None = None,
+        *,
+        outcome: StageCaseOutcome | None = None,
+    ) -> None:
+        self.assessments = list(assessments or [])
+        self.outcome = outcome
+        self.calls: list[tuple[str, str]] = []
+
+    async def assess(self, case: CaseSpec, checkpoint: str) -> GuardrailAssessment:
+        case_id = case.case_id
+        self.calls.append((case_id, checkpoint))
+        return self.assessments.pop(0) if self.assessments else _clear_guardrail()
+
+    async def execute(self, case: CaseSpec) -> StageCaseOutcome:
+        self.calls.append((case.case_id, "execute"))
+        if self.outcome is not None:
+            return self.outcome
+        prefix = f"campaign/runtime-metrics/{case.case_id}"
+        return StageCaseOutcome(
+            "passed",
+            "指标探针通过",
+            {
+                "runtime_metrics": {
+                    "sample_count": 2,
+                    "gateway_delta": {"requests_total": 3},
+                    "gateway_instance_request_delta": {"vbas-gpu0": 2},
+                    "peak_inflight": {"vbas-gpu0": 2},
+                    "peak_active_leases": {"vbas-gpu0": 2},
+                    "peak_declared_capacity": {"vbas-gpu0": 10},
+                    "peak_gpu_utilization": {"GPU-0": 25.0},
+                    "peak_gpu_memory_bytes": {"GPU-0": 1024},
+                    "minimum_target_filesystem_available_bytes": {"/data": 4096},
+                    "target_directory_bytes_before": {
+                        "/data/course": 100,
+                        "/data/result": 200,
+                    },
+                    "target_directory_bytes_after": {
+                        "/data/course": 130,
+                        "/data/result": 240,
+                    },
+                    "target_directory_bytes_delta": {
+                        "/data/course": 30,
+                        "/data/result": 40,
+                    },
+                },
+                "sample_evidence": [f"{prefix}/00000001.json", f"{prefix}/00000002.json"],
+            },
+        )
+
+
+class FakeStageAdapter:
+    def __init__(self, outcome: StageCaseOutcome) -> None:
+        self.outcome = outcome
+        self.calls: list[str] = []
+
+    async def execute(self, case: CaseSpec) -> StageCaseOutcome:
+        self.calls.append(case.case_id)
+        return self.outcome
+
+
+def _factory(instance: object) -> Callable[[CampaignPlan, Path], object]:
+    def build(plan: CampaignPlan, release_root: Path) -> object:
+        del plan, release_root
+        return instance
+
+    return build
+
+
 def test_status_preserves_catalog_phase_order_and_first_phase_readiness(tmp_path: Path) -> None:
     plan = _plan(tmp_path)
-    coordinator = CampaignCoordinator(plan, tmp_path / "release")
+    coordinator = CampaignCoordinator(
+        plan,
+        tmp_path / "release",
+        adapter_factories={"metrics": _factory(FakeMetricsAdapter())},
+    )
 
     status = coordinator.status()
 
@@ -205,6 +292,194 @@ def test_stage_coordinated_cases_remain_explicit_integration_blockers(
 
 
 @pytest.mark.asyncio
+async def test_explicit_stage_factories_publish_atomic_case_evidence(tmp_path: Path) -> None:
+    plan = _plan(tmp_path)
+    release_root = tmp_path / "release"
+    metrics = FakeMetricsAdapter()
+    media = FakeStageAdapter(
+        StageCaseOutcome("passed", "媒体下载基线通过", {"concurrency": 1})
+    )
+    coordinator = CampaignCoordinator(
+        plan,
+        release_root,
+        adapter_factories={
+            "metrics": _factory(metrics),
+            "media_download": _factory(media),
+        },
+    )
+
+    assert coordinator.readiness("BASE-MEDIA-DOWNLOAD-1").state == "ready"
+    result = await coordinator.execute_case(
+        "BASE-MEDIA-DOWNLOAD-1",
+        allow_live_execution=True,
+    )
+
+    document = json.loads(result.evidence_path.read_text(encoding="utf-8"))
+    assert result.status == "passed"
+    assert media.calls == ["BASE-MEDIA-DOWNLOAD-1"]
+    assert metrics.calls == [
+        ("BASE-MEDIA-DOWNLOAD-1", "before"),
+        ("BASE-MEDIA-DOWNLOAD-1", "after"),
+    ]
+    assert document["adapter"] == "media_download"
+    assert document["adapter_evidence"] == {"concurrency": 1}
+    assert stat.S_IMODE(result.evidence_path.stat().st_mode) == 0o600
+    assert coordinator.readiness("BASE-MEDIA-DOWNLOAD-3").state == "ready"
+
+
+@pytest.mark.asyncio
+async def test_stage_adapter_exception_still_stops_metrics_after_sampling(tmp_path: Path) -> None:
+    plan = _plan(tmp_path)
+    metrics = FakeMetricsAdapter()
+
+    class RaisingAdapter:
+        async def execute(self, case: CaseSpec) -> StageCaseOutcome:
+            del case
+            raise RuntimeError("stage failed")
+
+    result = await CampaignCoordinator(
+        plan,
+        tmp_path / "release",
+        adapter_factories={
+            "metrics": _factory(metrics),
+            "media_download": _factory(RaisingAdapter()),
+        },
+    ).execute_case("BASE-MEDIA-DOWNLOAD-1", allow_live_execution=True)
+
+    assert result.status == "failed"
+    assert metrics.calls == [
+        ("BASE-MEDIA-DOWNLOAD-1", "before"),
+        ("BASE-MEDIA-DOWNLOAD-1", "after"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_metrics_adapter_is_required_even_when_case_adapter_is_registered(
+    tmp_path: Path,
+) -> None:
+    media = FakeStageAdapter(StageCaseOutcome("passed", "不应执行", {}))
+    coordinator = CampaignCoordinator(
+        _plan(tmp_path),
+        tmp_path / "release",
+        adapter_factories={"media_download": _factory(media)},
+    )
+
+    readiness = coordinator.readiness("BASE-MEDIA-DOWNLOAD-1")
+
+    assert readiness.state == "blocked"
+    assert "实时主机指标" in readiness.reason
+    with pytest.raises(CoordinatorBlockedError, match="实时主机指标"):
+        await coordinator.execute_case(
+            "BASE-MEDIA-DOWNLOAD-1",
+            allow_live_execution=True,
+        )
+    assert media.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("level", (GuardrailLevel.WARNING, GuardrailLevel.STOP))
+async def test_warning_or_stop_guardrail_blocks_stage_escalation(
+    tmp_path: Path,
+    level: GuardrailLevel,
+) -> None:
+    plan = _plan(tmp_path)
+    release_root = tmp_path / "release"
+    assessments = (
+        [GuardrailAssessment(level, (f"{level.value} threshold",))]
+        if level is GuardrailLevel.STOP
+        else [_clear_guardrail(), GuardrailAssessment(level, ("disk warning",))]
+    )
+    metrics = FakeMetricsAdapter(assessments)
+    media = FakeStageAdapter(StageCaseOutcome("passed", "档位执行完成", {"concurrency": 1}))
+    coordinator = CampaignCoordinator(
+        plan,
+        release_root,
+        adapter_factories={
+            "metrics": _factory(metrics),
+            "media_download": _factory(media),
+        },
+    )
+
+    result = await coordinator.execute_case(
+        "BASE-MEDIA-DOWNLOAD-1",
+        allow_live_execution=True,
+    )
+
+    assert result.status == "blocked"
+    assert coordinator.readiness("BASE-MEDIA-DOWNLOAD-3").state == "blocked"
+    assert "禁止继续升级" in json.loads(
+        result.evidence_path.read_text(encoding="utf-8")
+    )["reason"]
+    if level is GuardrailLevel.STOP:
+        assert media.calls == []
+    else:
+        assert media.calls == ["BASE-MEDIA-DOWNLOAD-1"]
+
+
+@pytest.mark.asyncio
+async def test_recovery_failure_stops_all_following_fault_cases(tmp_path: Path) -> None:
+    plan = _plan(tmp_path)
+    release_root = tmp_path / "release"
+    _pass_required_before(release_root, plan, CampaignPhase.RECOVERY)
+    metrics = FakeMetricsAdapter()
+    fault = FakeStageAdapter(
+        StageCaseOutcome(
+            "passed",
+            "故障动作结束但恢复失败",
+            {"scenario": "first"},
+            recovery_succeeded=False,
+        )
+    )
+    coordinator = CampaignCoordinator(
+        plan,
+        release_root,
+        adapter_factories={"metrics": _factory(metrics), "fault": _factory(fault)},
+    )
+
+    assert coordinator.readiness("RECOVERY-OPERATOR-ASR-OFFLINE").state == "ready"
+    assert coordinator.readiness("RECOVERY-OPERATOR-ASR-ONLINE").state == "blocked"
+    result = await coordinator.execute_case(
+        "RECOVERY-OPERATOR-ASR-OFFLINE",
+        allow_live_execution=True,
+    )
+
+    assert result.status == "failed"
+    later = coordinator.readiness("RECOVERY-OPERATOR-ASR-ONLINE")
+    assert later.state == "blocked"
+    assert "禁止继续升级或注入故障" in later.reason
+    assert fault.calls == ["RECOVERY-OPERATOR-ASR-OFFLINE"]
+
+
+@pytest.mark.asyncio
+async def test_four_hour_soak_is_required_and_eight_hour_soak_remains_optional(
+    tmp_path: Path,
+) -> None:
+    plan = _plan(tmp_path)
+    release_root = tmp_path / "release"
+    _pass_required_before(release_root, plan, CampaignPhase.SOAK)
+    metrics = FakeMetricsAdapter()
+    soak = FakeStageAdapter(
+        StageCaseOutcome("passed", "四小时长稳完成", {"hours": 4})
+    )
+    coordinator = CampaignCoordinator(
+        plan,
+        release_root,
+        adapter_factories={"metrics": _factory(metrics), "soak": _factory(soak)},
+    )
+
+    assert coordinator.readiness("SOAK-8H-OPTIONAL").state == "blocked"
+    four_hour = await coordinator.execute_case("SOAK-4H", allow_live_execution=True)
+    assert four_hour.status == "passed"
+    assert coordinator.readiness("SOAK-8H-OPTIONAL").state == "ready"
+
+    gate = await coordinator.execute_case("PHASE-6-COMPLETE")
+    validation = coordinator.validate()
+    assert gate.status == "passed"
+    assert validation.passed is True
+    assert validation.optional_pending == ("SOAK-8H-OPTIONAL",)
+
+
+@pytest.mark.asyncio
 async def test_default_execute_does_not_instantiate_live_executor(tmp_path: Path) -> None:
     plan = _plan(tmp_path)
     called = False
@@ -219,6 +494,7 @@ async def test_default_execute_does_not_instantiate_live_executor(tmp_path: Path
         plan,
         tmp_path / "release",
         executor_factory=forbidden_factory,
+        adapter_factories={"metrics": _factory(FakeMetricsAdapter())},
     )
 
     with pytest.raises(CoordinatorBlockedError, match="allow-live-execution"):
@@ -227,29 +503,165 @@ async def test_default_execute_does_not_instantiate_live_executor(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_live_executor_case_requires_metrics_adapter_for_readiness(
+    tmp_path: Path,
+) -> None:
+    coordinator = CampaignCoordinator(_plan(tmp_path), tmp_path / "release")
+
+    readiness = coordinator.readiness("BASE-OFFLINE-PPT")
+
+    assert readiness.state == "blocked"
+    assert readiness.requires_live_execution is True
+    assert "实时主机指标" in readiness.reason
+    with pytest.raises(CoordinatorBlockedError, match="实时主机指标"):
+        await coordinator.execute_case("BASE-OFFLINE-PPT", allow_live_execution=True)
+
+
+@pytest.mark.asyncio
 async def test_explicit_live_opt_in_runs_supported_executor_case(tmp_path: Path) -> None:
     plan = _plan(tmp_path)
     release_root = tmp_path / "release"
     calls: list[str] = []
+    metrics = FakeMetricsAdapter()
 
     class FakeExecutor:
+        def __init__(self, candidate: CampaignPlan) -> None:
+            self.candidate = candidate
+
         async def execute(self, case_id: str) -> Path:
             calls.append(case_id)
-            return _write_evidence(release_root, plan, case_id)
+            return _write_evidence(release_root, self.candidate, case_id)
 
     def factory(candidate: CampaignPlan, candidate_root: Path) -> FakeExecutor:
-        assert candidate is plan
+        assert candidate.campaign_id == plan.campaign_id
+        assert candidate is not plan
         assert candidate_root == release_root
-        return FakeExecutor()
+        return FakeExecutor(candidate)
 
     result = await CampaignCoordinator(
         plan,
         release_root,
         executor_factory=factory,
+        adapter_factories={"metrics": _factory(metrics)},
     ).execute_case("BASE-OFFLINE-PPT", allow_live_execution=True)
 
     assert result.status == "passed"
     assert calls == ["BASE-OFFLINE-PPT"]
+    assert metrics.calls == [
+        ("BASE-OFFLINE-PPT", "before"),
+        ("BASE-OFFLINE-PPT", "after"),
+        ("BASE-OFFLINE-PPT", "execute"),
+    ]
+    document = json.loads(result.evidence_path.read_text(encoding="utf-8"))
+    assert document["business_status"] == "passed"
+    assert document["runtime_observability"]["status"] == "passed"
+    assert document["runtime_observability"]["runtime_metrics"]["peak_inflight"] == {
+        "vbas-gpu0": 2
+    }
+    assert document["runtime_observability"]["sample_evidence"] == [
+        "campaign/runtime-metrics/BASE-OFFLINE-PPT/00000001.json",
+        "campaign/runtime-metrics/BASE-OFFLINE-PPT/00000002.json",
+    ]
+    business_path = release_root / document["business_evidence_path"]
+    assert json.loads(business_path.read_text(encoding="utf-8"))["status"] == "passed"
+
+
+@pytest.mark.asyncio
+async def test_live_case_pre_guardrail_blocks_before_business_executor(tmp_path: Path) -> None:
+    plan = _plan(tmp_path)
+    release_root = tmp_path / "release"
+    metrics = FakeMetricsAdapter([GuardrailAssessment(GuardrailLevel.WARNING, ("disk warning",))])
+
+    def forbidden_factory(plan: CampaignPlan, release_root: Path) -> Never:
+        del plan, release_root
+        raise AssertionError("前置护栏非 CLEAR 时不得执行业务负载")
+
+    result = await CampaignCoordinator(
+        plan,
+        release_root,
+        executor_factory=forbidden_factory,
+        adapter_factories={"metrics": _factory(metrics)},
+    ).execute_case("BASE-OFFLINE-PPT", allow_live_execution=True)
+
+    assert result.status == "blocked"
+    document = json.loads(result.evidence_path.read_text(encoding="utf-8"))
+    assert document["status"] == "blocked"
+    assert document["guardrail_before"]["level"] == "WARNING"
+    assert metrics.calls == [
+        ("BASE-OFFLINE-PPT", "before"),
+        ("BASE-OFFLINE-PPT", "execute"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_live_case_post_guardrail_cannot_leave_normative_evidence_passed(
+    tmp_path: Path,
+) -> None:
+    plan = _plan(tmp_path)
+    release_root = tmp_path / "release"
+    metrics = FakeMetricsAdapter(
+        [_clear_guardrail(), GuardrailAssessment(GuardrailLevel.STOP, ("host OOM",))]
+    )
+
+    class FakeExecutor:
+        def __init__(self, observed_plan: CampaignPlan) -> None:
+            self.observed_plan = observed_plan
+
+        async def execute(self, case_id: str) -> Path:
+            return _write_evidence(release_root, self.observed_plan, case_id)
+
+    def factory(observed_plan: CampaignPlan, candidate_root: Path) -> FakeExecutor:
+        assert candidate_root == release_root
+        return FakeExecutor(observed_plan)
+
+    result = await CampaignCoordinator(
+        plan,
+        release_root,
+        executor_factory=factory,
+        adapter_factories={"metrics": _factory(metrics)},
+    ).execute_case("BASE-OFFLINE-PPT", allow_live_execution=True)
+
+    assert result.status == "blocked"
+    normative = json.loads(result.evidence_path.read_text(encoding="utf-8"))
+    assert normative["status"] == "blocked"
+    assert normative["business_status"] == "passed"
+    assert normative["guardrail_after"] == {"level": "STOP", "reasons": ["host OOM"]}
+    business = json.loads(
+        (release_root / normative["business_evidence_path"]).read_text(encoding="utf-8")
+    )
+    assert business["status"] == "passed"
+
+
+@pytest.mark.asyncio
+async def test_live_case_missing_runtime_summary_fails_closed(tmp_path: Path) -> None:
+    plan = _plan(tmp_path)
+    release_root = tmp_path / "release"
+    metrics = FakeMetricsAdapter(
+        outcome=StageCaseOutcome("passed", "伪造通过但缺少 summary", {"sample_evidence": []})
+    )
+
+    class FakeExecutor:
+        def __init__(self, observed_plan: CampaignPlan) -> None:
+            self.observed_plan = observed_plan
+
+        async def execute(self, case_id: str) -> Path:
+            return _write_evidence(release_root, self.observed_plan, case_id)
+
+    result = await CampaignCoordinator(
+        plan,
+        release_root,
+        executor_factory=lambda observed_plan, _: FakeExecutor(observed_plan),
+        adapter_factories={"metrics": _factory(metrics)},
+    ).execute_case("BASE-OFFLINE-PPT", allow_live_execution=True)
+
+    assert result.status == "failed"
+    document = json.loads(result.evidence_path.read_text(encoding="utf-8"))
+    assert document["business_status"] == "passed"
+    assert document["runtime_observability"] == {
+        "error_type": "ValueError",
+        "reason": "运行时指标汇总失败: ValueError",
+        "status": "failed",
+    }
 
 
 @pytest.mark.asyncio
@@ -345,7 +757,48 @@ def test_cli_create_validate_and_default_execute_are_local_and_json(
     execute_output = json.loads(capsys.readouterr().out)
     assert execute_code == 3
     assert execute_output["status"] == "blocked"
-    assert "allow-live-execution" in execute_output["reason"]
+    assert "实时主机指标" in execute_output["reason"]
+
+
+def test_cli_loads_only_explicit_named_stage_adapter_factories(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = _plan(tmp_path)
+    plan_path = tmp_path / "campaign-plan.json"
+    publish_campaign_plan(plan_path, plan)
+    release_root = tmp_path / "release"
+    metrics = FakeMetricsAdapter()
+    media = FakeStageAdapter(
+        StageCaseOutcome("passed", "CLI 媒体基线完成", {"concurrency": 1})
+    )
+    module = ModuleType("coordinator_test_adapters")
+    module.__dict__["metrics_factory"] = _factory(metrics)
+    module.__dict__["media_factory"] = _factory(media)
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+
+    exit_code = main(
+        [
+            "execute-case",
+            "--plan",
+            str(plan_path),
+            "--release-root",
+            str(release_root),
+            "--case-id",
+            "BASE-MEDIA-DOWNLOAD-1",
+            "--adapter-factory",
+            "metrics=coordinator_test_adapters:metrics_factory",
+            "--adapter-factory",
+            "media_download=coordinator_test_adapters:media_factory",
+            "--allow-live-execution",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert output["status"] == "passed"
+    assert media.calls == ["BASE-MEDIA-DOWNLOAD-1"]
 
 
 def test_wrapper_is_local_non_mutating_and_uses_project_venv() -> None:
@@ -368,4 +821,5 @@ def test_status_reports_unimplemented_live_integration_boundaries(tmp_path: Path
     assert any("实时主机" in item for item in blockers)
     assert any("SSH/媒体下载" in item for item in blockers)
     assert any("故障注入" in item for item in blockers)
-    assert any("混合负载与长稳负载" in item for item in blockers)
+    assert any("混合负载" in item for item in blockers)
+    assert any("长稳负载" in item for item in blockers)
