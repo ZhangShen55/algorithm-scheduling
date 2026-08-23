@@ -33,14 +33,49 @@
 
 - 主机：`zhangshendeMacBook-Pro.local`，Mac17,2、arm64、10 逻辑 CPU、32 GiB 内存。
 - 主地址：`192.168.28.144`；目标服务器为另一台 x86_64 主机，二者不共享 CPU、内存或 GPU。
-- 系统 Python 为 3.9.6，不作为 Campaign Python 权威；实际运行必须使用平台 `.venv` 的 Python 3.11 依赖并记录版本。
+- 系统 Python 为 3.9.6，不作为 Campaign Python 权威；平台 `.venv` 当前为 Python 3.12.13，
+  `httpx/PyYAML/websockets/aiokafka` 分别为 `0.28.1/6.0.3/17.0.1/0.14.0`。正式加压必须
+  使用同一 release 预检记录的 `.venv`，不能回退到系统 Python；服务器算子镜像继续遵循已确定的
+  Python 3.11 合同。
 - 打开文件上限为 1,048,575；正式加压仍必须实时记录 CPU、内存、socket、文件句柄、网络和事件循环漂移，避免把负载机上限误归因于平台。
 
 ## 当前证据结论
 
-- 已达到：工作区保护、目标机只读库存、GPU/磁盘/端口和负载主机基线。
-- 尚未达到：最终 clean Git SHA、Campaign 本地代码和测试、媒体源下载基线、常驻部署、镜像清理 dry-run、远端七算子新 release、阶段 0–6、4 小时长稳和最终清理。
+- 已达到：工作区保护、目标机只读库存、GPU/磁盘/端口和负载主机基线；Campaign catalog、
+  北向负载生成器、离线/在线/实时 ASR 请求模型、护栏、指标数据模型、聚合报告、精确故障执行器、
+  常驻生命周期、迁移账本、镜像生命周期、唯一中文部署手册和本地 fail-closed 协调入口。
+- 本地统一门禁为 `167 passed`，Ruff、strict Mypy（20 个源文件）、`compileall`、导入、Bash
+  syntax 与 OpenSpec strict 均通过。该结果只证明静态/单元层实现，不代表任何远端负载已经发生。
+- 尚未达到：最终 clean Campaign Git SHA、真实指标/SSH/媒体下载探针接入、缩小版服务运行
+  Campaign、媒体源下载基线、常驻部署、镜像清理 dry-run、远端七算子新 release、阶段 0–6、
+  4 小时长稳和最终清理。
 - 已知质量阻断：`ASR-013` 仍为 24 个中英混合术语片段中 9 个严重错误。性能测试可以继续，但最终结论必须保持质量阻断，除非同一最终 SHA 的新证据解除它。
+
+## 本地实施入口与失败关闭边界
+
+Campaign 元数据模板位于
+`deploy/templates/extreme-load-fixtures.example.yaml`；复制到 Git 工作区外并填入外部路径、
+大小、时长和 SHA-256 后，使用：
+
+```bash
+deploy/scripts/run-extreme-load-campaign create-plan \
+  --release-tag "$RELEASE_TAG" \
+  --git-sha "$EXPECTED_GIT_SHA" \
+  --seed 260823 \
+  --control-origin http://192.168.29.11:18100 \
+  --gateway-origin http://192.168.29.11:18103 \
+  --fixture-manifest "$EXTERNAL_FIXTURE_MANIFEST" \
+  --output "$RELEASE_ROOT/campaign-plan.json"
+
+deploy/scripts/run-extreme-load-campaign status \
+  --plan "$RELEASE_ROOT/campaign-plan.json" \
+  --release-root "$RELEASE_ROOT"
+```
+
+`execute-case` 默认不访问北向端点；只有显式传入 `--allow-live-execution` 才可发送 HTTP/WS。
+媒体下载、远端宿主机指标、残留扫描、故障语义、混合和长稳仍明确返回 blocked，不能通过手工
+写入 passed 证据绕过。计划和逐案证据均以 `0600`、当前 UID、单硬链接、不可覆盖和完整
+Campaign/release/SHA/case/phase 身份校验发布。
 
 ## 安全门禁
 

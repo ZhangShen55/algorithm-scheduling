@@ -23,6 +23,10 @@ New offline tasks use only these DAGs:
 Historical `PPT_KEYWORDS` and `COURSE_OVERVIEW` nodes may still appear in queries for old tasks,
 but new tasks do not create placeholders for them.
 
+七算子、四平台、四中间件和三 GPU 的首次部署、升级、回滚、常驻启停及精确清理，统一以
+[算法功能调度平台部署手册](deploy/算法功能调度平台部署手册.md) 为中文操作权威。本 README
+只说明仓库边界和开发入口，不再维护第二套生产部署顺序。
+
 ## Services
 
 - `../control_service`: course task API, persistent status, Outbox and operator control plane.

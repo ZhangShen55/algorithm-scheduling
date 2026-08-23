@@ -27,6 +27,13 @@
     "memory_bytes": 34359738368,
     "primary_ipv4": "192.168.28.144",
     "python_system": "3.9.6",
+    "python_platform_venv": "3.12.13",
+    "platform_venv_dependencies": {
+      "aiokafka": "0.14.0",
+      "httpx": "0.28.1",
+      "pyyaml": "6.0.3",
+      "websockets": "17.0.1"
+    },
     "open_files_limit": 1048575,
     "shares_target_compute_resources": false
   },

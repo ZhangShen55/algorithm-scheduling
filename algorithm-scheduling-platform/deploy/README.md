@@ -1,5 +1,10 @@
 # Single-project platform deployment
 
+七算子、四平台、四中间件、三 GPU 的首次部署、常驻启停、升级、回滚和精确清理以
+[算法功能调度平台部署手册](./算法功能调度平台部署手册.md) 为唯一中文操作入口。本 README
+保留 Compose、镜像资产和历史 Harness 背景作为实现参考；如命令顺序或生命周期说明与该
+手册冲突，以手册调用的当前权威脚本为准，不从这里拼装第二套生产流程。
+
 ## 里程碑 2B 部署验证入口
 
 完整顺序和证据边界见
@@ -22,10 +27,15 @@ GPU 或静态 Compose 结果当作真实部署通过。
 是外部可信基线；部署不得运行 `generate-model-asset-manifest` 重新生成或覆盖它，只能暂存并校验：
 
 ```bash
-RELEASE_TAG=v1.0_260812
-EXPECTED_GIT_SHA="$(git -C .. rev-parse HEAD)"
-MODEL_ASSET_SOURCE=/root/workspace/.algorithm-scheduling-assets/v1.0_260812
-RESTRICTED_REPORT_ROOT=/root/workspace/.algorithm-scheduling-restricted-reports
+export OPERATOR_REGISTRY_TOKEN="${OPERATOR_REGISTRY_TOKEN:?required}"
+export EXPECTED_GIT_SHA="$(git -C .. rev-parse HEAD)"
+export RELEASE_TAG=v1.0_260812
+export MODEL_ASSET_SOURCE=/root/workspace/.algorithm-scheduling-assets/v1.0_260812
+export REPORT_ROOT="$PWD/deploy/reports"
+export RELEASE_ROOT="$REPORT_ROOT/milestone-2b/releases/$RELEASE_TAG/$EXPECTED_GIT_SHA"
+export PRODUCTION_ROOT="$RELEASE_ROOT/production"
+export PRODUCTION_LEDGER="$PRODUCTION_ROOT/production-stack.json"
+export RESTRICTED_REPORT_ROOT=/root/workspace/.algorithm-scheduling-restricted-reports
 
 deploy/scripts/stage-model-assets \
   --source "$MODEL_ASSET_SOURCE" --workspace "$PWD/.."
@@ -33,13 +43,16 @@ deploy/scripts/verify-model-assets \
   --source "$MODEL_ASSET_SOURCE" --workspace "$PWD/.."
 deploy/scripts/prepare-report-directory \
   --release-tag "$RELEASE_TAG" --git-sha "$EXPECTED_GIT_SHA" \
-  --reports-root "$PWD/deploy/reports" \
+  --reports-root "$REPORT_ROOT" \
   --restricted-root "$RESTRICTED_REPORT_ROOT" \
   --external-manifest "$MODEL_ASSET_SOURCE/model-assets.manifest.json"
 
-EXPECTED_GIT_SHA="$EXPECTED_GIT_SHA" MODEL_ASSET_SOURCE="$MODEL_ASSET_SOURCE" \
-  deploy/scripts/build-images v1.0_260812
+deploy/scripts/build-images "$RELEASE_TAG"
 ```
+
+上述 token 与 SHA 必须在 preflight、build 和常驻启停前显式导出。`PRODUCTION_LEDGER` 是
+start/status/stop 在同一 `REPORT_ROOT` 下解析的 release 级默认 `0600` 权威账本；三者的完整
+命令只在中文部署手册维护，本 README 不复制另一套生命周期步骤。
 
 模型源、可信 manifest、课程媒体、人脸原图、私钥和解密密钥均为外部受控输入，
 不得提交到 Git 或写入报告。服务器登录密码是用户批准写入本文与 Git 的例外，不得把该
@@ -241,8 +254,8 @@ deploy/scripts/stage-model-assets \
 deploy/scripts/verify-model-assets \
   --source "$ASSET_SOURCE" --workspace "$PWD/.."
 
-EXPECTED_GIT_SHA="$(git -C .. rev-parse HEAD)" \
-MODEL_ASSET_SOURCE="$ASSET_SOURCE" \
+export EXPECTED_GIT_SHA="$(git -C .. rev-parse HEAD)"
+export MODEL_ASSET_SOURCE="$ASSET_SOURCE"
 deploy/scripts/build-images                    # default: v1.0_260812
 ```
 

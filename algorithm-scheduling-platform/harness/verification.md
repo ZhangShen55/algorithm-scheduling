@@ -5,6 +5,47 @@ platform root, use the explicit workspace import path below; this prevents a
 bare top-level `tests` package from another checkout from shadowing the
 platform tests:
 
+## 2026-08-23 A 服务极限负载 Campaign 本地门禁
+
+本节对应
+[`scenarios/milestone-2b-extreme-load-campaign.md`](scenarios/milestone-2b-extreme-load-campaign.md)
+和 OpenSpec `run-milestone-2b-extreme-load-campaign`。从平台目录执行：
+
+```bash
+.venv/bin/ruff check \
+  scripts/extreme_load tests/extreme_load tests/deploy \
+  deploy/scripts/production_stack.py \
+  deploy/scripts/migration_executor.py \
+  deploy/scripts/image_lifecycle.py \
+  deploy/scripts/extreme_load_faults.py \
+  scripts/run_extreme_load_campaign.py
+
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/extreme_load tests/deploy
+
+MYPYPATH="$PWD/.." .venv/bin/mypy --strict --explicit-package-bases \
+  scripts/extreme_load \
+  deploy/scripts/production_stack.py \
+  deploy/scripts/migration_executor.py \
+  deploy/scripts/image_lifecycle.py \
+  deploy/scripts/extreme_load_faults.py \
+  scripts/run_extreme_load_campaign.py
+
+.venv/bin/python -m compileall -q scripts/extreme_load deploy/scripts
+bash -n \
+  deploy/scripts/run-extreme-load-campaign \
+  deploy/scripts/start-production-stack \
+  deploy/scripts/status-production-stack \
+  deploy/scripts/stop-production-stack \
+  deploy/scripts/apply-database-migrations \
+  deploy/scripts/production-image-lifecycle
+```
+
+2026-08-23 本地结果为 `167 passed`，Ruff、strict Mypy（20 个源文件）、`compileall`、导入
+和 Bash syntax 均通过。该结果只达到静态/单元层级：协调器对实时北向执行要求显式
+`--allow-live-execution`，并对 SSH 媒体下载、真实主机指标、故障语义、混合和长稳用例返回
+blocked。不能据此宣称 `192.168.29.11` 的发布、Campaign 或清理通过。
+
 ## 2026-08-21 七算子当前验收入口
 
 当前发布范围由

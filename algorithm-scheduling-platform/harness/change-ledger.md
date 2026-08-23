@@ -18,6 +18,24 @@
   共享 CPU/内存/GPU；正式负载仍须使用平台 Python 3.11 环境并记录客户端资源。
 - 当前证据级别仅为只读基线。`ASR-013` 仍是质量阻断；Campaign 的性能结果不能把它改写为通过。
 
+## 2026-08-23 - `run-milestone-2b-extreme-load-campaign` 本地运行基础闭环
+
+- 新增七阶段、逐用例的版本化 catalog；必需用例使用稳定 ID、前置、档位、外部 fixture 摘要、
+  护栏、清理与 release 相对证据路径。8 小时长稳明确为可选，4 小时长稳仍是必需门禁。
+- A 服务负载只允许 `18100/18103`，实现有界异步 HTTP 池、离线组合/幂等/冲突/追加/复用、
+  查询、四类在线图片、S 流节拍、实时 ASR 和 FaceRec 管理/识别请求模型。负向离线混合只轮询
+  被成功接受的正向任务；追加与完成结果复用保持顺序；ASR 末块后使用有界响应窗口。
+- 新增宿主机/Docker/GPU/队列/租约指标数据模型、磁盘/GPU/OOM/重启/数据库/证据护栏、
+  相对性能判定、中文报告、精确完整容器 ID 故障计划和“恢复失败即停止后续故障”门禁。真实
+  远端探针尚未注入，因此相关用例继续 blocked，不把数据模型冒充现场观测。
+- 新增常驻 `start/status/stop-production-stack`、`0001-0007` 连续迁移账本、镜像 inventory/
+  protection/dry-run/漂移拒绝/完整 ID 删除，以及唯一中文部署手册。清理代码不接受 prune、
+  volume、`/data/result`、模型、Git 或 release 证据目标；本记录未执行任何远端删除。
+- 本地统一结果为 `167 passed`；Ruff、strict Mypy（20 个源文件）、`compileall`、导入、Bash
+  syntax、部署手册静态校验、OpenSpec strict 和 `git diff --check` 通过。当前新增代码尚未作为
+  最终 Campaign SHA 远端运行，目标机仍受约 103 GiB/7% 磁盘红线约束。
+- `ASR-013` 的 9/24 严重中英混合术语错误保持质量阻断；极限性能结果不得覆盖该结论。
+
 ## 2026-08-21 - `retire-text-analysis-from-scheduling-platform` 基线冻结
 
 - 本变更从 `56d42f5cc5e88f271935e0a5c99dadd54e0e07a6` 开始；`text_analysis/` 的 101 个非缓存

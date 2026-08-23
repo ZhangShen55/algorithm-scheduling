@@ -1,0 +1,58 @@
+# 仅保存外部测试数据的元数据。请复制到 Git 工作区外并替换全部占位值；
+# 课程媒体、人脸原图和音频字节不得提交到 Git 或普通 Campaign 报告。
+schema_version: 1
+fixtures:
+  - fixture_id: short-teacher
+    kind: short_teacher_video
+    path: <absolute external path or HTTP/HTTPS URL>
+    size_bytes: <integer>
+    duration_seconds: <seconds>
+    sha256: <64 lowercase hex characters>
+  - fixture_id: short-student
+    kind: short_student_video
+    path: <absolute external path or HTTP/HTTPS URL>
+    size_bytes: <integer>
+    duration_seconds: <seconds>
+    sha256: <64 lowercase hex characters>
+  - fixture_id: short-slides
+    kind: short_slides_video
+    path: <absolute external path or HTTP/HTTPS URL>
+    size_bytes: <integer>
+    duration_seconds: <seconds>
+    sha256: <64 lowercase hex characters>
+  - fixture_id: long-teacher
+    kind: long_course
+    path: <absolute external path or HTTP/HTTPS URL>
+    size_bytes: <integer>
+    duration_seconds: <2700-3600 seconds>
+    sha256: <64 lowercase hex characters>
+  - fixture_id: long-student
+    kind: long_course
+    path: <absolute external path or HTTP/HTTPS URL>
+    size_bytes: <integer>
+    duration_seconds: <2700-3600 seconds>
+    sha256: <64 lowercase hex characters>
+  - fixture_id: long-slides
+    kind: long_course
+    path: <absolute external path or HTTP/HTTPS URL>
+    size_bytes: <integer>
+    duration_seconds: <2700-3600 seconds>
+    sha256: <64 lowercase hex characters>
+  - fixture_id: online-image
+    kind: online_image
+    path: <absolute external path or HTTP/HTTPS URL>
+    size_bytes: <integer>
+    duration_seconds: null
+    sha256: <64 lowercase hex characters>
+  - fixture_id: realtime-audio
+    kind: realtime_audio
+    path: <absolute external path or HTTP/HTTPS URL>
+    size_bytes: <integer>
+    duration_seconds: <seconds>
+    sha256: <64 lowercase hex characters>
+  - fixture_id: person-photo
+    kind: person_photo
+    path: <absolute external path or HTTP/HTTPS URL>
+    size_bytes: <integer>
+    duration_seconds: null
+    sha256: <64 lowercase hex characters>
