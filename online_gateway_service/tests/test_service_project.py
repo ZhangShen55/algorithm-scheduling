@@ -3,9 +3,9 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
-import tomllib
 from fastapi.testclient import TestClient
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
@@ -138,5 +138,10 @@ def test_settings_precedence_is_defaults_then_toml_then_environment(
 def test_gateway_defaults_target_the_control_service_port() -> None:
     from app.core.config import OnlineGatewaySettings
 
-    assert OnlineGatewaySettings().control.base_url == "http://127.0.0.1:18100"
-    assert OnlineGatewaySettings().face_persons.base_url == "http://127.0.0.1:8003"
+    settings = OnlineGatewaySettings()
+
+    assert settings.control.base_url == "http://127.0.0.1:18100"
+    assert settings.face_persons.base_url == "http://127.0.0.1:8003"
+    assert settings.http.max_connections == 2048
+    assert settings.http.max_keepalive_connections == 512
+    assert settings.http.pool_timeout_seconds > 0

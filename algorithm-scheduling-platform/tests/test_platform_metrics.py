@@ -29,6 +29,11 @@ def test_metrics_endpoint_exposes_required_platform_dimensions(tmp_path: Path) -
         count=1,
     )
     metrics.set_active_leases("vbas", "vbas-gpu0", 1)
+    metrics.record_capacity_lease_event(
+        capability="teacher_behavior",
+        outcome="acquired",
+        instance_id="vbas-gpu0",
+    )
     metrics.observe_operator_request(
         operator_code="vbas",
         capability="teacher_behavior",
@@ -50,6 +55,10 @@ def test_metrics_endpoint_exposes_required_platform_dimensions(tmp_path: Path) -
     assert "algorithm_kafka_consumer_lag" in body
     assert 'gpu="0"' in body
     assert "algorithm_operator_active_leases" in body
+    assert (
+        'algorithm_capacity_lease_events_total{capability="teacher_behavior",'
+        'instance_id="vbas-gpu0",outcome="acquired"} 1.0' in body
+    )
     assert "algorithm_operator_request_latency_seconds" in body
     assert "algorithm_operator_request_errors_total" in body
     assert 'kind="course"' in body

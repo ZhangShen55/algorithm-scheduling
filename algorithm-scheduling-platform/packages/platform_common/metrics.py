@@ -59,6 +59,12 @@ class PlatformMetrics:
             ("operator_code", "instance_id"),
             registry=self.registry,
         )
+        self._capacity_lease_events = Counter(
+            "algorithm_capacity_lease_events",
+            "Capacity lease lifecycle events observed by a platform service.",
+            ("capability", "outcome", "instance_id"),
+            registry=self.registry,
+        )
         self._operator_latency = Histogram(
             "algorithm_operator_request_latency_seconds",
             "Synchronous operator request latency.",
@@ -129,6 +135,19 @@ class PlatformMetrics:
             operator_code=_current_operator_code(operator_code),
             instance_id=instance_id,
         ).set(count)
+
+    def record_capacity_lease_event(
+        self,
+        *,
+        capability: str,
+        outcome: str,
+        instance_id: str | None = None,
+    ) -> None:
+        self._capacity_lease_events.labels(
+            capability=capability,
+            outcome=outcome,
+            instance_id=instance_id or "none",
+        ).inc()
 
     def observe_operator_request(
         self,

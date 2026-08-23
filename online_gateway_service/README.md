@@ -44,6 +44,16 @@ FaceRec 人物管理由 Online Gateway 代理以下接口：
 租约、不进入 Kafka、也不由网关直连 MongoDB。人脸原图是否保存继续由 FaceRec
 `image.save_person_photo` 控制，当前默认值为 `false`。
 
+里程碑 2B 三卡部署使用 `[http].max_connections=2048`、
+`max_keepalive_connections=512` 和有界 `pool_timeout_seconds`。连接池只保证网关能够承接
+千级并发；请求是否进入算子仍由 Control Service 容量租约决定，无容量时返回业务码 `50301`，
+不能把连接池大小当成算子的声明容量。
+
+`GET /metrics` 通过 `algorithm_operator_request_*` 给出已经调用到各实例的请求计数与耗时，
+并通过 `algorithm_capacity_lease_events_total` 累计 `requested`、`acquired`、`rejected`、
+`released` 和 `release_failed`。极短请求的调度证据应同时使用实例请求增量、租约事件增量和
+0.5–1 秒峰值采样，不能只依赖 5 秒时点快照。
+
 单图 OCR 接口为 `POST /api/online/ocr/recognize`：
 
 ```json

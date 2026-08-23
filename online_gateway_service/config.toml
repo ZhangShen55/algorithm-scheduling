@@ -42,9 +42,9 @@ base_url = "http://127.0.0.1:8003"
 
 [http]
 # 下游 HTTP 连接池最大连接数。
-max_connections = 100
+max_connections = 2048
 # 下游 HTTP 连接池最大保活连接数。
-max_keepalive_connections = 20
+max_keepalive_connections = 512
 # 建立下游 HTTP 连接的超时秒数。
 connect_timeout_seconds = 5.0
 # 读取下游 HTTP 响应的超时秒数。

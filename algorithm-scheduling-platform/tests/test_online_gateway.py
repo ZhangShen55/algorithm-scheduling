@@ -23,6 +23,7 @@ from online_gateway_service.app.main import app
 from starlette.websockets import WebSocketDisconnect
 
 from packages.platform_common.config import PlatformSettings
+from packages.platform_common.metrics import PlatformMetrics
 from packages.platform_common.operator_registry import CapacityLease
 
 
@@ -242,8 +243,13 @@ async def test_online_capacity_client_renews_context_and_releases() -> None:
         work_id="online-ocr-001",
         trace_id="trace-001",
     )
+    metrics = PlatformMetrics()
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        client = OnlineCapacityLeaseClient(http, control_service_url="http://control")
+        client = OnlineCapacityLeaseClient(
+            http,
+            control_service_url="http://control",
+            metrics=metrics,
+        )
         async with client.acquire(
             "ocr",
             ttl_seconds=1,
@@ -264,6 +270,19 @@ async def test_online_capacity_client_renews_context_and_releases() -> None:
     assert calls[-1] == (
         "/internal/operator-instances/release",
         {"lease_id": "lease-online-renew"},
+    )
+    rendered = metrics.render().decode("utf-8")
+    assert (
+        'algorithm_capacity_lease_events_total{capability="ocr",'
+        'instance_id="none",outcome="requested"} 1.0' in rendered
+    )
+    assert (
+        'algorithm_capacity_lease_events_total{capability="ocr",'
+        'instance_id="ocr-gpu0",outcome="acquired"} 1.0' in rendered
+    )
+    assert (
+        'algorithm_capacity_lease_events_total{capability="ocr",'
+        'instance_id="ocr-gpu0",outcome="released"} 1.0' in rendered
     )
 
 
@@ -300,6 +319,34 @@ async def test_online_capacity_renewal_failure_cancels_work_and_releases() -> No
                 await asyncio.sleep(1)
 
     assert calls[-1].endswith("/release")
+
+
+@pytest.mark.asyncio
+async def test_online_capacity_client_counts_rejected_lease() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/internal/operator-instances/lease"
+        return httpx.Response(503, json={"detail": "暂无可用算子容量"})
+
+    metrics = PlatformMetrics()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OnlineCapacityLeaseClient(
+            http,
+            control_service_url="http://control",
+            metrics=metrics,
+        )
+        with pytest.raises(OnlineCapacityLeaseError, match="获取在线算子容量失败"):
+            async with client.acquire("detect_all"):
+                raise AssertionError("没有租约时不得进入算子调用")
+
+    rendered = metrics.render().decode("utf-8")
+    assert (
+        'algorithm_capacity_lease_events_total{capability="detect_all",'
+        'instance_id="none",outcome="requested"} 1.0' in rendered
+    )
+    assert (
+        'algorithm_capacity_lease_events_total{capability="detect_all",'
+        'instance_id="none",outcome="rejected"} 1.0' in rendered
+    )
 
 
 def test_online_ocr_timeout_and_upstream_errors_release_the_lease() -> None:

@@ -144,6 +144,7 @@ def create_online_gateway_app(
     app.state.online_lease_client = OnlineCapacityLeaseClient(
         http_client,
         control_service_url=platform_settings.control_service_url,
+        metrics=cast(PlatformMetrics, app.state.platform_metrics),
     )
     app.state.face_person_client = FacePersonClient(
         http_client,

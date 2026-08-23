@@ -36,8 +36,8 @@ class FacePersonsConfig(BaseModel):
 
 
 class HttpConfig(BaseModel):
-    max_connections: int = 100
-    max_keepalive_connections: int = 20
+    max_connections: int = 2048
+    max_keepalive_connections: int = 512
     connect_timeout_seconds: float = 5.0
     read_timeout_seconds: float = 60.0
     write_timeout_seconds: float = 60.0

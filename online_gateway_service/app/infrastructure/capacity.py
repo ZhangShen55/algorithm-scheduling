@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 
 import httpx
 
+from packages.platform_common.metrics import PlatformMetrics
+
 
 @dataclass(frozen=True, slots=True)
 class OnlineWorkContext:
@@ -48,9 +50,16 @@ class OnlineCapacityLeaseError(RuntimeError):
 
 
 class OnlineCapacityLeaseClient:
-    def __init__(self, http_client: httpx.AsyncClient, *, control_service_url: str) -> None:
+    def __init__(
+        self,
+        http_client: httpx.AsyncClient,
+        *,
+        control_service_url: str,
+        metrics: PlatformMetrics | None = None,
+    ) -> None:
         self._http = http_client
         self._control_service_url = control_service_url.rstrip("/")
+        self._metrics = metrics
 
     @asynccontextmanager
     async def acquire(
@@ -61,12 +70,16 @@ class OnlineCapacityLeaseClient:
         work_context: OnlineWorkContext | None = None,
         renew_interval_seconds: float | None = None,
     ) -> AsyncIterator[CapacityLease]:
+        interval = renew_interval_seconds or max(min(ttl_seconds / 3, 20.0), 0.1)
+        if interval >= ttl_seconds:
+            raise ValueError("租约续租周期必须小于租约时长")
         payload: dict[str, object] = {
             "capability": capability,
             "ttl_seconds": ttl_seconds,
         }
         if work_context is not None:
             payload["work_context"] = work_context.as_dict()
+        self._record_lease_event(capability=capability, outcome="requested")
         try:
             response = await self._http.post(
                 f"{self._control_service_url}/internal/operator-instances/lease",
@@ -75,13 +88,15 @@ class OnlineCapacityLeaseClient:
             response.raise_for_status()
             lease = self._parse_lease(response.json())
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+            self._record_lease_event(capability=capability, outcome="rejected")
             raise OnlineCapacityLeaseError(
                 f"获取在线算子容量失败: {capability}"
             ) from exc
-
-        interval = renew_interval_seconds or max(min(ttl_seconds / 3, 20.0), 0.1)
-        if interval >= ttl_seconds:
-            raise ValueError("租约续租周期必须小于租约时长")
+        self._record_lease_event(
+            capability=capability,
+            outcome="acquired",
+            instance_id=lease.instance_id,
+        )
         owner_task = asyncio.current_task()
         renewal_error: Exception | None = None
 
@@ -126,9 +141,33 @@ class OnlineCapacityLeaseClient:
                 )
                 response.raise_for_status()
             except httpx.HTTPError as exc:
+                self._record_lease_event(
+                    capability=capability,
+                    outcome="release_failed",
+                    instance_id=lease.instance_id,
+                )
                 raise OnlineCapacityLeaseError(
                     f"释放在线算子容量失败: {lease.lease_id}"
                 ) from exc
+            self._record_lease_event(
+                capability=capability,
+                outcome="released",
+                instance_id=lease.instance_id,
+            )
+
+    def _record_lease_event(
+        self,
+        *,
+        capability: str,
+        outcome: str,
+        instance_id: str | None = None,
+    ) -> None:
+        if self._metrics is not None:
+            self._metrics.record_capacity_lease_event(
+                capability=capability,
+                outcome=outcome,
+                instance_id=instance_id,
+            )
 
     @staticmethod
     def _parse_lease(body: object) -> CapacityLease:
