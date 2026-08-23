@@ -18,6 +18,19 @@
 
 机器可读基线见 `harness/baselines/milestone-2b-extreme-load-campaign-initial.json`。
 
+## 2026-08-23 日志与七算子依赖基线核对
+
+- `standardize-service-file-logging` 和 `retire-text-analysis-from-scheduling-platform` 仍是保留远端任务的
+  active 变更，不将它们误报为已归档或远端全部验收。
+- Campaign 基线祖先提交已包含日志主实现 `56d42f5`、11 份根配置修正
+  `5a31ebd`、Text Analysis 退役主实现 `7cbfaf4` 及其后续七算子收敛修正。
+- 当前 Git 树的 11 份根 `config.toml` 均声明 `logs/{instance_id}/application.log`、
+  100 MiB、7 日和 stdout/file；11 份 Dockerfile 均预建 `logs/`。
+- `operator-topology.json` 为 7 类、21 实例、18 GPU、3 CPU PPT 和 14 个配置解析进程；
+  当前 Compose、镜像与 endpoint 权威不包含 `text_analysis`。
+- 聚焦静态合同验证为 `46 passed`，两个受影响 active change 均通过 strict validate。
+  任务 1.2 因此完成；最终发布仍必须使用本 Campaign 后续产生的 clean 完整 SHA。
+
 ## 2026-08-23 目标服务器只读盘点
 
 - 目标：`192.168.29.11`，x86_64、80 逻辑 CPU、125 GiB 内存、Docker 26.1.4。
@@ -109,3 +122,16 @@ Campaign/release/SHA/case/phase 身份校验发布。
 3. 清理只能依据经审核的完整容器/镜像 ID dry-run 计划执行。
 4. 禁止 `docker system prune -a`、`docker compose down -v`、删除卷、删除 `/data/result`、删除模型和改写历史 release。
 5. 每一阶段必须原子发布原始证据；未执行、证据缺失或重复 ID 不得聚合为通过。
+
+## 2026-08-23 目标机 Git 准备合同补强
+
+- 远端已证明默认 SSH 身份无法访问 GitHub；部署 Git 操作必须显式使用
+  `/root/.ssh/algorithm-scheduling-github-deploy`，并同时启用 `IdentitiesOnly=yes` 和
+  `StrictHostKeyChecking=yes`。该路径只是 Git 外的预置密钥引用，私钥内容未进入文档或证据。
+- 部署手册现同时覆盖首次 clone 和已有 checkout 的 fetch，之后必须 detached checkout
+  到经批准的 40 位 SHA，并在切换前后检查 tracked/untracked 工作树为空；现有
+  `origin` 必须与批准仓库一致，fetch 直接指向批准 SHA。
+- 任一 Git 身份、host key、fetch、SHA 或 clean-worktree 检查失败都停止发布；手册明确
+  使用 `set -euo pipefail` 和禁止破坏性 reset/clean 来保证该边界。原子新目录 checkout
+  继续由 `checkout-release`/`DEP-020` 维护；固定生产目录使用本手册的 bootstrap/更新流程。
+  该补强不代表远端 11.x 发布已通过。

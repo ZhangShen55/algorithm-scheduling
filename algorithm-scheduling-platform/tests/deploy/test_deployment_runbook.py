@@ -61,7 +61,7 @@ def test_runbook_exports_release_environment_and_scopes_production_ledger() -> N
     document = _document()
     required_exports = (
         'export OPERATOR_REGISTRY_TOKEN="${OPERATOR_REGISTRY_TOKEN:?required}"',
-        'export EXPECTED_GIT_SHA="$(git -C .. rev-parse HEAD)"',
+        'export EXPECTED_GIT_SHA="$DEPLOY_GIT_SHA"',
         'export RELEASE_ROOT="$REPORT_ROOT/milestone-2b/releases/$RELEASE_TAG/$EXPECTED_GIT_SHA"',
         'export PRODUCTION_ROOT="$RELEASE_ROOT/production"',
         'export PRODUCTION_LEDGER="$PRODUCTION_ROOT/production-stack.json"',
@@ -83,6 +83,50 @@ def test_runbook_exports_release_environment_and_scopes_production_ledger() -> N
         ]
         assert len(matching_blocks) == 1, entrypoint
         assert '--reports-root "$REPORT_ROOT"' in matching_blocks[0], entrypoint
+
+
+def test_runbook_prepares_git_checkout_with_explicit_deploy_key() -> None:
+    document = _document()
+
+    required = (
+        "git@github.com:ZhangShen55/algorithm-scheduling.git",
+        "git clone --branch \"$DEPLOY_BRANCH\"",
+        "set -euo pipefail",
+        "export GIT_TERMINAL_PROMPT=0",
+        "test ! -L /root/.ssh/algorithm-scheduling-github-deploy",
+        'stat -c %a /root/.ssh/algorithm-scheduling-github-deploy)" = 600',
+        'stat -c %u /root/.ssh/algorithm-scheduling-github-deploy)" = "$(id -u)"',
+        'stat -c %h /root/.ssh/algorithm-scheduling-github-deploy)" = 1',
+        'test "$(git -C algorithm-scheduling remote get-url origin)" = '
+        '"$DEPLOY_REPOSITORY"',
+        "git -C algorithm-scheduling fetch --depth=1 origin \"$DEPLOY_GIT_SHA\"",
+        "git -C algorithm-scheduling checkout --detach FETCH_HEAD",
+        'test "$(git -C algorithm-scheduling rev-parse HEAD)" = "$DEPLOY_GIT_SHA"',
+        'git_status_before="$(git -C algorithm-scheduling status '
+        '--porcelain --untracked-files=all)"',
+        'test -z "$git_status_before"',
+        'git_status_after="$(git -C algorithm-scheduling status '
+        '--porcelain --untracked-files=all)"',
+        'test -z "$git_status_after"',
+        'export EXPECTED_GIT_SHA="$DEPLOY_GIT_SHA"',
+        "deploy/scripts/checkout-release",
+        "DEP-020",
+    )
+    for value in required:
+        assert value in document
+
+    assert (
+        "export GIT_SSH_COMMAND='ssh -i "
+        "/root/.ssh/algorithm-scheduling-github-deploy "
+        "-o IdentitiesOnly=yes -o StrictHostKeyChecking=yes'"
+    ) in document
+    assert 'test -z "$(git -C algorithm-scheduling status' not in document
+    assert "reset --hard" not in "\n".join(
+        re.findall(r"```bash\n(.*?)\n```", document, flags=re.DOTALL)
+    )
+    assert "clean -fd" not in "\n".join(
+        re.findall(r"```bash\n(.*?)\n```", document, flags=re.DOTALL)
+    )
 
 
 def test_runbook_has_one_a_service_smoke_section_and_no_fake_final_sha() -> None:

@@ -1,7 +1,7 @@
 ## 1. 变更基线与安全边界
 
 - [x] 1.1 记录当前分支、完整 Git SHA、dirty/untracked 文件和用户不纳管文件，实施过程不覆盖、删除或提交这些文件。
-- [ ] 1.2 核对 `standardize-service-file-logging` 和 `retire-text-analysis-from-scheduling-platform` 的当前必需任务，确定用于 Campaign 的唯一 clean Git SHA 已包含日志合同和七算子基线。
+- [x] 1.2 核对 `standardize-service-file-logging` 和 `retire-text-analysis-from-scheduling-platform` 的当前必需任务，确定用于 Campaign 的唯一 clean Git SHA 已包含日志合同和七算子基线。
 - [x] 1.3 只读盘点 `192.168.29.11` 的宿主机资源、容器、镜像、数据卷、端口、三 GPU、`/data/course`、`/data/result` 和当前 release，不在基线阶段执行删除。
 - [x] 1.4 记录负载主机的 CPU、内存、网络、socket、文件句柄和 Python 运行环境，确认负载主机不与目标服务器共享主要计算资源。
 - [x] 1.5 建立本变更的 Harness 场景和 change-ledger 初始记录，标注当前证据级层、已知 ASR-013 质量阻断和尚未执行的远端阶段。

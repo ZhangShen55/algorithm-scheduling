@@ -1638,6 +1638,26 @@
   strict Mypy、`compileall`、本变更 OpenSpec strict 和 `git diff --check` 通过。由于 ASR-013 尚未
   解除，不勾选远端9.1至10.5，也不以这些本地结果替代新 SHA 的 Canonical。
 
+## 2026-08-23 - 里程碑 2B 部署手册 Git 获取闭环
+
+- 先前状态：唯一中文部署手册可从服务器预检、模型和镜像准备继续，但没有说明如何在
+  新服务器 clone，也没有在已有工作树上执行 fetch 和精确 SHA checkout。目标机默认 SSH
+  身份实际无法访问 GitHub，按旧文档无法独立复现任务 11.1。
+- 修正：手册增加 clone/fetch/detached-checkout/HEAD 等值/clean-worktree 完整步骤；Git 调用显式
+  使用工作区外的 `/root/.ssh/algorithm-scheduling-github-deploy`，强制
+  `IdentitiesOnly=yes` 和 `StrictHostKeyChecking=yes`。只记录密钥路径和选择方式，没有记录
+  私钥内容。
+- 失败边界：工作树 dirty/untracked、Deploy Key 或 host key 失效、fetch 失败、SHA 不匹配均
+  立即停止；命令块使用 `set -euo pipefail`，同时校验 `origin` 精确 URL，fetch 直接指向
+  批准 SHA，并禁止通过破坏性 reset/clean 绕过。新目录原子 checkout 仍复用既有
+  `checkout-release`/`DEP-020`，固定生产目录的 bootstrap/更新步骤由手册静态测试锁定。
+- 证据边界：本条只修复部署手册的可复现性，不勾选远端 11.1，不表示镜像已清理、
+  构建或 Campaign 已执行。
+- 基线依赖核对：当前 Campaign 树已同时继承 `56d42f5`/`5a31ebd` 的 11 项日志合同和
+  `7cbfaf4` 起的七算子退役收敛链；当前拓扑为 7/21/18/3/14，静态合同 `46 passed`，
+  两个 active change strict validate 通过。因此完成 Campaign 任务 1.2，但不声称两个变更已归档
+  或远端任务已完成。
+
 ## Record template
 
 - Date and scope:

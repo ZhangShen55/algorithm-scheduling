@@ -1207,3 +1207,18 @@ docker exec algorithm-scheduling-platform-postgres-1 \
   psql -U algorithm -d algorithm -X -c \
   "SELECT schemaname, tablename FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY 1, 2"
 ```
+
+## 2026-08-23 里程碑 2B 部署手册 Git 准备验证
+
+在 `algorithm-scheduling-platform/` 执行：
+
+```bash
+.venv/bin/python -m pytest -q tests/deploy/test_deployment_runbook.py
+(cd .. && openspec validate run-milestone-2b-extreme-load-campaign --strict)
+git diff --check
+```
+
+静态门禁要求手册同时覆盖首次 clone、已有工作树 fetch、完整 SHA detached checkout、
+HEAD 等值和切换前后 clean-worktree 检查，并精确选择 Git 外的 Deploy Key、校验
+`origin`、直接 fetch 批准 SHA 且以 `set -euo pipefail` 失败即停。该测试不访问
+GitHub，远端复现仍需在任务 11.1 中产生当前 SHA 证据。
