@@ -927,6 +927,26 @@ delivery documentation.
 
 Integration and runtime commands must record infrastructure versions and container status. A skipped integration test is not passing evidence. Full end-to-end evidence must show Kafka offsets, Worker-produced database state, operator HTTP/WebSocket traffic and filesystem results.
 
+## `run-milestone-2b-extreme-load-campaign` 初始基线
+
+从工作区根目录记录本地版本、用户 dirty 文件和两个前置变更进度：
+
+```bash
+git branch --show-current
+git rev-parse HEAD
+git status --short
+openspec instructions apply --change standardize-service-file-logging --json
+openspec instructions apply --change retire-text-analysis-from-scheduling-platform --json
+```
+
+目标服务器初始盘点必须是只读命令，只记录主机/Docker/GPU/端口/共享目录和 checkout；不得在同一
+步骤执行停止、删除、重标、prune 或目录清理。2026-08-23 的机器可读摘要位于
+`harness/baselines/milestone-2b-extreme-load-campaign-initial.json`，详细边界位于
+`harness/scenarios/milestone-2b-extreme-load-campaign.md`。
+
+当前盘点结论是目标机根盘仅剩约 103 GB、7%，已触发磁盘红线；因此这份证据只证明基线，不允许
+进入远端负载。后续必须先生成可审核的精确镜像清理 dry-run，恢复到警戒线以上后再执行阶段 0。
+
 ## 2026-08-12 MongoDB authentication and FaceRec readiness
 
 Run the isolated MongoDB authentication check with Docker available:

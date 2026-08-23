@@ -1,0 +1,87 @@
+{
+  "schema": "milestone-2b-extreme-load-campaign-initial",
+  "schema_version": 1,
+  "change": "run-milestone-2b-extreme-load-campaign",
+  "recorded_at": "2026-08-23T20:05:00+08:00",
+  "workspace": {
+    "branch": "codex/milestone-2b-three-gpu-deployment",
+    "git_sha": "3cefc915317428cf17db037ba16023b48cd59783",
+    "final_campaign_sha_frozen": false,
+    "reason": "日志标准化和 Text Analysis 退役仍有远端验收任务；当前变更自身也尚未提交",
+    "protected_dirty_paths": [
+      "text_analysis/README.md",
+      "5{n++}",
+      "asr_offline/docker/README.md",
+      "asr_online/docker/README.md",
+      "docs/运维可视化平台详细设计文档-v1.md",
+      "facerec/docker/README.md",
+      "ppt_slice/docker/",
+      "text_analysis/docker/"
+    ]
+  },
+  "load_host": {
+    "hostname": "zhangshendeMacBook-Pro.local",
+    "model": "Mac17,2",
+    "architecture": "arm64",
+    "logical_cpu_count": 10,
+    "memory_bytes": 34359738368,
+    "primary_ipv4": "192.168.28.144",
+    "python_system": "3.9.6",
+    "open_files_limit": 1048575,
+    "shares_target_compute_resources": false
+  },
+  "target_host": {
+    "address": "192.168.29.11",
+    "architecture": "x86_64",
+    "cpu_count": 80,
+    "memory_gib": 125,
+    "docker_version": "26.1.4",
+    "docker_containers_total": 50,
+    "docker_containers_running": 8,
+    "docker_containers_stopped": 42,
+    "docker_images_total": 475,
+    "root_filesystem_size": "1.5T",
+    "root_filesystem_available": "103G",
+    "root_filesystem_available_percent": 7,
+    "disk_guard_state": "red",
+    "current_checkout_sha": "5f973adae6a81580ecd285ee81e203275fa14ba1",
+    "current_operator_runtime": "stopped",
+    "platform_and_infrastructure_running": 8,
+    "course_directory_exists": true,
+    "result_directory_exists": true,
+    "gpu_inventory": [
+      {
+        "index": 0,
+        "uuid": "GPU-812c493d-596f-a8f1-cebf-675b05a311e6",
+        "model": "NVIDIA GeForce RTX 4090 D",
+        "memory_mib": 24564,
+        "compute_processes": 0
+      },
+      {
+        "index": 1,
+        "uuid": "GPU-a9286375-8b8a-0e46-e81c-80a27257368b",
+        "model": "NVIDIA GeForce RTX 4090 D",
+        "memory_mib": 24564,
+        "compute_processes": 0
+      },
+      {
+        "index": 2,
+        "uuid": "GPU-8c6b7efd-2b4f-04f3-db71-b50d2482fc49",
+        "model": "NVIDIA GeForce RTX 3090",
+        "memory_mib": 24576,
+        "compute_processes": 0
+      }
+    ],
+    "northbound_ports": [18100, 18103],
+    "loopback_only_ports": [5432, 6379, 9092, 18101, 18102, 27017]
+  },
+  "known_quality_blockers": [
+    {
+      "id": "ASR-013",
+      "status": "blocked",
+      "summary": "24 个中英混合术语片段中仍有 9 个严重错误"
+    }
+  ],
+  "evidence_tier": "read_only_baseline",
+  "remote_mutations_performed": false
+}

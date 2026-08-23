@@ -1,5 +1,23 @@
 # Change Ledger
 
+## 2026-08-23 - `run-milestone-2b-extreme-load-campaign` 初始基线
+
+- 变更开始于分支 `codex/milestone-2b-three-gpu-deployment`、SHA
+  `3cefc915317428cf17db037ba16023b48cd59783`；开始前已有的用户 dirty/untracked 文件已冻结到
+  `harness/baselines/milestone-2b-extreme-load-campaign-initial.json`，实施不得覆盖、删除或提交。
+- `standardize-service-file-logging` 仍为 `54/72`，`retire-text-analysis-from-scheduling-platform`
+  仍为 `50/62`；剩余项包含同一新 SHA 的远端真实推理、日志、七算子 release 和最终复审。因此
+  当前 SHA 不是最终 Campaign SHA，不能与服务器现有 `5f973ada...` release 混合作为通过证据。
+- 只读盘点 `192.168.29.11`：x86_64、80 CPU、125 GiB 内存、Docker 26.1.4，50 个容器中
+  8 个运行、42 个停止，共 475 个镜像；三张 GPU 无计算进程。四平台和四中间件运行，21 个当前
+  算子实例停止；未执行任何远端变更。
+- 根盘和 `/data/course`、`/data/result` 所在文件系统只剩约 103 GB、7%，已经低于 Campaign
+  10% 红线。后续只允许本地实现、只读盘点和精确清理 dry-run；在经审核清理并恢复到警戒线以上前
+  不得开始远端负载。
+- 负载主机为独立 Mac17,2 arm64 主机，10 CPU、32 GiB、主地址 `192.168.28.144`，不与目标机
+  共享 CPU/内存/GPU；正式负载仍须使用平台 Python 3.11 环境并记录客户端资源。
+- 当前证据级别仅为只读基线。`ASR-013` 仍是质量阻断；Campaign 的性能结果不能把它改写为通过。
+
 ## 2026-08-21 - `retire-text-analysis-from-scheduling-platform` 基线冻结
 
 - 本变更从 `56d42f5cc5e88f271935e0a5c99dadd54e0e07a6` 开始；`text_analysis/` 的 101 个非缓存
