@@ -50,6 +50,9 @@ def test_runbook_covers_current_topology_and_lifecycle() -> None:
         "pool_timeout_seconds",
         "1/3/10/30",
         "save_person_photo=false",
+        "nvidia-ctk runtime configure --runtime=docker",
+        "docker-running.before-nvidia-runtime.txt",
+        "docker run --rm --gpus all",
     )
     for value in required:
         assert value in document

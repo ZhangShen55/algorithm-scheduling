@@ -135,3 +135,24 @@ Campaign/release/SHA/case/phase 身份校验发布。
   使用 `set -euo pipefail` 和禁止破坏性 reset/clean 来保证该边界。原子新目录 checkout
   继续由 `checkout-release`/`DEP-020` 维护；固定生产目录使用本手册的 bootstrap/更新流程。
   该补强不代表远端 11.x 发布已通过。
+
+## 2026-08-23 目标机 Git 同步与 NVIDIA Runtime 恢复
+
+- 目标机 checkout 的原 `origin` 是历史本地 bundle。为不删除历史获取来源，已将它保留为
+  `bootstrap-bundle`，并将 `origin` 精确设为已批准的 GitHub 仓库。使用 Git 外 `0600`
+  Deploy Key 按完整 SHA 获取后，目标机曾 clean detached checkout 到
+  `1aebadd43189aaba8545a042f530f04d734e0a9f`。该 SHA 是部署手册修正提交，不是最终发布 SHA。
+- NVIDIA Container Runtime 1.13.5 的二进制已安装，但 Docker daemon 原配置只注册
+  `runsc`。在用户已批准暂停现有业务容器的边界内，先将原 `/etc/docker/daemon.json`
+  保存为 `/root/workspace/docker-daemon.pre-nvidia-runtime.260823.json`（root 所有、`0600`、
+  单硬链接），再使用 `nvidia-ctk runtime configure --runtime=docker` 配置并重启 Docker。
+- Docker 重启共约 119 秒。除原 8 个平台/中间件容器外，5 个与本平台无关但带
+  自动重启策略的容器也被 Docker 启动。依据重启前已记录的 8 个完整 ID，对差集中的
+  5 个额外容器逐一按完整 ID 停止；未删除容器、镜像或数据卷。终态恢复为原
+  8 个容器运行且 8/8 healthy。
+- `docker info` 现同时包含 `nvidia`、`runc`、`runsc` 和 containerd runc runtime；使用已有
+  `nvcr.io/nvidia/cuda:12.1.1-cudnn8-runtime-centos7` 执行一次性容器探针，容器内
+  `nvidia-smi` 返回 GPU 0/1/2 及三个不同 UUID。
+- 复审同时发现 host preflight 的空工作树判定会掩盖 `git status` 自身失败。实现现改为
+  先采集状态且对非零退出显式失败，新增 fake Git 回归。在该修复提交、目标机再同步和
+  完整 preflight 通过前，任务 11.1 保持未完成。

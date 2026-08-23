@@ -157,7 +157,10 @@ if ! "$preflight_python" "$preflight_checks" "${host_socket_arguments[@]}" \
 fi
 printf 'preflight: OK: required ports have no unauthorized occupants\n'
 
-[[ -z "$(git status --porcelain)" ]] || fail "Git working tree is not clean"
+if ! git_status="$(git status --porcelain)"; then
+  fail "Git working tree inspection failed"
+fi
+[[ -z "$git_status" ]] || fail "Git working tree is not clean"
 current_git_sha="$(git rev-parse HEAD)"
 if [[ -z "${EXPECTED_GIT_SHA:-}" ]]; then
   if [[ "${ALLOW_UNPINNED_GIT:-false}" == "true" ]]; then

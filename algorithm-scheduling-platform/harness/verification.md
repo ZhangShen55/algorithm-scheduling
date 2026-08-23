@@ -1222,3 +1222,20 @@ git diff --check
 HEAD 等值和切换前后 clean-worktree 检查，并精确选择 Git 外的 Deploy Key、校验
 `origin`、直接 fetch 批准 SHA 且以 `set -euo pipefail` 失败即停。该测试不访问
 GitHub，远端复现仍需在任务 11.1 中产生当前 SHA 证据。
+
+## 2026-08-23 host preflight Git 状态失败关闭
+
+在 `algorithm-scheduling-platform/` 执行：
+
+```bash
+.venv/bin/python -m pytest -q tests/test_milestone_2b_scripts.py \
+  -k 'preflight and (git or exactly_three or explicit_host)'
+.venv/bin/ruff check tests/test_milestone_2b_scripts.py
+bash -n deploy/scripts/preflight
+git diff --check
+```
+
+预期聚焦回归为 `8 passed`。新用例让 fake `git status --porcelain` 返回非零，要求
+preflight 明确报“Git working tree inspection failed”且不得输出 host PASS。远端 NVIDIA
+Runtime 注册、8/8 原容器恢复与 3/3 GPU 容器可见性是当次目标机运行证据；根盘红线和
+最终 SHA preflight 仍未解除。

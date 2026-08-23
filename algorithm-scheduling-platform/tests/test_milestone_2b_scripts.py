@@ -593,7 +593,10 @@ printf '/dev/root 999999999 1 %s 1%% /\\n' "${DF_AVAILABLE_KIB}"
         fake_bin / "git",
         """#!/usr/bin/env bash
 case "$1 $2" in
-  "status --porcelain") printf '%s' "${GIT_STATUS}" ;;
+  "status --porcelain")
+    printf '%s' "${GIT_STATUS}"
+    exit "${GIT_STATUS_EXIT:-0}"
+    ;;
   "rev-parse HEAD") printf '%s\\n' "${GIT_SHA}" ;;
   *) exit 64 ;;
 esac
@@ -1197,6 +1200,24 @@ def test_preflight_rejects_known_development_registry_token_before_docker(
     assert completed.returncode != 0
     assert "development registry token is forbidden" in completed.stderr
     assert _commands(environment) == []
+
+
+def test_preflight_fails_closed_when_git_status_cannot_be_inspected(
+    fake_bin: Path, tmp_path: Path
+) -> None:
+    course, result = _separate_shared_roots(tmp_path)
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
+        GIT_STATUS_EXIT="23",
+    )
+
+    completed = _run("preflight", "host", environment=environment)
+
+    assert completed.returncode != 0
+    assert "Git working tree inspection failed" in completed.stderr
+    assert "preflight host: PASS" not in completed.stdout
 
 
 def test_preflight_explicit_host_stage_matches_the_default(

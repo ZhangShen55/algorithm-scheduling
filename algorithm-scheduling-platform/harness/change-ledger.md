@@ -1658,6 +1658,20 @@
   两个 active change strict validate 通过。因此完成 Campaign 任务 1.2，但不声称两个变更已归档
   或远端任务已完成。
 
+## 2026-08-23 - 目标机 NVIDIA Runtime 注册与预检失败关闭
+
+- 远端变更：保留原 Git bundle 为 `bootstrap-bundle`，将 `origin` 收敛到批准的 GitHub 仓库，
+  并使用 Git 外 `0600` Deploy Key 完整 SHA 同步到 `1aebadd43189aaba8545a042f530f04d734e0a9f`。
+- Runtime 修复：原 Docker daemon 未注册已安装的 NVIDIA Container Runtime。已先保存
+  `0600` 单链接配置备份，使用 NVIDIA 官方 `nvidia-ctk` 配置并重启 Docker；完整 ID
+  差集显示 5 个无关容器因自动重启策略额外启动，已按完整 ID 重新停止。终态为原
+  8 个容器 8/8 healthy，一次性 CUDA 12.1.1 容器内可见 3/3 GPU。
+- 代码修正：`deploy/scripts/preflight` 不再用“预期空输出”的命令替换掩盖
+  `git status` 失败；先显式捕获退出状态，再区分检查失败与 dirty 工作树。聚焦
+  preflight 回归 `8 passed`，Ruff、Bash 语法和 diff check 通过。
+- 证据边界：根盘仍只剩约 103 GB/7%，新 SHA 预检、镜像精确清理 dry-run、模型
+  manifest、媒体下载基线和正式发布尚未完成；不勾选 11.1/11.2。
+
 ## Record template
 
 - Date and scope:
