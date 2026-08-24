@@ -312,3 +312,42 @@ Campaign/release/SHA/case/phase 身份校验发布。
   4 小时长稳、217 条反例、26 条压力/恢复和 6 项 B 级复核尚未执行；媒体源
   `192.168.29.12` 的 CPU、内存、网络和连接数证据仍不可获取，所以 4.9/11.1 继续阻断，
   不得越过阶段 0 发布“全部符合”。
+
+## 2026-08-25 - `23364ffb` 旧 SHA 部署手册独立复现
+
+- 未使用实施者口头命令，按手册在 `192.168.29.11` 复验 clean detached
+  `23364ffb7849e3f68eda56135bcb74ceadb27851`、`x86_64`、Docker/Compose、NVIDIA runtime、
+  三张 GPU 和约 240 GiB 根盘可用空间。同 SHA 按手册 9.1 先跑 status；结果为
+  `PASS`，四中间件、四平台、21/21 注册、18 GPU、3 CPU 和零活跃租约均符合，
+  因此不重复调用 start，也不从运行容器反提取 registry token。
+- A 服务 18100 使用媒体源可达的 433 MiB PPT 真实视频，任务
+  `deploy-smoke-ppt-23364ffb7849` 由 `10 -> 50 -> 60`；18103 Online Gateway OCR 三案为
+  `ONLINE-OCR-001=0`、`002=40001`、`003=40001`。
+- 独立执行发现并修正四个手册可重放缺口：不再默认旧 `v1.0_260812`
+  release/model 路径；明确真实 token 必须由批准 secret 通道注入；把已跟踪的非敏感
+  OCR 图安全复制到 Git 外固定路径；为 PPT 终态增加 `0600` 快照，并在已有
+  Online Smoke 证据时校验 SHA/release 后复用而不删除重建。手册专项为
+  `11 passed`，`git diff --check` 通过。
+- 证据位于远程
+  `deploy/reports/milestone-2b/releases/v1.0_260825/23364ffb7849e3f68eda56135bcb74ceadb27851/`：
+  `production/production-stack.json` (`27dc80f6...`)、
+  `production/production-stack-status.json` (`4b854805...`)、
+  `production/a-service-ppt-smoke.json` (`4b83f61a...`) 和
+  `online/online-ocr.json` (`81cdd630...`)，均为非 symlink `0600` 文件。
+- 本轮完成后 Campaign Docker metrics 修正将产生新 SHA，所以这些证据只作为
+  `23364ffb` 旧 SHA 复现事实，不勾选 OpenSpec 11.7；新最终 SHA 仍须重建并重放。
+
+## 2026-08-25 - 阶段 0 首次执行阻断与指标探针修复
+
+- 首次 `BASE-ONLINE-VBAS` 没有发出业务负载，前置采样因 Docker metrics 解析失败而
+  STOP；原 `base-online-vbas.json` 是 write-once 失败证据，继续保留且不在同一
+  Campaign 路径重写。
+- 逐项真实探测定位到唯一失败面为 Docker。目标机 `docker stats` 返回
+  `126.1MiB`、`254.2MiB` 等已舍入的人类可读值，旧解析器错误地要求乘以单位后必须
+  精确为整数 byte；其他 load host、target host、GPU、Kafka、Control 和 Gateway 探针
+  均通过。
+- 修复后 Docker 内存值按显示精度取最近整数 byte；TaskGroup 失败只对外报告安全探针名，
+  不再只留下 `ExceptionGroup`，也不泄露远端命令输出。真实汇总采样的前后护栏均为
+  `CLEAR`，3 个样本包含 29 个容器、3 张 GPU、可证明的队列/Outbox/Kafka lag。
+- 新实现必须先提交形成新 SHA，并按该 SHA 重建 11 镜像及重放 11.3–11.7。之后为
+  阶段 0 创建新的受控 Campaign attempt；不得复用或覆盖旧失败 case 文件。

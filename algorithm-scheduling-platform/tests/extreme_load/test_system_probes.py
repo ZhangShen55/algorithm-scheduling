@@ -446,6 +446,43 @@ def test_docker_probe_collects_exact_compose_identity_restart_health_cpu_and_mem
     assert "credential" not in repr(metrics[0])
 
 
+def test_docker_probe_rounds_human_readable_fractional_memory_to_nearest_byte() -> None:
+    container_id = "9" * 64
+    inspect = [
+        _inspect_item(
+            container_id,
+            project="algorithm-scheduling-platform",
+            service="control-service",
+            restart_count=0,
+            health="healthy",
+        )
+    ]
+    runner = FakeRunner(
+        {
+            ("docker", "ps", "-q", "--no-trunc"): _ok(container_id + "\n"),
+            ("docker", "inspect", container_id): _ok(json.dumps(inspect)),
+            (
+                "docker",
+                "stats",
+                "--no-stream",
+                "--no-trunc",
+                container_id,
+            ): _ok(
+                "CONTAINER ID NAME CPU % MEM USAGE / LIMIT MEM % NET I/O BLOCK I/O PIDS\n"
+                f"{container_id} control 0.1% 126.1MiB / 125GiB 0.1% "
+                "1kB / 2kB 3kB / 4kB 5\n"
+            ),
+        }
+    )
+
+    metrics = DockerMetricsProbe(
+        runner,
+        compose_projects=("algorithm-scheduling-platform",),
+    ).collect()
+
+    assert metrics[0].memory_bytes == 132_225_434
+
+
 def test_docker_probe_rejects_missing_compose_service_before_stats() -> None:
     container_id = "c" * 64
     inspect = _inspect_item(

@@ -1867,6 +1867,52 @@
   重构建 11 镜像并重放 11.3-13.8。媒体源 `192.168.29.12` 无资源指标权限继续阻断
   4.9/11.1 和阶段 0 完整通过；不得伪造源端证据或据此执行后续必需 Campaign。
 
+## 2026-08-25 - `23364ffb` 旧 SHA 部署手册独立复现
+
+- Previous state: 当前栈已由 11.4 启动，但最终 SHA 尚未冻结；手册仍带旧
+  `v1.0_260812` 默认值，Online OCR 固定 fixture 路径未准备，PPT Smoke 不落文件证据。
+- Target state: 仅依据手册复验同 SHA 状态和 A 服务 Smoke；必需外部输入失败关闭，
+  Smoke 输入/证据可安全重放，不从容器反提取密钥。
+- Changed files: `deploy/算法功能调度平台部署手册.md`、
+  `tests/deploy/test_deployment_runbook.py`、
+  `harness/scenarios/milestone-2b-extreme-load-campaign.md`、`harness/change-ledger.md`。
+- Contract impact: 不改 A 服务 HTTP/WebSocket、算子、数据库、容器或部署入口合同；
+  只修正手册输入、幂等路径和证据持久化。
+- Verification command and environment: 远程 `192.168.29.11`、release `v1.0_260825`、
+  clean detached `23364ffb7849e3f68eda56135bcb74ceadb27851`；status `PASS`，PPT `60`，
+  Online OCR `0/40001/40001`；本地手册测试 `11 passed`，`git diff --check` 通过。
+- Evidence tier and verdict: 远程 `0600` 证据为
+  `production/production-stack.json` (`27dc80f6...`)、
+  `production/production-stack-status.json` (`4b854805...`)、
+  `production/a-service-ppt-smoke.json` (`4b83f61a...`) 和
+  `online/online-ocr.json` (`81cdd630...`)。本轮对该 SHA 复现通过。
+- Remaining risks: 后续 Campaign Docker metrics 修正将生成新 SHA；本轮证据不得支持最终
+  11.7 勾选，任务保持未完成，新 SHA 须重新构建和复现。未改写任何 Campaign
+  失败证据，未删除容器、镜像、volume 或数据。
+
+## 2026-08-25 - Campaign Docker 指标采集兼容修复
+
+- Previous state: `BASE-ONLINE-VBAS` 的首次真实执行被前置护栏阻断，原始不可变证据只显示
+  `运行时指标采集失败: ExceptionGroup`，无法定位八个并发指标面中的失败来源。
+- Target state: 保留原失败证据不覆盖；并发采集只发布安全探针名，Docker 人类可读内存值按
+  显示精度换算为最近的整数 byte，使实际 `126.1MiB` 等舍入值可进入时序指标。
+- Changed files: `scripts/extreme_load/runtime_metrics.py`、
+  `scripts/extreme_load/system_probes.py` 和对应 `tests/extreme_load/` 回归。
+- Contract impact: 不改 A 服务、算子、四服务、容器或指标端点合同；只修正负载机 Harness
+  的 Docker 指标解析与脱敏故障归因。
+- Verification command and environment: 本地聚焦回归 `60 passed`，Campaign 与部署手册专项
+  `380 passed`，Ruff、生产模块 strict Mypy、`compileall`、OpenSpec strict 和
+  `git diff --check` 通过。使用工作区外 `0600` runtime TOML 对
+  `192.168.29.11` 逐项探测时，load host、target host、Docker、GPU、Kafka、Control 和
+  Gateway 全部通过；完整 `RuntimeMetricsAdapter` 前后护栏为 `CLEAR`，3 个样本均含
+  29 个容器和 3 张 GPU，Kafka lag 为 0。
+- Evidence tier and verdict: 达到真实目标机只读运行指标采集层级；尚未重放正式 Campaign
+  用例。原 `23364ffb.../campaign/phase-0-baseline/base-online-vbas.json` 继续保持 blocked，
+  不得覆盖或改写。
+- Remaining risks: 修复提交会形成新的 Git SHA；七算子和四平台必须按新 SHA 重建、
+  attestation、常驻启动/状态/Smoke 和独立手册复现后，才能创建新的 Campaign attempt。
+  媒体源资源权限仍阻断 4.9/11.1 和完整阶段 0。
+
 ## Record template
 
 - Date and scope:

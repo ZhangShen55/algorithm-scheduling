@@ -65,6 +65,37 @@ CriticalGpuErrorProbe = Callable[[], Sequence[str]]
 MaintenanceLockProbe = Callable[[], bool]
 
 
+class SurfaceProbeError(RuntimeError):
+    """标记失败的指标面，同时避免暴露探针命令输出。"""
+
+    def __init__(self, surface: str, error: Exception) -> None:
+        super().__init__(f"{surface} 探针失败: {type(error).__name__}")
+        self.surface = surface
+
+
+async def _collect_surface(surface: str, collect: Callable[[], _T_co]) -> _T_co:
+    try:
+        return await asyncio.to_thread(collect)
+    except Exception as error:
+        raise SurfaceProbeError(surface, error) from error
+
+
+def _surface_failure_reason(error: Exception) -> str:
+    if isinstance(error, BaseExceptionGroup):
+        surfaces = sorted(
+            {
+                nested.surface
+                for nested in error.exceptions
+                if isinstance(nested, SurfaceProbeError)
+            }
+        )
+        if surfaces:
+            return "运行时指标采集失败: " + ", ".join(surfaces)
+    if isinstance(error, SurfaceProbeError):
+        return f"运行时指标采集失败: {error.surface}"
+    return f"运行时指标采集失败: {type(error).__name__}"
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeMetricSample:
     campaign_id: str
@@ -504,14 +535,28 @@ class RuntimeMetricsAdapter:
         critical_errors = self.critical_gpu_error_probe or (lambda: ())
         maintenance_lock = self.maintenance_lock_probe or (lambda: True)
         async with asyncio.TaskGroup() as group:
-            load_host_task = group.create_task(asyncio.to_thread(self.load_host_probe.collect))
-            target_host_task = group.create_task(asyncio.to_thread(self.target_host_probe.collect))
-            containers_task = group.create_task(asyncio.to_thread(self.docker_probe.collect))
-            gpus_task = group.create_task(asyncio.to_thread(self.gpu_probe.collect))
-            control_task = group.create_task(asyncio.to_thread(self.control_probe.collect))
-            gateway_task = group.create_task(asyncio.to_thread(self.gateway_probe.collect))
-            critical_errors_task = group.create_task(asyncio.to_thread(critical_errors))
-            maintenance_lock_task = group.create_task(asyncio.to_thread(maintenance_lock))
+            load_host_task = group.create_task(
+                _collect_surface("load_host", self.load_host_probe.collect)
+            )
+            target_host_task = group.create_task(
+                _collect_surface("target_host", self.target_host_probe.collect)
+            )
+            containers_task = group.create_task(
+                _collect_surface("docker", self.docker_probe.collect)
+            )
+            gpus_task = group.create_task(_collect_surface("gpu", self.gpu_probe.collect))
+            control_task = group.create_task(
+                _collect_surface("control", self.control_probe.collect)
+            )
+            gateway_task = group.create_task(
+                _collect_surface("gateway", self.gateway_probe.collect)
+            )
+            critical_errors_task = group.create_task(
+                _collect_surface("gpu_critical_errors", critical_errors)
+            )
+            maintenance_lock_task = group.create_task(
+                _collect_surface("maintenance_lock", maintenance_lock)
+            )
         load_host = load_host_task.result()
         target_host = target_host_task.result()
         if include_directory_sizes:
@@ -664,7 +709,7 @@ class RuntimeMetricsAdapter:
             except asyncio.CancelledError:
                 raise
             except Exception as error:
-                self._latch_stop(f"运行时指标采集失败: {type(error).__name__}")
+                self._latch_stop(_surface_failure_reason(error))
                 return None
 
             monotonic_seconds = self.monotonic_clock()

@@ -11,7 +11,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 from urllib.parse import urlsplit, urlunsplit
@@ -648,9 +648,10 @@ def _memory_bytes(raw: str) -> int:
         value = Decimal(match.group("value")) * factors[match.group("unit")]
     except InvalidOperation as error:
         raise ValueError("内存大小不是有限数值") from error
-    if value != value.to_integral_value() or value < 0:
-        raise ValueError("内存大小不能精确转换为字节")
-    return int(value)
+    if value < 0:
+        raise ValueError("内存大小不能为负数")
+    # docker stats 的人类可读值已经过显示精度舍入，换算后取最近的整数 byte。
+    return int(value.to_integral_value(rounding=ROUND_HALF_UP))
 
 
 @dataclass(frozen=True, slots=True)

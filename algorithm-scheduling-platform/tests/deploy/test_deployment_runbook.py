@@ -136,6 +136,15 @@ def test_runbook_has_one_a_service_smoke_section_and_no_fake_final_sha() -> None
     document = _document()
 
     assert document.count("deploy/scripts/run-online-gateway-smoke") == 1
+    assert 'PPT_SMOKE_EVIDENCE="$PRODUCTION_ROOT/a-service-ppt-smoke.json"' in document
+    assert 'chmod 0600 "$PPT_SMOKE_EVIDENCE"' in document
+    assert "ocr/tests/fixtures/formula-document.png" in document
+    assert 'install -m 0600 ../ocr/tests/fixtures/formula-document.png' in document
+    assert '--image "$ONLINE_SMOKE_IMAGE"' in document
+    assert 'ONLINE_SMOKE_EVIDENCE="$RELEASE_ROOT/online/online-ocr.json"' in document
+    assert 'p["status"] == "PASS"' in document
+    assert "Online Smoke evidence: %s" in document
+    assert "online/online-ocr.json" in document
     final_release_label = re.search(
         r"最终 Git SHA/release：(.*?)(?=\n\n)",
         document,
@@ -143,6 +152,18 @@ def test_runbook_has_one_a_service_smoke_section_and_no_fake_final_sha() -> None
     )
     assert final_release_label is not None
     assert re.search(r"\b[0-9a-fA-F]{40}\b", final_release_label.group(0)) is None
+
+
+def test_runbook_requires_current_release_inputs_instead_of_stale_examples() -> None:
+    document = _document()
+
+    assert 'export RELEASE_TAG="${RELEASE_TAG:?set the approved' in document
+    assert 'export MODEL_ASSET_SOURCE="${MODEL_ASSET_SOURCE:?set the approved' in document
+    assert "export RELEASE_TAG=v1.0_260812" not in document
+    assert "secret\n交付通道" in document
+    assert "不得从运行\n容器环境反向提取密钥" in document
+    assert "11.7 的同 SHA 独立复现" in document
+    assert "不重复调用 `start-production-stack`" in document
 
 
 def test_all_documented_deploy_script_paths_exist() -> None:

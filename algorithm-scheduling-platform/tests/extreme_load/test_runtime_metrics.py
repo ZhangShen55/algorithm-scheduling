@@ -58,6 +58,11 @@ class MutableProbe(Generic[_T]):
         return self.value
 
 
+class FailingProbe(MutableProbe[LoadHostMetrics]):
+    def collect(self) -> LoadHostMetrics:
+        raise ValueError("raw probe detail must not be exposed")
+
+
 @dataclass(slots=True)
 class ProbeState:
     load_host: MutableProbe[LoadHostMetrics]
@@ -673,3 +678,17 @@ async def test_long_course_missing_directory_checkpoint_probe_stops_before_load(
 
     assert assessment.level is GuardrailLevel.STOP
     assert "运行时指标采集失败: RuntimeError" in assessment.reasons
+
+
+@pytest.mark.asyncio
+async def test_concurrent_surface_failure_names_probe_without_raw_detail(tmp_path: Path) -> None:
+    case = _case()
+    state = _state()
+    state.load_host = FailingProbe(state.load_host.value)
+    adapter = _adapter(tmp_path, case, state)
+
+    assessment = await adapter.assess(case, "before")
+
+    assert assessment.level is GuardrailLevel.STOP
+    assert "运行时指标采集失败: load_host" in assessment.reasons
+    assert all("raw probe detail" not in reason for reason in assessment.reasons)
