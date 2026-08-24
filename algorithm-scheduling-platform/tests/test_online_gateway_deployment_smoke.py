@@ -13,6 +13,7 @@ def test_online_gateway_smoke_covers_real_ocr_and_both_size_limits(
     monkeypatch.setattr(smoke, "DECODED_MAX_BYTES", 8)
     monkeypatch.setattr(smoke, "BODY_MAX_BYTES", 16)
     observed: list[tuple[str, int]] = []
+    declared_sizes: list[int] = []
 
     def fake_post(
         url: str, payload: dict[str, Any], timeout: float
@@ -26,6 +27,14 @@ def test_online_gateway_smoke_covers_real_ocr_and_both_size_limits(
         return 200, {"code": 40001, "data": None}
 
     monkeypatch.setattr(smoke, "_post_json", fake_post)
+    monkeypatch.setattr(
+        smoke,
+        "_post_declared_oversize",
+        lambda url, declared_size, timeout: (
+            declared_sizes.append(declared_size) or 200,
+            {"code": 40001, "data": None},
+        ),
+    )
 
     results = smoke.run_smoke(b"image", "http://127.0.0.1:18103", 5)
 
@@ -36,7 +45,7 @@ def test_online_gateway_smoke_covers_real_ocr_and_both_size_limits(
     ]
     assert [item["business_code"] for item in results] == [0, 40001, 40001]
     assert observed[1][1] > smoke.DECODED_MAX_BYTES
-    assert observed[2][1] == smoke.BODY_MAX_BYTES
+    assert declared_sizes == [smoke.BODY_MAX_BYTES + 1]
 
 
 def test_online_gateway_smoke_fails_closed_on_wrong_business_code(

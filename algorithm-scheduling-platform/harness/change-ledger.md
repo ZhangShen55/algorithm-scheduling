@@ -1833,6 +1833,40 @@
   `compileall` 通过。OpenSpec 5.5/5.8/5.9 为实现完成；远端 12.4 仍未执行，
   不发布人脸一致性或图片极限已通过结论。
 
+## 2026-08-25 - 常驻栈独立复现与 Campaign 生产适配器收口
+
+- Previous state: `b7d5c4a2a8bba6bacbd6414b7162abb0d427beff` 已运行 29 容器和 21 算子，
+  但 Online OCR 超大 body Smoke 会在提前拒绝后继续发送正文；优先级 Campaign 需要的
+  `claimed_at/started_at` 未从 Control 查询返回；`mixed/soak/fault` 只有抽象适配器合同。
+- Target state: Smoke 用声明超限头验证提前拒绝；Control 返回 PostgreSQL 节点领取/开始时间；
+  生产 mixed/soak/fault 适配器只经北向、受护栏和 canonical 维护锁约束，手册 status/PPT Smoke
+  可在独立 shell 重现。
+- Contract impact: 只向课程节点查询新增可空响应字段，不改 A 服务请求字段、状态码、
+  四服务边界或算子协议。`start` 仍必须显式 registry token，故障动作仍只允许完整
+  container ID 与当前 Campaign 委托锁。
+- Evidence: 远程历史证据在 `b7d5c4a.../independent-validation/independent-11_5-11_7-20260824T194820Z/`；
+  11.5/11.6 对该 SHA 有完整支持，11.7 因两个手册缺口不通过。旧证据不修改，最终结论待新 SHA 重建与重放。
+- Remaining risks: `192.168.29.12` 尚无源端 CPU/内存/网络/连接数证据，媒体下载可继续实测但
+  4.9/11.1 不得因此写成完全符合；4 小时 soak、217/26/6 门禁和验收后精确退役仍待执行。
+
+## 2026-08-25 - 生产故障见证终审收口
+
+- Previous state: 初版故障探针只用 TTL、readiness、全局 metrics 或队列快照推断恢复，无法在
+  无背景流量下证明剩余/恢复实例真实承接请求，也不能充分证明 Gateway WebSocket、Kafka
+  单任务 DAG、Redis 租约和 Vision 聚合恢复。
+- Target state: 所有故障 case 都有故障窗口绑定的主动业务见证。七算子/三 GPU 使用真实容量和
+  生产路由；在线图片由唯一 trace 的 active lease 绑定实例；Gateway 同时验证 HTTP/WS；
+  Vision 只接受窗口后 `60` 成功与唯一非空结果；Kafka/Redis 使用当前任务或请求事实而非
+  全局空闲假设；恢复动作只作用于已记录的精确容器 ID。
+- Contract impact: 不改变 A 服务 HTTP/WebSocket 契约、算子接口、四服务边界、端口或状态码。
+  新增内容只属于 Campaign 生产探针、适配器、测试和 `0600` 外部运行时证据。
+- Evidence: 故障聚焦 `111 passed`，Campaign/部署专项 `432 passed`，平台完整回归
+  `3214 passed, 3 skipped`；Ruff、strict Mypy、`compileall`、Harness consistency 和 OpenSpec
+  strict 通过。独立终审无 P0/P1/P2；3 个 skip 仍是 Canonical FaceRec 外部条件，不能计为通过。
+- Remaining risks: 本地门禁没有执行真实 Docker 故障；最终 SHA 仍需在 `192.168.29.11`
+  重构建 11 镜像并重放 11.3-13.8。媒体源 `192.168.29.12` 无资源指标权限继续阻断
+  4.9/11.1 和阶段 0 完整通过；不得伪造源端证据或据此执行后续必需 Campaign。
+
 ## Record template
 
 - Date and scope:

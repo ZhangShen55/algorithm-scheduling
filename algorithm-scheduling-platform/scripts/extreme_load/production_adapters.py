@@ -61,7 +61,7 @@ _CONFIG_KEYS = frozenset(
     }
 )
 _RUNTIME_TOP_LEVEL_KEYS = frozenset(
-    {"schema_version", "media_download", "runtime_metrics", "face_photo_residue"}
+    {"schema_version", "media_download", "runtime_metrics", "face_photo_residue", "fault"}
 )
 _METRICS_CONFIG_KEYS = frozenset(
     {

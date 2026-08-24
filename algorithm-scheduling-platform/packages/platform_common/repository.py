@@ -119,6 +119,8 @@ class NodeRecord:
     progress: JsonObject
     effective_params: JsonObject | None
     updated_at: datetime
+    claimed_at: datetime | None = None
+    started_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +179,8 @@ def _node_record(row: RowMapping) -> NodeRecord:
         progress=row["progress"] or {},
         effective_params=row["result_effective_params"],
         updated_at=row["updated_at"],
+        claimed_at=row["claimed_at"],
+        started_at=row["started_at"],
     )
 
 
@@ -1172,6 +1176,7 @@ class CourseRepository:
                     """
                     SELECT n.id, n.course_task_type_id, n.node_code, n.status, n.priority,
                            n.reason, n.required_capability, n.updated_at,
+                           n.claimed_at, n.started_at,
                            r.result, r.artifact_path, r.artifact_count, r.progress,
                            r.effective_params AS result_effective_params
                     FROM task_nodes AS n
@@ -1192,6 +1197,7 @@ class CourseRepository:
                     """
                     SELECT n.id, n.course_task_type_id, n.node_code, n.status, n.priority,
                            n.reason, n.required_capability, n.updated_at,
+                           n.claimed_at, n.started_at,
                            r.result, r.artifact_path, r.artifact_count, r.progress,
                            r.effective_params AS result_effective_params
                     FROM task_nodes AS n
@@ -1211,6 +1217,7 @@ class CourseRepository:
                     """
                     SELECT n.id, n.course_task_type_id, n.node_code, n.status, n.priority,
                            n.reason, n.required_capability, n.updated_at,
+                           n.claimed_at, n.started_at,
                            r.result, r.artifact_path, r.artifact_count, r.progress,
                            r.effective_params AS result_effective_params
                     FROM task_nodes AS n
@@ -1230,6 +1237,7 @@ class CourseRepository:
                     """
                     SELECT n.id, n.course_task_type_id, n.node_code, n.status, n.priority,
                            n.reason, n.required_capability, n.updated_at,
+                           n.claimed_at, n.started_at,
                            r.result, r.artifact_path, r.artifact_count, r.progress,
                            r.effective_params AS result_effective_params
                     FROM task_nodes AS n

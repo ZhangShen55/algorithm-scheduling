@@ -807,6 +807,10 @@ def test_urgent_claims_before_normal_fifo_without_preempting_running_node(
 
     assert first_claim is not None and first_claim.id == urgent.id
     assert second_claim is not None and second_claim.id == first_normal.id
+    assert first_claim.claimed_at is not None
+    assert first_claim.started_at is None
+    assert second_claim.claimed_at is not None
+    assert second_claim.started_at is None
     assert second_normal.id != second_claim.id
     assert repository.get_node(running_normal.id).status is NodeStatus.RUNNING
 

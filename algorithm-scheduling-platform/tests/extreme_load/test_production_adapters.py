@@ -512,7 +512,7 @@ def test_runtime_template_defaults_to_disabled_and_does_not_use_dotenv() -> None
     template = project_root / "deploy/templates/extreme-load-runtime.example.toml"
     content = template.read_text(encoding="utf-8")
 
-    assert content.count("enabled = false") == 3
+    assert content.count("enabled = false") == 4
     assert 'target_hostname = "192.168.29.11"' in content
     assert 'ssh_user = "root"' in content
     assert "ssh_port = 22" in content
@@ -526,3 +526,7 @@ def test_runtime_template_defaults_to_disabled_and_does_not_use_dotenv() -> None
     assert '"algorithm-orchestrator-visual-events"' in content
     assert "[runtime_metrics.expected_gpu_by_pid]" in content
     assert "metrics=scripts.extreme_load.production_adapters:metrics_factory" in content
+    assert "fault=scripts.extreme_load.production_fault_adapter:fault_factory" in content
+    assert "[fault]" in content
+    assert "[fault.operator_container_ids]" in content
+    assert "[fault.platform_container_ids]" in content

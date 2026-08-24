@@ -99,6 +99,38 @@ FaceRec 三实例、共享 MongoDB 或原图残留通过证据。
 Images 行、475 个唯一完整 `sha256:` ID、零个缺失 `UniqueSize`，与
 `docker image ls --all --no-trunc --quiet | sort -u` 的 475 个 ID 一致。未执行镜像删除。
 
+## 2026-08-25 Campaign 故障见证最终本地门禁
+
+故障探针收口后从平台目录执行：
+
+```bash
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/extreme_load/test_extreme_load_fault_probe.py \
+  tests/extreme_load/test_production_fault_adapter.py \
+  tests/extreme_load/test_production_adapters.py \
+  tests/extreme_load/test_faults.py
+
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/extreme_load tests/deploy
+
+.venv/bin/ruff check \
+  deploy/scripts/extreme_load_fault_probe.py \
+  scripts/extreme_load/production_fault_adapter.py \
+  tests/extreme_load/test_extreme_load_fault_probe.py \
+  tests/extreme_load/test_production_fault_adapter.py
+
+MYPYPATH="$PWD/.." .venv/bin/mypy --strict --explicit-package-bases \
+  deploy/scripts/extreme_load_fault_probe.py \
+  scripts/extreme_load/production_fault_adapter.py \
+  tests/extreme_load/test_extreme_load_fault_probe.py \
+  tests/extreme_load/test_production_fault_adapter.py
+```
+
+结果分别为 `111 passed` 和 `432 passed`；Ruff、strict Mypy 与 `compileall` 通过。随后完整
+平台回归为 `3214 passed, 3 skipped`，`pip check` 为 `No broken requirements found`。
+3 项 skip 仍要求外部 Canonical FaceRec Token/容器，保持未执行。独立终审无 P0/P1/P2，
+但本地假运行时不能替代最终 SHA 在 `192.168.29.11` 的真实 Docker 故障 Campaign。
+
 ## 2026-08-21 七算子当前验收入口
 
 当前发布范围由

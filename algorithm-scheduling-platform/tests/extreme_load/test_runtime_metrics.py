@@ -297,7 +297,12 @@ async def test_burst_sampler_uses_half_second_interval(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("kind", "delay", "expected_burst"),
-    (("online_image", 0.55, True), ("query", 0.06, False)),
+    (
+        ("online_image", 0.55, True),
+        ("mixed", 0.55, True),
+        ("query", 0.06, False),
+        ("soak", 0.06, False),
+    ),
 )
 async def test_assess_before_and_after_cover_case_with_continuous_sampling(
     tmp_path: Path,
@@ -631,6 +636,26 @@ async def test_long_course_measures_directories_only_at_before_and_after(
     assert (await adapter.assess(case, "after")).level is GuardrailLevel.CLEAR
 
     assert len(adapter.samples(case.case_id)) >= 3
+    assert state.directory_sizes.calls == 2
+    assert [
+        bool(sample.target_host.directory_sizes) for sample in adapter.samples(case.case_id)
+    ].count(True) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ("mixed", "soak"))
+async def test_mixed_and_soak_measure_directories_only_at_boundaries(
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    case = _case(kind=kind)
+    state = _state()
+    adapter = _adapter(tmp_path, case, state)
+
+    assert (await adapter.assess(case, "before")).level is GuardrailLevel.CLEAR
+    await asyncio.sleep(0.03)
+    assert (await adapter.assess(case, "after")).level is GuardrailLevel.CLEAR
+
     assert state.directory_sizes.calls == 2
     assert [
         bool(sample.target_host.directory_sizes) for sample in adapter.samples(case.case_id)

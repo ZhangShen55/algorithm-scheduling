@@ -269,3 +269,46 @@ Campaign/release/SHA/case/phase 身份校验发布。
 - 本地验证为 `269 passed` 的 `tests/extreme_load`、`49 passed` 的 Online Gateway 测试、
   Ruff、strict Mypy 和 `compileall` 通过。这只完成 OpenSpec 5.5、5.8、5.9 的实现层；
   `192.168.29.11` 的四类图片、人脸库和原图残留真实执行仍属于未完成的 12.4。
+
+## 2026-08-25 - `b7d5c4a` 常驻栈与独立手册复现
+
+- 目标机 clean detached SHA 为 `b7d5c4a2a8bba6bacbd6414b7162abb0d427beff`。四中间件、四平台、
+  21 个算子实例均 healthy；21/21 注册为 `ONLINE/model_ready`，18/18 GPU PID/cgroup
+  与 GPU0/1/2 精确对应，3 个 CPU PPT 无 GPU 请求，租约前后均为 0。
+- 算子直连 7/7 Smoke 通过；PPT 使用 433 MiB 真实 fixture 生成切片和终态 manifest。
+  Online Gateway OCR 的正常请求与 50 MiB 解码上限均正确，但旧 Smoke 客户端在网关已根据
+  `Content-Length` 提前拒绝后仍上传 72 MiB 正文，导致 `Broken pipe`。修复后第三案只发
+  超限声明头，真实远端结果为 `ONLINE-OCR-001=0`、`002=40001`、`003=40001`。
+- 未依赖实施者上下文的独立复现证明：对外只有 `18100/18103`可达，其余 27 个宿主机
+  端口只绑定回环；新生成的 runtime/operators preflight、inventory、GPU PID/cgroup、注册、
+  租约和配置证据均通过，旧 canonical Smoke 的 10 个文件哈希和元数据保持不变。
+- 独立复现同时发现两个手册缺口：原 `status-production-stack` 会被启动阶段
+  `OPERATOR_REGISTRY_TOKEN` 插值阻断；手册写死的 `course/P.mp4` 返回 404，使 PPT 任务
+  最终为 70。前者收敛为只读 `status/stop` 使用不写入容器的 Compose 解析占位值，
+  `start` 仍强制显式 token；后者改为必填 `PPT_SMOKE_URL`、range 可达预检和轮询至
+  `PPT=60`。
+- 本节证据根位于远程 release 的 `independent-validation/independent-11_5-11_7-20260824T194820Z/`。
+  它支持 `b7d5c4a` 的 11.5/11.6 事实，但因手册缺口和后续实现已改变 Git SHA，11.3–11.7
+  仍要在新最终 SHA 重建、复现后才可最终勾选。
+
+## 2026-08-25 - Campaign 生产故障见证与本地门禁收口
+
+- 新增生产 `mixed/soak/fault` 适配器。故障动作严格绑定当前 Campaign 维护锁、Compose
+  project/service 和 64 位容器 ID，按 `stop -> 业务见证 -> start -> 恢复见证` 串行执行；
+  即使故障后维护锁丢失，也只允许补偿启动本轮已成功停止的精确容器 ID。
+- 七算子和三组 GPU 的恢复见证使用真实 `operator-topology.json` 容量与生产 Redis 排序语义。
+  在线图片请求使用唯一 `X-Trace-ID`，在请求存活期间经 Control active-leases 精确绑定
+  `work_context.trace_id` 和目标实例；OCR GPU2 的最大见证宽度为 `513`，仍受已批准的
+  `1000` 并发硬上限约束，不用背景 metrics 冒充当前请求。
+- 四平台恢复分别验证 Control 的 21/21 故障窗口后心跳、Orchestrator 的任务级
+  Outbox/Kafka/单一 DAG、Vision 的窗口内运行节点恢复为 `60` 且产生唯一非空结果摘要、
+  Gateway 的真实在线 OCR HTTP 与 ASR WebSocket 中断重连。Kafka 不要求持续背景提交时
+  全局 Outbox 为零；Redis 验证故障期当前请求 `50301`、旧租约回收、21/21 注册、新请求
+  acquire/release 和请求后容量回到基线。
+- 最终本地故障聚焦为 `111 passed`，Campaign/部署专项为 `432 passed`；Ruff、strict Mypy
+  和 `compileall` 通过。平台完整回归为 `3214 passed, 3 skipped`，3 项仍是缺少外部
+  Canonical FaceRec Token/容器的既知未执行项；独立终审无 P0/P1/P2。
+- 本节只证明实现、失败关闭和本地模拟边界。最终 SHA 的真实 Docker 故障 Campaign、
+  4 小时长稳、217 条反例、26 条压力/恢复和 6 项 B 级复核尚未执行；媒体源
+  `192.168.29.12` 的 CPU、内存、网络和连接数证据仍不可获取，所以 4.9/11.1 继续阻断，
+  不得越过阶段 0 发布“全部符合”。

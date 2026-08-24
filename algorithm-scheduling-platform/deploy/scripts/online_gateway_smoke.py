@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import http.client
 import json
 import os
 import re
@@ -49,6 +50,41 @@ def _post_json(url: str, payload: dict[str, Any], timeout: float) -> tuple[int, 
     return status, parsed
 
 
+def _post_declared_oversize(
+    url: str, declared_size: int, timeout: float
+) -> tuple[int, dict[str, Any]]:
+    """只发送超限声明头，验证网关在读取大请求体前拒绝。"""
+
+    parsed = urlsplit(url)
+    hostname = parsed.hostname
+    if hostname is None:
+        raise SmokeError("gateway URL is missing a hostname")
+    connection_type = (
+        http.client.HTTPSConnection
+        if parsed.scheme == "https"
+        else http.client.HTTPConnection
+    )
+    connection = connection_type(hostname, parsed.port, timeout=timeout)
+    try:
+        path = parsed.path or "/"
+        connection.putrequest("POST", path)
+        connection.putheader("Content-Type", "application/json")
+        connection.putheader("Content-Length", str(declared_size))
+        connection.endheaders()
+        response = connection.getresponse()
+        status = response.status
+        raw = response.read()
+    finally:
+        connection.close()
+    try:
+        body = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise SmokeError("Online Gateway returned invalid JSON") from error
+    if not isinstance(body, dict):
+        raise SmokeError("Online Gateway response must be an object")
+    return status, body
+
+
 def _validate_gateway_url(value: str) -> str:
     parsed = urlsplit(value)
     if (
@@ -84,6 +120,18 @@ def _expect_business_code(
     return {"case_id": case_id, "http_status": http_status, "business_code": actual_code}
 
 
+def _expect_declared_body_limit(url: str, timeout: float) -> dict[str, Any]:
+    case_id = "ONLINE-OCR-003"
+    http_status, response = _post_declared_oversize(url, BODY_MAX_BYTES + 1, timeout)
+    actual_code = response.get("code")
+    if http_status != 200 or actual_code != 40001:
+        raise SmokeError(
+            f"{case_id} expected HTTP 200/code 40001, "
+            f"got HTTP {http_status}/code {actual_code!r}"
+        )
+    return {"case_id": case_id, "http_status": http_status, "business_code": actual_code}
+
+
 def run_smoke(image_bytes: bytes, gateway_url: str, timeout: float) -> list[dict[str, Any]]:
     if not image_bytes or len(image_bytes) > 5 * 1024 * 1024:
         raise SmokeError("real OCR smoke image must be between 1 byte and 5 MiB")
@@ -110,16 +158,7 @@ def run_smoke(image_bytes: bytes, gateway_url: str, timeout: float) -> list[dict
             timeout,
         )
     )
-    body_oversize = "A" * BODY_MAX_BYTES
-    results.append(
-        _expect_business_code(
-            "ONLINE-OCR-003",
-            endpoint,
-            {"image_id": "body-limit", "image": body_oversize},
-            40001,
-            timeout,
-        )
-    )
+    results.append(_expect_declared_body_limit(endpoint, timeout))
     return results
 
 

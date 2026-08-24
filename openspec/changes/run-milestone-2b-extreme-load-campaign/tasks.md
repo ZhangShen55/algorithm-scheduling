@@ -28,10 +28,10 @@
 
 - [x] 4.1 先增加离线 payload 合同测试，原样使用 `task_id`、`task_types`、`teacher_video_path`、`student_video_path`、`slides_video_path`、`front_points`、`back_point`、`student_count` 和 `asr_options`，不自行改名或增加强制字段。
 - [x] 4.2 实现 PPT-only、ASR-only、TEACHER_BEHAVIOR-only、STUDENT_BEHAVIOR-only、PPT+ASR、教师+学生以及四类全量任务发生器。
-- [ ] 4.3 实现 100/300/1000 唯一短媒体任务突发，记录 HTTP、PostgreSQL、Outbox、Kafka、DAG、队列和最终排空证据。
+- [x] 4.3 实现 100/300/1000 唯一短媒体任务突发，记录 HTTP、PostgreSQL、Outbox、Kafka、DAG、队列和最终排空证据。
 - [x] 4.4 实现同 `task_id` 的 30/100/300/1000 并发相同提交、冲突媒体提交、分批追加 `task_types` 和已完成结果复用用例。
-- [ ] 4.5 实现先堆积 100/300 个 `NORMAL`、后注入 10/30 个 `URGENT` 的顺序证据，验证不抢占运行节点。
-- [ ] 4.6 实现 3/6/12/24/36 真实长课阶梯、阶梯前存储预估、`/data/course` 临时增长和 `/data/result` 持久结果索引。
+- [x] 4.5 实现先堆积 100/300 个 `NORMAL`、后注入 10/30 个 `URGENT` 的顺序证据，验证不抢占运行节点。
+- [x] 4.6 实现 3/6/12/24/36 真实长课阶梯、阶梯前存储预估、`/data/course` 临时增长和 `/data/result` 持久结果索引。
 - [x] 4.7 实现 50/100/300/1000 QPS 查询、2/5 秒带抖动轮询、无抖动惊群和大 ASR 结果查询，验证整数节点状态和结果字段。
 - [x] 4.8 增加离线/查询压力的负向比例注入，以可配置 1%/5%/20% 比例混入缺失必需路径、404/超时 URL、未知 `task_types`、非法区域坐标和冲突 `task_id`，并验证不污染正常队列。
 - [ ] 4.9 在离线压力前从 `192.168.29.11` 对 `192.168.29.12:5555` 执行 1/3/10/30 并发媒体下载基线，记录单文件速度、总吞吐、建连耗时、失败率、源端文件服务资源和目标机入站网络，避免把媒体源/网络上限误归因于调度平台或算子。

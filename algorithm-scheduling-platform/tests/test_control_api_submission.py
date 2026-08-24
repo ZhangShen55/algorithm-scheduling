@@ -80,6 +80,8 @@ class QueryRepository(RecordingRepository):
                 progress={},
                 effective_params=None,
                 updated_at=now,
+                claimed_at=now,
+                started_at=now,
             ),
             NodeRecord(
                 id=102,
@@ -95,6 +97,8 @@ class QueryRepository(RecordingRepository):
                 progress={"completed_count": 5, "total_count": 20},
                 effective_params=None,
                 updated_at=now,
+                claimed_at=now,
+                started_at=now,
             ),
         ]
 
@@ -364,6 +368,12 @@ def test_get_course_job_returns_all_task_types_and_node_results(tmp_path: Path) 
     assert ppt["nodes"][0]["count"] == 20
     assert ppt["nodes"][1]["result"]["items"][0]["ppt_image_id"] == "ppt-001"
     assert ppt["nodes"][1]["progress"] == {"completed_count": 5, "total_count": 20}
+    assert datetime.fromisoformat(ppt["nodes"][0]["claimed_at"]) == repository.nodes[
+        0
+    ].claimed_at
+    assert datetime.fromisoformat(ppt["nodes"][0]["started_at"]) == repository.nodes[
+        0
+    ].started_at
     assert "result" not in ppt["nodes"][0]
     assert "path" not in ppt["nodes"][1]
     assert "count" not in ppt["nodes"][1]

@@ -302,6 +302,8 @@ def _node_response(record: NodeRecord) -> dict[str, Any]:
         "required_capability": record.required_capability,
         "progress": record.progress,
         "effective_params": record.effective_params,
+        "claimed_at": record.claimed_at,
+        "started_at": record.started_at,
         "updated_at": record.updated_at,
     }
     if record.artifact_path is not None:

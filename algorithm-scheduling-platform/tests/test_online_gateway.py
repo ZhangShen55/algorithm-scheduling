@@ -26,6 +26,12 @@ from packages.platform_common.config import PlatformSettings
 from packages.platform_common.metrics import PlatformMetrics
 from packages.platform_common.operator_registry import CapacityLease
 
+MINIMAL_PNG_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+    "+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+MINIMAL_PNG_DATA_URI = f"data:image/png;base64,{MINIMAL_PNG_BASE64}"
+
 
 def test_online_gateway_exposes_vbas_request_level_proxy() -> None:
     route_paths = {route.path for route in app.routes}
@@ -60,11 +66,11 @@ def test_online_gateway_exposes_single_image_ocr_proxy() -> None:
 @pytest.mark.parametrize(
     ("request_body", "expected_formula", "expected_image_id"),
     [
-        ({"image": "AA=="}, False, None),
+        ({"image": MINIMAL_PNG_BASE64}, False, None),
         (
             {
                 "image_id": "ppt-image-001",
-                "image": "data:image/png;base64,AA==",
+                "image": MINIMAL_PNG_DATA_URI,
                 "enable_formula": True,
             },
             True,
@@ -383,7 +389,7 @@ def test_online_ocr_timeout_and_upstream_errors_release_the_lease() -> None:
         with TestClient(online_app) as client:
             response = client.post(
                 "/api/online/ocr/recognize",
-                json={"image": "AA=="},
+                json={"image": MINIMAL_PNG_BASE64},
             )
     finally:
         asyncio.run(operator_http.aclose())
@@ -434,7 +440,7 @@ def test_online_vbas_proxies_complete_base64_request_through_one_lease(
         "ImageList": [
             {
                 "ImageId": "student-001",
-                "StoragePath": "data:image/jpeg;base64,AA==",
+                "StoragePath": MINIMAL_PNG_DATA_URI,
             }
         ],
     }
@@ -501,7 +507,7 @@ def test_online_face_recognition_preserves_existing_operator_contract(
         )
 
     request_body = {
-        "photo": "data:image/jpeg;base64,AA==",
+        "photo": MINIMAL_PNG_DATA_URI,
         "targets": ["T001"],
         "threshold": 0.4,
     }
@@ -568,7 +574,7 @@ def test_online_image_quality_uses_detect_all_contract(tmp_path: Path) -> None:
         )
 
     request_body = {
-        "image": "data:image/jpeg;base64,AA==",
+        "image": MINIMAL_PNG_DATA_URI,
         "include": ["tilt", "screen"],
         "screen_conf": 0.3,
     }
@@ -657,8 +663,8 @@ def test_multi_image_vbas_request_is_not_split_and_preserves_partial_results(
     request_body = {
         "stream_type": "student",
         "ImageList": [
-            {"ImageId": "image-ok", "StoragePath": "AA=="},
-            {"ImageId": "image-failed", "StoragePath": "AQ=="},
+            {"ImageId": "image-ok", "StoragePath": MINIMAL_PNG_BASE64},
+            {"ImageId": "image-failed", "StoragePath": MINIMAL_PNG_DATA_URI},
         ],
     }
     online_app = create_online_gateway_app(
@@ -830,7 +836,7 @@ def test_online_http_returns_bounded_business_error_when_capacity_is_unavailable
     with TestClient(online_app) as client:
         response = client.post(
             "/api/online/face/recognize",
-            json={"photo": "data:image/jpeg;base64,AA=="},
+            json={"photo": MINIMAL_PNG_DATA_URI},
         )
 
     assert response.status_code == 200
@@ -886,11 +892,11 @@ async def test_concurrent_online_requests_can_use_different_instances(tmp_path: 
             responses = await asyncio.gather(
                 client.post(
                     "/api/online/image-quality/detect",
-                    json={"image": "AA=="},
+                    json={"image": MINIMAL_PNG_BASE64},
                 ),
                 client.post(
                     "/api/online/image-quality/detect",
-                    json={"image": "AQ=="},
+                    json={"image": MINIMAL_PNG_DATA_URI},
                 ),
             )
     finally:

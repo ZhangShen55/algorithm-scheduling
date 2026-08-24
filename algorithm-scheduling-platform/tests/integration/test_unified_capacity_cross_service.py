@@ -55,6 +55,10 @@ from packages.platform_contracts.status import NodeStatus
 
 pytestmark = pytest.mark.integration
 TEST_REDIS_URL = "redis://127.0.0.1:6379/15"
+MINIMAL_PNG_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+    "+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
 
 
 class HostRoutingTransport(httpx.AsyncBaseTransport):
@@ -288,12 +292,12 @@ async def test_online_ocr_crosses_gateway_control_and_contract_operator(
         capabilities=["ocr"],
         service_url="http://ocr.test",
     )
-    valid_image = base64.b64encode(b"image").decode()
+    valid_image = MINIMAL_PNG_BASE64
 
     async with _gateway_runtime(
         redis_registry,
         {"ocr.test": ocr},
-        decoded_limit=8,
+        decoded_limit=len(base64.b64decode(MINIMAL_PNG_BASE64)),
         body_limit=256,
     ) as (gateway, control, _):
         request_task = asyncio.create_task(
@@ -338,7 +342,7 @@ async def test_online_ocr_crosses_gateway_control_and_contract_operator(
 
         for payload in (
             {"image": "%%%"},
-            {"image": base64.b64encode(b"x" * 9).decode()},
+            {"image": base64.b64encode(b"x" * 69).decode()},
             {"image": "A" * 300},
         ):
             invalid = await gateway.post(
@@ -414,7 +418,7 @@ async def test_online_and_ppt_ocr_share_one_pool_without_losing_offline_work(
         online_task = asyncio.create_task(
             gateway.post(
                 "/api/online/ocr/recognize",
-                json={"image": base64.b64encode(b"image").decode()},
+                json={"image": MINIMAL_PNG_BASE64},
             )
         )
         await asyncio.wait_for(started.wait(), timeout=1)
@@ -630,7 +634,9 @@ async def test_control_reports_heartbeat_difference_without_using_it_for_admissi
             "/ImageDetect/teacher/v1.0.0",
             {
                 "stream_type": "teacher",
-                "ImageList": [{"ImageId": "frame-1", "StoragePath": "AA=="}],
+                "ImageList": [
+                    {"ImageId": "frame-1", "StoragePath": MINIMAL_PNG_BASE64}
+                ],
             },
         ),
         (
@@ -639,7 +645,7 @@ async def test_control_reports_heartbeat_difference_without_using_it_for_admissi
             "recognize",
             "/api/online/face/recognize",
             "/recognize",
-            {"photo": "AA=="},
+            {"photo": MINIMAL_PNG_BASE64},
         ),
         (
             "screen-full-0",
@@ -647,7 +653,7 @@ async def test_control_reports_heartbeat_difference_without_using_it_for_admissi
             "detect_all",
             "/api/online/image-quality/detect",
             "/detect_all",
-            {"image": "AA=="},
+            {"image": MINIMAL_PNG_BASE64},
         ),
         (
             "ocr-full-0",
@@ -655,7 +661,7 @@ async def test_control_reports_heartbeat_difference_without_using_it_for_admissi
             "ocr",
             "/api/online/ocr/recognize",
             "/ocr/prediction",
-            {"image": "AA=="},
+            {"image": MINIMAL_PNG_BASE64},
         ),
     ),
 )

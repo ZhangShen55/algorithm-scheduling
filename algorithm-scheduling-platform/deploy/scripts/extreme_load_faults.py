@@ -449,6 +449,14 @@ class FaultRuntime(Protocol):
     def verify(self, scenario: FaultScenario, check: FaultCheck, phase: str) -> bool: ...
 
 
+class MaintenanceLockBinding(Protocol):
+    @property
+    def campaign_id(self) -> str: ...
+
+    @property
+    def acquired(self) -> bool: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ScenarioRunResult:
     scenario_id: str
@@ -616,7 +624,7 @@ class FaultSequenceRunner:
         plan: FaultPlan,
         *,
         dry_run: bool = True,
-        maintenance_lock: MaintenanceLock | None,
+        maintenance_lock: MaintenanceLockBinding | None,
     ) -> FaultPlanRunResult:
         plan.validate()
         if dry_run:

@@ -96,10 +96,19 @@ def test_release_environment_and_default_ledger_follow_cli_identity(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    for variable in ("EXPECTED_GIT_SHA", *production_stack.OPERATOR_IMAGE_REPOSITORIES):
+    for variable in (
+        "EXPECTED_GIT_SHA",
+        "OPERATOR_REGISTRY_TOKEN",
+        *production_stack.OPERATOR_IMAGE_REPOSITORIES,
+    ):
         monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv("OPERATOR_REGISTRY_TOKEN", "registry-token")
 
-    production_stack._configure_release_environment("a" * 40, "v1.0_260823")
+    production_stack._configure_release_environment(
+        "a" * 40,
+        "v1.0_260823",
+        require_registry_token=True,
+    )
 
     assert os.environ["EXPECTED_GIT_SHA"] == "a" * 40
     assert os.environ["OCR_IMAGE"] == "algorithm-ocr:v1.0_260823"
@@ -109,6 +118,31 @@ def test_release_environment_and_default_ledger_follow_cli_identity(
         release_tag="v1.0_260823",
         git_sha="a" * 40,
     ) == tmp_path / "milestone-2b/releases/v1.0_260823" / ("a" * 40) / "production"
+
+
+def test_read_only_lifecycle_commands_do_not_require_registry_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPERATOR_REGISTRY_TOKEN", raising=False)
+
+    production_stack._configure_release_environment(
+        "a" * 40,
+        "v1.0_260823",
+        require_registry_token=False,
+    )
+
+    assert os.environ["OPERATOR_REGISTRY_TOKEN"] == "compose-read-only-placeholder"
+
+
+def test_start_requires_explicit_registry_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPERATOR_REGISTRY_TOKEN", raising=False)
+
+    with pytest.raises(production_stack.ProductionStackError, match="OPERATOR_REGISTRY_TOKEN"):
+        production_stack._configure_release_environment(
+            "a" * 40,
+            "v1.0_260823",
+            require_registry_token=True,
+        )
 
 
 def test_status_requires_exact_eight_platform_and_twenty_one_operator_services() -> None:

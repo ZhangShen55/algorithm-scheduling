@@ -203,6 +203,7 @@ GET /api/course-jobs/{task_id}
 ```
 
 响应固定返回四个 task type；未请求类型为 `status=0`，已请求类型包含节点、优先级、原因、进度和可用结果。
+每个已请求节点还包含可空 `claimed_at` 和 `started_at`，分别表示调度工作者已领取和节点真正开始执行的数据库时间；尚未发生时为 `null`。
 
 状态码：
 

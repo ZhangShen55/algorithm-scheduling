@@ -781,18 +781,32 @@ def _state_root(
     )
 
 
-def _configure_release_environment(git_sha: str, release_tag: str) -> None:
+def _configure_release_environment(
+    git_sha: str,
+    release_tag: str,
+    *,
+    require_registry_token: bool,
+) -> None:
     """让 Compose 使用 CLI 已核验的 SHA/tag，而不是依赖未导出的 shell 变量。"""
 
     os.environ["EXPECTED_GIT_SHA"] = git_sha
     for variable, repository in OPERATOR_IMAGE_REPOSITORIES.items():
         os.environ.setdefault(variable, f"{repository}:{release_tag}")
+    if "OPERATOR_REGISTRY_TOKEN" not in os.environ:
+        if require_registry_token:
+            raise ProductionStackError("启动常驻栈必须显式设置 OPERATOR_REGISTRY_TOKEN")
+        # status/stop 只需 Compose 解析已有容器身份，不会重建或更改容器环境。
+        os.environ["OPERATOR_REGISTRY_TOKEN"] = "compose-read-only-placeholder"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     _validate_identity(args.git_sha, args.release_tag)
-    _configure_release_environment(args.git_sha, args.release_tag)
+    _configure_release_environment(
+        args.git_sha,
+        args.release_tag,
+        require_registry_token=args.command == "start",
+    )
     state_root = _state_root(
         args.state_root,
         reports_root=args.reports_root,

@@ -42,9 +42,16 @@ from .system_probes import (
 _SAFE_CRITICAL_ERROR = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/ -]{0,159}")
 _SAFE_SERVICE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 _BURST_CASE_KINDS = frozenset(
-    {"online_image", "mixed_image", "s_stream", "image_boundary", "face_recognition"}
+    {
+        "online_image",
+        "mixed_image",
+        "s_stream",
+        "image_boundary",
+        "face_recognition",
+        "mixed",
+    }
 )
-_DIRECTORY_CHECKPOINT_CASE_KINDS = frozenset({"long_course"})
+_DIRECTORY_CHECKPOINT_CASE_KINDS = frozenset({"long_course", "mixed", "soak"})
 
 _T_co = TypeVar("_T_co", covariant=True)
 
