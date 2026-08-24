@@ -111,6 +111,9 @@ _FACE_RESIDUE_CONFIG_KEYS = frozenset(
         "mongodb_container_id",
         "mongodb_database",
         "mongodb_collection",
+        "online_gateway_compose_project",
+        "online_gateway_compose_service",
+        "online_gateway_container_id",
         "container_photo_paths",
         "container_log_paths",
         "persistent_paths",
@@ -174,6 +177,7 @@ class _FacePhotoResidueSettings:
     person_photo_size_bytes: int
     facerec_container_ids: Mapping[str, str]
     mongodb_container_id: str
+    online_gateway_container_id: str
 
 
 def _as_string_mapping(value: object) -> Mapping[str, object]:
@@ -491,6 +495,9 @@ def _load_face_photo_residue_settings() -> _FacePhotoResidueSettings:
             or residue["mongodb_compose_service"] != "mongodb"
             or residue["mongodb_database"] != "facerecapi"
             or residue["mongodb_collection"] != "persons"
+            or residue["online_gateway_compose_project"]
+            != "algorithm-scheduling-platform"
+            or residue["online_gateway_compose_service"] != "online-gateway-service"
         ):
             raise ValueError("FaceRec 或 MongoDB Compose/数据库身份不合法")
         container_ids = _as_string_mapping(residue["facerec_container_ids"])
@@ -498,13 +505,14 @@ def _load_face_photo_residue_settings() -> _FacePhotoResidueSettings:
             raise ValueError("FaceRec 容器 ID 必须精确覆盖三个服务")
         frozen_ids = {service: container_ids[service] for service in _FACEREC_SERVICES}
         mongodb_id = residue["mongodb_container_id"]
+        online_gateway_id = residue["online_gateway_container_id"]
         if any(
             type(value) is not str or _FULL_CONTAINER_ID.fullmatch(value) is None
-            for value in (*frozen_ids.values(), mongodb_id)
+            for value in (*frozen_ids.values(), mongodb_id, online_gateway_id)
         ):
             raise ValueError("FaceRec/MongoDB 必须使用完整容器 ID")
-        if len({*frozen_ids.values(), mongodb_id}) != 4:
-            raise ValueError("FaceRec/MongoDB 容器 ID 不能重复")
+        if len({*frozen_ids.values(), mongodb_id, online_gateway_id}) != 5:
+            raise ValueError("FaceRec/MongoDB/Gateway 容器 ID 不能重复")
         photo_sha256 = residue["person_photo_sha256"]
         photo_size = residue["person_photo_size_bytes"]
         if type(photo_sha256) is not str or _SHA256.fullmatch(photo_sha256) is None:
@@ -538,6 +546,7 @@ def _load_face_photo_residue_settings() -> _FacePhotoResidueSettings:
             person_photo_size_bytes=photo_size,
             facerec_container_ids=cast(Mapping[str, str], frozen_ids),
             mongodb_container_id=cast(str, mongodb_id),
+            online_gateway_container_id=cast(str, online_gateway_id),
         )
     except _ConfigurationBlocked:
         raise
@@ -784,6 +793,9 @@ def face_photo_residue_factory(
             mongodb_container_id=settings.mongodb_container_id,
             mongodb_database="facerecapi",
             mongodb_collection="persons",
+            online_gateway_compose_project="algorithm-scheduling-platform",
+            online_gateway_compose_service="online-gateway-service",
+            online_gateway_container_id=settings.online_gateway_container_id,
             container_photo_paths=("/app/media/person_photos",),
             container_log_paths=("/app/logs",),
             persistent_paths=("/data/result",),

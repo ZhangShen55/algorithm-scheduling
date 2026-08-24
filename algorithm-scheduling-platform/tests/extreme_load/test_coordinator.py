@@ -20,6 +20,7 @@ from scripts.extreme_load.catalog import (
 from scripts.extreme_load.coordinator import (
     CampaignCoordinator,
     CoordinatorBlockedError,
+    _face_instance_observation,
 )
 from scripts.extreme_load.guardrails import GuardrailAssessment, GuardrailLevel
 from scripts.extreme_load.plan import (
@@ -177,6 +178,180 @@ class FakeMetricsAdapter:
         )
 
 
+def _runtime_outcome(
+    *,
+    requests: int,
+    acquired: int,
+    rejected: int,
+    released: int,
+    instance_requests: dict[str, int] | None = None,
+) -> StageCaseOutcome:
+    prefix = "campaign/runtime-metrics/IMG-BOUNDARY-INVALID-B64"
+    return StageCaseOutcome(
+        "passed",
+        "指标探针通过",
+        {
+            "runtime_metrics": {
+                "sample_count": 2,
+                "gateway_delta": {
+                    "requests_total": requests,
+                    "lease_acquired_total": acquired,
+                    "lease_rejected_total": rejected,
+                    "lease_released_total": released,
+                },
+                "gateway_instance_request_delta": instance_requests or {},
+                "peak_inflight": {},
+                "peak_active_leases": {},
+                "peak_declared_capacity": {},
+                "peak_gpu_utilization": {},
+                "peak_gpu_memory_bytes": {},
+                "minimum_target_filesystem_available_bytes": {"/": 4096},
+                "target_directory_bytes_before": {},
+                "target_directory_bytes_after": {},
+                "target_directory_bytes_delta": {},
+            },
+            "sample_evidence": [f"{prefix}/00000001.json", f"{prefix}/00000002.json"],
+        },
+    )
+
+
+def _face_business_evidence(
+    *,
+    status: str = "passed",
+    recognized: int = 499,
+    deleted_absence: int = 1,
+    invalid: int = 0,
+) -> dict[str, object]:
+    return {
+        "extra": {
+            "person_fact_consistency": {
+                "status": status,
+                "reason": "北向人物事实证据",
+                "expected_retained_number_count": 499,
+                "recognized_retained_number_count": recognized,
+                "expected_deleted_absence_count": 1,
+                "validated_deleted_absence_count": deleted_absence,
+                "invalid_response_count": invalid,
+            }
+        }
+    }
+
+
+def test_face_recognition_accepts_uneven_complete_three_instance_participation(
+    tmp_path: Path,
+) -> None:
+    plan = _plan(tmp_path)
+    case = next(
+        item for item in plan.catalog.cases if item.case_id == "FACE-RECOGNIZE-500"
+    )
+    business = _face_business_evidence()
+    uneven = _runtime_outcome(
+        requests=500,
+        acquired=500,
+        rejected=0,
+        released=500,
+        instance_requests={
+            "facerec-gpu0": 220,
+            "facerec-gpu1": 170,
+            "facerec-gpu2": 110,
+            "ocr-gpu0": 0,
+            "vbas-gpu1": 0,
+        },
+    )
+
+    observation = _face_instance_observation(case, business, uneven)
+
+    assert observation is not None
+    assert observation["status"] == "passed"
+    assert observation["person_fact_consistency"]["status"] == "passed"
+    routing = observation["recognition_routing_participation"]
+    assert routing["status"] == "passed"
+    assert routing["observed_instance_request_count"] == {
+        "facerec-gpu0": 220,
+        "facerec-gpu1": 170,
+        "facerec-gpu2": 110,
+    }
+    assert "计数不关联人物与实例" in str(routing["reason"])
+    assert "每个" not in str(observation)
+    assert "各完成一遍" not in str(observation)
+
+
+@pytest.mark.parametrize(
+    ("business", "instance_requests", "expected_fact_status", "expected_routing_status"),
+    (
+        (
+            _face_business_evidence(),
+            {"facerec-gpu0": 300, "facerec-gpu1": 200},
+            "passed",
+            "failed",
+        ),
+        (
+            _face_business_evidence(),
+            {
+                "facerec-gpu0": 200,
+                "facerec-gpu1": 150,
+                "facerec-gpu2": 100,
+                "facerec-gpu3": 50,
+            },
+            "passed",
+            "failed",
+        ),
+        (
+            _face_business_evidence(),
+            {"facerec-gpu0": 200, "facerec-gpu1": 150, "facerec-gpu2": 100},
+            "passed",
+            "failed",
+        ),
+        (
+            _face_business_evidence(),
+            {"facerec-gpu0": 250, "facerec-gpu1": 250, "facerec-gpu2": 0},
+            "passed",
+            "failed",
+        ),
+        (
+            _face_business_evidence(status="failed", recognized=498, invalid=1),
+            {"facerec-gpu0": 220, "facerec-gpu1": 170, "facerec-gpu2": 110},
+            "failed",
+            "passed",
+        ),
+        (
+            _face_business_evidence(status="passed", deleted_absence=0),
+            {"facerec-gpu0": 220, "facerec-gpu1": 170, "facerec-gpu2": 110},
+            "failed",
+            "passed",
+        ),
+    ),
+)
+def test_face_recognition_fails_closed_for_incomplete_independent_evidence(
+    tmp_path: Path,
+    business: dict[str, object],
+    instance_requests: dict[str, int],
+    expected_fact_status: str,
+    expected_routing_status: str,
+) -> None:
+    plan = _plan(tmp_path)
+    case = next(
+        item for item in plan.catalog.cases if item.case_id == "FACE-RECOGNIZE-500"
+    )
+    metrics = _runtime_outcome(
+        requests=500,
+        acquired=500,
+        rejected=0,
+        released=500,
+        instance_requests=instance_requests,
+    )
+
+    observation = _face_instance_observation(case, business, metrics)
+
+    assert observation is not None
+    assert observation["status"] == "failed"
+    assert observation["person_fact_consistency"]["status"] == expected_fact_status
+    assert (
+        observation["recognition_routing_participation"]["status"]
+        == expected_routing_status
+    )
+
+
 class FakeStageAdapter:
     def __init__(self, outcome: StageCaseOutcome) -> None:
         self.outcome = outcome
@@ -284,6 +459,13 @@ def test_stage_coordinated_cases_remain_explicit_integration_blockers(
     plan = _plan(tmp_path)
     release_root = tmp_path / "release"
     _pass_required_before(release_root, plan, phase)
+    selected = next(case for case in plan.catalog.cases if case.case_id == case_id)
+    for prerequisite in selected.prerequisites:
+        prerequisite_case = next(
+            case for case in plan.catalog.cases if case.case_id == prerequisite
+        )
+        if prerequisite_case.phase is phase:
+            _write_evidence(release_root, plan, prerequisite)
 
     readiness = CampaignCoordinator(plan, release_root).readiness(case_id)
 
@@ -564,6 +746,56 @@ async def test_explicit_live_opt_in_runs_supported_executor_case(tmp_path: Path)
     ]
     business_path = release_root / document["business_evidence_path"]
     assert json.loads(business_path.read_text(encoding="utf-8"))["status"] == "passed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("gateway_counts", "expected_status"),
+    (
+        ((0, 0, 0, 0), "passed"),
+        ((1, 1, 0, 1), "failed"),
+    ),
+)
+async def test_rejected_image_boundary_requires_observed_zero_lease_delta(
+    tmp_path: Path,
+    gateway_counts: tuple[int, int, int, int],
+    expected_status: str,
+) -> None:
+    plan = _plan(tmp_path)
+    release_root = tmp_path / "release"
+    _pass_required_before(release_root, plan, CampaignPhase.ONLINE)
+    requests, acquired, rejected, released = gateway_counts
+    metrics = FakeMetricsAdapter(
+        outcome=_runtime_outcome(
+            requests=requests,
+            acquired=acquired,
+            rejected=rejected,
+            released=released,
+            instance_requests=(
+                {"ocr-gpu0": requests} if requests else {}
+            ),
+        )
+    )
+
+    class FakeExecutor:
+        def __init__(self, observed_plan: CampaignPlan) -> None:
+            self.observed_plan = observed_plan
+
+        async def execute(self, case_id: str) -> Path:
+            return _write_evidence(release_root, self.observed_plan, case_id)
+
+    result = await CampaignCoordinator(
+        plan,
+        release_root,
+        executor_factory=lambda observed_plan, _root: FakeExecutor(observed_plan),
+        adapter_factories={"metrics": _factory(metrics)},
+    ).execute_case("IMG-BOUNDARY-INVALID-B64", allow_live_execution=True)
+
+    assert result.status == expected_status
+    evidence = json.loads(result.evidence_path.read_text(encoding="utf-8"))
+    assert evidence["lease_boundary_observation"]["status"] == expected_status
+    assert evidence["lease_boundary_observation"]["expected_lease_acquisitions"] == 0
+    assert evidence["lease_boundary_observation"]["observed_lease_acquisitions"] == acquired
 
 
 @pytest.mark.asyncio

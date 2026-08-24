@@ -18,7 +18,7 @@ from packages.platform_contracts.responses import BusinessResponse
 
 from ..core.config import SERVICE_ROOT, ControlConfig, OnlineGatewaySettings, ServiceConfig
 from ..core.service_app import create_gateway_base_app
-from ..domain import decoded_base64_size, vbas_route
+from ..domain import valid_base64_image, vbas_route
 from ..infrastructure.capacity import (
     CapacityLease,
     OnlineCapacityLeaseClient,
@@ -93,12 +93,15 @@ def _online_work_context(work_type: str, *, trace_id: str | None) -> OnlineWorkC
     )
 
 
-def _valid_online_image(value: object, settings: OnlineGatewaySettings) -> bool:
-    return isinstance(value, str) and decoded_base64_size(
+async def _valid_online_image(value: object, settings: OnlineGatewaySettings) -> bool:
+    if not isinstance(value, str):
+        return False
+    return await asyncio.to_thread(
+        valid_base64_image,
         value,
         max_decoded_bytes=settings.base64.max_decoded_bytes,
         allow_data_uri=settings.base64.allow_data_uri,
-    ) is not None
+    )
 
 
 def create_online_gateway_app(
@@ -200,10 +203,13 @@ def create_online_gateway_app(
                 40001,
                 "VBas 在线请求必须包含有效的 stream_type 和 Base64 图片",
             )
-        if not all(
-            _valid_online_image(item.get("StoragePath"), service_settings)
-            for item in request_body["ImageList"]
-        ):
+        image_validity = await asyncio.gather(
+            *(
+                _valid_online_image(item.get("StoragePath"), service_settings)
+                for item in request_body["ImageList"]
+            )
+        )
+        if not all(image_validity):
             return BusinessResponse[JsonObject].failure(
                 40001,
                 "VBas 在线图片超过配置上限",
@@ -265,7 +271,7 @@ def create_online_gateway_app(
         request: Request,
     ) -> BusinessResponse[JsonObject]:
         photo = request_body.get("photo")
-        if not _valid_online_image(photo, service_settings):
+        if not await _valid_online_image(photo, service_settings):
             return BusinessResponse[JsonObject].failure(
                 40001,
                 "人脸对比请求必须包含有效的 Base64 图片",
@@ -396,7 +402,7 @@ def create_online_gateway_app(
         request: Request,
     ) -> BusinessResponse[JsonObject]:
         image = request_body.get("image")
-        if not _valid_online_image(image, service_settings):
+        if not await _valid_online_image(image, service_settings):
             return BusinessResponse[JsonObject].failure(
                 40001,
                 "图像质量检测请求必须包含有效的 Base64 图片",
@@ -463,7 +469,7 @@ def create_online_gateway_app(
                 40001,
                 "OCR 在线请求参数不合法",
             )
-        if not _valid_online_image(parsed.image, service_settings):
+        if not await _valid_online_image(parsed.image, service_settings):
             return BusinessResponse[JsonObject].failure(
                 40001,
                 "OCR 在线请求必须包含有效且未超限的 Base64 图片",

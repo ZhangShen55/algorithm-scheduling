@@ -1780,6 +1780,59 @@
 - Ruff、strict Mypy、`compileall`、OpenSpec strict 和 `git diff --check` 通过。OpenSpec 8.7 完成；
   远端实际采纳/备份/v7 应用、11.4 常驻启动和 21/21 实例验证仍待新 SHA 发布。
 
+## 2026-08-25 - 迁移修复新 SHA 重建触发磁盘门禁
+
+- 迁移前缀采纳修复已以中文 Conventional Commit 推送，目标机使用预置 Git 外 Deploy Key
+  clean detached checkout 到 `2548fcecbbc41d27c2e382552afdde1ec6d6856b`；原四平台和四中间件
+  仍为 8/8 healthy，未开始数据库采纳或新算子启动。
+- 七算子构建先通过六类模型资产、七个构建上下文和 registry client wheel 门禁。
+  `seacraft-asr-offline:v1.0_260812` 成功构建为
+  `sha256:9026d12123ee7aac1ea7bbf5f178f4fdd1a78a0b64aa1d434bdceda580865a82`，架构为
+  `amd64`，revision label 精确等于新 SHA。
+- ASR Offline 的 7.25 GB 构建上下文使下一镜像开始前的可用空间降至
+  `232505476 KiB`；`MIN_ROOT_FREE_GIB=227` 门禁按设计失败关闭。构建退出并回收临时空间后
+  根盘仍只有约 221.74 GiB，低于门禁；其余 6 个算子和 4 个平台镜像未开始。
+- 远端无残留构建进程、OOM 或 NVIDIA Xid。旧 `22717cf7...` 的 11 个镜像和
+  `5f973ada...` 回滚 11 镜像仍完整，8 个原运行容器未变化；没有删除镜像、容器、卷、模型、
+  Git、`/data/result` 或历史证据。
+- 由于最终发布 SHA 已改变，上一条 `22717cf7...` 的 11/11 构建只保留为历史证据，不能继续
+  支撑当前任务 11.3。OpenSpec 11.3 已退回未完成；再次执行 BuildKit 缓存清理仍须逐次获得
+  用户明确授权，不降低 227 GiB 门禁，也不以 1/11 部分镜像进入 11.4。
+
+## 2026-08-25 - 失败 release 精确镜像退役未完全解除门禁
+
+- 新 SHA release 下重新生成正式 inventory 和 prebuild dry-run。计划摘要为
+  `967aff08573dfb4715280ec683e6c2d5b7dde56e9aad03dc409a9b29ac8b660b`，保护当前目标
+  11 镜像、`5f973ada...` 回滚 11 镜像、4 个基础镜像、旧 `22717cf7...` ASR Offline
+  allowlist 和全部容器引用镜像，共 49 个完整 ID。
+- 候选集恰为 3 个且与保护集零交集：无容器引用的失败构建
+  `sha256:23091a1b326309e56acf37a43a1470896d77f35d3f5be10e10fc992ce4930cb6`，以及已退役失败
+  release `ecadb0cb1e884f24c18aa77965d5695101931d2f` 的
+  `sha256:20561f3198309bbbb3bd99923ca96ed170632ce5560b48c2348ee08029b8abe2` 和
+  `sha256:e9a936fab22e1ea82a806c2abf53209cfd4e248c9f54489ee46972f13072db62`。
+- 执行器按审核摘要完成逐 ID 删除，结果为 `PASS`，三个完整 ID 均已不存在，8 个原运行容器
+  仍 healthy。未删除容器、卷、模型、Git、`/data/result`、当前/回滚镜像或历史证据。
+- 计划按镜像 unique size 估算 `28.285 GB`，实际根盘可用空间只从 `238083481600` 增至
+  `245336256512` 字节，即释放约 7.253 GB。其余约 21 GB 的旧 ASR 层仍被 BuildKit cache
+  引用，因此镜像删除成功不能表述为磁盘门禁解除；当前仍只有约 228.49 GiB，距 227 GiB
+  门禁余量约 1.49 GiB。
+- 本轮没有执行 BuildKit prune。后续必须先冻结包含 Online Gateway/Campaign 补强的新最终 SHA，
+  再取得新的逐次缓存清理授权或其他可审核空间方案；11.3/11.4 继续保持未完成。
+
+## 2026-08-25 - 在线图片和人脸库 Campaign 实现补强
+
+- 已完成 Online Gateway `2048/512` 连接池配置校验与实际接线，人脸管理固定单实例、
+  人脸识别租约路由三实例的边界保持不变。
+- 图片边界现覆盖常规、49 MiB、超过 50 MiB、语法、Data URI、格式和截断解码；
+  四个在线入口在租约前完成校验，图片解码不阻塞异步事件循环。
+- FaceRec 人物集改为 500/1000/5000 嵌套编号空间，一致性识别使用 30 并发；
+  按实际 `252` 未命中和 top3 候选响应验证人物事实，并单独核对三个识别实例的正请求增量。
+- 原图残留探针现覆盖三 FaceRec 配置与容器、MongoDB、FaceRec/Online Gateway 日志和
+  `/data/result`，报告只保留脱敏聚合计数。
+- 验证：Campaign `269 passed`，Online Gateway `49 passed`，Ruff、strict Mypy、
+  `compileall` 通过。OpenSpec 5.5/5.8/5.9 为实现完成；远端 12.4 仍未执行，
+  不发布人脸一致性或图片极限已通过结论。
+
 ## Record template
 
 - Date and scope:

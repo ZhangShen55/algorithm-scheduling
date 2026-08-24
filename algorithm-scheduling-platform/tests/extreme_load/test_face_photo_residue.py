@@ -30,6 +30,7 @@ _CONTAINER_IDS = {
     "facerec-gpu2": "c" * 64,
 }
 _MONGODB_ID = "d" * 64
+_ONLINE_GATEWAY_ID = "e" * 64
 
 
 def _remote_document(**updates: object) -> dict[str, object]:
@@ -37,14 +38,17 @@ def _remote_document(**updates: object) -> dict[str, object]:
         "schema_version": 1,
         "facerec_container_count": 3,
         "facerec_identity_verified_count": 3,
+        "facerec_save_person_photo_false_count": 3,
+        "online_gateway_container_count": 1,
+        "online_gateway_identity_verified_count": 1,
         "container_photo_paths_observed": 3,
         "container_photo_paths_existing": 0,
         "container_photo_regular_files": 0,
         "container_photo_symlinks": 0,
         "container_photo_forbidden_digest_matches": 0,
-        "log_paths_observed": 3,
-        "log_paths_existing": 3,
-        "log_regular_files": 9,
+        "log_paths_observed": 4,
+        "log_paths_existing": 4,
+        "log_regular_files": 12,
         "log_symlinks": 0,
         "log_sensitive_marker_files": 0,
         "log_forbidden_digest_matches": 0,
@@ -90,6 +94,9 @@ def _adapter(runner: RecordingRunner, *, enabled: bool = True) -> SshFacePhotoRe
         mongodb_compose_project="algorithm-scheduling-platform",
         mongodb_compose_service="mongodb",
         mongodb_container_id=_MONGODB_ID,
+        online_gateway_compose_project="algorithm-scheduling-platform",
+        online_gateway_compose_service="online-gateway-service",
+        online_gateway_container_id=_ONLINE_GATEWAY_ID,
         mongodb_database="facerecapi",
         mongodb_collection="persons",
         container_photo_paths=("/app/media/person_photos",),
@@ -112,21 +119,28 @@ async def test_ssh_probe_uses_strict_identity_and_publishes_only_aggregate_count
     result = await _adapter(runner).run()
 
     assert result.status == "passed"
+    assert result.expected_log_observations == 4
+    assert result.document is not None
+    assert result.document.facerec_save_person_photo_false_count == 3
+    assert result.document.online_gateway_identity_verified_count == 1
     argv, stdin, timeout = runner.calls[0]
     assert "BatchMode=yes" in argv
     assert "StrictHostKeyChecking=yes" in argv
     assert timeout == 120
     assert all(container_id not in " ".join(argv) for container_id in _CONTAINER_IDS.values())
     assert _MONGODB_ID not in " ".join(argv)
+    assert _ONLINE_GATEWAY_ID not in " ".join(argv)
     payload = json.loads(stdin)
     assert payload["facerec_container_ids"] == _CONTAINER_IDS
     assert payload["mongodb_container_id"] == _MONGODB_ID
+    assert payload["online_gateway_container_id"] == _ONLINE_GATEWAY_ID
     assert payload["person_photo_sha256"] == _PHOTO_SHA256
 
     rendered = json.dumps(result.to_evidence(), sort_keys=True)
     assert result.to_evidence()["fixture_evidence_id"] == "external-face-fixture-1"
     assert all(container_id not in rendered for container_id in _CONTAINER_IDS.values())
     assert _MONGODB_ID not in rendered
+    assert _ONLINE_GATEWAY_ID not in rendered
     assert _PHOTO_SHA256 not in rendered
     assert "file_name" not in rendered
     assert "data:image" not in rendered
@@ -137,6 +151,8 @@ async def test_ssh_probe_uses_strict_identity_and_publishes_only_aggregate_count
     ("updates", "reason"),
     (
         ({"log_paths_existing": 2}, "观察不完整"),
+        ({"facerec_save_person_photo_false_count": 2}, "观察不完整"),
+        ({"online_gateway_identity_verified_count": 0}, "观察不完整"),
         ({"container_photo_regular_files": 1}, "发现人脸原图残留"),
         ({"log_sensitive_marker_files": 1}, "发现人脸原图残留"),
         ({"nonempty_photo_path_count": 1}, "发现人脸原图残留"),
@@ -217,6 +233,9 @@ def _runtime_config(tmp_path: Path, *, enabled: bool = True, sha256: str = _PHOT
                 'mongodb_compose_project = "algorithm-scheduling-platform"',
                 'mongodb_compose_service = "mongodb"',
                 f'mongodb_container_id = "{_MONGODB_ID}"',
+                'online_gateway_compose_project = "algorithm-scheduling-platform"',
+                'online_gateway_compose_service = "online-gateway-service"',
+                f'online_gateway_container_id = "{_ONLINE_GATEWAY_ID}"',
                 'mongodb_database = "facerecapi"',
                 'mongodb_collection = "persons"',
                 'container_photo_paths = ["/app/media/person_photos"]',

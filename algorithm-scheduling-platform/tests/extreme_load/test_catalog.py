@@ -141,6 +141,21 @@ def test_load_profile_freezes_required_extreme_tiers() -> None:
     assert profile.soak_hours == (4, 8)
 
 
+def test_online_negative_and_face_cases_encode_execution_dependencies() -> None:
+    catalog = default_catalog()
+    by_id = {case.case_id: case for case in catalog.cases}
+
+    assert "IMG-BOUNDARY-DECODE-FAIL" in by_id
+    for tier in (500, 1000, 5000):
+        recognition = by_id[f"FACE-RECOGNIZE-{tier}"]
+        assert f"FACE-MANAGE-{tier}" in recognition.prerequisites
+        assert recognition.load == {"kind": "face_recognition", "persons": tier}
+    assert {
+        "FACE-MANAGE-5000",
+        "FACE-RECOGNIZE-5000",
+    }.issubset(by_id["FACE-PHOTO-RESIDUE"].prerequisites)
+
+
 def test_versioned_catalog_and_profile_accept_json_yaml_list_shapes() -> None:
     catalog = default_catalog()
     profile = default_load_profile()

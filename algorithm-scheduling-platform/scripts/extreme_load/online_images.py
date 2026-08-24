@@ -299,6 +299,10 @@ def image_syntax_and_format_cases() -> tuple[ImageNegativeCase, ...]:
         ImageNegativeCase("invalid_base64", "not-base64!"),
         ImageNegativeCase("unsupported_format", base64.b64encode(b"not-an-image").decode()),
         ImageNegativeCase("invalid_data_uri", "data:text/plain;base64,QQ=="),
+        ImageNegativeCase(
+            "decode_failure",
+            base64.b64encode(b"\x89PNG\r\n\x1a\ntruncated").decode(),
+        ),
     )
 
 

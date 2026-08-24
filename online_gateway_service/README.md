@@ -39,15 +39,23 @@ FaceRec 人物管理由 Online Gateway 代理以下接口：
 - `POST /api/online/face/persons/search`
 - `DELETE /api/online/face/persons/delete`
 
-这些接口将请求原样转发到 `[face_persons].base_url` 对应的 FaceRec 管理接口，FaceRec 的
+这五个接口将请求原样转发到 `[face_persons].base_url` 指定的同一个固定 FaceRec
+管理实例；里程碑 2B Compose 中该地址为 `facerec-gpu0`。FaceRec 的
 `status_code/message/data` 响应对象原样放入 `BusinessResponse.data`。人物管理不申请推理容量
-租约、不进入 Kafka、也不由网关直连 MongoDB。人脸原图是否保存继续由 FaceRec
-`image.save_person_photo` 控制，当前默认值为 `false`。
+租约、不进入 Kafka、也不由网关直连 MongoDB。`POST /api/online/face/recognize`
+则为每个请求申请 `recognize` 租约，在三个 FaceRec 识别实例间路由；三个实例共享
+MongoDB。因此人物管理能力按单实例计算，识别能力按三实例计算。人脸原图是否保存继续由
+FaceRec `image.save_person_photo` 控制，当前默认值为 `false`。
 
 里程碑 2B 三卡部署使用 `[http].max_connections=2048`、
-`max_keepalive_connections=512` 和有界 `pool_timeout_seconds`。连接池只保证网关能够承接
+`max_keepalive_connections=512` 和有界正数 `pool_timeout_seconds`。启动时会拒绝非正数连接上限、
+超过总连接数的保活上限以及非有限或非正数的池等待超时。连接池只保证网关能够承接
 千级并发；请求是否进入算子仍由 Control Service 容量租约决定，无容量时返回业务码 `50301`，
 不能把连接池大小当成算子的声明容量。
+
+四个在线图片入口在申请租约前校验 Base64 语法、解码后大小和图片可解码性；
+完整解码在有界线程池中执行，不阻塞网关的异步事件循环。非图片 Data URI、损坏图片和超过
+`[base64].max_decoded_bytes` 的请求返回业务码 `40001`，不申请算子容量。
 
 `GET /metrics` 通过 `algorithm_operator_request_*` 给出已经调用到各实例的请求计数与耗时，
 并通过 `algorithm_capacity_lease_events_total` 累计 `requested`、`acquired`、`rejected`、

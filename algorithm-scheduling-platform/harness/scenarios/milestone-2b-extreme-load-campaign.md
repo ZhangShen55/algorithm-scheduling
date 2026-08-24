@@ -224,3 +224,48 @@ Campaign/release/SHA/case/phase 身份校验发布。
 - 复审同时发现 host preflight 的空工作树判定会掩盖 `git status` 自身失败。实现现改为
   先采集状态且对非零退出显式失败，新增 fake Git 回归。在该修复提交、目标机再同步和
   完整 preflight 通过前，任务 11.1 保持未完成。
+
+## 2026-08-25 新 SHA 镜像重建磁盘门禁结论
+
+- 目标机 clean detached checkout 到迁移修复 SHA
+  `2548fcecbbc41d27c2e382552afdde1ec6d6856b` 后重新执行七算子权威构建入口。
+- ASR Offline 完成模型、上下文、wheel 和 Docker 构建，目标镜像为
+  `sha256:9026d12123ee7aac1ea7bbf5f178f4fdd1a78a0b64aa1d434bdceda580865a82`，
+  `amd64` 与 revision 均符合。其余 10 个目标尚未开始，当前只达到 1/11。
+- 构建入口在第二个镜像前报告
+  `root disk has 232505476 KiB free; 227 GiB required` 并失败关闭；退出后可用空间约
+  221.74 GiB，仍不满足门禁。原 8 个运行容器 healthy，旧发布/回滚镜像完整，无 OOM、Xid
+  或残留构建进程。
+- 本场景因此把 11.3 退回未完成并阻止 11.4。只允许继续只读诊断和本地实现；再次清理
+  BuildKit 缓存必须取得新的逐次明确授权，不能复用此前授权、降低门禁或启动部分新栈。
+
+## 2026-08-25 失败 release 精确退役结果
+
+- 当前 release 的 prebuild 计划保护 49 个当前、回滚、基础、allowlist 和容器引用镜像；
+  dry-run 摘要为 `967aff08573dfb4715280ec683e6c2d5b7dde56e9aad03dc409a9b29ac8b660b`。
+- 审核后的三个候选均无容器引用，分别属于旧失败构建 `0e11d3d7...` 和已退役失败 release
+  `ecadb0cb...`。执行结果为 `PASS`，候选完整 ID 均已删除，8 个原运行容器仍 healthy。
+- 镜像账本估算可回收 28.285 GB，实际只释放约 7.253 GB；其余大层继续受 BuildKit cache
+  引用。根盘回到约 228.49 GiB，但仍只有约 1.49 GiB 构建裕量。
+- 因此本场景没有重新完成 11.3，也没有进入 11.4；未执行 BuildKit prune。后续必须使用
+  包含本地功能补强的新最终 SHA，并为每次缓存清理重新取得明确授权。
+
+## 2026-08-25 在线图片与 FaceRec Campaign 冻结前补强
+
+- Online Gateway 已将出站 HTTP 连接池实际接线为 `2048/512`，校验有界池等待；
+  人脸管理五个入口继续固定单一 FaceRec 实例，只有识别入口通过租约路由三实例。
+- 四个在线图片入口在申请租约前校验 Base64 语法、Data URI 媒体类型、解码后大小和
+  图片可解码性；完整图片解码移入线程执行，VBas 不再重复解码。常规、49 MiB、
+  超过 50 MiB、非法 Base64、非图片 Data URI、非图片字节和截断图片均已进入 Campaign；
+  拒绝请求必须观测为零租约、零算子调用。
+- FaceRec 一致性和容量压力分开：人物事实检查以 30 并发执行，不在声明总容量
+  384 上用 500/1000 并发制造预期过载；真实识别容量仍由独立 1–1000 在线图片阶梯测量。
+- 500/1000/5000 三档改为可重放的嵌套编号集，利用当前 FaceRec 单个/批量接口的
+  upsert 语义防止跨档重复积累。删除后未命中按真实算子业务码 `252` 或不含已删 number
+  判定；正常识别允许真实 top3 候选但不允许重复事实。三实例证据要求三个固定
+  FaceRec 实例均有正请求增量，不依赖随机路由恰好均匀，其他算子的零增量键不会造成误失败。
+- `save_person_photo=false` 证据现同时核验三个 FaceRec 运行配置、MongoDB embedding/图片字段、
+  FaceRec 与 Online Gateway 日志、容器目录和持久目录，仅发布聚合计数，不把人脸底图写入报告。
+- 本地验证为 `269 passed` 的 `tests/extreme_load`、`49 passed` 的 Online Gateway 测试、
+  Ruff、strict Mypy 和 `compileall` 通过。这只完成 OpenSpec 5.5、5.8、5.9 的实现层；
+  `192.168.29.11` 的四类图片、人脸库和原图残留真实执行仍属于未完成的 12.4。

@@ -816,7 +816,7 @@ async def test_face_management_executes_ordered_phases_and_sanitizes_summary(
 
 
 @pytest.mark.asyncio
-async def test_face_recognition_rejects_wrong_match_and_keeps_consistency_pending(
+async def test_face_recognition_reports_person_fact_consistency_separately(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -837,12 +837,16 @@ async def test_face_recognition_rejects_wrong_match_and_keeps_consistency_pendin
             targets = request.json_body["targets"]
             assert isinstance(targets, list)
             expected = str(targets[0])
-            observed = "P-wrong" if index == 0 else expected
+            if request.work_type == "online_face_recognize_deleted":
+                match: list[dict[str, str]] = []
+            else:
+                observed = "P-wrong" if index == 0 else expected
+                match = [{"number": observed}]
             results.append(
                 _result(
                     request.request_id,
                     ResultCategory.SUCCESS,
-                    {"response": _face_response({"match": [{"number": observed}]})},
+                    {"response": _face_response({"match": match})},
                 )
             )
         return results
@@ -856,13 +860,21 @@ async def test_face_recognition_rejects_wrong_match_and_keeps_consistency_pendin
     assert outcome.extra is not None
     request_summary = outcome.extra["request_summary"]
     assert isinstance(request_summary, dict)
-    assert request_summary["deleted_target_count"] == 0
+    assert request_summary["request_count"] == 500
+    assert "recognition_passes" not in request_summary
+    assert request_summary["deleted_target_count"] == 1
     assert request_summary["unique_expected_number_count"] == 499
-    assert outcome.extra["instance_consistency"] == {
-        "status": "pending_unproven",
-        "reason": "必须核对三个识别实例",
-        "observed_instance_count": 0,
+    assert outcome.extra["recognition_consistency_concurrency"] == 30
+    assert outcome.extra["person_fact_consistency"] == {
+        "status": "failed",
+        "reason": "北向识别响应的人物事实不完整或不唯一",
+        "expected_retained_number_count": 499,
+        "recognized_retained_number_count": 498,
+        "expected_deleted_absence_count": 1,
+        "validated_deleted_absence_count": 1,
+        "invalid_response_count": 1,
     }
+    assert "instance_consistency" not in outcome.extra
     validate_public_payload(outcome.extra)
 
 

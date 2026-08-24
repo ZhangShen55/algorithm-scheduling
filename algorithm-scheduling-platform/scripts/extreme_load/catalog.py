@@ -604,7 +604,16 @@ def default_catalog() -> CampaignCatalog:
                     fixture_ids=("online-image",),
                 )
             )
-    for boundary in ("512K", "5M", "49M", "OVER-50M", "INVALID-B64", "BAD-FORMAT", "BAD-DATA-URI"):
+    for boundary in (
+        "512K",
+        "5M",
+        "49M",
+        "OVER-50M",
+        "INVALID-B64",
+        "BAD-FORMAT",
+        "BAD-DATA-URI",
+        "DECODE-FAIL",
+    ):
         online.append(
             _catalog_case(
                 CampaignPhase.ONLINE,
@@ -645,6 +654,7 @@ def default_catalog() -> CampaignCatalog:
                     f"FACE-RECOGNIZE-{persons}",
                     load={"kind": "face_recognition", "persons": persons},
                     fixture_ids=("person-photo",),
+                    prerequisites=(f"FACE-MANAGE-{persons}",),
                 ),
             )
         )
@@ -654,6 +664,7 @@ def default_catalog() -> CampaignCatalog:
             "FACE-PHOTO-RESIDUE",
             load={"kind": "face_photo_residue"},
             fixture_ids=("person-photo",),
+            prerequisites=("FACE-MANAGE-5000", "FACE-RECOGNIZE-5000"),
         )
     )
     previous_gate = _append_phase(cases, online, prerequisite_gate=previous_gate)

@@ -42,6 +42,7 @@ class PersonFixture:
 class FaceManagementBoundary:
     management_instance_count: int = 1
     recognition_instance_count: int = 3
+    recognition_consistency_concurrency: int = 30
     save_person_photo: bool = False
 
     def __post_init__(self) -> None:
@@ -49,6 +50,8 @@ class FaceManagementBoundary:
             raise ValueError("人脸管理请求必须固定转发到单实例")
         if self.recognition_instance_count != 3:
             raise ValueError("人脸识别请求必须使用三实例租约池")
+        if self.recognition_consistency_concurrency <= 0:
+            raise ValueError("人脸事实一致性并发必须为正数")
         if self.save_person_photo:
             raise ValueError("极限负载 Campaign 必须使用 save_person_photo=false")
 
@@ -75,11 +78,12 @@ def build_person_dataset(
     if not case_id:
         raise ValueError("人物用例 ID 不能为空")
     _validate_base64(encoded_photo)
-    dataset_id = person_dataset_id(count)
+    # 三个档位共用同一编号空间，小档位是大档位的稳定前缀。
+    identity_scope = "FACE-DATASET"
     return tuple(
         PersonFixture(
             name=f"压测人物-{index:05d}",
-            number=f"P-{identity.request_id(dataset_id, index)[-18:]}",
+            number=f"P-{identity.request_id(identity_scope, index)[-18:]}",
             photo=encoded_photo,
         )
         for index in range(count)
@@ -140,7 +144,8 @@ class PersonManagementRequestPlan:
 
     def expected_numbers(self, request: HttpRequestSpec) -> tuple[str, ...]:
         if request.work_type == "face_person_list":
-            return tuple(person.number for person in self.persons)
+            # 列表接口只验证分页事实不重复；Campaign 人物由精确搜索和识别验证。
+            return ()
         body = request.json_body
         if request.work_type == "face_person_batch_create":
             raw_persons = body.get("persons") if body is not None else None
@@ -237,22 +242,65 @@ def build_recognition_requests(
     persons: Sequence[PersonFixture],
     *,
     repeats: int,
+    request_id_prefix: str = "person-recognize",
+    work_type: str = "online_face_recognize",
 ) -> tuple[HttpRequestSpec, ...]:
-    if not persons or repeats <= 0:
+    if not persons or repeats <= 0 or not request_id_prefix or not work_type:
         raise ValueError("识别负载必须包含人物且 repeats 为正数")
     return tuple(
         HttpRequestSpec(
-            request_id=f"person-recognize-{index}",
+            request_id=f"{request_id_prefix}-{index}",
             method="POST",
             url=targets.gateway_url("/api/online/face/recognize"),
             json_body={
                 "photo": persons[index % len(persons)].photo,
                 "targets": [persons[index % len(persons)].number],
             },
-            work_type="online_face_recognize",
+            work_type=work_type,
             expected_lease_acquisition=True,
         )
         for index in range(repeats)
+    )
+
+
+@dataclass(frozen=True)
+class PersonRecognitionPlan:
+    expected_matches: tuple[HttpRequestSpec, ...]
+    deleted_absence_checks: tuple[HttpRequestSpec, ...]
+    retained_persons: tuple[PersonFixture, ...]
+    deleted_persons: tuple[PersonFixture, ...]
+
+    @property
+    def requests(self) -> tuple[HttpRequestSpec, ...]:
+        return (*self.expected_matches, *self.deleted_absence_checks)
+
+
+def build_person_recognition_plan(
+    targets: NorthboundTargets,
+    persons: Sequence[PersonFixture],
+    *,
+    recognition_instance_count: int,
+) -> PersonRecognitionPlan:
+    if recognition_instance_count != 3:
+        raise ValueError("人脸识别一致性计划必须覆盖三个实例")
+    partition = partition_person_dataset(persons)
+    expected_matches = build_recognition_requests(
+        targets,
+        partition.retained,
+        repeats=len(partition.retained),
+    )
+    deleted_absence_checks = build_recognition_requests(
+        targets,
+        partition.deleted,
+        repeats=len(partition.deleted),
+        request_id_prefix="person-deleted",
+        work_type="online_face_recognize_deleted",
+    )
+    return PersonRecognitionPlan(
+        expected_matches=expected_matches,
+        deleted_absence_checks=deleted_absence_checks,
+        retained_persons=partition.retained,
+        deleted_persons=partition.deleted,
     )
 
 
@@ -385,7 +433,7 @@ def validate_person_management_response(
         )
     elif request.work_type in {"face_person_list", "face_person_search"}:
         observed = _person_numbers(data.get("persons"))
-        valid = len(observed) == len(set(observed)) and set(expected).issubset(observed)
+        valid = len(observed) == len(set(observed))
         if request.work_type == "face_person_search":
             valid = valid and set(observed) == set(expected)
     elif request.work_type == "face_person_delete":
@@ -414,13 +462,36 @@ def validate_person_recognition_response(
     response: Mapping[str, Any],
     *,
     expected_number: str,
+    expected_present: bool = True,
 ) -> PersonResponseValidation:
     status_code, data, instances, routes = _operator_response(response)
-    observed = () if data is None else _person_numbers(data.get("match"))
-    valid = status_code == 200 and expected_number in observed
+    raw_match = None if data is None else data.get("match")
+    observed = _person_numbers(raw_match)
+    if raw_match is None:
+        raw_fact_count = 0
+    elif isinstance(raw_match, Sequence) and not isinstance(
+        raw_match, (str, bytes, bytearray)
+    ):
+        raw_fact_count = len(raw_match)
+    else:
+        raw_fact_count = -1
+    facts_complete = raw_fact_count == len(observed)
+    facts_unique = facts_complete and len(observed) == len(set(observed))
+    if expected_present:
+        valid = status_code == 200 and facts_unique and expected_number in observed
+        success_reason = "识别结果包含预期 number 且候选事实不重复"
+        failure_reason = "识别结果缺少预期 number 或包含重复事实"
+    else:
+        valid = (
+            status_code in {200, 252}
+            and facts_unique
+            and expected_number not in observed
+        )
+        success_reason = "删除人物 number 未在识别结果中复活"
+        failure_reason = "删除人物 number 在识别结果中复活或响应不合法"
     return PersonResponseValidation(
         valid,
-        "识别结果包含预期 number" if valid else "识别结果缺少预期 number",
+        success_reason if valid else failure_reason,
         1 if valid else 0,
         0 if valid else 1,
         observed_numbers=observed,

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import base64
 import binascii
+from io import BytesIO
 from typing import Any
+
+from PIL import Image, UnidentifiedImageError
 
 JsonObject = dict[str, Any]
 
@@ -35,12 +38,34 @@ def _valid_vbas_image(item: object) -> bool:
         isinstance(image_id, str)
         and bool(image_id)
         and isinstance(encoded, str)
-        and is_base64_image(encoded)
+        and bool(encoded)
     )
 
 
 def is_base64_image(value: str) -> bool:
-    return decoded_base64_size(value) is not None
+    return valid_base64_image(value)
+
+
+def valid_base64_image(
+    value: str,
+    *,
+    max_decoded_bytes: int | None = None,
+    allow_data_uri: bool = True,
+) -> bool:
+    decoded = _decode_base64(
+        value,
+        max_decoded_bytes=max_decoded_bytes,
+        allow_data_uri=allow_data_uri,
+        require_image_data_uri=True,
+    )
+    if decoded is None:
+        return False
+    try:
+        with Image.open(BytesIO(decoded)) as image:
+            image.load()
+    except (Image.DecompressionBombError, UnidentifiedImageError, OSError, ValueError):
+        return False
+    return True
 
 
 def decoded_base64_size(
@@ -49,10 +74,30 @@ def decoded_base64_size(
     max_decoded_bytes: int | None = None,
     allow_data_uri: bool = True,
 ) -> int | None:
+    decoded = _decode_base64(
+        value,
+        max_decoded_bytes=max_decoded_bytes,
+        allow_data_uri=allow_data_uri,
+        require_image_data_uri=False,
+    )
+    return None if decoded is None else len(decoded)
+
+
+def _decode_base64(
+    value: str,
+    *,
+    max_decoded_bytes: int | None,
+    allow_data_uri: bool,
+    require_image_data_uri: bool,
+) -> bytes | None:
     if value.startswith("data:"):
         if not allow_data_uri or "," not in value:
             return None
-        encoded = value.split(",", 1)[1]
+        metadata, encoded = value.split(",", 1)
+        if require_image_data_uri:
+            parts = metadata[5:].lower().split(";")
+            if not parts or not parts[0].startswith("image/") or "base64" not in parts[1:]:
+                return None
     else:
         encoded = value
     if not encoded:
@@ -66,4 +111,4 @@ def decoded_base64_size(
         return None
     if max_decoded_bytes is not None and len(decoded) > max_decoded_bytes:
         return None
-    return len(decoded)
+    return decoded

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Self
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -36,13 +37,19 @@ class FacePersonsConfig(BaseModel):
 
 
 class HttpConfig(BaseModel):
-    max_connections: int = 2048
-    max_keepalive_connections: int = 512
+    max_connections: int = Field(default=2048, gt=0)
+    max_keepalive_connections: int = Field(default=512, gt=0)
     connect_timeout_seconds: float = 5.0
     read_timeout_seconds: float = 60.0
     write_timeout_seconds: float = 60.0
-    pool_timeout_seconds: float = 5.0
+    pool_timeout_seconds: float = Field(default=5.0, gt=0, allow_inf_nan=False)
     hard_timeout_seconds: float = 600.0
+
+    @model_validator(mode="after")
+    def keepalive_connections_must_fit_pool(self) -> Self:
+        if self.max_keepalive_connections > self.max_connections:
+            raise ValueError("保活连接数不能超过总连接数")
+        return self
 
 
 class LeaseConfig(BaseModel):

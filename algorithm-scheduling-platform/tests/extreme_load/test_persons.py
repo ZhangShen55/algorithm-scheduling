@@ -11,6 +11,7 @@ from scripts.extreme_load.persons import (
     ResidueObservation,
     build_person_dataset,
     build_person_management_requests,
+    build_person_recognition_plan,
     build_recognition_requests,
     partition_person_dataset,
     person_dataset_id,
@@ -61,10 +62,40 @@ def test_recognition_requests_use_leased_gateway_route_and_three_instance_pool()
     assert all(request.url.endswith(":18103/api/online/face/recognize") for request in requests)
     assert all(recognition_expected_number(request) == "P-001" for request in requests)
     assert FaceManagementBoundary().recognition_instance_count == 3
+    assert FaceManagementBoundary().recognition_consistency_concurrency == 30
 
 
 def test_person_tiers_are_fixed() -> None:
     assert person_dataset_tiers() == (500, 1000, 5000)
+
+
+def test_person_tiers_share_a_stable_nested_number_space() -> None:
+    identity = ReproducibleIdentity("campaign-persons", 10)
+    tier_500 = build_person_dataset(
+        identity,
+        "FACE-MANAGE-500",
+        count=500,
+        encoded_photo=PHOTO,
+    )
+    tier_1000 = build_person_dataset(
+        identity,
+        "FACE-MANAGE-1000",
+        count=1000,
+        encoded_photo=PHOTO,
+    )
+    tier_5000 = build_person_dataset(
+        identity,
+        "FACE-MANAGE-5000",
+        count=5000,
+        encoded_photo=PHOTO,
+    )
+
+    assert [person.number for person in tier_500] == [
+        person.number for person in tier_1000[:500]
+    ]
+    assert [person.number for person in tier_1000] == [
+        person.number for person in tier_5000[:1000]
+    ]
 
 
 @pytest.mark.parametrize("tier", person_dataset_tiers())
@@ -106,6 +137,30 @@ def test_recognition_selection_excludes_exactly_deleted_person() -> None:
         recognition_expected_number(request) != partition.deleted[0].number
         for request in requests
     )
+
+
+def test_recognition_plan_checks_each_retained_person_once_and_deleted_absence() -> None:
+    persons = tuple(
+        PersonFixture(name=f"人物-{index}", number=f"P-{index}", photo=PHOTO)
+        for index in range(3)
+    )
+
+    plan = build_person_recognition_plan(TARGETS, persons, recognition_instance_count=3)
+
+    assert len(plan.expected_matches) == 2
+    assert len(plan.deleted_absence_checks) == 1
+    assert len(plan.requests) == 3
+    assert {
+        recognition_expected_number(request) for request in plan.expected_matches
+    } == {"P-0", "P-1"}
+    assert {
+        recognition_expected_number(request)
+        for request in plan.deleted_absence_checks
+    } == {"P-2"}
+    assert all(
+        request.expected_lease_acquisition is True for request in plan.requests
+    )
+    assert len({request.request_id for request in plan.requests}) == len(plan.requests)
 
 
 def _gateway_response(status_code: int, data: object) -> dict[str, object]:
@@ -163,6 +218,16 @@ def test_management_response_validates_nested_counts_and_exact_delete() -> None:
         expected_numbers=plan.expected_numbers(plan.delete[0]),
     ).valid
 
+    unrelated_page = _gateway_response(
+        200,
+        {"persons": [{"number": "EXISTING-1"}, {"number": "EXISTING-2"}]},
+    )
+    assert validate_person_management_response(
+        plan.read[0],
+        unrelated_page,
+        expected_numbers=plan.expected_numbers(plan.read[0]),
+    ).valid
+
 
 def test_batch_partial_failure_and_wrong_recognition_number_fail_semantics() -> None:
     persons = tuple(
@@ -187,6 +252,13 @@ def test_batch_partial_failure_and_wrong_recognition_number_fail_semantics() -> 
         _gateway_response(200, {"match": [{"number": "P-expected"}]}),
         expected_number="P-expected",
     ).valid
+    assert validate_person_recognition_response(
+        _gateway_response(
+            200,
+            {"match": [{"number": "P-other"}, {"number": "P-expected"}]},
+        ),
+        expected_number="P-expected",
+    ).valid
     assert not validate_person_recognition_response(
         _gateway_response(200, {"match": [{"number": "P-wrong"}]}),
         expected_number="P-expected",
@@ -194,6 +266,32 @@ def test_batch_partial_failure_and_wrong_recognition_number_fail_semantics() -> 
     assert not validate_person_recognition_response(
         _gateway_response(200, {"match": []}),
         expected_number="P-expected",
+    ).valid
+    assert not validate_person_recognition_response(
+        _gateway_response(
+            200,
+            {"match": [{"number": "P-expected"}, {"number": "P-expected"}]},
+        ),
+        expected_number="P-expected",
+    ).valid
+    assert not validate_person_recognition_response(
+        _gateway_response(200, {"match": [{"number": "P-expected"}, {}]}),
+        expected_number="P-expected",
+    ).valid
+    assert validate_person_recognition_response(
+        _gateway_response(252, {"match": None}),
+        expected_number="P-deleted",
+        expected_present=False,
+    ).valid
+    assert validate_person_recognition_response(
+        _gateway_response(200, {"match": [{"number": "P-other"}]}),
+        expected_number="P-deleted",
+        expected_present=False,
+    ).valid
+    assert not validate_person_recognition_response(
+        _gateway_response(200, {"match": [{"number": "P-deleted"}]}),
+        expected_number="P-deleted",
+        expected_present=False,
     ).valid
 
 

@@ -68,11 +68,9 @@ from .persons import (
     FaceManagementBoundary,
     build_person_dataset,
     build_person_management_requests,
-    build_recognition_requests,
-    partition_person_dataset,
+    build_person_recognition_plan,
     person_dataset_id,
     recognition_expected_number,
-    validate_cross_instance_person_views,
     validate_person_management_response,
     validate_person_recognition_response,
 )
@@ -858,6 +856,7 @@ class CampaignCaseExecutor:
                 "INVALID-B64": "invalid_base64",
                 "BAD-FORMAT": "unsupported_format",
                 "BAD-DATA-URI": "invalid_data_uri",
+                "DECODE-FAIL": "decode_failure",
             }
             if boundary in named:
                 item = negative[named[boundary]]
@@ -1186,24 +1185,29 @@ class CampaignCaseExecutor:
                 },
             )
 
-        partition = partition_person_dataset(persons)
-        requests = build_recognition_requests(
+        boundary = FaceManagementBoundary()
+        recognition_plan = build_person_recognition_plan(
             self.plan.targets,
-            partition.retained,
-            repeats=count,
+            persons,
+            recognition_instance_count=boundary.recognition_instance_count,
         )
+        requests = recognition_plan.requests
         async with self.pool.build_client() as client:
             runner = AsyncLoadRunner(
                 client,
-                max_concurrency=min(1000, count),
+                max_concurrency=min(
+                    boundary.recognition_consistency_concurrency,
+                    count,
+                ),
                 request_timeout_seconds=min(case.timeout_seconds, 900),
             )
             results = await runner.run(requests)
         http_outcome = _http_outcome(requests, results, allow_overload=False)
         request_by_id = {request.request_id: request for request in requests}
         validations = []
+        expected_match_valid_count = 0
+        deleted_absence_valid_count = 0
         failures: list[str] = []
-        instance_views: dict[str, set[str]] = {}
         for result in results:
             request = request_by_id.get(result.request_id)
             response = result.evidence.get("response")
@@ -1215,34 +1219,35 @@ class CampaignCaseExecutor:
                 failures.append(result.request_id)
                 continue
             expected_number = recognition_expected_number(request)
+            expected_present = request.work_type != "online_face_recognize_deleted"
             validation = validate_person_recognition_response(
                 response,
                 expected_number=expected_number,
+                expected_present=expected_present,
             )
             validations.append(validation)
             if not validation.valid:
                 failures.append(f"{result.request_id}:{validation.reason}")
-            for instance_id in validation.instance_ids:
-                instance_views.setdefault(instance_id, set()).add(expected_number)
-        expected_numbers = tuple(person.number for person in partition.retained)
-        consistency = validate_cross_instance_person_views(
-            {
-                instance_id: tuple(sorted(numbers))
-                for instance_id, numbers in instance_views.items()
-            },
-            expected_numbers,
+            elif expected_present:
+                expected_match_valid_count += 1
+            else:
+                deleted_absence_valid_count += 1
+        person_fact_consistent = (
+            http_outcome.status == "passed"
+            and not failures
+            and expected_match_valid_count == len(recognition_plan.retained_persons)
+            and deleted_absence_valid_count == len(recognition_plan.deleted_persons)
         )
         categories, latency = _result_summary(results)
-        boundary = FaceManagementBoundary()
         return CaseRunOutcome(
             "failed" if http_outcome.status != "passed" or failures else "passed",
             (
                 http_outcome.reason
                 if http_outcome.status != "passed"
                 else (
-                    "识别响应缺少预期 number"
+                    "识别响应的人物事实不完整或不唯一"
                     if failures
-                    else "所有识别响应均包含各自预期 number"
+                    else "北向识别响应覆盖全部保留人物且删除人物未复活"
                 )
             ),
             len(results),
@@ -1251,39 +1256,58 @@ class CampaignCaseExecutor:
             extra={
                 "dataset_id": person_dataset_id(count),
                 "dataset_person_count": len(persons),
-                "retained_person_count": len(partition.retained),
-                "deleted_person_count": len(partition.deleted),
+                "retained_person_count": len(recognition_plan.retained_persons),
+                "deleted_person_count": len(recognition_plan.deleted_persons),
                 "recognition_instance_count": boundary.recognition_instance_count,
+                "recognition_consistency_concurrency": (
+                    boundary.recognition_consistency_concurrency
+                ),
                 "request_summary": {
                     "request_count": len(requests),
                     "route": "/api/online/face/recognize",
                     "unique_expected_number_count": len(
-                        {recognition_expected_number(request) for request in requests}
+                        {
+                            recognition_expected_number(request)
+                            for request in recognition_plan.expected_matches
+                        }
                     ),
-                    "deleted_target_count": sum(
-                        recognition_expected_number(request)
-                        in {person.number for person in partition.deleted}
-                        for request in requests
+                    "deleted_target_count": len(
+                        recognition_plan.deleted_absence_checks
                     ),
                 },
                 "result_summary": {
                     "request_count": len(results),
                     "categories": categories,
-                    "matched_expected_count": sum(item.valid for item in validations),
+                    "matched_expected_count": expected_match_valid_count,
+                    "deleted_absence_validated_count": deleted_absence_valid_count,
                     "invalid_response_count": len(failures),
-                    "observed_instance_ids": sorted(instance_views),
+                    "observed_instance_ids": sorted(
+                        {
+                            instance_id
+                            for item in validations
+                            for instance_id in item.instance_ids
+                        }
+                    ),
                     "response_routes": sorted(
                         {route for item in validations for route in item.response_routes}
                     ),
                 },
-                "instance_consistency": {
-                    "status": "proven" if consistency.consistent else "pending_unproven",
+                "person_fact_consistency": {
+                    "status": "passed" if person_fact_consistent else "failed",
                     "reason": (
-                        "三个实例均观察到完整保留人物集合"
-                        if consistency.consistent
-                        else consistency.reason
+                        "北向识别响应覆盖全部保留 number，删除 number 未返回，且响应事实唯一完整"
+                        if person_fact_consistent
+                        else "北向识别响应的人物事实不完整或不唯一"
                     ),
-                    "observed_instance_count": len(instance_views),
+                    "expected_retained_number_count": len(
+                        recognition_plan.retained_persons
+                    ),
+                    "recognized_retained_number_count": expected_match_valid_count,
+                    "expected_deleted_absence_count": len(
+                        recognition_plan.deleted_persons
+                    ),
+                    "validated_deleted_absence_count": deleted_absence_valid_count,
+                    "invalid_response_count": len(failures),
                 },
             },
         )

@@ -5,10 +5,16 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from typing import Any
 
+import httpx
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
+
+
 def test_service_has_complete_fastapi_project_layout() -> None:
     for relative_path in (
         "app/__init__.py",
@@ -115,7 +121,7 @@ def test_every_toml_field_has_an_adjacent_chinese_comment() -> None:
 
 def test_settings_precedence_is_defaults_then_toml_then_environment(
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.core.config import OnlineGatewaySettings
 
@@ -145,3 +151,63 @@ def test_gateway_defaults_target_the_control_service_port() -> None:
     assert settings.http.max_connections == 2048
     assert settings.http.max_keepalive_connections == 512
     assert settings.http.pool_timeout_seconds > 0
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"max_connections": 0},
+        {"max_connections": -1},
+        {"max_keepalive_connections": 0},
+        {"max_keepalive_connections": -1},
+        {"max_connections": 10, "max_keepalive_connections": 11},
+        {"pool_timeout_seconds": 0.0},
+        {"pool_timeout_seconds": -1.0},
+        {"pool_timeout_seconds": float("nan")},
+        {"pool_timeout_seconds": float("inf")},
+        {"pool_timeout_seconds": float("-inf")},
+    ],
+)
+def test_http_pool_configuration_rejects_invalid_bounds(
+    overrides: dict[str, object],
+) -> None:
+    from app.core.config import HttpConfig
+
+    with pytest.raises(ValidationError):
+        HttpConfig.model_validate(overrides)
+
+
+def test_gateway_applies_configured_http_pool_limits_and_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api.routes import create_online_gateway_app
+    from app.core.config import HttpConfig, OnlineGatewaySettings
+
+    real_async_client = httpx.AsyncClient
+    captured: dict[str, Any] = {}
+
+    def recording_async_client(*args: object, **kwargs: Any) -> httpx.AsyncClient:
+        captured.update(kwargs)
+        return real_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", recording_async_client)
+    app = create_online_gateway_app(
+        OnlineGatewaySettings(
+            http=HttpConfig(
+                max_connections=2048,
+                max_keepalive_connections=512,
+                pool_timeout_seconds=3.25,
+            )
+        )
+    )
+
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
+
+    limits = captured["limits"]
+    timeout = captured["timeout"]
+    assert isinstance(limits, httpx.Limits)
+    assert limits.max_connections == 2048
+    assert limits.max_keepalive_connections == 512
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.pool == 3.25

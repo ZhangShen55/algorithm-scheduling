@@ -91,6 +91,218 @@ _RUNTIME_SUMMARY_REQUIRED_KEYS = frozenset(
         "target_directory_bytes_delta",
     }
 )
+_PRELEASE_IMAGE_REJECTION_BOUNDARIES = frozenset(
+    {"OVER-50M", "INVALID-B64", "BAD-FORMAT", "BAD-DATA-URI", "DECODE-FAIL"}
+)
+_ACCEPTED_IMAGE_BOUNDARIES = frozenset({"512K", "5M", "49M"})
+_FACEREC_INSTANCE_IDS = frozenset(
+    {"facerec-gpu0", "facerec-gpu1", "facerec-gpu2"}
+)
+
+
+def _runtime_metric_summary(outcome: StageCaseOutcome) -> Mapping[str, object] | None:
+    value = outcome.evidence.get("runtime_metrics")
+    return value if isinstance(value, Mapping) else None
+
+
+def _counter_values(summary: Mapping[str, object]) -> dict[str, int] | None:
+    raw = summary.get("gateway_delta")
+    if not isinstance(raw, Mapping):
+        return None
+    names = (
+        "requests_total",
+        "lease_acquired_total",
+        "lease_rejected_total",
+        "lease_released_total",
+    )
+    if any(type(raw.get(name)) is not int or raw[name] < 0 for name in names):
+        return None
+    return {name: cast(int, raw[name]) for name in names}
+
+
+def _instance_request_values(summary: Mapping[str, object]) -> dict[str, int] | None:
+    raw = summary.get("gateway_instance_request_delta")
+    if not isinstance(raw, Mapping):
+        return None
+    if any(
+        not isinstance(instance_id, str)
+        or not instance_id
+        or type(value) is not int
+        or value < 0
+        for instance_id, value in raw.items()
+    ):
+        return None
+    return {str(instance_id): cast(int, value) for instance_id, value in raw.items()}
+
+
+def _image_boundary_observation(
+    case: CaseSpec,
+    metrics_outcome: StageCaseOutcome,
+) -> dict[str, object] | None:
+    if case.load.get("kind") != "image_boundary":
+        return None
+    boundary = case.load.get("boundary")
+    if not isinstance(boundary, str) or boundary not in (
+        _PRELEASE_IMAGE_REJECTION_BOUNDARIES | _ACCEPTED_IMAGE_BOUNDARIES
+    ):
+        return {
+            "status": "failed",
+            "reason": "图片边界配置不属于权威集合",
+        }
+    summary = _runtime_metric_summary(metrics_outcome)
+    counters = None if summary is None else _counter_values(summary)
+    instances = None if summary is None else _instance_request_values(summary)
+    expected_acquisitions = 0 if boundary in _PRELEASE_IMAGE_REJECTION_BOUNDARIES else 1
+    evidence: dict[str, object] = {
+        "boundary": boundary,
+        "expected_lease_acquisitions": expected_acquisitions,
+        "observed_lease_acquisitions": (
+            None if counters is None else counters["lease_acquired_total"]
+        ),
+        "observed_operator_requests": (
+            None if counters is None else counters["requests_total"]
+        ),
+    }
+    if counters is None or instances is None:
+        return {
+            **evidence,
+            "status": "failed",
+            "reason": "图片边界缺少完整 Gateway 租约累计差值",
+        }
+    if expected_acquisitions == 0:
+        valid = not any(counters.values()) and not any(instances.values())
+        reason = (
+            "拒绝请求未申请租约且未调用算子"
+            if valid
+            else "拒绝请求产生了租约或算子调用"
+        )
+    else:
+        valid = (
+            counters
+            == {
+                "requests_total": 1,
+                "lease_acquired_total": 1,
+                "lease_rejected_total": 0,
+                "lease_released_total": 1,
+            }
+            and sum(instances.values()) == 1
+        )
+        reason = (
+            "合法边界请求取得并释放一个租约"
+            if valid
+            else "合法边界请求的租约或算子调用累计差值不符合预期"
+        )
+    return {**evidence, "status": "passed" if valid else "failed", "reason": reason}
+
+
+def _face_instance_observation(
+    case: CaseSpec,
+    business_document: Mapping[str, object],
+    metrics_outcome: StageCaseOutcome,
+) -> dict[str, object] | None:
+    if case.load.get("kind") != "face_recognition":
+        return None
+    persons = case.load.get("persons")
+    if type(persons) is not int or persons not in {500, 1000, 5000}:
+        return {"status": "failed", "reason": "FaceRec 人数档位不合法"}
+    expected_requests = persons
+    summary = _runtime_metric_summary(metrics_outcome)
+    counters = None if summary is None else _counter_values(summary)
+    instances = None if summary is None else _instance_request_values(summary)
+    extra = business_document.get("extra")
+    raw_person_facts = (
+        extra.get("person_fact_consistency") if isinstance(extra, Mapping) else None
+    )
+    expected_retained = (
+        raw_person_facts.get("expected_retained_number_count")
+        if isinstance(raw_person_facts, Mapping)
+        else None
+    )
+    recognized_retained = (
+        raw_person_facts.get("recognized_retained_number_count")
+        if isinstance(raw_person_facts, Mapping)
+        else None
+    )
+    expected_deleted_absence = (
+        raw_person_facts.get("expected_deleted_absence_count")
+        if isinstance(raw_person_facts, Mapping)
+        else None
+    )
+    validated_deleted_absence = (
+        raw_person_facts.get("validated_deleted_absence_count")
+        if isinstance(raw_person_facts, Mapping)
+        else None
+    )
+    invalid_responses = (
+        raw_person_facts.get("invalid_response_count")
+        if isinstance(raw_person_facts, Mapping)
+        else None
+    )
+    person_facts_valid = (
+        isinstance(raw_person_facts, Mapping)
+        and raw_person_facts.get("status") == "passed"
+        and expected_retained == persons - 1
+        and recognized_retained == persons - 1
+        and expected_deleted_absence == 1
+        and validated_deleted_absence == 1
+        and invalid_responses == 0
+    )
+    positive_instances = (
+        None
+        if instances is None
+        else {instance_id: count for instance_id, count in instances.items() if count > 0}
+    )
+    routing_valid = (
+        counters
+        == {
+            "requests_total": expected_requests,
+            "lease_acquired_total": expected_requests,
+            "lease_rejected_total": 0,
+            "lease_released_total": expected_requests,
+        }
+        and positive_instances is not None
+        and set(positive_instances) == _FACEREC_INSTANCE_IDS
+        and sum(positive_instances.values()) == expected_requests
+    )
+    person_fact_observation = {
+        "status": "passed" if person_facts_valid else "failed",
+        "reason": (
+            "北向识别结果覆盖全部保留 number，删除 number 未返回，且无重复或部分事实"
+            if person_facts_valid
+            else "北向人物事实一致性证据不完整"
+        ),
+        "expected_retained_number_count": persons - 1,
+        "recognized_retained_number_count": recognized_retained,
+        "expected_deleted_absence_count": 1,
+        "validated_deleted_absence_count": validated_deleted_absence,
+        "invalid_response_count": invalid_responses,
+    }
+    routing_observation = {
+        "status": "passed" if routing_valid else "failed",
+        "reason": (
+            "Gateway 累计差值证明三个固定 FaceRec 识别实例均参与随机租约路由；计数不关联人物与实例"
+            if routing_valid
+            else "Gateway 租约累计差值未证明三个固定 FaceRec 识别实例均参与路由"
+        ),
+        "expected_instance_ids": sorted(_FACEREC_INSTANCE_IDS),
+        "expected_request_count": expected_requests,
+        "observed_gateway_counters": {} if counters is None else counters,
+        "observed_instance_request_count": (
+            {} if positive_instances is None else positive_instances
+        ),
+    }
+    valid = person_facts_valid and routing_valid
+    return {
+        "status": "passed" if valid else "failed",
+        "reason": (
+            "北向人物事实一致性与 Gateway 三实例路由参与证据分别通过"
+            if valid
+            else "北向人物事实一致性或 Gateway 三实例路由参与证据不完整"
+        ),
+        "dataset_person_count": persons,
+        "person_fact_consistency": person_fact_observation,
+        "recognition_routing_participation": routing_observation,
+    }
 
 
 class CoordinatorBlockedError(RuntimeError):
@@ -696,6 +908,20 @@ class CampaignCoordinator:
             final_reason = f"后置护栏为 {after.level.value}，用例不得保持 passed: " + "；".join(
                 after.reasons
             )
+        lease_boundary_observation = _image_boundary_observation(case, metrics_outcome)
+        face_instance_observation = _face_instance_observation(
+            case,
+            business_document,
+            metrics_outcome,
+        )
+        for observation in (lease_boundary_observation, face_instance_observation):
+            if (
+                final_status == "passed"
+                and observation is not None
+                and observation.get("status") != "passed"
+            ):
+                final_status = "failed"
+                final_reason = str(observation.get("reason", "运行时一致性证据不完整"))
         document = dict(business_document)
         document.update(
             {
@@ -713,6 +939,10 @@ class CampaignCoordinator:
                 },
             }
         )
+        if lease_boundary_observation is not None:
+            document["lease_boundary_observation"] = lease_boundary_observation
+        if face_instance_observation is not None:
+            document["face_instance_observation"] = face_instance_observation
         validate_public_payload(document)
         output = execution_path(self.release_root, self.plan, case.case_id)
         atomic_write_report(

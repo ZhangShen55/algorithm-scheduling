@@ -2,14 +2,23 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
 import pytest
 from app.api.routes import create_online_gateway_app
-from app.core.config import HttpConfig, OnlineGatewaySettings
+from app.core.config import FacePersonsConfig, HttpConfig, OnlineGatewaySettings
+from app.infrastructure.capacity import CapacityLease
 from app.infrastructure.persons import FacePersonClient
 from fastapi.testclient import TestClient
+
+VALID_PNG = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
+    "AAAAASUVORK5CYII="
+)
 
 JsonObject = dict[str, Any]
 
@@ -44,6 +53,30 @@ class LeaseClientMustNotBeUsed:
     def acquire(self, *args: object, **kwargs: object) -> None:
         del args, kwargs
         raise AssertionError("人物管理请求不应申请推理容量租约")
+
+
+class SequentialRecognitionLeaseClient:
+    def __init__(self, service_urls: list[str]) -> None:
+        self._service_urls = iter(service_urls)
+        self.capabilities: list[str] = []
+
+    @asynccontextmanager
+    async def acquire(
+        self,
+        capability: str,
+        **kwargs: object,
+    ) -> AsyncIterator[CapacityLease]:
+        del kwargs
+        self.capabilities.append(capability)
+        service_url = next(self._service_urls)
+        instance_id = service_url.rsplit("-", 1)[-1].split(".", 1)[0]
+        yield CapacityLease(
+            lease_id=f"lease-{instance_id}",
+            instance_id=f"facerec-{instance_id}",
+            capability=capability,
+            service_url=service_url,
+            expires_at=datetime.now(UTC) + timedelta(minutes=1),
+        )
 
 
 @pytest.mark.parametrize(
@@ -168,6 +201,99 @@ def test_person_client_maps_methods_paths_and_query_parameters() -> None:
         ("POST", "/persons/search", {"name": "甲"}, {}),
         ("DELETE", "/persons/delete", {"id": "person-1"}, {}),
     ]
+
+
+def test_all_person_management_routes_use_one_configured_instance() -> None:
+    upstream_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        upstream_urls.append(str(request.url))
+        return httpx.Response(
+            200,
+            json={"status_code": 200, "message": "ok", "data": {}},
+        )
+
+    app = create_online_gateway_app(
+        OnlineGatewaySettings(
+            face_persons=FacePersonsConfig(
+                base_url="http://facerec-management:8000"
+            )
+        )
+    )
+    operator_http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    app.state.face_person_client = FacePersonClient(
+        operator_http,
+        base_url=app.state.service_settings.face_persons.base_url,
+        hard_timeout_seconds=1,
+    )
+    app.state.online_lease_client = LeaseClientMustNotBeUsed()
+    try:
+        with TestClient(app) as client:
+            responses = [
+                client.post("/api/online/face/persons", json={"number": "1"}),
+                client.post(
+                    "/api/online/face/persons/batch",
+                    json={"persons": [{"number": "1"}]},
+                ),
+                client.get("/api/online/face/persons"),
+                client.post(
+                    "/api/online/face/persons/search",
+                    json={"number": "1"},
+                ),
+                client.request(
+                    "DELETE",
+                    "/api/online/face/persons/delete",
+                    json={"id": "person-1"},
+                ),
+            ]
+    finally:
+        asyncio.run(operator_http.aclose())
+
+    assert all(response.json()["code"] == 0 for response in responses)
+    assert [httpx.URL(url).host for url in upstream_urls] == [
+        "facerec-management"
+    ] * 5
+    assert [httpx.URL(url).path for url in upstream_urls] == [
+        "/persons",
+        "/persons/batch",
+        "/persons",
+        "/persons/search",
+        "/persons/delete",
+    ]
+
+
+def test_face_recognition_follows_each_capacity_lease_instance() -> None:
+    upstream_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        upstream_urls.append(str(request.url))
+        return httpx.Response(200, json={"matched": True})
+
+    service_urls = [
+        "http://facerec-gpu0.test:8000",
+        "http://facerec-gpu1.test:8000",
+        "http://facerec-gpu2.test:8000",
+    ]
+    lease_client = SequentialRecognitionLeaseClient(service_urls)
+    app = create_online_gateway_app()
+    operator_http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    app.state.online_http_client = operator_http
+    app.state.online_lease_client = lease_client
+    try:
+        with TestClient(app) as client:
+            responses = [
+                client.post(
+                    "/api/online/face/recognize",
+                    json={"photo": f"data:image/png;base64,{VALID_PNG}"},
+                )
+                for _ in service_urls
+            ]
+    finally:
+        asyncio.run(operator_http.aclose())
+
+    assert all(response.json()["code"] == 0 for response in responses)
+    assert lease_client.capabilities == ["recognize"] * 3
+    assert upstream_urls == [f"{service_url}/recognize" for service_url in service_urls]
 
 
 @pytest.mark.parametrize(

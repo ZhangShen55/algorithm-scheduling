@@ -116,6 +116,20 @@ def test_invalid_base64_is_rejected_before_request_generation() -> None:
     assert all(request.expected_business_rejection for request in requests)
     assert all(request.expected_lease_acquisition is False for request in requests)
 
+    by_name = {case.name: case for case in cases}
+    assert set(by_name) == {
+        "invalid_base64",
+        "unsupported_format",
+        "invalid_data_uri",
+        "decode_failure",
+    }
+    corrupt = OnlineImageFixture(
+        image_id="corrupt-png",
+        encoded=by_name["decode_failure"].encoded,
+    )
+    assert corrupt.supported_format is True
+    assert corrupt.decoded_bytes < 512 * 1024
+
 
 def test_required_gateway_pool_contract_is_explicit() -> None:
     requirement = GatewayPoolRequirement()

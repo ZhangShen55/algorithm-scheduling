@@ -50,6 +50,11 @@ import os
 import stat
 import sys
 
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib
+
 
 MEDIA_MARKERS = (
     b"data:image/",
@@ -134,6 +139,7 @@ result = {
     "log_symlinks": 0,
     "log_sensitive_marker_files": 0,
     "log_forbidden_digest_matches": 0,
+    "save_person_photo_false": None,
 }
 for root in payload["photo_paths"]:
     if os.path.exists(root):
@@ -157,6 +163,16 @@ for root in payload["log_paths"]:
             result["log_sensitive_marker_files"] += 1
         if os.path.getsize(path) == expected_size and sha256_file(path) == expected_sha256:
             result["log_forbidden_digest_matches"] += 1
+if payload.get("verify_save_person_photo") is True:
+    config_path = os.environ.get("CONFIG_PATH")
+    if not config_path or not os.path.isabs(config_path):
+        raise RuntimeError("facerec config path is unavailable")
+    with open(config_path, "rb") as stream:
+        config = tomllib.load(stream)
+    image = config.get("image")
+    result["save_person_photo_false"] = (
+        isinstance(image, dict) and image.get("save_person_photo") is False
+    )
 print(json.dumps(result, sort_keys=True))
 """
 
@@ -218,6 +234,9 @@ if set(payload) != {
     "mongodb_container_id",
     "mongodb_database",
     "mongodb_collection",
+    "online_gateway_compose_project",
+    "online_gateway_compose_service",
+    "online_gateway_container_id",
     "container_photo_paths",
     "container_log_paths",
     "persistent_paths",
@@ -240,6 +259,9 @@ if SAFE_IDENTITY.fullmatch(facerec_project) is None:
 totals = {
     "facerec_container_count": 0,
     "facerec_identity_verified_count": 0,
+    "facerec_save_person_photo_false_count": 0,
+    "online_gateway_container_count": 0,
+    "online_gateway_identity_verified_count": 0,
     "container_photo_paths_observed": 0,
     "container_photo_paths_existing": 0,
     "container_photo_regular_files": 0,
@@ -262,12 +284,16 @@ for service in ("facerec-gpu0", "facerec-gpu1", "facerec-gpu2"):
         "log_paths": payload["container_log_paths"],
         "person_photo_sha256": payload["person_photo_sha256"],
         "person_photo_size_bytes": payload["person_photo_size_bytes"],
+        "verify_save_person_photo": True,
     })
     scan_raw = checked(
         ["docker", "exec", "-i", container_id, "python3", "-c", INNER_SCAN],
         input_text=scan_payload,
     )
     scan = json.loads(scan_raw)
+    if scan.get("save_person_photo_false") is not True:
+        raise RuntimeError("facerec save_person_photo is not false")
+    totals["facerec_save_person_photo_false_count"] += 1
     for source, target in (
         ("photo_paths_observed", "container_photo_paths_observed"),
         ("photo_paths_existing", "container_photo_paths_existing"),
@@ -285,6 +311,38 @@ for service in ("facerec-gpu0", "facerec-gpu1", "facerec-gpu2"):
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise RuntimeError("container observation count is invalid")
         totals[target] += value
+
+gateway_id = payload["online_gateway_container_id"]
+inspect_container(
+    gateway_id,
+    payload["online_gateway_compose_project"],
+    payload["online_gateway_compose_service"],
+)
+totals["online_gateway_container_count"] = 1
+totals["online_gateway_identity_verified_count"] = 1
+gateway_scan_raw = checked(
+    ["docker", "exec", "-i", gateway_id, "python3", "-c", INNER_SCAN],
+    input_text=json.dumps({
+        "photo_paths": [],
+        "log_paths": payload["container_log_paths"],
+        "person_photo_sha256": payload["person_photo_sha256"],
+        "person_photo_size_bytes": payload["person_photo_size_bytes"],
+        "verify_save_person_photo": False,
+    }),
+)
+gateway_scan = json.loads(gateway_scan_raw)
+for source, target in (
+    ("log_paths_observed", "log_paths_observed"),
+    ("log_paths_existing", "log_paths_existing"),
+    ("log_regular_files", "log_regular_files"),
+    ("log_symlinks", "log_symlinks"),
+    ("log_sensitive_marker_files", "log_sensitive_marker_files"),
+    ("log_forbidden_digest_matches", "log_forbidden_digest_matches"),
+):
+    value = gateway_scan.get(source)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise RuntimeError("gateway log observation count is invalid")
+    totals[target] += value
 
 mongodb_id = payload["mongodb_container_id"]
 mongodb_record = inspect_container(
@@ -400,6 +458,9 @@ class FacePhotoResidueRemoteDocument(BaseModel):
     schema_version: int
     facerec_container_count: int = Field(ge=0)
     facerec_identity_verified_count: int = Field(ge=0)
+    facerec_save_person_photo_false_count: int = Field(ge=0)
+    online_gateway_container_count: int = Field(ge=0)
+    online_gateway_identity_verified_count: int = Field(ge=0)
     container_photo_paths_observed: int = Field(ge=0)
     container_photo_paths_existing: int = Field(ge=0)
     container_photo_regular_files: int = Field(ge=0)
@@ -484,6 +545,9 @@ class SshFacePhotoResidueAdapter:
         mongodb_container_id: str,
         mongodb_database: str,
         mongodb_collection: str,
+        online_gateway_compose_project: str,
+        online_gateway_compose_service: str,
+        online_gateway_container_id: str,
         container_photo_paths: Sequence[str],
         container_log_paths: Sequence[str],
         persistent_paths: Sequence[str],
@@ -511,7 +575,11 @@ class SshFacePhotoResidueAdapter:
         frozen_ids = dict(facerec_container_ids)
         if tuple(sorted(frozen_ids)) != tuple(sorted(_FACEREC_SERVICES)):
             raise ValueError("FaceRec 容器必须精确覆盖 gpu0/gpu1/gpu2")
-        all_ids = (*frozen_ids.values(), mongodb_container_id)
+        all_ids = (
+            *frozen_ids.values(),
+            mongodb_container_id,
+            online_gateway_container_id,
+        )
         if any(_CONTAINER_ID.fullmatch(value) is None for value in all_ids):
             raise ValueError("残留探针必须使用完整容器 ID")
         if len(all_ids) != len(set(all_ids)):
@@ -558,6 +626,9 @@ class SshFacePhotoResidueAdapter:
             "mongodb_container_id": mongodb_container_id,
             "mongodb_database": mongodb_database,
             "mongodb_collection": mongodb_collection,
+            "online_gateway_compose_project": online_gateway_compose_project,
+            "online_gateway_compose_service": online_gateway_compose_service,
+            "online_gateway_container_id": online_gateway_container_id,
             "container_photo_paths": list(self._photo_paths),
             "container_log_paths": list(self._log_paths),
             "persistent_paths": list(self._persistent_paths),
@@ -581,7 +652,8 @@ class SshFacePhotoResidueAdapter:
             fixture_evidence_id=self._fixture_evidence_id,
             observation_binding_sha256=self._binding_sha256,
             expected_container_count=len(_FACEREC_SERVICES),
-            expected_log_observations=len(_FACEREC_SERVICES) * len(self._log_paths),
+            expected_log_observations=(len(_FACEREC_SERVICES) + 1)
+            * len(self._log_paths),
             expected_persistent_observations=len(self._persistent_paths),
             document=document,
         )
@@ -623,11 +695,15 @@ class SshFacePhotoResidueAdapter:
         observations_complete = (
             document.facerec_container_count == len(_FACEREC_SERVICES)
             and document.facerec_identity_verified_count == len(_FACEREC_SERVICES)
+            and document.facerec_save_person_photo_false_count
+            == len(_FACEREC_SERVICES)
+            and document.online_gateway_container_count == 1
+            and document.online_gateway_identity_verified_count == 1
             and document.mongodb_identity_verified
             and document.container_photo_paths_observed
             == len(_FACEREC_SERVICES) * len(self._photo_paths)
             and document.log_paths_observed
-            == len(_FACEREC_SERVICES) * len(self._log_paths)
+            == (len(_FACEREC_SERVICES) + 1) * len(self._log_paths)
             and document.log_paths_existing == document.log_paths_observed
             and document.persistent_paths_observed == len(self._persistent_paths)
             and document.persistent_paths_existing == document.persistent_paths_observed
