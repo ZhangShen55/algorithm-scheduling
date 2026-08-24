@@ -56,8 +56,23 @@
 - **THEN** 计划校验 MUST 失败关闭并不允许执行任何删除
 
 #### Scenario: 禁止宽泛 prune
-- **WHEN** 操作请求尝试通过 prune 或宽泛名称/标签匹配执行发布清理
+- **WHEN** 操作请求尝试通过 `docker system prune`、`docker image prune` 或宽泛名称/标签匹配执行发布清理
 - **THEN** 清理入口 SHALL 拒绝该请求并要求提供经 dry-run 审核的完整 ID 计划
+
+### Requirement: 磁盘门禁未解除时允许受控清理 BuildKit 缓存
+发布清理系统 MUST 仅在精确镜像计划执行完成、实际文件系统仍低于构建警戒线且
+`docker buildx du` 证明 BuildKit 持有可回收缓存时，允许发布人员在用户对本次操作逐次明确
+授权后执行
+`docker buildx prune --all --force --keep-storage 100GB`。该例外 SHALL 只作用于可重新构建的
+BuildKit 缓存，不得删除镜像、容器、卷、模型、Git、`/data/result` 或历史 release 证据。
+
+#### Scenario: 已授权缓存清理解除磁盘门禁
+- **WHEN** 精确镜像删除结果为 `PASS`、磁盘仍低于警戒线、缓存前置证据已落盘且用户批准本次固定命令
+- **THEN** 系统 SHALL 执行固定 BuildKit 命令，记录缓存、文件系统、Docker、镜像与容器前后证据，并在缓存操作前后镜像集合零减少、当前发布/回滚/基础镜像、运行容器、NVIDIA Runtime 和三张 GPU 复核通过后重新判定磁盘门禁；缓存操作开始前已经存在的外部状态漂移必须单独报告
+
+#### Scenario: 缓存清理仍不足以越过警戒线
+- **WHEN** 已批准命令成功完成但根盘仍低于 15% 或 150 GiB
+- **THEN** 发布流程 MUST 保留清理结果、继续阻断构建，并要求新的空间方案，不得自动扩大到镜像、卷或持久数据清理
 
 ### Requirement: 清理结果必须可追溯且不能伪造成功
 发布清理系统 SHALL 为每个删除目标记录完整 ID、删除前快照摘要、执行时间、成功/失败、错误原因和删除后二次验证，并记录 `docker system df` 前后差异。任一目标删除失败 MUST 保留原始状态并使清理阶段不符合。

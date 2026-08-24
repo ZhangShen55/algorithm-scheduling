@@ -1691,6 +1691,25 @@
   Build Cache；在获得缓存清理授权并补充可审核边界前，任务 11.2 保持未完成，禁止进入 11.3
   镜像构建。
 
+## 2026-08-24 - 已授权 BuildKit 缓存清理解除磁盘门禁
+
+- 用户明确批准固定命令 `docker buildx prune --all --force --keep-storage 100GB`。OpenSpec、
+  部署手册与 Harness 已补充“仅清理可重建缓存、逐次授权、前后证据、发布边界复核”的例外；
+  `docker system prune`、`docker image prune`、容器、卷、模型、Git、`/data/result` 和历史证据
+  仍不在授权范围。
+- 远端当前 release 的 `cleanup/` 已记录 `df -B1 /`、`docker system df`、`docker buildx du`、
+  镜像完整 ID、运行容器、Runtime、GPU 和摘要。命令退出码为零，Build Cache 从
+  `308.2GB` 总可回收降至 `162GB`，其中 private cache 从 `249.7GB` 降至 `127.4GB`。
+- 根盘实际可用空间升至 `249091776512` 字节，即 231.98 GiB/15.35%，同时越过 150 GiB 和
+  15% 警戒线。缓存操作开始时和结束后的 76 个镜像完整 ID、8 个运行容器清单逐字节一致；
+  四平台和四中间件为 8/8 healthy，NVIDIA Runtime 容器探针可见 3/3 GPU。
+- 原精确镜像计划的 37 个保护项中，`vllm/vllm-openai:v0.9.2` 在缓存操作开始前已经缺失；
+  同期其停止容器 `vllm-qwen3-8b` 及两个无关镜像也已被外部操作移除。该镜像仅因停止容器引用
+  进入保护集，不属于当前 11 镜像、回滚 11 镜像或 3 个基础镜像；这三个发布集合均零缺失。
+  清理前后清单证明该漂移不是本次 BuildKit 命令产生，且没有回滚用户/外部状态。
+- 任务 11.2 完成。后续 11.3 必须先把本轮 OpenSpec/Harness 修订提交为新的 clean 完整 Git SHA，
+  让目标机切换到该 SHA 后再构建 11 个镜像。
+
 ## Record template
 
 - Date and scope:
