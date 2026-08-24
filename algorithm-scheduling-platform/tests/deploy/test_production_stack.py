@@ -82,6 +82,12 @@ def test_start_plan_uses_persistent_stages_not_canonical_restore() -> None:
     assert "run-milestone-2b-8a7" not in rendered
     assert "down" not in rendered
     assert "--remove-orphans" not in rendered
+    assert plan[1].command == (
+        str(PROJECT_ROOT / "deploy/scripts/apply-database-migrations"),
+        "--git-sha",
+        "a" * 40,
+        "--adopt-existing",
+    )
     full_readiness = plan[-1].command
     assert full_readiness.count("--git-sha") == 1
 

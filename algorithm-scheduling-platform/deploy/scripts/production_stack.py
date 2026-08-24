@@ -146,6 +146,7 @@ def build_start_plan(
                 str(scripts / "apply-database-migrations"),
                 "--git-sha",
                 git_sha,
+                "--adopt-existing",
             ),
         ),
         CommandStep(

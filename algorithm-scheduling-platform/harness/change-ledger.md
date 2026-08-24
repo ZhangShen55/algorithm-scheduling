@@ -1729,6 +1729,57 @@
 - BuildKit 当前仍报告约 169.3 GB 可回收、其中 private cache 约 127.4 GB。OpenSpec 要求缓存
   清理逐次获得明确授权；本条只记录门禁停止，没有重复执行缓存清理，也没有降低磁盘门禁。
 
+## 2026-08-25 - 二次受控缓存清理与 11 镜像构建通过
+
+- 用户逐次批准再次执行固定命令 `docker buildx prune --all --force --keep-storage 100GB`。
+  当前 release 在执行前后分别保存根盘、BuildKit、Docker、78 个完整镜像 ID、8 个运行容器、
+  Runtime 和 3 个 GPU 的 `0600` 证据；命令退出码为零，stderr 为空，报告回收 20.45 GB。
+- 清理前后 78 个普通镜像 ID、8 个运行容器完整 ID、Runtime 和 GPU 清单逐字节一致；根盘可用
+  空间从 `234552823808` 增至 `254694129664` 字节。此前把 FaceRec CUDA 11.8 基础镜像的
+  manifest 查询超时误判为本地缺失；精确 `docker image inspect` 证明该 `amd64` 基础镜像一直
+  存在，本轮直接复用，不要求重新提供或拉取。
+- 目标机保持 clean detached SHA `22717cf7abb584bb1891d86c89e215729ee48955`。七算子权威入口
+  依次完成 ASR Offline、ASR Online、FaceRec、OCR、PPT Slice、ScreenDet 和 VBas；四平台按
+  Control、Orchestrator、Vision Orchestrator、Online Gateway 顺序逐个构建。11 个构建均退出码
+  为零、完整 ID 互异、架构为 `amd64`，revision label 精确等于该 SHA。
+- 11 个镜像均通过容器内项目根 `logs/` 检查；ASR Offline/Online、FaceRec、OCR、ScreenDet、
+  VBas 的模型文件分别为 43、10、3、14、4、8 项。旧 11 个回滚镜像和 3 个基础镜像继续存在，
+  旧回滚镜像均有容器引用；本轮没有构建 Text Analysis。
+- 构建前后原 8 个平台/中间件运行容器完整 ID 不变且全部 healthy，未出现 OOM 或 NVIDIA Xid。
+  终态根盘可用 `245348466688` 字节，约 228.49 GiB/15.12%，高于 227 GiB 构建门禁但裕量只有
+  约 1.49 GiB；后续启动、Smoke 和负载阶段必须继续监控且不得并行生成无关大文件。
+- OpenSpec 任务 11.3 完成。原始证据位于远端当前 release 的 `cleanup/buildkit-prune-2/` 和
+  `build/`；11.4 的 21 实例启动、注册、GPU 进程和 7/7 Smoke 尚未执行。
+
+## 2026-08-25 - 旧调度 schema 连续前缀采纳闭环
+
+- 首次 `start-production-stack` 在数据库迁移步骤失败：迁移账本刚创建且为空，旧实现从
+  `0001` 重放并与已存在的 `course_jobs` 冲突。失败发生在平台 `up` 之前；远端原有
+  四平台和四中间件的 8 个完整容器 ID 未变、全部 healthy，没有启动新算子实例。
+- 远端只读目录核对证明当前公共 schema 完整包含 `0001`–`0006` 的表、索引、依赖和
+  `submission_id` 非空列，但 `0007_retire_text_analysis_comments.sql` 的退役注释尚未应用；
+  因此不能固定冒充 v7，也不能重放 v1。
+- 远端追加只读数据不变量核对：唯一同名账本为 `public.algorithm_schema_migrations`且为 0 行；
+  `course_jobs=18`、`course_task_types=45`，全零 `submission_id=0`、跨不同 `task_id` 复用的
+  `submission_id=0`。该查询未执行 DDL、账本写入或业务数据修改。
+- 远端追加只读序列不变量核对：6 个 owned identity 序列映射完整；5 个非空表的下一生成值
+  均严格大于当前 `MAX(id)`，唯一空表序列为未调用状态。该查询未执行 `setval`、DDL 或任何写入。
+- 通用迁移器现只接受与临时 schema 唯一匹配的连续 `0001`–`N` 前缀；固定 `public`
+  账本边界并拒绝非 `public` 同名账本。既有账本会先核对列、约束、索引、注释、owner/ACL 和
+  表访问方法，空但畸形的账本失败关闭。采纳事务对平台表获取独占锁，对 `pg_sequence`
+  通过 `pg_class SHARE` 锁阻塞新关系对象，锁后拒绝已存在的其他事务/prepared transaction；然后动态读取序列当前
+  `CACHE` 值并原值重申以获取序列关系锁，不用预扫描旧值覆盖漂移，且阻塞新的 `ALTER SEQUENCE`/`setval()`。
+  账本独占锁内再次核对 canonical 账本签名和所有归属列 identity/serial 序列的下一键位置、上下界、cycle 与持久性，
+  然后再核对前缀摘要、行为型目录对象和
+  `submission_id` 数据不变量后
+  才原子写入账本。PostgreSQL 失败只对外输出退出码和 stderr SHA-256 摘要。
+- 平台 `.venv` 中聚焦部署/Harness 回归为 `31 passed`；真实 PostgreSQL 集成回归为
+  `22 passed`，覆盖空库、v6、v7、畸形空账本、账本锁内二次校验、新/旧并发 DDL 顺序、缺失/无效索引、排序规则、表访问方法、
+  序列依赖/持久性/并发 `setval()`/identity 位置与上界、多行注释、环境 `search_path`、非 `public` 账本、全零 UUID 与跨课程 UUID 复用。用例只创建并删除
+  `algorithm_migration_<random>_test` 隔离库，未修改本地或远端业务数据库，验证层级为 3。
+- Ruff、strict Mypy、`compileall`、OpenSpec strict 和 `git diff --check` 通过。OpenSpec 8.7 完成；
+  远端实际采纳/备份/v7 应用、11.4 常驻启动和 21/21 实例验证仍待新 SHA 发布。
+
 ## Record template
 
 - Date and scope:

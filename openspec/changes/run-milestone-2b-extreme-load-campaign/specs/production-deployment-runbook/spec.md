@@ -33,6 +33,10 @@
 - **WHEN** 未参与脚本实现的执行者只根据手册在 `192.168.29.11` 完成预检、常驻启动、状态查询和 A 服务 Smoke
 - **THEN** 手册验证 SHALL 产生绑定当前 Git SHA 的完整成功证据，任何只能依赖口头补充才能完成的步骤都使用例失败
 
+#### Scenario: 迁移账本引入前的完整旧库
+- **WHEN** `public` 中已存在与唯一连续 `0001`–`N` 前缀完全一致的平台 schema，但迁移账本为空
+- **THEN** 迁移入口 SHALL 先验证既有账本的完整结构，通过 `pg_class SHARE` 锁阻塞新 DDL 并要求已有事务/prepared transaction 已排空，再通过动态当前配置取得序列关系锁，在平台表和账本独占锁内二次核对账本 canonical 签名、访问方法、identity/serial 序列下一键/上下界/cycle/持久性与其他结构/数据不变量，只写入该前缀账本并正常执行剩余迁移；无唯一前缀、账本畸形、漂移或非 `public` 账本 MUST 失败关闭
+
 ### Requirement: 手册必须准确说明配置、凭据和数据边界
 部署手册 SHALL 列出七算子和四平台服务的 `config.toml` 路径、部署必需项和可调项，明确当前部署不使用 `.env`。它 MUST 说明里程碑 2B 的 Online Gateway 使用 `max_connections=2048`、`max_keepalive_connections=512` 和有界 `pool_timeout_seconds`，该连接池只负责承接请求，业务容量最终由租约和算子实测能力决定。它 MUST 区分经用户明确批准记录的服务器登录合同与不得进入 Git/普通报告的私钥、模型密钥、人脸原图、课程媒体和外部模型 manifest。
 

@@ -1282,3 +1282,52 @@ root disk has 229075452 KiB free; 227 GiB required
 终态根盘约 218.46 GiB/14.46%，没有残留构建进程。8 个既有运行容器保持 healthy，未发现
 OOM/NVIDIA Xid；但目标镜像集合仅 ASR Offline 属于新 revision，其余 10 个仍为旧 revision。
 因此 11.3 未完成，禁止启动部分发布。再次执行 BuildKit 缓存清理需取得新的逐次明确授权。
+
+用户再次逐次批准相同固定命令后，当前 SHA release 的 `cleanup/buildkit-prune-2/` 保存了新的
+执行前后证据。命令退出码为零，报告回收 20.45 GB；普通镜像 ID 保持 78 个、运行容器保持
+8 个，Runtime 与 3 GPU 文件逐字节一致。根盘从 `234552823808` 增至 `254694129664` 字节。
+
+随后在 clean detached SHA `22717cf7abb584bb1891d86c89e215729ee48955` 执行七算子统一构建，
+并逐个构建四平台。`build/operators.inspect.json` 与 `build/release-images.inspect.json` 证明
+11 个完整镜像 ID 互异、架构均为 `amd64`、revision 均精确匹配；
+`build/image-filesystem-verification.txt` 证明 11 个镜像均预创建项目根 `logs/`，六类模型资产
+目录非空。`build/rollback-images.inspect.json` 证明旧 11 镜像继续存在且为 `amd64`。
+
+构建终态根盘为 `245348466688` 字节可用，约 228.49 GiB/15.12%；8 个原运行容器仍全部
+healthy，未观测到 OOM/NVIDIA Xid。本证据完成 OpenSpec 11.3，不代表 11.4 的 21 实例启动、
+注册、GPU 真实进程或 Smoke 已通过。
+
+## 2026-08-25 迁移账本旧库连续前缀采纳
+
+在 `algorithm-scheduling-platform/` 执行：
+
+```bash
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/deploy/test_migration_executor.py \
+  tests/deploy/test_production_stack.py \
+  tests/deploy/test_deployment_runbook.py \
+  tests/test_harness_consistency.py
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q -rs \
+  tests/integration/test_migration_executor_runtime.py
+.venv/bin/ruff check deploy/scripts/migration_executor.py \
+  deploy/scripts/production_stack.py tests/deploy/test_migration_executor.py \
+  tests/deploy/test_production_stack.py tests/integration/test_migration_executor_runtime.py
+MYPYPATH="$PWD/.." .venv/bin/mypy --strict --explicit-package-bases \
+  deploy/scripts/migration_executor.py deploy/scripts/production_stack.py \
+  tests/deploy/test_migration_executor.py tests/deploy/test_production_stack.py \
+  tests/integration/test_migration_executor_runtime.py
+.venv/bin/python -m compileall -q deploy/scripts tests/deploy \
+  tests/integration/test_migration_executor_runtime.py
+```
+
+结果分别为 `31 passed`、`22 passed`且无 skip、Ruff 通过、strict Mypy 通过和
+`compileall` 通过。集成用例使用真实 PostgreSQL 容器和随机
+`algorithm_migration_<uuid>_test` 库，每例终态精确删除该测试库；未读写本地 `algorithm`
+业务表或远端业务库。覆盖空库、v6/v7、环境 `search_path`、非 `public` 账本、畸形空账本、
+索引、排序规则、表访问方法、序列依赖/持久性/并发 `setval()`/identity 位置与上界、账本锁内二次校验、新/旧并发 DDL 顺序、多行注释和 `submission_id` 数据不变量。实际远端采纳/v7 与常驻
+启动尚未执行，本节的最高证据级层为 3。
+
+远端只读 psql 追加核对返回：`public.algorithm_schema_migrations=0`、
+`course_jobs=18`、`course_task_types=45`、全零 `submission_id=0`、跨课程复用
+`submission_id=0`，且不存在非 `public` 同名账本。该证据只证明远端满足采纳前数据门禁，
+不代表采纳、`0007` 或常驻启动已执行。
