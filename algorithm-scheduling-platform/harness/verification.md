@@ -1268,3 +1268,17 @@ Runtime 容器探针返回三个 GPU UUID。因此任务 11.2 的磁盘门禁已
 `vllm/vllm-openai:v0.9.2` 镜像和两个无关镜像在缓存操作开始前已不存在。VLLM 只因该停止
 容器引用进入原保护集，不属于当前发布、回滚或基础镜像；清理前后镜像清单一致，故不把该变化
 归因于 BuildKit 命令，也不擅自恢复非平台资源。
+
+随后以 clean SHA `0e11d3d70fd43d49f43dac44a6f8eec97f3782a1` 和
+`MIN_ROOT_FREE_GIB=227` 执行七算子构建。ASR Offline 成功生成
+`sha256:23091a1b326309e56acf37a43a1470896d77f35d3f5be10e10fc992ce4930cb6`；镜像为
+`amd64` 且 revision label 与 SHA 一致。下一镜像开始前，构建入口返回：
+
+```text
+deployment-contracts: FAIL:
+root disk has 229075452 KiB free; 227 GiB required
+```
+
+终态根盘约 218.46 GiB/14.46%，没有残留构建进程。8 个既有运行容器保持 healthy，未发现
+OOM/NVIDIA Xid；但目标镜像集合仅 ASR Offline 属于新 revision，其余 10 个仍为旧 revision。
+因此 11.3 未完成，禁止启动部分发布。再次执行 BuildKit 缓存清理需取得新的逐次明确授权。

@@ -147,6 +147,20 @@ Campaign/release/SHA/case/phase 身份校验发布。
   变化移除；清理前后清单证明不是本命令所致。该漂移不回滚，但必须保留在最终风险记录中。
 - 任务 11.2 完成；只有新 clean Git SHA 同步到目标机后才允许开始 11.3。
 
+## 2026-08-24 七算子构建部分完成与护栏停止
+
+- 目标机同步到 clean SHA `0e11d3d70fd43d49f43dac44a6f8eec97f3782a1` 后启动七算子构建。
+  ASR Offline 成功生成 `amd64` 镜像
+  `sha256:23091a1b326309e56acf37a43a1470896d77f35d3f5be10e10fc992ce4930cb6`，revision label
+  与该 SHA 一致。
+- 单个 ASR Offline 构建使根盘从 231.98 GiB/15.35% 降至约 218.46 GiB/14.46%。构建入口在
+  下一镜像开始前按 `MIN_ROOT_FREE_GIB=227` 失败关闭，日志终态为
+  `root disk has 229075452 KiB free; 227 GiB required`；第二个镜像没有开始。
+- 当前只有 1/11 目标镜像属于新 revision，其余目标仍是旧 revision。旧 ASR Offline 镜像仍由
+  停止容器引用并按完整 ID 保留；原 8 个运行容器保持 healthy，无 OOM/Xid，也无残留构建进程。
+- 11.3 保持未完成。达到新的受控空间方案前，不降低门禁、不启动部分新栈，也不把旧镜像重标
+  为新 revision；再次清理 BuildKit 缓存仍须遵守逐次明确授权。
+
 ## 2026-08-23 目标机 Git 准备合同补强
 
 - 远端已证明默认 SSH 身份无法访问 GitHub；部署 Git 操作必须显式使用

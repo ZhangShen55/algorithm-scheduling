@@ -1710,6 +1710,25 @@
 - 任务 11.2 完成。后续 11.3 必须先把本轮 OpenSpec/Harness 修订提交为新的 clean 完整 Git SHA，
   让目标机切换到该 SHA 后再构建 11 个镜像。
 
+## 2026-08-24 - 七算子构建在首镜像后触发磁盘警戒门禁
+
+- 目标机已 clean detached checkout 到
+  `0e11d3d70fd43d49f43dac44a6f8eec97f3782a1`。七算子统一构建入口显式使用该完整
+  revision，并将构建前最低可用空间设置为 `227 GiB`。
+- `seacraft-asr-offline:v1.0_260812` 构建成功，镜像完整 ID 为
+  `sha256:23091a1b326309e56acf37a43a1470896d77f35d3f5be10e10fc992ce4930cb6`；只读复核确认
+  架构为 `amd64`，revision label 精确等于上述 SHA。旧 ASR Offline 回滚镜像
+  `sha256:ca97382d5b6ab5320801dffbdba2a2fca90f237640cfe00cd096423dfac4dbfc` 仍由三个停止容器
+  引用且必须继续按完整 ID 保护，不能再依赖已移动的新标签识别回滚版本。
+- 首镜像构建后根盘可用空间降至 `234572959744` 字节，即约 218.46 GiB/14.46%。下一算子
+  开始前的合同检查以 `229075452 KiB free; 227 GiB required` 失败关闭；没有开始第二个镜像，
+  也没有残留构建进程。
+- 当前目标标签是 1 个新 revision、其余 6 个算子及 4 个平台仍为旧 revision 的部分构建状态。
+  原 8 个平台/中间件容器完整 ID 未变化且 8/8 healthy，未观测到 OOM 或 NVIDIA Xid；不得启动
+  新算子栈或把 11.3 表述为完成。
+- BuildKit 当前仍报告约 169.3 GB 可回收、其中 private cache 约 127.4 GB。OpenSpec 要求缓存
+  清理逐次获得明确授权；本条只记录门禁停止，没有重复执行缓存清理，也没有降低磁盘门禁。
+
 ## Record template
 
 - Date and scope:
