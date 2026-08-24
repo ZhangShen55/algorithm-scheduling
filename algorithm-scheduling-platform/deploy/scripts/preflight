@@ -262,9 +262,9 @@ run_runtime() {
 
   postgres_user="${PREFLIGHT_POSTGRES_USER:-algorithm}"
   postgres_database="${PREFLIGHT_POSTGRES_DATABASE:-algorithm}"
-  table_query="SELECT c.relname, pg_catalog.obj_description(c.oid, 'pg_class') FROM pg_catalog.pg_class AS c JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace WHERE n.nspname = current_schema() AND c.relkind = 'r' ORDER BY c.relname"
-  column_query="SELECT c.relname, a.attname, pg_catalog.col_description(c.oid, a.attnum) FROM pg_catalog.pg_class AS c JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace JOIN pg_catalog.pg_attribute AS a ON a.attrelid = c.oid WHERE n.nspname = current_schema() AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped ORDER BY c.relname, a.attnum"
-  index_query="SELECT tablename, indexname FROM pg_catalog.pg_indexes WHERE schemaname = current_schema() ORDER BY tablename, indexname"
+  table_query="SELECT c.relname, pg_catalog.obj_description(c.oid, 'pg_class') FROM pg_catalog.pg_class AS c JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace WHERE n.nspname = current_schema() AND c.relkind = 'r' AND c.relname <> 'algorithm_schema_migrations' ORDER BY c.relname"
+  column_query="SELECT c.relname, a.attname, pg_catalog.col_description(c.oid, a.attnum) FROM pg_catalog.pg_class AS c JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace JOIN pg_catalog.pg_attribute AS a ON a.attrelid = c.oid WHERE n.nspname = current_schema() AND c.relkind = 'r' AND c.relname <> 'algorithm_schema_migrations' AND a.attnum > 0 AND NOT a.attisdropped ORDER BY c.relname, a.attnum"
+  index_query="SELECT tablename, indexname FROM pg_catalog.pg_indexes WHERE schemaname = current_schema() AND tablename <> 'algorithm_schema_migrations' ORDER BY tablename, indexname"
   psql_base=(docker compose --project-directory "$deploy_root" -f "$platform_compose" \
     exec -T -e "PGOPTIONS=-c default_transaction_read_only=on" postgres psql \
     --no-psqlrc --set=ON_ERROR_STOP=1 --csv --tuples-only \

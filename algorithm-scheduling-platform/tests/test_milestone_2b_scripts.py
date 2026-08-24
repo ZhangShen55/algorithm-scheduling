@@ -2410,6 +2410,27 @@ def test_preflight_runtime_rejects_unready_required_services_before_catalog_quer
     assert not any("psql" in command for command in _commands(environment))
 
 
+def test_preflight_runtime_excludes_migration_ledger_from_business_catalog(
+    fake_bin: Path, readiness_server: Any
+) -> None:
+    base_url, _ = readiness_server
+    environment = _base_environment(
+        fake_bin,
+        CONTROL_READINESS_URL=f"{base_url}/control",
+        ORCHESTRATOR_READINESS_URL=f"{base_url}/orchestrator",
+    )
+
+    completed = _run("preflight", "runtime", environment=environment)
+
+    assert completed.returncode == 0, completed.stderr
+    psql_commands = [command for command in _commands(environment) if "psql" in command]
+    assert len(psql_commands) == 3
+    assert all(
+        "algorithm_schema_migrations" in " ".join(command)
+        for command in psql_commands
+    )
+
+
 @pytest.mark.parametrize(
     ("environment_key", "rows", "message"),
     [
