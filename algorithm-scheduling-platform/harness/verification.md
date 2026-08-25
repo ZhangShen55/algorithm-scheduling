@@ -131,6 +131,145 @@ MYPYPATH="$PWD/.." .venv/bin/mypy --strict --explicit-package-bases \
 3 项 skip 仍要求外部 Canonical FaceRec Token/容器，保持未执行。独立终审无 P0/P1/P2，
 但本地假运行时不能替代最终 SHA 在 `192.168.29.11` 的真实 Docker 故障 Campaign。
 
+## 2026-08-25 `e91f5b21` 发布与阶段 0 在线定位验证
+
+本节绑定 release `v1.0_260825`、SHA
+`e91f5b21cb458983f8ab1eea2518e33579f4836d`。在目标机只读复核 11.3–11.7 的关键证据：
+
+```bash
+REMOTE_RELEASE_ROOT=/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/reports/milestone-2b/releases/v1.0_260825/e91f5b21cb458983f8ab1eea2518e33579f4836d
+
+jq -e 'length == 11
+  and ([.[].architecture] | unique) == ["amd64"]
+  and ([.[].revision] | unique) == ["e91f5b21cb458983f8ab1eea2518e33579f4836d"]
+  and ([.[].id] | unique | length) == 11' \
+  "$REMOTE_RELEASE_ROOT/build/release-images.inspect.json"
+
+jq -e '.status == "PASS"
+  and .git_sha == "e91f5b21cb458983f8ab1eea2518e33579f4836d"
+  and .summary.infrastructure == 4
+  and .summary.platform_services == 4
+  and .summary.operator_instances == 21
+  and .summary.gpu_instances == 18
+  and .summary.cpu_instances == 3
+  and .summary.registered_instances == 21
+  and .summary.active_leases == 0' \
+  "$REMOTE_RELEASE_ROOT/production/production-stack-status.json"
+
+jq -e '.git_sha == "e91f5b21cb458983f8ab1eea2518e33579f4836d"
+  and .release_tag == "v1.0_260825"
+  and (.containers | length) == 29' \
+  "$REMOTE_RELEASE_ROOT/production/production-stack.json"
+
+jq -e '.git_sha == "e91f5b21cb458983f8ab1eea2518e33579f4836d"
+  and .summary.expected_ports == 29
+  and .summary.observed_ports == 29
+  and .summary.external_host_ports == [18100, 18103]
+  and .summary.internal_binding_count == 27
+  and .missing_listener_ports == []' \
+  "$REMOTE_RELEASE_ROOT/preflight/port-boundary.json"
+
+jq -e 'length == 7 and all(.[];
+  .status == "通过"
+  and .mock == false
+  and .git_sha == "e91f5b21cb458983f8ab1eea2518e33579f4836d")' \
+  "$REMOTE_RELEASE_ROOT/smoke/cases.json"
+
+jq -e '.code == 0
+  and .data.task_id == "deploy-smoke-ppt-e91f5b21cb45"
+  and any(.data.tasks[];
+  .task_type == "PPT" and .status == 60)' \
+  "$REMOTE_RELEASE_ROOT/production/a-service-ppt-smoke.json"
+
+jq -e '.status == "PASS"
+  and .git_sha == "e91f5b21cb458983f8ab1eea2518e33579f4836d"
+  and .release_tag == "v1.0_260825"
+  and .mock == false
+  and [.cases[].business_code] == [0, 40001, 40001]' \
+  "$REMOTE_RELEASE_ROOT/online/online-ocr.json"
+```
+
+上述检查实际得到 11 个互异 `amd64`/同 revision 镜像、生产栈 `PASS`、29/29 端口、7/7
+Smoke、PPT `60` 和 Online OCR `0/40001/40001`。四份关键发布证据的 SHA-256 前缀依次为
+`6ac2aa34`、`e12410fb`、`070f3567` 和 `bd714358`，且均为 root 所有、`0600`、单硬链接。
+
+负载机上的新 attempt 只读验证命令为：
+
+```bash
+ATTEMPT_ROOT="$PWD/deploy/reports/milestone-2b-load/v1.0_260825/e91f5b21cb458983f8ab1eea2518e33579f4836d/attempts/phase0-online-e91f5b21cb45-20260825001147"
+
+jq -s -e 'length == 5 and all(.[];
+  .release_tag == "v1.0_260825"
+  and .git_sha == "e91f5b21cb458983f8ab1eea2518e33579f4836d"
+  and .status == "passed"
+  and .business_status == "passed"
+  and .request_count == 1
+  and .guardrail_before.level == "CLEAR"
+  and .guardrail_after.level == "CLEAR"
+  and .runtime_observability.status == "passed"
+  and .runtime_observability.runtime_metrics.target_oom_delta == 0
+  and .runtime_observability.runtime_metrics.max_kafka_lag == 0
+  and .runtime_observability.runtime_metrics.max_outbox_pending == 0
+  and all(.runtime_observability.runtime_metrics.container_restart_delta[]; . == 0))' \
+  "$ATTEMPT_ROOT/campaign/phase-0-baseline/base-online-vbas.json" \
+  "$ATTEMPT_ROOT/campaign/phase-0-baseline/base-online-face.json" \
+  "$ATTEMPT_ROOT/campaign/phase-0-baseline/base-online-screen-det.json" \
+  "$ATTEMPT_ROOT/campaign/phase-0-baseline/base-online-ocr.json" \
+  "$ATTEMPT_ROOT/campaign/phase-0-baseline/base-asr-ws.json"
+```
+
+四个图片单请求的 `latency_seconds[0]` 分别为 `0.181751`、`0.069775`、`0.246660`、
+`0.139112` 秒；ASR WebSocket 会话为 `464.222339` 秒、2294 个音频块、零失败会话、零缺失
+终态。图片用例各有 2 个不可变指标样本，ASR 有 93 个。五案均通过，但
+`192.168.29.12` 缺少 CPU、内存、发送网络和连接数源端遥测，故 4.9、11.1、四个媒体下载
+baseline、`PHASE-0-COMPLETE` 和完整 12.1 仍为 blocked。
+
+目标端媒体下载修正复跑使用同一 frozen manifest，验证命令为：
+
+```bash
+MEDIA_PARTIAL="$ATTEMPT_ROOT/preflight/media-download-baseline-partial-rerun1.json"
+
+jq -e '.release_tag == "v1.0_260825"
+  and .git_sha == "e91f5b21cb458983f8ab1eea2518e33579f4836d"
+  and .status == "PARTIAL_BLOCKED"
+  and .manifest_driven_range_probe.status == "REACHABLE"
+  and ([.manifest_driven_range_probe.fixtures[].http_status] | all(. == 206))
+  and [.tiers[].concurrency] == [1, 3, 10, 30]
+  and ([.tiers[].attempt_count] | add) == 44
+  and ([.tiers[].success_count] | add) == 44
+  and ([.tiers[].failure_count] | add) == 0
+  and .summary.successful_payload_bytes == 37788131032
+  and .summary.target_network_receive_bytes == 40954896306
+  and .source_resources.status == "NOT_COLLECTED"
+  and all(.source_resources.metrics[]; .value == null and .status == "NOT_COLLECTED")
+  and .task_eligibility.task_4_9_completed == false
+  and .task_eligibility.task_11_1_completed == false
+  and .task_eligibility.campaign_phase_0_admitted == false' \
+  "$MEDIA_PARTIAL"
+
+shasum -a 256 "$MEDIA_PARTIAL"
+```
+
+实际结果为 `44/44` 成功、失败率 0，payload 吞吐约 `116.97 -> 112.99 MB/s`，目标入站速率
+约 `123.06–123.10 MB/s`。本地 attempt 和远端 release 的证据摘要均为
+`aed4c897503c9a1c8ef7f0f3d919f8b421d897c70bb006791f810f4e762bcae3`，权限为 `0600`、
+单硬链接，敏感扫描和样本尺寸校验通过。首份 `6a7b34f1...` partial 不覆盖；新证据明确只
+修正其下载/404解释，不修正源端四项遥测缺失，因此阶段 0 准入仍为 blocked。
+
+Harness 记录同步后从平台目录执行：
+
+```bash
+.venv/bin/python -m pytest -q tests/test_harness_consistency.py
+(cd .. && openspec validate run-milestone-2b-extreme-load-campaign --strict)
+git diff --check -- \
+  harness/scenarios/milestone-2b-extreme-load-campaign.md \
+  harness/verification.md \
+  harness/change-ledger.md \
+  ../openspec/changes/run-milestone-2b-extreme-load-campaign/tasks.md
+```
+
+结果为 Harness consistency `5 passed`、OpenSpec strict `valid`、`git diff --check` 零输出。
+
 ## 2026-08-21 七算子当前验收入口
 
 当前发布范围由

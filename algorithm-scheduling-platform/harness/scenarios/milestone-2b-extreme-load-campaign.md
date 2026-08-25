@@ -351,3 +351,47 @@ Campaign/release/SHA/case/phase 身份校验发布。
   `CLEAR`，3 个样本包含 29 个容器、3 张 GPU、可证明的队列/Outbox/Kafka lag。
 - 新实现必须先提交形成新 SHA，并按该 SHA 重建 11 镜像及重放 11.3–11.7。之后为
   阶段 0 创建新的受控 Campaign attempt；不得复用或覆盖旧失败 case 文件。
+
+## 2026-08-25 - `e91f5b21` 当前发布与阶段 0 在线定位子集
+
+- 当前发布为 `v1.0_260825`，完整 SHA 为
+  `e91f5b21cb458983f8ab1eea2518e33579f4836d`。远端 release 根为
+  `deploy/reports/milestone-2b/releases/v1.0_260825/e91f5b21cb458983f8ab1eea2518e33579f4836d/`。
+- 11.3–11.7 已在同一 SHA 完成：11 个互异 `amd64` 镜像的 revision 均精确匹配；常驻状态为
+  `PASS`，包含 4 个中间件、4 个平台服务、21 个算子、18 个 GPU 实例、3 个 CPU PPT 实例、
+  21/21 注册和零活跃租约；7/7 算子 Smoke 通过。端口证据恰有 29 个宿主机端口，仅
+  `18100/18103` 对外，其余 27 个绑定回环。独立手册复现还得到 PPT 任务
+  `deploy-smoke-ppt-e91f5b21cb45` 终态 `60` 和 Online OCR 业务码 `0/40001/40001`。
+- 独立执行者只按手册 9.1 操作；因同 SHA 的 status 已为 `PASS`，复用已校验的
+  `production/production-stack.json`，没有重复执行 start。复现过程不依赖口头补充，未发现
+  真实命令漂移或缺失步骤，因此 11.7 在当前 SHA 下完成。
+- 关键远端证据文件均为 root 所有、`0600`、单硬链接：
+  `build/release-images.inspect.json`（`6ac2aa34...`）、
+  `production/production-stack-status.json`（`e12410fb...`）、
+  `preflight/port-boundary.json`（`070f3567...`）和
+  `smoke/cases.json`（`bd714358...`）。这些文件支持 11.3–11.7，但不补足 11.1 的媒体源资源证据。
+- 新 Campaign attempt 为
+  `deploy/reports/milestone-2b-load/v1.0_260825/e91f5b21cb458983f8ab1eea2518e33579f4836d/attempts/phase0-online-e91f5b21cb45-20260825001147/`。
+  五个定位用例的真实北向结果为：
+
+| 用例 | 结果 | 单请求/会话实测 | 租约与实例证据 | 指标样本 |
+| --- | --- | --- | --- | ---: |
+| `BASE-ONLINE-VBAS` | `passed` | `0.181751` 秒 | 获取/释放各 1，`vbas-gpu0` 请求增量 1 | 2 |
+| `BASE-ONLINE-FACE` | `passed` | `0.069775` 秒 | 获取/释放各 1，`facerec-gpu0` 请求增量 1 | 2 |
+| `BASE-ONLINE-SCREEN-DET` | `passed` | `0.246660` 秒 | 获取/释放各 1，`screen-det-gpu0` 请求增量 1 | 2 |
+| `BASE-ONLINE-OCR` | `passed` | `0.139112` 秒 | 获取/释放各 1，`ocr-gpu0` 请求增量 1 | 2 |
+| `BASE-ASR-WS` | `passed` | `464.222339` 秒；2294 块，零失败、零缺失终态 | 获取/释放各 1、拒绝 0 | 93 |
+
+- 五案前后护栏均为 `CLEAR`，运行时汇总均为 `passed`；29 个容器重启增量全为 0，宿主机
+  OOM 增量、Kafka lag 和 Outbox pending 均为 0。上述证据只完成五个阶段 0 在线定位用例，
+  不等于完整阶段 0 或 OpenSpec 12.1 完成。
+- frozen manifest 中 T/S/P 三条 URL 的 Range 探针均返回 `206` 且长度精确匹配。目标机
+  1/3/10/30 并发修正复跑共 `44/44` 成功，累计成功载荷 `37,788,131,032` B、目标入站
+  `40,954,896,306` B；payload 吞吐从约 `116.97` 降至 `112.99` MB/s，四档最大建连耗时为
+  `2.29/2.93/4.11/14.74` ms。修正证据为
+  `preflight/media-download-baseline-partial-rerun1.json`（`aed4c897...`）。首份
+  `6a7b34f1...` partial 保持原样，修正证据只 supersede 当时的下载和稳定 404 解释。
+- `192.168.29.12:5555` 当前仍没有受信的源端 CPU、内存、发送网络和连接数遥测；四项均为
+  `NOT_COLLECTED`。因此下载归因状态仍为 `BLOCKED`，OpenSpec 4.9、11.1、四个正式
+  `BASE-MEDIA-DOWNLOAD-*` 和 `PHASE-0-COMPLETE` 继续阻断；不得以目标端下载或五个在线通过
+  结果进入阶段 1，也不得发布完整阶段 0 符合结论。

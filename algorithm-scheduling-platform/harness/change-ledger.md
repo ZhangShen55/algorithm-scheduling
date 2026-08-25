@@ -1913,6 +1913,45 @@
   attestation、常驻启动/状态/Smoke 和独立手册复现后，才能创建新的 Campaign attempt。
   媒体源资源权限仍阻断 4.9/11.1 和完整阶段 0。
 
+## 2026-08-25 - `e91f5b21` 发布与阶段 0 在线定位子集
+
+- Previous state: `23364ffb...` 的首次 `BASE-ONLINE-VBAS` 在业务请求前因 Docker 指标解析
+  blocked；修复已完成，但同一最终 SHA 的 11 镜像、常驻栈、端口、Smoke、独立手册复现和
+  新 Campaign attempt 尚未形成闭环。
+- Target state: release `v1.0_260825` 绑定完整 SHA
+  `e91f5b21cb458983f8ab1eea2518e33579f4836d`。OpenSpec 11.3–11.7 已完成：11 个
+  `amd64` 同 revision 镜像、4 中间件、4 平台、21 算子、18 GPU、3 CPU、21/21 注册、
+  7/7 Smoke、29/29 端口和独立手册 A 服务 Smoke 均有同 SHA 证据。
+- Changed files: 更新
+  `harness/scenarios/milestone-2b-extreme-load-campaign.md`、`harness/verification.md` 和
+  `harness/change-ledger.md`，并在 OpenSpec `tasks.md` 勾选有同 SHA 证据支持的 11.3–11.7；
+  没有修改部署代码、运行配置或 release 报告。
+- Contract impact: 不改变 A 服务 HTTP/WebSocket、算子、四服务、数据库、端口或部署合同；
+  仅把当前发布事实、定位用例结果和仍然失败关闭的媒体源边界同步到 Harness。
+- Verification command and environment: 目标机 `192.168.29.11` 的
+  `build/release-images.inspect.json`、`production/production-stack-status.json`、
+  `preflight/port-boundary.json`、`smoke/cases.json` 分别绑定摘要前缀 `6ac2aa34`、
+  `e12410fb`、`070f3567`、`bd714358`，均为 root 所有、`0600`、单硬链接。负载机 attempt
+  `phase0-online-e91f5b21cb45-20260825001147` 的五份 baseline 规范证据摘要前缀依次为
+  ASR `b3a9fc4c`、Face `df83127e`、OCR `663acad3`、ScreenDet `117076fd`、VBas `27cf5e00`。
+  五案聚合 `jq -e` 为 true；Harness consistency 为 `5 passed`，OpenSpec strict valid，
+  三份 Harness 文件和 OpenSpec `tasks.md` 的 `git diff --check` 零输出。独立执行者按手册 9.1
+  复验时，同 SHA status 已为 `PASS`，因此复用既有 start ledger、没有重复 start；没有口头补充、
+  真实命令漂移或缺失步骤。目标端下载修正复跑证据为
+  `preflight/media-download-baseline-partial-rerun1.json`（`aed4c897...`）：frozen T/S/P Range
+  均为 `206`，1/3/10/30 档合计 `44/44` 成功、成功载荷 `37,788,131,032` B。首份
+  `6a7b34f1...` partial 保持原样，新证据只 supersede 下载和稳定 404 解释。
+- Evidence tier and verdict: 五案均为真实北向 `passed`。VBas、Face、ScreenDet、OCR
+  单请求延迟分别为 `0.181751/0.069775/0.246660/0.139112` 秒；各自获取并释放一个租约，
+  对应 GPU0 实例请求增量为 1。ASR WebSocket 实时会话耗时 `464.222339` 秒，发送 2294 块，
+  零失败、零缺失终态，获取/释放租约各 1。五案前后护栏均 `CLEAR`，运行指标通过，容器
+  重启、宿主机 OOM、Kafka lag 和 Outbox pending 增量均为 0。
+- Remaining risks: 目标端下载 payload 吞吐约 `116.97 -> 112.99 MB/s`，但
+  `192.168.29.12:5555` 没有受信的源端 CPU、内存、发送网络和连接数遥测，四项均为
+  `NOT_COLLECTED`，不能完成 1/3/10/30 下载归因。因此 4.9、11.1、四个
+  `BASE-MEDIA-DOWNLOAD-*`、`PHASE-0-COMPLETE` 和完整 12.1 继续 blocked；五个在线定位通过
+  不授权进入阶段 1，也不解除 ASR-013、4 小时 soak、217/26/6 和最终清理门禁。
+
 ## Record template
 
 - Date and scope:
