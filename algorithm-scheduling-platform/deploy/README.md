@@ -533,6 +533,11 @@ runtime 放入 `bash -c` argv 或可被子进程消费的 stdin。探针返回�
 aggregator 强制校验该证据属于当前 release/SHA、状态为 `passed`、恰有固定三轮且每轮 T/S/P
 状态和长度均有效，缺失或失败时不发布 `summary/cases.json`。
 
+长时间极限负载统一通过 `deploy/scripts/start-extreme-load-campaign-sequence` 后台启动，底层
+调用权威 `run-extreme-load-campaign execute-sequence`。PID、JSONL 日志和逐案退出码必须位于
+当前 write-once attempt；任一证据已存在时拒绝覆盖，runner 在 case 终态前消失时不得续写该
+attempt。完整参数与判定方式见中文部署手册。
+
 `preflight runtime/operators` 对运行容器使用的最终镜像执行
 `org.opencontainers.image.revision` attestation；`run-operator-smoke --git-sha` 只把结果
 归档到对应 release/SHA，不证明镜像来源。FaceRec 的 gpu0/gpu1/gpu2 三实例必须同时

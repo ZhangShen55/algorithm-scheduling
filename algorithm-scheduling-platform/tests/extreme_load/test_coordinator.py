@@ -1189,6 +1189,63 @@ def test_cli_loads_only_explicit_named_stage_adapter_factories(
     assert media.calls == ["BASE-MEDIA-DOWNLOAD-1"]
 
 
+def test_cli_execute_sequence_records_each_terminal_result(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = _plan(tmp_path)
+    plan_path = tmp_path / "campaign-plan.json"
+    publish_campaign_plan(plan_path, plan)
+    release_root = tmp_path / "release"
+    metrics = FakeMetricsAdapter()
+    media = FakeStageAdapter(
+        StageCaseOutcome("passed", "CLI 媒体基线完成", {"concurrency": 1})
+    )
+    module = ModuleType("coordinator_sequence_test_adapters")
+    module.__dict__["metrics_factory"] = _factory(metrics)
+    module.__dict__["media_factory"] = _factory(media)
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+
+    exit_code = main(
+        [
+            "execute-sequence",
+            "--plan",
+            str(plan_path),
+            "--release-root",
+            str(release_root),
+            "--case-id",
+            "BASE-MEDIA-DOWNLOAD-1",
+            "--case-id",
+            "BASE-MEDIA-DOWNLOAD-3",
+            "--adapter-factory",
+            "metrics=coordinator_sequence_test_adapters:metrics_factory",
+            "--adapter-factory",
+            "media_download=coordinator_sequence_test_adapters:media_factory",
+            "--allow-live-execution",
+        ]
+    )
+
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert exit_code == 0
+    assert [(event["event"], event.get("case_id")) for event in events] == [
+        ("sequence_started", None),
+        ("case_started", "BASE-MEDIA-DOWNLOAD-1"),
+        ("case_ended", "BASE-MEDIA-DOWNLOAD-1"),
+        ("case_started", "BASE-MEDIA-DOWNLOAD-3"),
+        ("case_ended", "BASE-MEDIA-DOWNLOAD-3"),
+        ("sequence_ended", None),
+    ]
+    assert events[0]["git_sha"] == _GIT_SHA
+    assert events[0]["case_ids"] == [
+        "BASE-MEDIA-DOWNLOAD-1",
+        "BASE-MEDIA-DOWNLOAD-3",
+    ]
+    assert events[-1]["status"] == "passed"
+    assert events[-1]["exit_code"] == 0
+    assert media.calls == ["BASE-MEDIA-DOWNLOAD-1", "BASE-MEDIA-DOWNLOAD-3"]
+
+
 def test_wrapper_is_local_non_mutating_and_uses_project_venv() -> None:
     project_root = Path(__file__).resolve().parents[2]
     wrapper = project_root / "deploy/scripts/run-extreme-load-campaign"
@@ -1199,6 +1256,19 @@ def test_wrapper_is_local_non_mutating_and_uses_project_venv() -> None:
     assert '"$PROJECT_ROOT/scripts/run_extreme_load_campaign.py" "$@"' in content
     assert not {"ssh", "docker", "prune", " down "} & set(content.lower().split())
     assert wrapper.stat().st_mode & stat.S_IXUSR
+
+
+def test_sequence_launcher_is_non_overwriting_and_detached() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    launcher = project_root / "deploy/scripts/start-extreme-load-campaign-sequence"
+    content = launcher.read_text(encoding="utf-8")
+
+    assert content.startswith("#!/usr/bin/env bash\nset -euo pipefail\n")
+    assert 'nohup "$RUNNER" "$@" </dev/null' in content
+    assert '[[ -e "$PID_FILE" || -L "$PID_FILE"' in content
+    assert '-e "$LOG_FILE" || -L "$LOG_FILE"' in content
+    assert 'chmod 0600 "$PID_TEMP" "$LOG_FILE"' in content
+    assert launcher.stat().st_mode & stat.S_IXUSR
 
 
 def test_status_reports_unimplemented_live_integration_boundaries(tmp_path: Path) -> None:

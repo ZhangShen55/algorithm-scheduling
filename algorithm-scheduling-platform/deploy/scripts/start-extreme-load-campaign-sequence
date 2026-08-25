@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+RUNNER="$PROJECT_ROOT/deploy/scripts/run-extreme-load-campaign"
+
+usage() {
+  printf '%s\n' \
+    "用法: $0 --pid-file PATH --log-file PATH -- execute-sequence 参数..." >&2
+}
+
+PID_FILE=""
+LOG_FILE=""
+while (($#)); do
+  case "$1" in
+    --pid-file)
+      PID_FILE="${2:-}"
+      shift 2
+      ;;
+    --log-file)
+      LOG_FILE="${2:-}"
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
+done
+
+if [[ -z "$PID_FILE" || -z "$LOG_FILE" || $# -eq 0 || "$1" != "execute-sequence" ]]; then
+  usage
+  exit 2
+fi
+if [[ -e "$PID_FILE" || -L "$PID_FILE" || -e "$LOG_FILE" || -L "$LOG_FILE" ]]; then
+  printf '%s\n' "PID 或日志证据已存在，拒绝覆盖" >&2
+  exit 3
+fi
+
+umask 077
+mkdir -p -- "$(dirname -- "$PID_FILE")" "$(dirname -- "$LOG_FILE")"
+: >"$LOG_FILE"
+
+# nohup 让长时 Campaign 不依赖当前终端；PID 和逐案 JSONL 日志用于证明进程终态。
+nohup "$RUNNER" "$@" </dev/null >>"$LOG_FILE" 2>&1 &
+RUNNER_PID=$!
+PID_TEMP="${PID_FILE}.tmp.${RUNNER_PID}"
+printf '%s\n' "$RUNNER_PID" >"$PID_TEMP"
+chmod 0600 "$PID_TEMP" "$LOG_FILE"
+mv -- "$PID_TEMP" "$PID_FILE"
+
+if ! kill -0 "$RUNNER_PID" 2>/dev/null; then
+  printf '%s\n' "Campaign runner 启动后立即退出，检查日志: $LOG_FILE" >&2
+  exit 1
+fi
+
+printf '{"status":"started","pid":%s,"pid_file":"%s","log_file":"%s"}\n' \
+  "$RUNNER_PID" "$PID_FILE" "$LOG_FILE"

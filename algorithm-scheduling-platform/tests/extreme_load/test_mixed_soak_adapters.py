@@ -30,6 +30,7 @@ from scripts.extreme_load.mixed_soak_adapters import (
 )
 from scripts.extreme_load.online_images import OnlineImageFixture
 from scripts.extreme_load.plan import CampaignPlan, build_campaign_plan
+from scripts.extreme_load.realtime_asr import AsrSessionResult
 from scripts.run_extreme_load_campaign import _load_adapter_factories
 
 _LONG_FIXTURES = ("long-teacher", "long-student", "long-slides")
@@ -241,6 +242,62 @@ def test_extreme_profile_uses_one_explicit_global_http_concurrency_budget() -> N
     assert budget.s_streams == 300
     assert budget.queries == 748
     assert budget.total == 2048
+
+
+@pytest.mark.asyncio
+async def test_mixed_asr_requires_finished_message_not_only_intermediate_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _case("mixed", level="daily")
+    plan = _plan(case)
+    runner = mixed_soak_adapters._NorthboundTrafficRunner(plan)
+    audio = mixed_soak_adapters.AudioStreamFixture(
+        pcm=b"\x00\x00" * 1600,
+        sample_rate_hz=16000,
+        sample_width_bytes=2,
+        channels=1,
+        chunk_duration_seconds=0.1,
+    )
+
+    class FakeRealtimeAsrRunner:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        async def run_sessions(
+            self,
+            specs: object,
+            _fixture: object,
+        ) -> tuple[AsrSessionResult, ...]:
+            assert isinstance(specs, tuple)
+            return (
+                AsrSessionResult(
+                    session_id="session-1",
+                    trace_id="trace-1",
+                    category=mixed_soak_adapters.ResultCategory.SUCCESS,
+                    sent_chunk_count=1,
+                    message_digests=("intermediate-message-digest",),
+                    finished_message_count=0,
+                ),
+            )
+
+    monkeypatch.setattr(
+        mixed_soak_adapters,
+        "RealtimeAsrRunner",
+        FakeRealtimeAsrRunner,
+    )
+
+    await runner._run_asr(
+        case,
+        MIXED_PROFILES["daily"],
+        mixed_soak_adapters._RoundAssets(
+            OnlineImageFixture("image-1", "/9j/2Q=="),
+            audio,
+        ),
+    )
+
+    assert runner.snapshot().correctness_failures == (
+        "1 个实时 ASR 成功会话缺少 finished=true 终态消息",
+    )
 
 
 def test_factories_are_dynamically_loadable_by_the_existing_cli_contract() -> None:

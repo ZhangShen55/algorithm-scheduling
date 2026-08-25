@@ -1009,7 +1009,7 @@ def _wave_bytes() -> bytes:
 
 
 @pytest.mark.asyncio
-async def test_asr_success_requires_a_received_final_message(
+async def test_asr_success_requires_finished_message_not_only_any_message(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1034,7 +1034,8 @@ async def test_asr_success_requires_a_received_final_message(
                     spec.trace_id,
                     ResultCategory.SUCCESS,
                     1,
-                    (),
+                    ("intermediate-message-digest",),
+                    0,
                 )
                 for spec in specs
             )
@@ -1047,9 +1048,57 @@ async def test_asr_success_requires_a_received_final_message(
     assert outcome.status == "failed"
     assert outcome.extra == {
         "sent_chunks": 1,
-        "message_digest_count": 0,
+        "message_digest_count": 1,
+        "finished_message_count": 0,
         "failed_session_count": 0,
         "missing_final_message_count": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_asr_success_records_received_finished_message(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _case("realtime_asr", sessions=1)
+    executor = CampaignCaseExecutor(_plan(tmp_path, case), tmp_path / "release")
+
+    async def fake_fixture(*_args: object, **_kwargs: object) -> bytes:
+        return _wave_bytes()
+
+    class FakeRunner:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        async def run_sessions(
+            self,
+            specs: Sequence[Any],
+            _fixture: object,
+        ) -> tuple[AsrSessionResult, ...]:
+            return tuple(
+                AsrSessionResult(
+                    spec.session_id,
+                    spec.trace_id,
+                    ResultCategory.SUCCESS,
+                    1,
+                    ("finished-message-digest",),
+                    1,
+                )
+                for spec in specs
+            )
+
+    monkeypatch.setattr("scripts.extreme_load.execution._read_fixture_bytes", fake_fixture)
+    monkeypatch.setattr("scripts.extreme_load.execution.RealtimeAsrRunner", FakeRunner)
+
+    outcome = await executor._realtime_asr(case)
+
+    assert outcome.status == "passed"
+    assert outcome.extra == {
+        "sent_chunks": 1,
+        "message_digest_count": 1,
+        "finished_message_count": 1,
+        "failed_session_count": 0,
+        "missing_final_message_count": 0,
     }
 
 

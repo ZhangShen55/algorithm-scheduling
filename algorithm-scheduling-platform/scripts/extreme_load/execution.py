@@ -1250,7 +1250,8 @@ class CampaignCaseExecutor:
         missing_messages = [
             item.session_id
             for item in results
-            if item.category is ResultCategory.SUCCESS and not item.message_digests
+            if item.category is ResultCategory.SUCCESS
+            and (not item.message_digests or item.finished_message_count <= 0)
         ]
         return CaseRunOutcome(
             "failed" if failures or missing_messages else "passed",
@@ -1265,6 +1266,9 @@ class CampaignCaseExecutor:
             extra={
                 "sent_chunks": sum(item.sent_chunk_count for item in results),
                 "message_digest_count": sum(len(item.message_digests) for item in results),
+                "finished_message_count": sum(
+                    item.finished_message_count for item in results
+                ),
                 "failed_session_count": len(failures),
                 "missing_final_message_count": len(missing_messages),
             },

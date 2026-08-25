@@ -112,6 +112,7 @@
 - [x] 10.18 将 Kafka lag 从 Control 中拆为独立采集面，使用独立 20 秒超时和最多一次重试，原子发布脱敏失败事件并由用例结果引用，验证最终恢复不覆盖已锁存 STOP。
 - [x] 10.19 保留 `28e74d7` attempt 只完成 `BASE-MEDIA-DOWNLOAD-1/3/10` 的预执行诊断证据；修复 Fault Adapter 对 attempt root 的严格识别，并通过专用 `_LocalCampaignLockGuard` 持有当前 attempt 根下绑定 Campaign/attempt 的 `0600` 单链接 `.campaign-fault.lock`，与 `.11` delegated canonical 锁分离，验证故障 case 全程持锁、逐动作本地探针、远端 challenge 和非法绑定失败关闭。
 - [x] 10.20 保留 `4dc40757` attempt 在 `OFF-UNIQUE-PPT-100` 的第 33 份运行时 `STOP` 证据；修复 PPT 终态回调与对账并发命中同一节点时的同终态幂等竞态，验证冲突终态仍失败关闭，不补写中断 case。
+- [x] 10.21 保留 `da1f5e37` attempt 在 `OFF-UNIQUE-ASR-300` 已提交但缺少规范终态和退出码的执行器中断证据，并记录已接受任务自然排空；阶段 0/3 与阶段 4/6 的实时 ASR 成功必须收到 `finished=true`，并为下一 attempt 固化脱离交互终端的持久 runner、PID、日志和逐案退出码边界。
 
 ## 11. `192.168.29.11` 七算子四平台发布
 
@@ -123,11 +124,12 @@
 - [x] 11.6 发布远端预检、容器/镜像库存、配置权威、GPU PID/cgroup、注册、租约和 Smoke 原始证据。
 - [x] 11.7 由未依赖隐式开发上下文的执行者按部署手册在 `192.168.29.11` 复现预检、常驻启动、状态查询和 A 服务 Smoke，记录口头补充、命令漂移或缺失步骤并修正手册。
 - [x] 11.8 将阶段 0 修复形成并推送为新完整 Git SHA，在 `192.168.29.11` 重新构建并逐 ID inspect 全部七算子和四平台镜像，恢复同 revision 的 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT 与 7/7 Smoke；11.3–11.7 的旧 SHA 证据只保留为历史发布事实，不得直接授权 12.1。
-- [ ] 11.9 将 PPT 终态并发幂等修复形成新完整 Git SHA，重建并 inspect 11 个同 revision 镜像，恢复 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT 与 7/7 Smoke；使用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写 `4dc40757` 中断 attempt。
+- [x] 11.9 将 PPT 终态并发幂等修复形成新完整 Git SHA，重建并 inspect 11 个同 revision 镜像，恢复 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT 与 7/7 Smoke；使用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写 `4dc40757` 中断 attempt。
+- [ ] 11.10 将实时 ASR 终态门禁和持久 runner 约束形成新完整 Git SHA，重建并 inspect 11 个同 revision 镜像，恢复完整拓扑；使用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写 `da1f5e37` 中断 attempt。
 
 ## 12. 远端极限负载 Campaign 执行
 
-- [x] 12.1 执行阶段0的单请求与单泳道基线，建立各接口/算子的延迟、吞吐、实时率、资源和结果结构基线。
+- [ ] 12.1 执行阶段0的单请求与单泳道基线，建立各接口/算子的延迟、吞吐、实时率、资源和结果结构基线。
 - [ ] 12.2 执行阶段1的 PPT、ASR、教师行为、学生行为单泳道及 3/6/12/24/36 长课阶梯，每级达到警戒线时停止升级。
 - [ ] 12.3 执行阶段2的 100/300/1000 唯一提交、幂等竞争、追加任务类型、NORMAL/URGENT 插队、负向比例和 50/100/300/1000 QPS 查询。
 - [ ] 12.4 执行阶段3的四类图片 1–1000 并发、100/300/1000 路 S 流、ASR 1–150 会话、图片边界反例和 500/1000/5000 人人脸库用例；人脸管理请求固定单实例、识别请求租约路由三实例，分别给出容量结论。

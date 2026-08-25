@@ -101,16 +101,21 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--release-root", type=_path, required=True)
         _add_adapter_factory_arguments(command)
 
-    execute = subparsers.add_parser("execute-case", allow_abbrev=False)
-    execute.add_argument("--plan", type=_path, required=True)
-    execute.add_argument("--release-root", type=_path, required=True)
-    execute.add_argument("--case-id", required=True)
-    _add_adapter_factory_arguments(execute)
-    execute.add_argument(
-        "--allow-live-execution",
-        action="store_true",
-        help="显式允许执行器访问北向端点或调用已注册的阶段适配器",
-    )
+    for command_name in ("execute-case", "execute-sequence"):
+        execute = subparsers.add_parser(command_name, allow_abbrev=False)
+        execute.add_argument("--plan", type=_path, required=True)
+        execute.add_argument("--release-root", type=_path, required=True)
+        execute.add_argument(
+            "--case-id",
+            action="append" if command_name == "execute-sequence" else "store",
+            required=True,
+        )
+        _add_adapter_factory_arguments(execute)
+        execute.add_argument(
+            "--allow-live-execution",
+            action="store_true",
+            help="显式允许执行器访问北向端点或调用已注册的阶段适配器",
+        )
     return parser
 
 
@@ -172,6 +177,84 @@ def _execute_case(args: argparse.Namespace) -> int:
     return 0 if result.status == "passed" else 1
 
 
+async def _execute_sequence_async(args: argparse.Namespace) -> int:
+    coordinator = _coordinator(args)
+    case_ids = cast(list[str], args.case_id)
+    _print_json(
+        {
+            "event": "sequence_started",
+            "campaign_id": coordinator.plan.campaign_id,
+            "release_tag": coordinator.plan.release_tag,
+            "git_sha": coordinator.plan.git_sha,
+            "case_ids": case_ids,
+            "sequence_total": len(case_ids),
+        }
+    )
+    sys.stdout.flush()
+    for index, case_id in enumerate(case_ids, start=1):
+        _print_json(
+            {
+                "event": "case_started",
+                "case_id": case_id,
+                "sequence": index,
+                "sequence_total": len(case_ids),
+            }
+        )
+        sys.stdout.flush()
+        try:
+            result = await coordinator.execute_case(
+                case_id,
+                allow_live_execution=args.allow_live_execution,
+            )
+        except BaseException as error:
+            _print_json(
+                {
+                    "event": "case_ended",
+                    "case_id": case_id,
+                    "sequence": index,
+                    "status": "interrupted",
+                    "error_type": type(error).__name__,
+                }
+            )
+            sys.stdout.flush()
+            raise
+        _print_json(
+            {
+                "event": "case_ended",
+                "case_id": case_id,
+                "sequence": index,
+                "status": result.status,
+                "result": result.to_dict(),
+            }
+        )
+        sys.stdout.flush()
+        if result.status != "passed":
+            _print_json(
+                {
+                    "event": "sequence_ended",
+                    "completed": index,
+                    "sequence_total": len(case_ids),
+                    "status": "failed",
+                    "exit_code": 1,
+                }
+            )
+            return 1
+    _print_json(
+        {
+            "event": "sequence_ended",
+            "completed": len(case_ids),
+            "sequence_total": len(case_ids),
+            "status": "passed",
+            "exit_code": 0,
+        }
+    )
+    return 0
+
+
+def _execute_sequence(args: argparse.Namespace) -> int:
+    return asyncio.run(_execute_sequence_async(args))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
@@ -183,6 +266,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _status(args)
         if args.command == "execute-case":
             return _execute_case(args)
+        if args.command == "execute-sequence":
+            return _execute_sequence(args)
         raise ValueError(f"未知命令: {args.command}")
     except CoordinatorBlockedError as error:
         _print_json({"status": "blocked", "reason": str(error)})

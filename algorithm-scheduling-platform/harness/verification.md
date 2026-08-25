@@ -1877,3 +1877,39 @@ algorithm-scheduling-platform/.venv/bin/ruff check \
 最终结果为 `3284 passed, 3 skipped, 27 warnings`，用时 `666.64s`。三个 skip 仍仅因
 本机未运行 canonical `facerec-gpu0`，将由同 SHA 远端 7/7 Smoke 和 Campaign 门禁补足；
 该全量回归不替代 OpenSpec 11.9 的远端重建与新 attempt。
+
+## 2026-08-26 实时 ASR 最终消息门禁聚焦回归
+
+`da1f5e37` attempt 的 `OFF-UNIQUE-ASR-300` 在生成 74 份 `CLEAR` 运行时样本后失去 runner；
+`phase1-runner.log` 缺少当前 case 的规范结果、`END` 和退出码。平台随后自然排空到空队列且
+租约归零；三次有效样本均为队列/Outbox/Kafka lag/租约全 0 且 Orchestrator ready，
+后两次间隔超过 30 秒。PostgreSQL 中该批 300 个任务类型和节点也均为 `60`。
+这些是自然排空证据，不是缺失的 case 终态；该 attempt 不补写、不续跑。
+
+从 `algorithm-scheduling-platform/` 执行：
+
+```bash
+.venv/bin/python -m pytest -q tests/extreme_load/test_execution.py -k 'asr_success'
+.venv/bin/ruff check \
+  scripts/extreme_load/execution.py \
+  tests/extreme_load/test_execution.py
+.venv/bin/mypy --strict scripts/extreme_load/execution.py
+bash -n deploy/scripts/start-extreme-load-campaign-sequence
+.venv/bin/python -m pytest -q tests/extreme_load/test_coordinator.py \
+  -k 'execute_sequence or sequence_launcher or wrapper_is_local'
+.venv/bin/python -m pytest -q tests/extreme_load/test_mixed_soak_adapters.py \
+  -k finished_message
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q tests/extreme_load
+```
+
+实际结果依次为 `2 passed`、`3 passed`、`1 passed` 和完整 Campaign `424 passed`；平台
+权威全量为 `3288 passed, 3 skipped, 27 warnings`，用时 `664.19s`。三个 skip 仍仅因
+本机未运行 canonical `facerec-gpu0`，27 条 warning 均为既有 Python fork
+`DeprecationWarning`。Ruff、strict Mypy、compileall、Bash syntax、Harness `5 passed` 和
+OpenSpec strict 通过。回归证明：成功会话只
+收到中间消息但 `finished_message_count=0` 时失败；收到 `finished=true` 时通过并在脱敏结果中
+记录 `finished_message_count`；阶段 4/6 mixed/soak 使用同一终态判断；顺序 CLI 和后台入口会
+发布逐案 START/END、最终退出码、PID 和 `0600` 日志。这只达到静态和单元验证层级，必须形成
+新 SHA、重建 11 镜像、创建新 attempt 并从阶段 0 重跑。`da1f5e37` 阶段 0 的
+`BASE-ASR-WS` 没有 `finished_message_count`，不能通过新门禁，因此 OpenSpec 12.1
+重新为待验证。

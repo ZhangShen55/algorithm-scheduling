@@ -44,6 +44,10 @@ Campaign 系统 SHALL 为每条用例维护唯一 ID、阶段、前置条件、�
 - **WHEN** 必需用例 ID 重复执行、没有执行或缺失原始证据
 - **THEN** 总报告 SHALL 失败关闭并列出精确 ID
 
+#### Scenario: 执行器在逐案终态前消失
+- **WHEN** Campaign runner 已产生请求或运行时指标，但在当前 case 发布规范结果和退出码之前消失
+- **THEN** 当前 attempt MUST 标记为执行器中断并保持只读，不得从中断 case 续写或用平台后续排空事实补写通过；重跑 MUST 使用新 seed、Campaign ID 和 write-once attempt
+
 ### Requirement: 离线负载必须分离调度突发与真实长视频
 Campaign 系统 SHALL 使用短媒体执行 100、300、1000 个唯一任务的提交突发，使用 45–60 分钟真实 T/S/P 视频执行 3、6、12、24、36 节活动课程阶梯。离线集合 MUST 覆盖 `PPT`、`ASR`、`TEACHER_BEHAVIOR`、`STUDENT_BEHAVIOR` 单项与混合组合。
 
@@ -170,7 +174,7 @@ Online Gateway SHALL 使用 `config.toml` 中可配置的出站连接池承接�
 - **THEN** 报告 SHALL 分别给出 Gateway 承接吞吐、租约申请/拒绝、各算子实测稳定吞吐和过载拒绝，并据此收敛后续 `declared_capacity`
 
 ### Requirement: 实时 ASR 必须按真实时钟执行会话阶梯
-Campaign 系统 SHALL 通过 `/api/online/asr/stream` 执行 1、10、24、30、60、90、150 会话阶梯，每个会话按真实采样速率发送音频，不得一次性灌入整段媒体来伪造实时压力。
+Campaign 系统 SHALL 通过 `/api/online/asr/stream` 执行 1、10、24、30、60、90、150 会话阶梯，每个会话按真实采样速率发送音频，不得一次性灌入整段媒体来伪造实时压力。每个分类为成功的会话 MUST 至少收到一条可解析的 JSON `finished=true` 终态消息；该门禁 MUST 同时适用于独立实时 ASR、混合和长稳用例。
 
 #### Scenario: 声明容量内的三十会话
 - **WHEN** 30 个 ASR WebSocket 会话持续推送实时音频
@@ -183,6 +187,10 @@ Campaign 系统 SHALL 通过 `/api/online/asr/stream` 执行 1、10、24、30、
 #### Scenario: 断线与重连
 - **WHEN** 负载生成器主动中断部分会话并重新连接
 - **THEN** 旧会话租约 SHALL 最终释放，新会话取得独立追踪和实例粘性，不得继续返回旧会话字幕
+
+#### Scenario: 中间消息不能冒充实时 ASR 终态
+- **WHEN** WebSocket 会话被归类为成功且收到一个或多个中间消息，但没有收到可解析的 `finished=true` 消息
+- **THEN** 当前会话 MUST 计入 `missing_final_message_count` 并使当前独立、混合或长稳用例失败；证据 SHALL 分别记录消息摘要数和 `finished=true` 消息数，不得保存字幕原文
 
 ### Requirement: 人脸库必须在三实例并发下保持一致
 Campaign 系统 SHALL 使用 500、1000、5000 人数据集覆盖人脸新增、批量新增、查询、搜索、删除和识别。Online Gateway 对管理接口 SHALL 固定转发到单一 FaceRec 管理实例，`/face/recognize` SHALL 通过租约在三个 FaceRec 识别实例间路由。三个识别实例 MUST 通过共享 MongoDB 观察到一致的人员事实；`save_person_photo=false` 时 MUST 不保存人脸原图。

@@ -556,11 +556,14 @@ class _NorthboundTrafficRunner:
         results = await runner.run_sessions(specs, assets.audio)
         self._categories.update(result.category.value for result in results)
         missing = sum(
-            result.category is ResultCategory.SUCCESS and not result.message_digests
+            result.category is ResultCategory.SUCCESS
+            and (not result.message_digests or result.finished_message_count <= 0)
             for result in results
         )
         if missing:
-            self._correctness_failures.append(f"{missing} 个实时 ASR 成功会话缺少隔离后的响应摘要")
+            self._correctness_failures.append(
+                f"{missing} 个实时 ASR 成功会话缺少 finished=true 终态消息"
+            )
 
     async def _lane(
         self,

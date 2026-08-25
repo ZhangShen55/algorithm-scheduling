@@ -2257,3 +2257,28 @@
 - Remaining risks: 必须完成平台权威全量回归、形成新 SHA，在 `.11` 重建/inspect 11 个同
   revision 镜像，恢复 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT 和 7/7 Smoke，然后新建
   write-once attempt 从阶段 0 重跑。
+
+## 2026-08-26 - Campaign runner 中断与实时 ASR 最终消息门禁
+
+- Previous state: `da1f5e37` attempt 在 `OFF-UNIQUE-ASR-300` 已提交并生成 74 份 `CLEAR`
+  指标后，runner 在发布规范结果和退出码前消失。平台继续自然排空，但旧执行器只要求成功
+  会话收到任意消息，可能把中间字幕误判为完整实时 ASR 终态。
+- Target state: 中断 attempt 保持只读且不得续写；后续 runner 脱离交互终端生命周期并记录
+  PID、日志、逐案终态和退出码。阶段 0/3 与阶段 4/6 中的实时 ASR 成功会话必须至少
+  收到一条可解析的 `finished=true`，消息摘要数和终态消息数分别记录。
+- Changed files: Campaign executor、mixed/soak 实时 ASR、顺序执行 CLI、后台启动脚本及聚焦
+  测试，当前 OpenSpec 设计/规格/任务、部署手册和三份 Harness 文档。历史 attempt、用户未
+  纳管文件和媒体源凭据均不改写。
+- Contract impact: 不改变 A 服务接口、ASR WebSocket 路径、算子协议、七算子/四服务拓扑或
+  容量声明；只收紧 Campaign 的成功证据和长时执行边界。
+- Verification command and environment: 平台 `.venv` 聚焦执行实时 ASR executor 为
+  `2 passed`、顺序执行/后台入口为 `3 passed`、mixed ASR 为 `1 passed`；完整 Campaign 为
+  `424 passed`。受影响文件 Ruff、strict Mypy、compileall、Bash syntax、Harness `5 passed`
+  和 OpenSpec strict 均通过。平台权威全量为 `3288 passed, 3 skipped, 27 warnings`，用时
+  `664.19s`；三个 skip 只因本机未运行 canonical `facerec-gpu0`。新 SHA、11 镜像和远端
+  新 attempt 仍为后续门禁。
+- Evidence tier and verdict: 达到真实远程业务排空、静态与单元层级。连续样本证明
+  队列、Outbox、Kafka lag 和租约均归零，PostgreSQL 中 300 任务/节点均为 `60`；这不补写
+  缺失 case。旧阶段 0 的 `BASE-ASR-WS` 没有 `finished_message_count`，不能通过新门禁；
+  因此 OpenSpec 12.1 重新为待验证。该结果不完成 11.10、12.1 或后续阶段，只授权
+  形成新 SHA 后重新发布。

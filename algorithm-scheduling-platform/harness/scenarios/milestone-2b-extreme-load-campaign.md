@@ -656,3 +656,24 @@ Campaign/release/SHA/case/phase 身份校验发布。
 - 修复只放行并发后与回调一致的同终态；竞争后为冲突终态时仍失败关闭。当前
   attempt 整体阻断，修复必须形成新 SHA、重建 11 个同 revision 镜像，再以新 seed、
   Campaign ID 和 write-once attempt 从阶段 0 重跑。
+
+## 2026-08-26 - `da1f5e37` Campaign runner 中断与实时 ASR 终态收敛
+
+- 当前 attempt 为 `full-campaign-da1f5e37-20260825234811`。阶段 0、四条阶段 1 单泳道、
+  PPT 100/300/1000 和 ASR 100 均已发布 `passed` 规范结果。
+- `OFF-UNIQUE-ASR-300` 已开始并生成 74 份运行时样本；最后样本护栏为 `CLEAR`，活动队列
+  176、Outbox 0、Kafka lag 0，29 个容器健康且零重启。随后 Campaign runner 进程消失，
+  `phase1-runner.log` 只有 `START`，没有规范 case 结果、`END` 或退出码。
+- 平台未随 runner 中断：已接受任务继续自然排空。`2026-08-26 01:09:59`、
+  `01:10:59`、`01:12:10 +08:00` 三次只读样本均为活动队列 0、Outbox 0、三个必需
+  Kafka 消费组总 lag 0、21 实例活跃租约合计 0、Orchestrator ready；最后两份
+  有效样本间隔超过 30 秒。PostgreSQL 只读核对显示该批 300 条课程任务类型和 300 条
+  ASR 节点均为 `status=60`。这些事实只能证明平台排空，不得补写
+  `OFF-UNIQUE-ASR-300` 通过。整个 attempt 作为执行器中断只读保留，后续 case 不在其中续写。
+- 下一次执行使用脱离交互终端生命周期的持久 runner，记录 PID、日志路径、逐案 START/END 和
+  退出码。任一 case 缺少规范结果或 runner 异常消失时，当前 attempt 立即阻断。
+- 实时 ASR 执行器只在成功会话至少收到一条 `finished=true` 时判定存在终态；收到中间消息但
+  没有终态仍计入 `missing_final_message_count`。该规则同时收紧阶段 0/3 独立用例和
+  阶段 4/6 混合、长稳适配器。消息摘要和终态消息计数分别进入脱敏证据，不写字幕原文。
+- `da1f5e37` 的阶段 0 结果只有 2294 个消息摘要，没有 `finished_message_count`；
+  因此无法按新门禁证明 `BASE-ASR-WS` 终态，当前 OpenSpec 12.1 重新标为待新 SHA 验证。

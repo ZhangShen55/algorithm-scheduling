@@ -372,6 +372,25 @@ Campaign ID 和 attempt root；锁以非阻塞独占方式取得，并在该 cas
 `OFF-UNIQUE-PPT-100` 规范 case，也不继续后续用例。修复必须形成新完整 SHA，
 同 revision 重建 11 个镜像并以新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑。
 
+### 18. Campaign 执行器中断和实时 ASR 终态必须失败关闭
+
+`da1f5e37e64aa429ec8538bb6ccd5bd504017604` 的新 attempt 已完成阶段 0、四条阶段 1
+单泳道、PPT 100/300/1000 和 ASR 100。`OFF-UNIQUE-ASR-300` 已提交任务并持续采集 74 份
+`CLEAR` 指标，但负责等待排空的 Campaign runner 进程在没有写出 case 终态和退出码时消失。
+平台继续把已接受任务处理到活动队列、Outbox、Kafka lag 和租约归零，29 个容器保持健康且
+无重启。这证明平台排空正常，但不能补足缺失的 write-once case 结果；该 attempt 必须只读
+保留为“执行器中断”，不得从中断 case 续写或把后续排空事实反向伪造成通过。
+
+后续长时间 Campaign 必须由脱离交互终端生命周期的持久 runner 执行，启动时记录 PID、完整
+命令摘要和日志路径，逐案记录开始、规范结果、结束及退出码；runner 异常消失或日志缺少终态时
+立即阻断当前 attempt。修复形成新 SHA 后，以新 seed、Campaign ID 和 attempt 从阶段 0 重跑。
+
+实时 ASR 的成功不能只依赖“收到过任意消息”。中间字幕、状态或握手消息都不能替代协议终态；
+只有成功会话至少收到一条可解析的 `finished=true` 消息时，`missing_final_message_count` 才能为
+零。这一门禁同时适用于阶段 0/3 的独立实时 ASR 用例和阶段 4/6 的混合、长稳负载；
+任一声称成功的会话缺少终态时，对应 case 必须失败关闭。执行证据同时记录消息摘要数和
+`finished=true` 消息数，不保存字幕原文，避免任何阶段把中间响应误判为完整会话成功。
+
 ## Risks / Trade-offs
 
 - [风险] 1000 提交与 36 长课可能产生大量 `/data/course` 临时文件。 → 短/长媒体分阶段，进入新阶梯前重新预估，低于 15%/150 GiB 禁止加压，低于 10%/100 GiB 立即停止。
