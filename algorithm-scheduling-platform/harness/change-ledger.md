@@ -2251,7 +2251,7 @@
   `InvalidNodeTransition`；修复后 PPT 适配器与 runtime 聚焦回归为 `39 passed`，真实
   PostgreSQL 双线程竞态为 `1 passed`，Ruff 与 strict Mypy 通过。同状态重复还会核对
   已持久化载荷，异状态和同状态不同载荷均不会被吞掉。该结果达到本地静态、单元与
-  真实 PostgreSQL 集成层；平台权威全量为 `3283 passed, 3 skipped, 27 warnings`，三个 skip
+  真实 PostgreSQL 集成层；平台权威全量为 `3284 passed, 3 skipped, 27 warnings`，三个 skip
   仍只是本机缺少 canonical `facerec-gpu0`。当前仍不完成 OpenSpec 11.9 或任何远端
   Campaign 阶段。
 - Remaining risks: 必须完成平台权威全量回归、形成新 SHA，在 `.11` 重建/inspect 11 个同

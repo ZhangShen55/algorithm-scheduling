@@ -1874,6 +1874,6 @@ algorithm-scheduling-platform/.venv/bin/ruff check \
 11 镜像重建、远端就绪/Smoke 和新 attempt 阶段 0 仍属必需后续门禁。
 
 补强后在平台 `.venv` 使用权威 `PYTHONPATH="$PWD:$PWD/.."` 重跑完整 `tests`，
-最终结果为 `3283 passed, 3 skipped, 27 warnings`，用时 `667.44s`。三个 skip 仍仅因
+最终结果为 `3284 passed, 3 skipped, 27 warnings`，用时 `666.64s`。三个 skip 仍仅因
 本机未运行 canonical `facerec-gpu0`，将由同 SHA 远端 7/7 Smoke 和 Campaign 门禁补足；
 该全量回归不替代 OpenSpec 11.9 的远端重建与新 attempt。
