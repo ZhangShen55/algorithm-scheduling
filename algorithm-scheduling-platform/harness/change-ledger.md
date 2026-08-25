@@ -2156,3 +2156,18 @@
 - Remaining risks: 目标机仍运行 `0ebaa126`；必须推送新 SHA、同 revision 重建七算子四平台、
   恢复 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT 和 7/7 Smoke，再用新 seed/Campaign ID/
   write-once attempt 从阶段 0 重跑。旧 attempt 的成功 case 只能作为历史诊断。
+
+## 2026-08-25 - 阶段 1 catalog 语义与阶梯依赖补齐
+
+- Previous state: OpenSpec 12.2 要求四条单泳道和 `3/6/12/24/36` 长课阶梯，但旧 catalog
+  没有独立阶段 1 单泳道 ID，五档长课也都只依赖阶段 0，允许跳过低档直接执行高档。
+- Target state: 阶段 1 单泳道与阶段 0 基线、阶段 2 唯一提交保持不同 ID；长课只有在四条
+  单泳道和上一档均通过时逐级解锁。
+- Changed files: 极限负载 catalog、catalog 单元测试、OpenSpec 设计/规格和三份 Harness 记录；
+  catalog schema 升为 3，旧 write-once plan 继续按原 schema 只读保留。
+- Contract impact: 不改变 A 服务接口、任务字段、四服务边界、算子合同或任务状态；只收紧
+  Campaign 执行顺序和证据归属。
+- Verification command and environment: 平台 `.venv` 执行 catalog、coordinator、executor
+  聚焦套件共 `88 passed`；Ruff 与 strict Mypy 通过。
+- Evidence tier and verdict: 达到静态与单元验证层级，允许形成新发布 SHA；OpenSpec 12.2
+  仍为未执行，必须在 `.11` 同 revision 发布后创建新 attempt 并从阶段 0 顺序重跑。

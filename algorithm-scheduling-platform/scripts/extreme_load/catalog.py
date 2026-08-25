@@ -458,6 +458,18 @@ def default_catalog() -> CampaignCatalog:
     previous_gate = _append_phase(cases, baseline, prerequisite_gate=None)
 
     offline: list[CaseSpec] = []
+    single_lane_ids: list[str] = []
+    for task_type in ("PPT", "ASR", "TEACHER_BEHAVIOR", "STUDENT_BEHAVIOR"):
+        case_id = f"OFF-LANE-{task_type.replace('_BEHAVIOR', '')}"
+        single_lane_ids.append(case_id)
+        offline.append(
+            _catalog_case(
+                CampaignPhase.OFFLINE,
+                case_id,
+                load={"kind": "offline_baseline", "task_types": [task_type], "count": 1},
+                fixture_ids=_SHORT_FIXTURES,
+            )
+        )
     combinations = {
         "PPT": "ppt_only",
         "ASR": "asr_only",
@@ -519,16 +531,25 @@ def default_catalog() -> CampaignCatalog:
                 fixture_ids=_SHORT_FIXTURES,
             )
         )
+    previous_long_course_id: str | None = None
     for count in (3, 6, 12, 24, 36):
+        case_id = f"OFF-LONG-COURSE-{count}"
+        prerequisites = (
+            tuple(single_lane_ids)
+            if previous_long_course_id is None
+            else (previous_long_course_id,)
+        )
         offline.append(
             _catalog_case(
                 CampaignPhase.OFFLINE,
-                f"OFF-LONG-COURSE-{count}",
+                case_id,
                 load={"kind": "long_course", "count": count},
                 fixture_ids=_LONG_FIXTURES,
+                prerequisites=prerequisites,
                 timeout_seconds=28_800,
             )
         )
+        previous_long_course_id = case_id
     for percent in (1, 5, 20):
         offline.append(
             _catalog_case(
@@ -754,4 +775,4 @@ def default_catalog() -> CampaignCatalog:
         ),
     ]
     _append_phase(cases, soak, prerequisite_gate=previous_gate)
-    return CampaignCatalog(schema_version=2, cases=tuple(cases))
+    return CampaignCatalog(schema_version=3, cases=tuple(cases))

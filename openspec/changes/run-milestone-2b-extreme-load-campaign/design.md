@@ -87,6 +87,11 @@ A 服务模拟器默认从 Mac 或另一台内网主机运行，不在 `192.168.
 - 真实长课：3、6、12、24、36 节，覆盖 PPT、ASR、教师行为、学生行为和四类混合 `task_types`。
 - 优先级：先堆积 100/300 个 `NORMAL`，再插入 10/30 个 `URGENT`；只允许超越尚未领取的 `NORMAL`，不抢占已运行节点。
 
+阶段 1 使用独立的 `OFF-LANE-PPT`、`OFF-LANE-ASR`、`OFF-LANE-TEACHER` 和
+`OFF-LANE-STUDENT` 建立单泳道事实，不能复用阶段 0 的 `BASE-OFFLINE-*`，也不能用属于
+阶段 2 突发语义的 `OFF-UNIQUE-*-100/300/1000` 冒充。`OFF-LONG-COURSE-3` 必须等待四条
+单泳道全部通过；后续 `6 -> 12 -> 24 -> 36` 每档只在上一档通过且护栏允许时解锁。
+
 优先级顺序证据以 PostgreSQL 节点事实为准。Control 课程查询的每个节点字典返回可空
 `claimed_at` 和 `started_at`：前者表示工作节点已被领取，后者表示真正进入执行。
 Campaign 不得用客户端发送时间、响应顺序或 `updated_at` 代替这两个数据库时间事实。

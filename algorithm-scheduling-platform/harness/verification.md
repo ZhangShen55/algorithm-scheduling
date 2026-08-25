@@ -1776,3 +1776,20 @@ GPU 容器；Campaign 聚焦 `126 passed`，PPT runtime `16 passed`，四服务�
 `25/70/44/49 passed`。Ruff、strict Mypy、`compileall`、Harness `5 passed`、OpenSpec strict
 和 `git diff --check` 全部通过。该记录证明新修复具备提交和远端重建条件，不将本地结果表达
 为 12.2/12.3 已完成。
+
+## 2026-08-25 阶段 1 catalog 与逐级前置验证
+
+```bash
+.venv/bin/python -m pytest -q \
+  tests/extreme_load/test_catalog.py \
+  tests/extreme_load/test_coordinator.py \
+  tests/extreme_load/test_execution.py
+.venv/bin/ruff check \
+  scripts/extreme_load/catalog.py \
+  tests/extreme_load/test_catalog.py
+.venv/bin/mypy --strict scripts/extreme_load/catalog.py
+```
+
+实际结果为 `88 passed`，Ruff 与 strict Mypy 均通过。新增断言证明四个 `OFF-LANE-*` 用例
+各自只提交一个对应任务类型并依赖 `PHASE-0-COMPLETE`；3 节长课依赖四条单泳道，后续
+`6/12/24/36` 逐级依赖上一档。旧阶段 0 与 `OFF-UNIQUE-*` 证据不能补足这些新 ID。

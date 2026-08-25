@@ -24,7 +24,7 @@ from scripts.extreme_load.core import ReproducibleIdentity
 def test_default_catalog_covers_all_seven_phases_and_has_complete_cases() -> None:
     catalog = default_catalog()
 
-    assert catalog.schema_version == 2
+    assert catalog.schema_version == 3
     assert len(catalog.cases) > 140
     assert {case.phase for case in catalog.cases} == set(CampaignPhase)
     assert len({case.case_id for case in catalog.cases}) == len(catalog.cases)
@@ -53,6 +53,37 @@ def test_default_catalog_covers_all_seven_phases_and_has_complete_cases() -> Non
         case for case in catalog.cases if case.case_id == "SOAK-8H-OPTIONAL"
     )
     assert optional_soak.required is False
+
+
+def test_offline_phase_has_distinct_single_lanes_and_ordered_long_course_ladder() -> None:
+    catalog = default_catalog()
+    by_id = {case.case_id: case for case in catalog.cases}
+    lane_ids = (
+        "OFF-LANE-PPT",
+        "OFF-LANE-ASR",
+        "OFF-LANE-TEACHER",
+        "OFF-LANE-STUDENT",
+    )
+
+    for case_id, task_type in zip(
+        lane_ids,
+        ("PPT", "ASR", "TEACHER_BEHAVIOR", "STUDENT_BEHAVIOR"),
+        strict=True,
+    ):
+        case = by_id[case_id]
+        assert case.phase is CampaignPhase.OFFLINE
+        assert case.load == {
+            "kind": "offline_baseline",
+            "task_types": [task_type],
+            "count": 1,
+        }
+        assert "PHASE-0-COMPLETE" in case.prerequisites
+
+    assert set(lane_ids).issubset(by_id["OFF-LONG-COURSE-3"].prerequisites)
+    for current, previous in ((6, 3), (12, 6), (24, 12), (36, 24)):
+        assert f"OFF-LONG-COURSE-{previous}" in by_id[
+            f"OFF-LONG-COURSE-{current}"
+        ].prerequisites
 
 
 def test_catalog_rejects_duplicate_ids_unknown_prerequisites_and_cycles() -> None:

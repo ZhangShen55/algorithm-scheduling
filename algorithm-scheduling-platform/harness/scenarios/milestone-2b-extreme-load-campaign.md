@@ -546,3 +546,15 @@ Campaign/release/SHA/case/phase 身份校验发布。
   至少一个节点为 `70`；整体课程失败不再被当作节点归因证据。
 - 规范结果继续要求最终活动队列、Outbox、Kafka lag 和全部容量租约归零。该实现只为新 SHA
   的阶段 2 建立可执行门禁，不回写旧 attempt，也不表示 12.3 已完成。
+
+## 2026-08-25 - 阶段 1 单泳道与长课顺序门禁补齐
+
+- 只读审计确认旧 catalog 的阶段 1 直接从 `OFF-UNIQUE-*-100/300/1000` 开始，这组用例属于
+  OpenSpec 12.3；阶段 0 的 `BASE-OFFLINE-*` 也不能跨阶段复用，因此 12.2 缺少四个独立
+  单泳道用例。
+- 新 catalog schema 3 增加 `OFF-LANE-PPT/ASR/TEACHER/STUDENT`，均使用短 T/S/P fixture、
+  只提交一个对应任务类型，并显式依赖 `PHASE-0-COMPLETE`。
+- `OFF-LONG-COURSE-3` 同时依赖四条单泳道；`6/12/24/36` 依次依赖上一档。任一低档未通过、
+  护栏到达警戒线或产生 write-once 失败证据时，高档保持 blocked，不能跳级执行。
+- 本地聚焦验证为 `88 passed`，Ruff 和 strict Mypy 通过。该结果只补齐 12.2 的执行入口，
+  不代表远端发布、阶段 0 重跑或 12.2 已完成。
