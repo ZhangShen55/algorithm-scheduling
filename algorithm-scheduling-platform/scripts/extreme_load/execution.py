@@ -77,8 +77,8 @@ from .persons import (
 )
 from .plan import CampaignPlan, execution_path, read_case_evidence
 from .realtime_asr import (
-    AudioStreamFixture,
     RealtimeAsrRunner,
+    build_asr_online_fixture,
     build_reconnect_specs,
     build_session_specs,
 )
@@ -1218,12 +1218,11 @@ class CampaignCaseExecutor:
             max_bytes=256 * 1024 * 1024,
         )
         with wave.open(io.BytesIO(content), "rb") as stream:
-            fixture = AudioStreamFixture(
+            fixture = build_asr_online_fixture(
                 pcm=stream.readframes(stream.getnframes()),
                 sample_rate_hz=stream.getframerate(),
                 sample_width_bytes=stream.getsampwidth(),
                 channels=stream.getnchannels(),
-                chunk_duration_seconds=0.2,
             )
         sessions = _load_int(case, "sessions", default=10)
         specs = build_session_specs(self.identity, case.case_id, sessions)
@@ -1253,11 +1252,14 @@ class CampaignCaseExecutor:
             if item.category is ResultCategory.SUCCESS
             and (not item.message_digests or item.finished_message_count <= 0)
         ]
+        inconsistent_counts = [
+            item.session_id for item in results if not item.chunk_counts_consistent
+        ]
         return CaseRunOutcome(
-            "failed" if failures or missing_messages else "passed",
+            "failed" if failures or missing_messages or inconsistent_counts else "passed",
             (
-                "实时 ASR 存在非预期失败或未等到最终消息"
-                if failures or missing_messages
+                "实时 ASR 存在非预期失败、未等到完整语句或分块计数不一致"
+                if failures or missing_messages or inconsistent_counts
                 else "实时 ASR 会话结果符合合同"
             ),
             len(results),
@@ -1271,6 +1273,33 @@ class CampaignCaseExecutor:
                 ),
                 "failed_session_count": len(failures),
                 "missing_final_message_count": len(missing_messages),
+                "inconsistent_chunk_count": len(inconsistent_counts),
+                "media_chunk_count": sum(
+                    item.sent_media_chunk_count for item in results
+                ),
+                "tail_silence_chunk_count": sum(
+                    item.sent_tail_silence_chunk_count for item in results
+                ),
+                "planned_media_duration_seconds": sum(
+                    item.planned_media_duration_seconds for item in results
+                ),
+                "sent_media_duration_seconds": sum(
+                    item.sent_media_duration_seconds for item in results
+                ),
+                "send_elapsed_seconds": sum(
+                    item.send_elapsed_seconds for item in results
+                ),
+                "max_realtime_factor": max(
+                    (item.realtime_factor for item in results),
+                    default=0.0,
+                ),
+                "max_positive_schedule_drift_seconds": max(
+                    (
+                        item.max_positive_schedule_drift_seconds
+                        for item in results
+                    ),
+                    default=0.0,
+                ),
             },
         )
 

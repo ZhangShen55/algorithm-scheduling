@@ -174,7 +174,12 @@ Online Gateway SHALL 使用 `config.toml` 中可配置的出站连接池承接�
 - **THEN** 报告 SHALL 分别给出 Gateway 承接吞吐、租约申请/拒绝、各算子实测稳定吞吐和过载拒绝，并据此收敛后续 `declared_capacity`
 
 ### Requirement: 实时 ASR 必须按真实时钟执行会话阶梯
-Campaign 系统 SHALL 通过 `/api/online/asr/stream` 执行 1、10、24、30、60、90、150 会话阶梯，每个会话按真实采样速率发送音频，不得一次性灌入整段媒体来伪造实时压力。每个分类为成功的会话 MUST 至少收到一条可解析的 JSON `finished=true` 终态消息；该门禁 MUST 同时适用于独立实时 ASR、混合和长稳用例。
+Campaign 系统 SHALL 通过 `/api/online/asr/stream` 执行 1、10、24、30、60、90、150 会话阶梯，每个会话按真实采样速率发送音频，不得一次性灌入整段媒体来伪造实时压力。每个分类为成功的会话 MUST 至少收到一条可解析的 JSON `finished=true` 完整语句消息；该门禁 MUST 同时适用于独立实时 ASR、混合和长稳用例。
+
+Campaign 生产路径 MUST 按 ASR Online 稳定合同使用 16 kHz、单声道、signed 16-bit PCM，
+每块固定 7680 samples，即 `0.48s/15360 bytes`。最后一个不足整块的媒体帧 MUST 补零到完整
+块，并在媒体结束后追加 6 个同尺寸静音块，再在有界窗口内等待完整语句消息。静音收尾上限
+MUST 不超过 12 块，且该行为 MUST 由独立、混合和长稳路径共用。
 
 #### Scenario: 声明容量内的三十会话
 - **WHEN** 30 个 ASR WebSocket 会话持续推送实时音频
@@ -188,9 +193,33 @@ Campaign 系统 SHALL 通过 `/api/online/asr/stream` 执行 1、10、24、30、
 - **WHEN** 负载生成器主动中断部分会话并重新连接
 - **THEN** 旧会话租约 SHALL 最终释放，新会话取得独立追踪和实例粘性，不得继续返回旧会话字幕
 
-#### Scenario: 中间消息不能冒充实时 ASR 终态
+#### Scenario: 中间消息不能冒充实时 ASR 完整语句
 - **WHEN** WebSocket 会话被归类为成功且收到一个或多个中间消息，但没有收到可解析的 `finished=true` 消息
-- **THEN** 当前会话 MUST 计入 `missing_final_message_count` 并使当前独立、混合或长稳用例失败；证据 SHALL 分别记录消息摘要数和 `finished=true` 消息数，不得保存字幕原文
+- **THEN** 当前会话 MUST 计入 `missing_final_message_count` 并使当前独立、混合或长稳用例失败；该兼容字段表示缺少完整语句而不是缺少连接终态，证据 SHALL 分别记录消息摘要数和 `finished=true` 消息数，不得保存字幕原文
+
+#### Scenario: 生产分块和有界静音收尾保持一致
+- **WHEN** 独立实时 ASR、混合或长稳适配器从同一 WAV 构造会话输入
+- **THEN** 三条路径 MUST 使用同一 7680 samples 构造器，全部发送块均为 15360 bytes，末块补齐并追加 6 个静音块；任何路径回退到 `0.2s/3200 samples` MUST 使回归门禁失败
+
+#### Scenario: finished 不是连接级 EOS
+- **WHEN** 算子发送一条 `finished=true` 后继续接收同一 WebSocket 的后续音频
+- **THEN** Campaign SHALL 只把该消息解释为完整语句证据，不得宣称会话已由协议终结或最后残余文本已获得连接级可靠 flush
+
+#### Scenario: 绝对 deadline 防止发送节拍累计漂移
+- **WHEN** 单次 `send()` 或事件循环存在小于一个分块周期的可恢复延迟
+- **THEN** Campaign MUST 以单调时钟和绝对 deadline 调度后续块，分别记录计划媒体时长、实际已发送媒体时长、发送耗时、实时因子和最大正漂移，不得把每块延迟递归累加；独立、混合和长稳阶段 MUST 保留相同证据字段
+
+#### Scenario: 负载机无法维持实时节拍
+- **WHEN** 最大正调度漂移超过配置的有界门槛，默认为一个 `0.48s` 分块周期
+- **THEN** 当前会话 MUST 停止继续发送并归类为负载机限制，不得归因为 Gateway 或 ASR 算子失败
+
+#### Scenario: 完整语句后的接收通道异常
+- **WHEN** 接收协程先收到 `finished=true`，随后因非预期响应通道异常结束
+- **THEN** runner MUST 检查该协程异常并把会话归类为连接失败，只有 runner 主动取消 receiver 产生的 `CancelledError` 可被忽略
+
+#### Scenario: 容量拒绝立即停止发送
+- **WHEN** 会话收到已定义的 `50301` 容量拒绝
+- **THEN** runner MUST 停止后续媒体块和尾静音块，最终类别 MUST 为 `overload`，且证据 MUST 满足 `sent_chunk_count = sent_media_chunk_count + sent_tail_silence_chunk_count`
 
 ### Requirement: 人脸库必须在三实例并发下保持一致
 Campaign 系统 SHALL 使用 500、1000、5000 人数据集覆盖人脸新增、批量新增、查询、搜索、删除和识别。Online Gateway 对管理接口 SHALL 固定转发到单一 FaceRec 管理实例，`/face/recognize` SHALL 通过租约在三个 FaceRec 识别实例间路由。三个识别实例 MUST 通过共享 MongoDB 观察到一致的人员事实；`save_person_photo=false` 时 MUST 不保存人脸原图。

@@ -2282,3 +2282,47 @@
   缺失 case。旧阶段 0 的 `BASE-ASR-WS` 没有 `finished_message_count`，不能通过新门禁；
   因此 OpenSpec 12.1 重新为待验证。该结果不完成 11.10、12.1 或后续阶段，只授权
   形成新 SHA 后重新发布。
+
+## 2026-08-26 - `5a5760ef` 实时 ASR 权威分块与有界收尾修复
+
+- Previous state: 第一个 `5a5760ef` attempt 被运行环境回收，只留下 sequence/首案开始事件；
+  第二个 attempt 的持久 runner 正常完成前 12 案，但 `BASE-ASR-WS` 用 2294 个错误尺寸媒体块
+  只收到中间消息，没有 `finished=true`，以规范失败和 `exit_code=1` 停止。
+- Target state: 两个 attempt 均保持只读；独立、混合和长稳统一遵守 ASR Online 的
+  `0.48s/7680 samples/15360 bytes`，补齐最后媒体块、追加 6 个有界静音块并在有界窗口等待
+  至少一条完整语句消息。
+- Changed files: Campaign 实时 ASR 共享实现、独立 executor、mixed/soak 适配器及聚焦测试；
+  当前 OpenSpec 与三份 Harness 文档。未修改 ASR 算子、Online Gateway、历史 attempt、媒体、
+  模型、用户未纳管文件或 `.12` 登录凭据。
+- Contract impact: 不改变 A 服务 WebSocket、算子路径、请求/响应字段、会话粘性或租约合同；
+  `finished=true` 明确解释为完整语句边界而不是连接终态，本轮不增加 EOS/flush 控制帧。
+- Verification command and environment: 平台 `.venv` 的三个聚焦测试文件为 `64 passed`；
+  受影响源文件与测试 Ruff、三个源文件 strict Mypy、compileall 均通过；平台权威全量为
+  `3303 passed, 3 skipped, 27 warnings`。`.11` 同一 12 秒 WAV
+  现场对照证明：旧分块无完整语句，权威分块无尾静音仍无完整语句，追加 6 个静音块后产生
+  1 条 `finished=true`，且租约均正常释放。
+- Evidence tier and verdict: 达到静态、单元和真实远端算子合同探针层级，完成 OpenSpec 10.22；
+  当前只授权形成新 SHA、在 `.11` 重建同 revision 11 镜像并创建全新 attempt。11.10、12.1
+  和阶段 1–6 仍未完成，不能发布里程碑 2B 全部符合。
+
+## 2026-08-26 - 实时 ASR 发送节拍与异常分类复审收敛
+
+- Previous state: 权威分块与尾静音已实现，但 receiver 非预期异常被统一收集后没有检查；
+  每块后相对 sleep 会把 `send()` 与事件循环耗时累积到后续节拍；收到容量拒绝后的
+  发送循环只依赖连接关闭间接停止。
+- Target state: receiver 自行结束必须检查异常，只忽略 runner 主动取消它产生的取消；
+  以单调绝对 deadline 调度 0.48 秒分块，分别记录计划媒体时长、实际已发送媒体时长、
+  发送耗时、实时因子和
+  最大正漂移，超过有界门槛归类为负载机限制；`50301` 立即阻止后续发块且保持
+  `overload` 优先级；已发送总数必须等于媒体块与静音块之和。
+- Changed files: Campaign 实时 ASR runner、独立 executor 证据、mixed/soak 计数门禁与聚焦
+  测试，当前 OpenSpec 设计/规格/任务和三份 Harness 文档。不改 ASR 算子、Gateway、
+  两个冻结 attempt、媒体或用户未纳管文件。
+- Contract impact: 不改 HTTP/WebSocket 路径、ASR 字段、算子协议、租约或容量声明；
+  只收紧 Campaign 客户端的节拍、分类和证据一致性。
+- Verification command and environment: 平台 `.venv` 的三个聚焦测试文件为 `83 passed`，
+  完整 `tests/extreme_load` 为 `458 passed`；受影响文件 Ruff、三个源文件 strict Mypy 和
+  compileall 通过。新增回归显式覆盖 receiver
+  意外取消、父任务取消传播、非有限超时参数、计划/实发媒体时长分离及 mixed/soak 实时证据。
+- Evidence tier and verdict: 达到静态与单元验证层级；新完整 SHA、`.11` 的 11 镜像重建、
+  完整拓扑恢复和新 write-once attempt 仍属于 11.10，本地结果不替代 12.1–12.8。

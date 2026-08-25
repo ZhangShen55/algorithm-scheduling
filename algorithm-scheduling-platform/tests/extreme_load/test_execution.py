@@ -36,7 +36,7 @@ from scripts.extreme_load.execution import (
 )
 from scripts.extreme_load.online_images import ScheduledImageRequest
 from scripts.extreme_load.plan import CampaignPlan, build_campaign_plan, read_case_evidence
-from scripts.extreme_load.realtime_asr import AsrSessionResult
+from scripts.extreme_load.realtime_asr import AsrSessionResult, AudioStreamFixture
 from scripts.extreme_load.report import validate_public_payload
 
 
@@ -1026,8 +1026,11 @@ async def test_asr_success_requires_finished_message_not_only_any_message(
         async def run_sessions(
             self,
             specs: Sequence[Any],
-            _fixture: object,
+            fixture: object,
         ) -> tuple[AsrSessionResult, ...]:
+            assert isinstance(fixture, AudioStreamFixture)
+            assert fixture.chunk_duration_seconds == 0.48
+            assert fixture.chunk_bytes == 15360
             return tuple(
                 AsrSessionResult(
                     spec.session_id,
@@ -1036,6 +1039,7 @@ async def test_asr_success_requires_finished_message_not_only_any_message(
                     1,
                     ("intermediate-message-digest",),
                     0,
+                    sent_media_chunk_count=1,
                 )
                 for spec in specs
             )
@@ -1052,6 +1056,14 @@ async def test_asr_success_requires_finished_message_not_only_any_message(
         "finished_message_count": 0,
         "failed_session_count": 0,
         "missing_final_message_count": 1,
+        "inconsistent_chunk_count": 0,
+        "media_chunk_count": 1,
+        "tail_silence_chunk_count": 0,
+        "planned_media_duration_seconds": 0.0,
+        "sent_media_duration_seconds": 0.0,
+        "send_elapsed_seconds": 0.0,
+        "max_realtime_factor": 0.0,
+        "max_positive_schedule_drift_seconds": 0.0,
     }
 
 
@@ -1073,8 +1085,11 @@ async def test_asr_success_records_received_finished_message(
         async def run_sessions(
             self,
             specs: Sequence[Any],
-            _fixture: object,
+            fixture: object,
         ) -> tuple[AsrSessionResult, ...]:
+            assert isinstance(fixture, AudioStreamFixture)
+            assert fixture.chunk_duration_seconds == 0.48
+            assert fixture.chunk_bytes == 15360
             return tuple(
                 AsrSessionResult(
                     spec.session_id,
@@ -1083,6 +1098,7 @@ async def test_asr_success_records_received_finished_message(
                     1,
                     ("finished-message-digest",),
                     1,
+                    sent_media_chunk_count=1,
                 )
                 for spec in specs
             )
@@ -1099,6 +1115,14 @@ async def test_asr_success_records_received_finished_message(
         "finished_message_count": 1,
         "failed_session_count": 0,
         "missing_final_message_count": 0,
+        "inconsistent_chunk_count": 0,
+        "media_chunk_count": 1,
+        "tail_silence_chunk_count": 0,
+        "planned_media_duration_seconds": 0.0,
+        "sent_media_duration_seconds": 0.0,
+        "send_elapsed_seconds": 0.0,
+        "max_realtime_factor": 0.0,
+        "max_positive_schedule_drift_seconds": 0.0,
     }
 
 

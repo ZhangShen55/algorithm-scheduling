@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import wave
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import cast
@@ -277,6 +279,12 @@ async def test_mixed_asr_requires_finished_message_not_only_intermediate_message
                     sent_chunk_count=1,
                     message_digests=("intermediate-message-digest",),
                     finished_message_count=0,
+                    sent_media_chunk_count=1,
+                    planned_media_duration_seconds=0.1,
+                    sent_media_duration_seconds=0.1,
+                    send_elapsed_seconds=0.1,
+                    realtime_factor=1.0,
+                    max_positive_schedule_drift_seconds=0.01,
                 ),
             )
 
@@ -296,8 +304,45 @@ async def test_mixed_asr_requires_finished_message_not_only_intermediate_message
     )
 
     assert runner.snapshot().correctness_failures == (
-        "1 个实时 ASR 成功会话缺少 finished=true 终态消息",
+        "1 个实时 ASR 成功会话缺少 finished=true 完整语句消息",
     )
+    snapshot = runner.snapshot()
+    assert snapshot.asr_session_count == 1
+    assert snapshot.asr_sent_chunk_count == 1
+    assert snapshot.asr_sent_media_chunk_count == 1
+    assert snapshot.asr_sent_tail_silence_chunk_count == 0
+    assert snapshot.asr_planned_media_duration_seconds == pytest.approx(0.1)
+    assert snapshot.asr_sent_media_duration_seconds == pytest.approx(0.1)
+    assert snapshot.asr_send_elapsed_seconds == pytest.approx(0.1)
+    assert snapshot.asr_max_realtime_factor == pytest.approx(1.0)
+    assert snapshot.asr_max_positive_schedule_drift_seconds == pytest.approx(0.01)
+
+
+@pytest.mark.asyncio
+async def test_mixed_assets_use_the_asr_online_chunk_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _case("mixed", level="daily")
+    runner = mixed_soak_adapters._NorthboundTrafficRunner(_plan(case))
+
+    async def fake_fixture(descriptor: object, **_kwargs: object) -> bytes:
+        fixture_id = getattr(descriptor, "fixture_id", "")
+        if fixture_id == "online-image":
+            return b"image"
+        target = io.BytesIO()
+        with wave.open(target, "wb") as stream:
+            stream.setframerate(16_000)
+            stream.setsampwidth(2)
+            stream.setnchannels(1)
+            stream.writeframes(b"\x00\x00" * 7680)
+        return target.getvalue()
+
+    monkeypatch.setattr(mixed_soak_adapters, "_read_fixture_bytes", fake_fixture)
+
+    assets = await runner._load_assets()
+
+    assert assets.audio.chunk_duration_seconds == 0.48
+    assert assets.audio.chunk_bytes == 15360
 
 
 def test_factories_are_dynamically_loadable_by_the_existing_cli_contract() -> None:
@@ -331,6 +376,17 @@ async def test_mixed_adapter_records_expected_overload_and_requires_drain() -> N
     assert outcome.evidence["classification"] == "expected_overload"
     assert outcome.evidence["stable_capacity"] is False
     assert outcome.evidence["categories"] == {"overload": 100, "success": 900}
+    assert outcome.evidence["realtime_asr"] == {
+        "session_count": 0,
+        "sent_chunk_count": 0,
+        "sent_media_chunk_count": 0,
+        "sent_tail_silence_chunk_count": 0,
+        "planned_media_duration_seconds": 0.0,
+        "sent_media_duration_seconds": 0.0,
+        "send_elapsed_seconds": 0.0,
+        "max_realtime_factor": 0.0,
+        "max_positive_schedule_drift_seconds": 0.0,
+    }
     recovery = cast(Mapping[str, object], outcome.evidence["recovery"])
     assert recovery["queue_drained"] is True
     assert runner.profiles == [MIXED_PROFILES["extreme"]]

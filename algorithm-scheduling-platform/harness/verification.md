@@ -1913,3 +1913,73 @@ OpenSpec strict 通过。回归证明：成功会话只
 新 SHA、重建 11 镜像、创建新 attempt 并从阶段 0 重跑。`da1f5e37` 阶段 0 的
 `BASE-ASR-WS` 没有 `finished_message_count`，不能通过新门禁，因此 OpenSpec 12.1
 重新为待验证。
+
+## 2026-08-26 实时 ASR 权威分块与有界收尾聚焦回归
+
+`5a5760ef` 的持久 runner attempt 已证明 Gateway、租约和容器均正常，但 `BASE-ASR-WS`
+按 `0.2s/3200 samples` 发送 2294 块后没有任何 `finished=true`。case 文件 SHA-256 为
+`710b4c3c2fdb761a11daed57116215e5323f7ce79b68ab0d64d99307585e7840`，runner JSONL
+SHA-256 为 `6f29e89637fdedf0e530b035bc4d04319872dc3a54ac0adae0031d7fe618d18f`；原文件不修改。
+
+在平台目录执行：
+
+```bash
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/extreme_load/test_realtime_asr.py \
+  tests/extreme_load/test_execution.py \
+  tests/extreme_load/test_mixed_soak_adapters.py
+.venv/bin/ruff check \
+  scripts/extreme_load/realtime_asr.py \
+  scripts/extreme_load/execution.py \
+  scripts/extreme_load/mixed_soak_adapters.py \
+  tests/extreme_load/test_realtime_asr.py \
+  tests/extreme_load/test_execution.py \
+  tests/extreme_load/test_mixed_soak_adapters.py
+.venv/bin/mypy --strict \
+  scripts/extreme_load/realtime_asr.py \
+  scripts/extreme_load/execution.py \
+  scripts/extreme_load/mixed_soak_adapters.py
+.venv/bin/python -m compileall -q scripts/extreme_load
+```
+
+实际结果为 `64 passed`，Ruff、strict Mypy 和 compileall 通过。回归覆盖生产构造器严格使用
+`0.48s/7680 samples/15360 bytes`、末帧补齐、6 个有界尾静音块、延迟完整语句等待、严格
+JSON boolean `finished=true`，以及独立和 mixed/soak 使用同一合同。现场 12 秒 WAV 对照还
+证明权威分块但不加尾静音仍为完整语句 0，追加 6 块后为 1。该结果达到静态、单元和真实
+远端算子合同探针层级。随后平台权威全量为 `3303 passed, 3 skipped, 27 warnings`，用时
+`666.48s`；三个 skip 仍只因本机未运行 canonical `facerec-gpu0`，27 条 warning 均为既有
+Python fork `DeprecationWarning`。新 SHA、11 镜像和新 attempt 阶段 0 尚未完成。
+
+## 2026-08-26 实时 ASR 发送节拍与异常分类复审回归
+
+在平台目录执行：
+
+```bash
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/extreme_load/test_realtime_asr.py \
+  tests/extreme_load/test_execution.py \
+  tests/extreme_load/test_mixed_soak_adapters.py
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q tests/extreme_load
+.venv/bin/ruff check \
+  scripts/extreme_load/realtime_asr.py \
+  scripts/extreme_load/execution.py \
+  scripts/extreme_load/mixed_soak_adapters.py \
+  tests/extreme_load/test_realtime_asr.py \
+  tests/extreme_load/test_execution.py \
+  tests/extreme_load/test_mixed_soak_adapters.py \
+  ../orchestrator_service/app/infrastructure/ppt_slice.py
+.venv/bin/mypy --strict \
+  scripts/extreme_load/realtime_asr.py \
+  scripts/extreme_load/execution.py \
+  scripts/extreme_load/mixed_soak_adapters.py
+.venv/bin/python -m compileall -q scripts/extreme_load
+```
+
+实际结果为聚焦 `83 passed`、完整 Campaign `458 passed`，Ruff、strict Mypy 和 compileall
+均通过。回归使用可注入单调时钟证明发送耗时不递归累加，超过一个
+0.48 秒周期的正漂移归类为负载机限制；也覆盖收到完整语句后 receiver 异常、
+`50301` 后不再发块、已发送总数与媒体/静音分项的不变式，以及媒体时长、发送耗时、
+实时因子和最大正漂移的脱敏证据字段。新增回归显式覆盖 receiver 意外取消、父任务取消传播、
+非有限超时参数，并将计划媒体时长与实际已发送媒体时长分开；mixed/soak 同样输出这些实时
+证据。该结果达到静态和单元层级；必须形成新 SHA、
+在 `.11` 重建同 revision 11 镜像并以新 attempt 从阶段 0 重跑，才能完成 11.10/12.1。

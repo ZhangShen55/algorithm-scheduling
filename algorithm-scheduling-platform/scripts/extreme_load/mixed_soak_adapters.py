@@ -34,7 +34,12 @@ from .online_images import (
     build_mixed_image_requests,
 )
 from .plan import CampaignPlan, read_case_evidence
-from .realtime_asr import AudioStreamFixture, RealtimeAsrRunner, build_session_specs
+from .realtime_asr import (
+    AudioStreamFixture,
+    RealtimeAsrRunner,
+    build_asr_online_fixture,
+    build_session_specs,
+)
 from .stage_runtime import StageCaseAdapter, StageCaseOutcome
 
 StageKind = Literal["mixed", "soak"]
@@ -220,6 +225,15 @@ class TrafficSnapshot:
     latency_seconds: tuple[float, ...]
     accepted_task_ids: tuple[str, ...]
     correctness_failures: tuple[str, ...]
+    asr_session_count: int = 0
+    asr_sent_chunk_count: int = 0
+    asr_sent_media_chunk_count: int = 0
+    asr_sent_tail_silence_chunk_count: int = 0
+    asr_planned_media_duration_seconds: float = 0.0
+    asr_sent_media_duration_seconds: float = 0.0
+    asr_send_elapsed_seconds: float = 0.0
+    asr_max_realtime_factor: float = 0.0
+    asr_max_positive_schedule_drift_seconds: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -380,6 +394,15 @@ class _NorthboundTrafficRunner:
         self._accepted_task_ids: dict[str, None] = {}
         self._active_task_ids: dict[str, None] = {}
         self._correctness_failures: list[str] = []
+        self._asr_session_count = 0
+        self._asr_sent_chunk_count = 0
+        self._asr_sent_media_chunk_count = 0
+        self._asr_sent_tail_silence_chunk_count = 0
+        self._asr_planned_media_duration_seconds = 0.0
+        self._asr_sent_media_duration_seconds = 0.0
+        self._asr_send_elapsed_seconds = 0.0
+        self._asr_max_realtime_factor = 0.0
+        self._asr_max_positive_schedule_drift_seconds = 0.0
         self._round_count = 0
         self._assets: _RoundAssets | None = None
         self._assets_lock = asyncio.Lock()
@@ -399,12 +422,11 @@ class _NorthboundTrafficRunner:
                 max_bytes=256 * 1024 * 1024,
             )
             with wave.open(io.BytesIO(audio_bytes), "rb") as stream:
-                audio = AudioStreamFixture(
+                audio = build_asr_online_fixture(
                     pcm=stream.readframes(stream.getnframes()),
                     sample_rate_hz=stream.getframerate(),
                     sample_width_bytes=stream.getsampwidth(),
                     channels=stream.getnchannels(),
-                    chunk_duration_seconds=0.2,
                 )
             self._assets = _RoundAssets(
                 OnlineImageFixture("campaign-mixed-image", base64.b64encode(image_bytes).decode()),
@@ -555,6 +577,31 @@ class _NorthboundTrafficRunner:
         )
         results = await runner.run_sessions(specs, assets.audio)
         self._categories.update(result.category.value for result in results)
+        self._asr_session_count += len(results)
+        self._asr_sent_chunk_count += sum(result.sent_chunk_count for result in results)
+        self._asr_sent_media_chunk_count += sum(
+            result.sent_media_chunk_count for result in results
+        )
+        self._asr_sent_tail_silence_chunk_count += sum(
+            result.sent_tail_silence_chunk_count for result in results
+        )
+        self._asr_planned_media_duration_seconds += sum(
+            result.planned_media_duration_seconds for result in results
+        )
+        self._asr_sent_media_duration_seconds += sum(
+            result.sent_media_duration_seconds for result in results
+        )
+        self._asr_send_elapsed_seconds += sum(
+            result.send_elapsed_seconds for result in results
+        )
+        self._asr_max_realtime_factor = max(
+            self._asr_max_realtime_factor,
+            *(result.realtime_factor for result in results),
+        )
+        self._asr_max_positive_schedule_drift_seconds = max(
+            self._asr_max_positive_schedule_drift_seconds,
+            *(result.max_positive_schedule_drift_seconds for result in results),
+        )
         missing = sum(
             result.category is ResultCategory.SUCCESS
             and (not result.message_digests or result.finished_message_count <= 0)
@@ -562,7 +609,12 @@ class _NorthboundTrafficRunner:
         )
         if missing:
             self._correctness_failures.append(
-                f"{missing} 个实时 ASR 成功会话缺少 finished=true 终态消息"
+                f"{missing} 个实时 ASR 成功会话缺少 finished=true 完整语句消息"
+            )
+        inconsistent = sum(not result.chunk_counts_consistent for result in results)
+        if inconsistent:
+            self._correctness_failures.append(
+                f"{inconsistent} 个实时 ASR 会话的已发送分块计数不一致"
             )
 
     async def _lane(
@@ -662,6 +714,19 @@ class _NorthboundTrafficRunner:
             latency_seconds=tuple(self._latencies),
             accepted_task_ids=tuple(self._accepted_task_ids),
             correctness_failures=tuple(self._correctness_failures),
+            asr_session_count=self._asr_session_count,
+            asr_sent_chunk_count=self._asr_sent_chunk_count,
+            asr_sent_media_chunk_count=self._asr_sent_media_chunk_count,
+            asr_sent_tail_silence_chunk_count=self._asr_sent_tail_silence_chunk_count,
+            asr_planned_media_duration_seconds=(
+                self._asr_planned_media_duration_seconds
+            ),
+            asr_sent_media_duration_seconds=self._asr_sent_media_duration_seconds,
+            asr_send_elapsed_seconds=self._asr_send_elapsed_seconds,
+            asr_max_realtime_factor=self._asr_max_realtime_factor,
+            asr_max_positive_schedule_drift_seconds=(
+                self._asr_max_positive_schedule_drift_seconds
+            ),
         )
 
     @staticmethod
@@ -1121,6 +1186,23 @@ class MixedSoakStageAdapter(StageCaseAdapter):
             "latency_p99_seconds": _percentile(snapshot.latency_seconds, 0.99),
             "accepted_task_count": len(snapshot.accepted_task_ids),
             "correctness_failures": list(snapshot.correctness_failures),
+            "realtime_asr": {
+                "session_count": snapshot.asr_session_count,
+                "sent_chunk_count": snapshot.asr_sent_chunk_count,
+                "sent_media_chunk_count": snapshot.asr_sent_media_chunk_count,
+                "sent_tail_silence_chunk_count": (
+                    snapshot.asr_sent_tail_silence_chunk_count
+                ),
+                "planned_media_duration_seconds": (
+                    snapshot.asr_planned_media_duration_seconds
+                ),
+                "sent_media_duration_seconds": snapshot.asr_sent_media_duration_seconds,
+                "send_elapsed_seconds": snapshot.asr_send_elapsed_seconds,
+                "max_realtime_factor": snapshot.asr_max_realtime_factor,
+                "max_positive_schedule_drift_seconds": (
+                    snapshot.asr_max_positive_schedule_drift_seconds
+                ),
+            },
             "maximum_http_concurrency": max(
                 profile.long_courses,
                 profile_http_concurrency(profile).total,

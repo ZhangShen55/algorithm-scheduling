@@ -372,7 +372,7 @@ Campaign ID 和 attempt root；锁以非阻塞独占方式取得，并在该 cas
 `OFF-UNIQUE-PPT-100` 规范 case，也不继续后续用例。修复必须形成新完整 SHA，
 同 revision 重建 11 个镜像并以新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑。
 
-### 18. Campaign 执行器中断和实时 ASR 终态必须失败关闭
+### 18. Campaign 执行器中断和实时 ASR 完整语句证据必须失败关闭
 
 `da1f5e37e64aa429ec8538bb6ccd5bd504017604` 的新 attempt 已完成阶段 0、四条阶段 1
 单泳道、PPT 100/300/1000 和 ASR 100。`OFF-UNIQUE-ASR-300` 已提交任务并持续采集 74 份
@@ -385,11 +385,45 @@ Campaign ID 和 attempt root；锁以非阻塞独占方式取得，并在该 cas
 命令摘要和日志路径，逐案记录开始、规范结果、结束及退出码；runner 异常消失或日志缺少终态时
 立即阻断当前 attempt。修复形成新 SHA 后，以新 seed、Campaign ID 和 attempt 从阶段 0 重跑。
 
-实时 ASR 的成功不能只依赖“收到过任意消息”。中间字幕、状态或握手消息都不能替代协议终态；
-只有成功会话至少收到一条可解析的 `finished=true` 消息时，`missing_final_message_count` 才能为
-零。这一门禁同时适用于阶段 0/3 的独立实时 ASR 用例和阶段 4/6 的混合、长稳负载；
-任一声称成功的会话缺少终态时，对应 case 必须失败关闭。执行证据同时记录消息摘要数和
-`finished=true` 消息数，不保存字幕原文，避免任何阶段把中间响应误判为完整会话成功。
+实时 ASR 的成功不能只依赖“收到过任意消息”。中间字幕、状态或握手消息都不能替代完整
+语句证据；只有成功会话至少收到一条可解析的 `finished=true` 消息时，
+`missing_final_message_count` 才能为零。该字段名为兼容既有报告 schema 保留，语义是缺少完整
+语句，不表示缺少 WebSocket 连接终态。这一门禁同时适用于阶段 0/3 的独立实时 ASR 用例和
+阶段 4/6 的混合、长稳负载；任一声称成功的会话缺少完整语句时，对应 case 必须失败关闭。
+执行证据同时记录消息摘要数和 `finished=true` 消息数，不保存字幕原文。
+
+### 19. Campaign 必须遵守 ASR Online 的分块和有界收尾合同
+
+`5a5760ef13855f21365bc6321a80d45cbf6fae87` 的第一个 attempt
+`full-campaign-5a5760ef-20260826015800` 因运行环境回收父命令后的 `nohup` 子进程，只写出
+`sequence_started` 和首案 `case_started`，没有规范 case 结果和退出码；该 attempt 作为执行器
+中断保持只读。第二个 attempt `full-campaign-5a5760ef-20260826021000` 使用独立 `tmux` 监督
+持久 runner，前 12 个阶段 0 case 全部通过，但 `BASE-ASR-WS` 在发送 2294 块后只有 2294 个
+消息摘要、没有 `finished=true`，规范失败并以 `sequence_ended exit_code=1` 正常停止；
+`PHASE-0-COMPLETE` 未执行，该 attempt 同样不得续写。
+
+ASR Online 的稳定合同是 16 kHz、单声道、signed 16-bit PCM，每块 7680 samples，即
+`0.48s/15360 bytes`。旧 Campaign 的独立与 mixed/soak 路径都使用 `0.2s/3200 samples`，
+导致算子每块无法形成权威流式上下文。现场同一 12 秒 WAV 的只读对照为：旧 `0.2s` 路径
+60 条响应全部空且没有完整语句；改为 `0.48s`、不加尾静音时有 25 条响应和 24 条非空文本，
+但仍没有完整语句；追加 6 个同尺寸静音帧后有 31 条响应、25 条非空文本和 1 条
+`finished=true`。三组会话均能正常释放租约，证明问题不在 Gateway 透传或租约生命周期。
+
+Campaign 因此在一个共享构造器中固定权威 PCM 元数据和分块大小，将不足一块的最后媒体帧
+补零到完整 15360 bytes，并在媒体结束后追加固定 6 块、有界最多 12 块的静音收尾，再以有界
+窗口等待完整语句消息。该策略由独立、混合和长稳路径共用。`finished=true` 只表示算子完成了
+一条语句并会继续接收后续音频，不是 WebSocket EOS 或会话级最终确认；本修复不增加新上行
+控制帧、不修改算子或 Gateway 协议，也不宣称最后残余语句具备连接级可靠 flush。
+
+此外，发送节拍以 `time.monotonic()` 的绝对 deadline 为准，不在每次 `send()` 后固定相对
+sleep，避免把发送耗时和事件循环延迟逐块累加。每个会话分别记录计划媒体时长、实际已发送
+媒体时长、发送耗时、实时因子和最大正调度漂移；默认超过一个 `0.48s` 分块周期时停止该
+会话后续发送并归类为负载机限制，不误报为平台失败。接收协程只忽略 runner 主动取消它产生的 `CancelledError`；
+已自行结束的接收协程必须检查异常，即使先前已收到 `finished=true`，非预期响应通道断裂仍
+归类为连接失败。收到 `50301` 后立即停止后续媒体和静音块，最终仍归类为预期过载。
+证据还必须验证 `sent_chunk_count = sent_media_chunk_count +
+sent_tail_silence_chunk_count`，计数不一致时当前用例失败关闭。独立、混合和长稳阶段均输出
+这些实时证据，不允许混合或长稳只保留结果分类而丢失节拍事实。
 
 ## Risks / Trade-offs
 

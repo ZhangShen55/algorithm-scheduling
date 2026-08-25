@@ -677,3 +677,33 @@ Campaign/release/SHA/case/phase 身份校验发布。
   阶段 4/6 混合、长稳适配器。消息摘要和终态消息计数分别进入脱敏证据，不写字幕原文。
 - `da1f5e37` 的阶段 0 结果只有 2294 个消息摘要，没有 `finished_message_count`；
   因此无法按新门禁证明 `BASE-ASR-WS` 终态，当前 OpenSpec 12.1 重新标为待新 SHA 验证。
+
+## 2026-08-26 - `5a5760ef` 实时 ASR 分块违约与完整语句证据收敛
+
+- `full-campaign-5a5760ef-20260826015800` 由父命令退出后的运行环境回收，仅保留
+  `sequence_started` 和首案 `case_started`；无规范 case 结果和退出码，按执行器中断只读冻结。
+- `full-campaign-5a5760ef-20260826021000` 使用独立 `tmux` 持久 runner，媒体下载四档、PPT、
+  离线 ASR、教师/学生行为及四类在线图片共前 12 案全部通过。`BASE-ASR-WS` 为业务失败，
+  `sent_chunks=2294`、`message_digest_count=2294`、`finished_message_count=0`、
+  `missing_final_message_count=1`、`failed_session_count=0`；94 份运行指标和前后护栏均为
+  `CLEAR`，租约获取/释放各 1，队列、Outbox、Kafka lag 和最终租约均归零。runner 正常写出
+  `sequence_ended exit_code=1`，没有执行 `PHASE-0-COMPLETE`，该 attempt 不续写。
+- 根因是独立与 mixed/soak Campaign 都把 16 kHz mono int16 WAV 按 `0.2s/3200 samples`
+  发送，而算子稳定合同是 `0.48s/7680 samples/15360 bytes`。Gateway 原样透传，不是根因。
+- `.11` 同一 WAV 前 12 秒的只读对照：旧分块 60 条响应均为空、完整语句 0；权威分块无尾
+  静音为 25 条响应、24 条非空、完整语句 0；权威分块加 6 个静音块为 31 条响应、25 条非空、
+  `finished=true` 1。三次会话关闭后租约均释放。
+- Campaign 共享构造器固定权威 PCM/分块，末帧补齐，追加 6 个有界静音块并有界等待。
+  `finished=true` 只作为完整语句证据，不表示 WebSocket EOS；不修改 ASR 或 Gateway 协议。
+- 下一步必须形成新 SHA、重建同 revision 11 镜像、恢复完整拓扑，再以新 seed、Campaign ID
+  和 write-once attempt 从阶段 0 重跑；两个 `5a5760ef` attempt 及此前历史 attempt 均保持只读。
+- 提交前复审还发现 receiver 异常会被 `return_exceptions=True` 吞掉、相对
+  `sleep(0.48)` 会累计发送和调度延迟、收到 `50301` 后可能继续发块三个阻断。
+  修复后只忽略 runner 主动取消 receiver 产生的取消异常；已自行结束的 receiver
+  异常归类为 `connection_failure`，容量消息仍最终归类为 `overload` 并停止后续
+  媒体/静音块。
+- 发送节拍改为单调绝对 deadline，记录媒体时长、发送耗时、实时因子和最大正漂移；
+  默认漂移超过一个 `0.48s` 周期时停发并归类为负载机限制。每个会话还校验
+  `sent_chunk_count = sent_media_chunk_count + sent_tail_silence_chunk_count`；这些实时证据
+  透传到独立用例；mixed/soak 共用同一 runner 和计数正确性门禁，并同样输出会话数、计划/
+  实发媒体时长、发送耗时、最大实时因子和最大正调度漂移。
