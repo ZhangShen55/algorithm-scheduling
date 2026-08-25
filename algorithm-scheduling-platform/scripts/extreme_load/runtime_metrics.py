@@ -76,6 +76,9 @@ class SurfaceProbeError(RuntimeError):
     def __init__(self, surface: str, error: Exception) -> None:
         super().__init__(f"{surface} 探针失败: {type(error).__name__}")
         self.surface = surface
+        self.exception_type = type(error).__name__
+        attempts = getattr(error, "attempts", 1)
+        self.attempts = attempts if type(attempts) is int and attempts > 0 else 1
 
 
 async def _collect_surface(surface: str, collect: Callable[[], _T_co]) -> _T_co:
@@ -99,6 +102,17 @@ def _surface_failure_reason(error: Exception) -> str:
     if isinstance(error, SurfaceProbeError):
         return f"运行时指标采集失败: {error.surface}"
     return f"运行时指标采集失败: {type(error).__name__}"
+
+
+def _surface_failures(error: BaseException) -> tuple[SurfaceProbeError, ...]:
+    if isinstance(error, SurfaceProbeError):
+        return (error,)
+    if isinstance(error, BaseExceptionGroup):
+        nested: list[SurfaceProbeError] = []
+        for item in error.exceptions:
+            nested.extend(_surface_failures(item))
+        return tuple(nested)
+    return ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -540,6 +554,7 @@ class RuntimeMetricsAdapter:
         docker_probe: CollectProbe[tuple[ContainerMetrics, ...]],
         gpu_probe: CollectProbe[tuple[GpuMetrics, ...]],
         control_probe: CollectProbe[ControlPlaneMetrics],
+        kafka_lag_probe: CollectProbe[int],
         gateway_probe: CollectProbe[GatewayMetrics],
         schedule: SamplingSchedule | None = None,
         guardrail_policy: GuardrailPolicy | None = None,
@@ -585,6 +600,7 @@ class RuntimeMetricsAdapter:
         self.docker_probe = docker_probe
         self.gpu_probe = gpu_probe
         self.control_probe = control_probe
+        self.kafka_lag_probe = kafka_lag_probe
         self.gateway_probe = gateway_probe
         self.schedule = schedule or SamplingSchedule()
         self.guardrail_policy = guardrail_policy or GuardrailPolicy()
@@ -606,7 +622,10 @@ class RuntimeMetricsAdapter:
         self._active_burst = False
         self._samples: dict[str, list[RuntimeMetricSample]] = {}
         self._window_start: dict[str, int] = {}
+        self._failure_evidence: dict[str, list[Path]] = {}
+        self._failure_window_start: dict[str, int] = {}
         self._next_sequence: dict[str, int] = {}
+        self._next_failure_sequence: dict[str, int] = {}
         self._oom_baseline: dict[str, int] = {}
         self._restart_history: dict[str, deque[tuple[float, int, str]]] = {}
         self._latest_assessment = GuardrailAssessment(GuardrailLevel.CLEAR, ())
@@ -632,6 +651,9 @@ class RuntimeMetricsAdapter:
         if self._sampling_task is not None:
             raise RuntimeError("重置指标窗口前必须先停止现有采样")
         self._window_start[case.case_id] = len(self._samples.get(case.case_id, ()))
+        self._failure_window_start[case.case_id] = len(
+            self._failure_evidence.get(case.case_id, ())
+        )
         self._oom_baseline.pop(case.case_id, None)
         self._restart_history.clear()
 
@@ -665,6 +687,9 @@ class RuntimeMetricsAdapter:
             control_task = group.create_task(
                 _collect_surface("control", self.control_probe.collect)
             )
+            kafka_lag_task = group.create_task(
+                _collect_surface("kafka_lag", self.kafka_lag_probe.collect)
+            )
             gateway_task = group.create_task(
                 _collect_surface("gateway", self.gateway_probe.collect)
             )
@@ -683,7 +708,13 @@ class RuntimeMetricsAdapter:
             target_host = replace(target_host, directory_sizes=tuple(directory_sizes))
         containers = containers_task.result()
         gpus = gpus_task.result()
-        control = control_task.result()
+        kafka_lag = kafka_lag_task.result()
+        if type(kafka_lag) is not int or kafka_lag < 0:
+            raise SurfaceProbeError(
+                "kafka_lag",
+                ValueError("Kafka lag 必须是非负整数"),
+            )
+        control = replace(control_task.result(), kafka_lag=kafka_lag)
         gateway = gateway_task.result()
         errors: tuple[str, ...] = tuple(critical_errors_task.result())
         lock_owned = maintenance_lock_task.result()
@@ -794,6 +825,44 @@ class RuntimeMetricsAdapter:
             / f"{sequence:08d}.json"
         )
 
+    def _failure_evidence_path(self, case: CaseSpec, sequence: int) -> Path:
+        return (
+            self.release_root
+            / "campaign"
+            / "runtime-metrics"
+            / case.case_id
+            / "failures"
+            / f"{sequence:08d}.json"
+        )
+
+    async def _write_failure_evidence(self, case: CaseSpec, error: Exception) -> None:
+        failures = _surface_failures(error)
+        if not failures:
+            failures = (SurfaceProbeError("runtime", error),)
+        for failure in failures:
+            sequence = self._next_failure_sequence.get(case.case_id, 1)
+            self._next_failure_sequence[case.case_id] = sequence + 1
+            document = {
+                "schema_version": 1,
+                "evidence_type": "runtime_metric_collection_failure",
+                "campaign_id": self.plan.campaign_id,
+                "case_id": case.case_id,
+                "phase": case.phase.value,
+                "recorded_at": self.wall_clock(),
+                "surface": failure.surface,
+                "exception_type": failure.exception_type,
+                "attempts": failure.attempts,
+            }
+            validate_public_payload(document)
+            content = json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+            path = self._failure_evidence_path(case, sequence)
+            await asyncio.to_thread(
+                self.evidence_writer,
+                path,
+                content,
+            )
+            self._failure_evidence.setdefault(case.case_id, []).append(path)
+
     def _latch_stop(self, reason: str) -> GuardrailAssessment:
         self._latched_stop_reasons = tuple(dict.fromkeys((*self._latched_stop_reasons, reason)))
         self._latest_assessment = _merge_stop_reasons(
@@ -828,6 +897,10 @@ class RuntimeMetricsAdapter:
                 raise
             except Exception as error:
                 self._latch_stop(_surface_failure_reason(error))
+                try:
+                    await self._write_failure_evidence(case, error)
+                except Exception:
+                    self._latch_stop("采集失败事件证据无法原子写入")
                 return None
 
             monotonic_seconds = self.monotonic_clock()
@@ -991,6 +1064,9 @@ class RuntimeMetricsAdapter:
             (summary.latest_guardrail, self._latest_assessment)
         )
         samples = self.samples(case.case_id)[self._window_start.get(case.case_id, 0) :]
+        failure_evidence = self._failure_evidence.get(case.case_id, ())[
+            self._failure_window_start.get(case.case_id, 0) :
+        ]
         directory_checkpoint_count = sum(
             bool(sample.target_host.directory_sizes) for sample in samples
         )
@@ -1015,6 +1091,9 @@ class RuntimeMetricsAdapter:
                 str(sample.evidence_path.relative_to(self.release_root))
                 for sample in samples
                 if sample.evidence_path is not None
+            ],
+            "failure_evidence": [
+                str(path.relative_to(self.release_root)) for path in failure_evidence
             ],
         }
         validate_public_payload(evidence)

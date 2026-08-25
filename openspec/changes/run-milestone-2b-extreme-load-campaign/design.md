@@ -316,10 +316,16 @@ fixture 总字节数乘课程数，计算投影剩余空间。投影低于 15% �
 
 Kafka lag 探针改为一次 `--describe --all-groups` 获取快照，只汇总配置明确列出的
 `algorithm-orchestrator`、`algorithm-orchestrator-visual-events` 和 `vision-orchestrator`，同时
-要求三个组都具有可证明的分区行。Kafka CLI 命令失败时只在同一采样内执行可配置的有限重试；
-默认 2 次、间隔 0.25 秒。全部尝试失败、输出畸形、消费组缺失或指标不可证明时仍立即锁存
-`STOP`，后续成功采样不能覆盖。旧 blocked attempt 保持只读，修复后必须新 SHA、新 seed、
-新 Campaign ID 和新 attempt 从阶段 0 重跑。
+要求三个组都具有可证明的分区行。它从 Control HTTP 指标中拆为独立 `kafka_lag` 采集面：
+Control 的队列和实例快照仍使用通用 5 秒上限，Kafka CLI 使用独立配置，默认 20 秒且只允许
+15–30 秒。Kafka CLI 命令失败时只在同一采样内执行可配置的有限重试，最多 2 次尝试、默认
+2 次、间隔默认 0.25 秒。
+
+全部尝试失败、输出畸形、消费组缺失或指标不可证明时仍立即锁存 `STOP`，后续成功采样不能
+覆盖。失败采样不伪造成成功样本，而是在 `runtime-metrics/<case>/failures/` 写入脱敏、只增不改
+的 JSON 事件，只包含 case、时间、`surface`、异常类型和尝试次数；运行时 outcome 使用独立
+`failure_evidence` 列表公开这些路径，不能混入 `sample_evidence`。旧 blocked attempt 保持只读，
+修复后必须新 SHA、新 seed、新 Campaign ID 和新 attempt 从阶段 0 重跑。
 
 ## Risks / Trade-offs
 

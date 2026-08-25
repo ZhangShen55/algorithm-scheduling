@@ -222,7 +222,7 @@ Campaign 系统 SHALL 在持续受控负载中分别停止一个算子实例、�
 - **THEN** 报告 SHALL 如实记录会话中断，验证客户端重连、旧租约最终释放和新会话恢复，不得将其表达为无感迁移
 
 ### Requirement: 资源护栏必须优先于负载目标
-Campaign 系统 SHALL 至少每 5 秒采集宿主机、Docker、GPU、磁盘、Kafka lag、任务队列和容器重启指标；在线图片突发阶段 MUST 每 0.5–1 秒采集实例 `inflight`、活跃租约和容量峰值，并使用 Gateway 实例级请求、租约申请/拒绝/释放累计指标的阶段前后差值覆盖短租约。任一红线触发时 MUST 立即停止新负载，保留证据并执行精确恢复，不得为了完成目标并发而继续加压。
+Campaign 系统 SHALL 至少每 5 秒发起宿主机、Docker、GPU、磁盘、Kafka lag、任务队列和容器重启指标采集；在线图片突发阶段 MUST 每 0.5–1 秒采集实例 `inflight`、活跃租约和容量峰值，并使用 Gateway 实例级请求、租约申请/拒绝/释放累计指标的阶段前后差值覆盖短租约。Kafka lag MUST 作为独立于 Control HTTP 的 `kafka_lag` 采集面，使用独立的 15–30 秒命令超时，默认 20 秒；其他探针不得因此放大超时。任一红线触发时 MUST 立即停止新负载，保留证据并执行精确恢复，不得为了完成目标并发而继续加压。
 
 #### Scenario: 短租约由高频峰值和累计差值共同取证
 - **WHEN** 在线图片请求在 5 秒常规采样周期内已完成租约申请、调用和释放
@@ -234,7 +234,11 @@ Campaign 系统 SHALL 至少每 5 秒采集宿主机、Docker、GPU、磁盘、K
 
 #### Scenario: Kafka lag 瞬时命令失败在同一采样内有限重试
 - **WHEN** 一次 Kafka consumer group 快照命令因瞬时超时失败，但在配置的有限尝试次数内恢复
-- **THEN** 探针 SHALL 使用单次 all-groups 快照汇总 Orchestrator、视觉事件和 Vision Orchestrator 三个必需消费组，并继续当前采样；全部尝试失败、任一必需组缺失或输出不可证明时 MUST 锁存 `STOP`
+- **THEN** 独立 `kafka_lag` 采集面 SHALL 使用默认 20 秒且限制为 15–30 秒的独立超时，以单次 all-groups 快照汇总 Orchestrator、视觉事件和 Vision Orchestrator 三个必需消费组，并继续当前采样；尝试次数 MUST 不超过 2 次且默认 2 次，默认重试间隔 MUST 为 0.25 秒；全部尝试失败、任一必需组缺失或输出不可证明时 MUST 锁存 `STOP`
+
+#### Scenario: Kafka lag 失败证据独立可发现
+- **WHEN** `kafka_lag` 采集面在全部尝试后仍失败，后续收尾采样重新成功
+- **THEN** 当前用例 MUST 保持 `STOP`，系统 MUST 写入仅含 case、时间、采集面、异常类型和尝试次数的脱敏失败 JSON，并通过独立 `failure_evidence` 路径列表公开；失败事件 MUST NOT 混入成功样本的 `sample_evidence`
 
 #### Scenario: 磁盘达到红线
 - **WHEN** 宿主机或关键数据目录所在文件系统剩余空间低于 100 GiB 或 10%

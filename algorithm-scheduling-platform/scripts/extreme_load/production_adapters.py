@@ -82,6 +82,7 @@ _METRICS_CONFIG_KEYS = frozenset(
         "kafka_compose_project",
         "kafka_compose_service",
         "kafka_consumer_groups",
+        "kafka_probe_timeout_seconds",
         "kafka_probe_attempts",
         "kafka_probe_retry_delay_seconds",
     }
@@ -166,6 +167,7 @@ class _RuntimeMetricsSettings:
     kafka_compose_project: str
     kafka_compose_service: str
     kafka_consumer_groups: tuple[str, ...]
+    kafka_probe_timeout_seconds: float
     kafka_probe_attempts: int
     kafka_probe_retry_delay_seconds: float
 
@@ -414,12 +416,18 @@ def _load_metrics_settings() -> _RuntimeMetricsSettings:
         timeout = _number(metrics["probe_timeout_seconds"], "probe_timeout_seconds")
         if not 0 < timeout <= 30:
             raise ValueError("探针超时必须位于 0–30 秒")
+        kafka_probe_timeout = _number(
+            metrics["kafka_probe_timeout_seconds"],
+            "kafka_probe_timeout_seconds",
+        )
+        if not 15 <= kafka_probe_timeout <= 30:
+            raise ValueError("Kafka lag 探针超时必须位于 15–30 秒")
         restart_threshold = metrics["restart_loop_threshold"]
         if type(restart_threshold) is not int or restart_threshold <= 0:
             raise ValueError("容器重启阈值必须是正整数")
         kafka_probe_attempts = metrics["kafka_probe_attempts"]
-        if type(kafka_probe_attempts) is not int or not 1 <= kafka_probe_attempts <= 5:
-            raise ValueError("Kafka lag 探针尝试次数必须位于 1–5")
+        if type(kafka_probe_attempts) is not int or not 1 <= kafka_probe_attempts <= 2:
+            raise ValueError("Kafka lag 探针尝试次数必须位于 1–2")
         kafka_probe_retry_delay_seconds = _number(
             metrics["kafka_probe_retry_delay_seconds"],
             "kafka_probe_retry_delay_seconds",
@@ -467,6 +475,7 @@ def _load_metrics_settings() -> _RuntimeMetricsSettings:
                 metrics["kafka_consumer_groups"],
                 "kafka_consumer_groups",
             ),
+            kafka_probe_timeout_seconds=kafka_probe_timeout,
             kafka_probe_attempts=kafka_probe_attempts,
             kafka_probe_retry_delay_seconds=kafka_probe_retry_delay_seconds,
         )
@@ -897,7 +906,7 @@ def metrics_factory(
             compose_project=settings.kafka_compose_project,
             compose_service=settings.kafka_compose_service,
             consumer_groups=settings.kafka_consumer_groups,
-            timeout_seconds=timeout,
+            timeout_seconds=settings.kafka_probe_timeout_seconds,
             attempts=settings.kafka_probe_attempts,
             retry_delay_seconds=settings.kafka_probe_retry_delay_seconds,
         )
@@ -926,8 +935,9 @@ def metrics_factory(
                 http_client,
                 plan.control_origin,
                 timeout_seconds=timeout,
-                kafka_lag_source=kafka_lag_probe.collect,
+                include_kafka_lag=False,
             ),
+            kafka_lag_probe=kafka_lag_probe,
             gateway_probe=GatewayMetricsProbe(
                 http_client,
                 plan.gateway_origin,

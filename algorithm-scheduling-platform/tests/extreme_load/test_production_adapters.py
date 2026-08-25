@@ -107,6 +107,7 @@ def _metrics_runtime_config(
                 "kafka_consumer_groups = "
                 '["algorithm-orchestrator", "algorithm-orchestrator-visual-events", '
                 '"vision-orchestrator"]',
+                "kafka_probe_timeout_seconds = 20.0",
                 "kafka_probe_attempts = 2",
                 "kafka_probe_retry_delay_seconds = 0.25",
                 "regular_seconds = 5.0",
@@ -277,6 +278,29 @@ async def test_metrics_factory_missing_or_disabled_config_fails_closed(
     assert disabled_outcome.evidence == {"configuration_state": "disabled"}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeout_seconds", (14.99, 30.01))
+async def test_metrics_factory_rejects_kafka_timeout_outside_independent_bounds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    timeout_seconds: float,
+) -> None:
+    config = _metrics_runtime_config(tmp_path, enabled=True)
+    content = config.read_text(encoding="utf-8").replace(
+        "kafka_probe_timeout_seconds = 20.0",
+        f"kafka_probe_timeout_seconds = {timeout_seconds}",
+    )
+    config.write_text(content, encoding="utf-8")
+    config.chmod(0o600)
+    monkeypatch.setenv(RUNTIME_CONFIG_ENV, str(config))
+
+    adapter = metrics_factory(_plan(), tmp_path / "release")
+    assessment = await adapter.assess(_case(), "before")
+
+    assert assessment.level.value == "STOP"
+    assert "运行时指标配置" in assessment.reasons[0]
+
+
 def test_metrics_factory_assembles_explicit_read_only_probe_surfaces(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -296,8 +320,9 @@ def test_metrics_factory_assembles_explicit_read_only_probe_surfaces(
     assert remote_runner.enabled is True
     assert remote_runner.target.host == "192.168.29.11"
     assert adapter.target_host_probe.directory_paths == ("/data/course", "/data/result")
-    assert adapter.control_probe.kafka_lag_source is not None
-    kafka_probe = adapter.control_probe.kafka_lag_source.__self__
+    assert adapter.control_probe.include_kafka_lag is False
+    assert adapter.control_probe.kafka_lag_source is None
+    kafka_probe = adapter.kafka_lag_probe
     assert isinstance(kafka_probe, production_adapters.KafkaLagProbe)
     assert kafka_probe.consumer_groups == (
         "algorithm-orchestrator",
@@ -306,6 +331,7 @@ def test_metrics_factory_assembles_explicit_read_only_probe_surfaces(
     )
     assert kafka_probe.attempts == 2
     assert kafka_probe.retry_delay_seconds == 0.25
+    assert kafka_probe.timeout_seconds == 20.0
 
 
 @pytest.mark.asyncio
@@ -536,6 +562,7 @@ def test_runtime_template_defaults_to_disabled_and_does_not_use_dotenv() -> None
     assert "burst_seconds = 0.5" in content
     assert 'kafka_compose_service = "kafka"' in content
     assert '"algorithm-orchestrator-visual-events"' in content
+    assert "kafka_probe_timeout_seconds = 20.0" in content
     assert "[runtime_metrics.expected_gpu_by_pid]" in content
     assert "metrics=scripts.extreme_load.production_adapters:metrics_factory" in content
     assert "fault=scripts.extreme_load.production_fault_adapter:fault_factory" in content

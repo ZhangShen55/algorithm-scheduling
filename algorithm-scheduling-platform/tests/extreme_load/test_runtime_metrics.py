@@ -69,6 +69,21 @@ class FailingProbe(MutableProbe[LoadHostMetrics]):
         raise ValueError("raw probe detail must not be exposed")
 
 
+class AttemptsFailure(RuntimeError):
+    def __init__(self, attempts: int, detail: str) -> None:
+        super().__init__(detail)
+        self.attempts = attempts
+
+
+class RecoveringKafkaLagProbe(MutableProbe[int]):
+    def collect(self) -> int:
+        self.calls += 1
+        self.thread_ids.append(threading.get_ident())
+        if self.calls == 2:
+            raise AttemptsFailure(2, "password=must-not-enter-evidence")
+        return self.value
+
+
 @dataclass(slots=True)
 class ProbeState:
     load_host: MutableProbe[LoadHostMetrics]
@@ -77,6 +92,7 @@ class ProbeState:
     containers: MutableProbe[tuple[ContainerMetrics, ...]]
     gpus: MutableProbe[tuple[GpuMetrics, ...]]
     control: MutableProbe[ControlPlaneMetrics]
+    kafka_lag: MutableProbe[int]
     gateway: MutableProbe[GatewayMetrics]
 
 
@@ -235,6 +251,7 @@ def _state(*, delay_seconds: float = 0.0) -> ProbeState:
             ),
             delay_seconds=delay_seconds,
         ),
+        kafka_lag=MutableProbe(3, delay_seconds=delay_seconds),
         gateway=MutableProbe(
             GatewayMetrics(
                 counters=GatewayCounters(
@@ -271,6 +288,7 @@ def _adapter(
         docker_probe=state.containers,
         gpu_probe=state.gpus,
         control_probe=state.control,
+        kafka_lag_probe=state.kafka_lag,
         gateway_probe=state.gateway,
         **options,
     )
@@ -409,6 +427,7 @@ async def test_runtime_summary_preserves_intermittent_stop_after_exact_recovery(
     }
     assert outcome.evidence["runtime_metrics"]["sample_count"] == len(samples)
     assert len(outcome.evidence["sample_evidence"]) == len(samples)
+    assert outcome.evidence["failure_evidence"] == []
     assert all(sample.evidence_path is not None for sample in samples)
     stop_path = next(
         sample.evidence_path
@@ -417,6 +436,67 @@ async def test_runtime_summary_preserves_intermittent_stop_after_exact_recovery(
     )
     assert stop_path is not None
     assert json.loads(stop_path.read_text(encoding="utf-8"))["guardrail"]["level"] == "STOP"
+
+
+@pytest.mark.asyncio
+async def test_kafka_lag_failure_is_independent_and_recovery_cannot_clear_stop(
+    tmp_path: Path,
+) -> None:
+    case = _case()
+    state = _state()
+    state.kafka_lag = RecoveringKafkaLagProbe(0)
+    adapter = _adapter(tmp_path, case, state)
+
+    assert (await adapter.assess(case, "before")).level is GuardrailLevel.CLEAR
+    for _ in range(100):
+        if state.kafka_lag.calls >= 2 and not adapter.is_running:
+            break
+        await asyncio.sleep(0.005)
+    else:
+        raise AssertionError("Kafka lag 背景失败没有终止采样")
+
+    after = await adapter.assess(case, "after")
+    outcome = await adapter.execute(case)
+
+    assert after.level is GuardrailLevel.STOP
+    assert outcome.status == "blocked"
+    assert "运行时指标采集失败: kafka_lag" in outcome.reason
+    assert "运行时指标采集失败: control" not in outcome.reason
+    samples = adapter.samples(case.case_id)
+    assert len(samples) == 2
+    assert samples[-1].control.kafka_lag == 0
+    assert samples[-1].guardrail.level is GuardrailLevel.STOP
+
+    failure_path = (
+        tmp_path
+        / "release"
+        / "campaign"
+        / "runtime-metrics"
+        / case.case_id
+        / "failures"
+        / "00000001.json"
+    )
+    document = json.loads(failure_path.read_text(encoding="utf-8"))
+    assert document == {
+        "schema_version": 1,
+        "evidence_type": "runtime_metric_collection_failure",
+        "campaign_id": _plan(case).campaign_id,
+        "case_id": case.case_id,
+        "phase": case.phase.value,
+        "recorded_at": document["recorded_at"],
+        "surface": "kafka_lag",
+        "exception_type": "AttemptsFailure",
+        "attempts": 2,
+    }
+    assert "must-not-enter-evidence" not in failure_path.read_text(encoding="utf-8")
+    assert stat.S_IMODE(failure_path.stat().st_mode) == 0o600
+    assert outcome.evidence["failure_evidence"] == [
+        f"campaign/runtime-metrics/{case.case_id}/failures/00000001.json"
+    ]
+    assert outcome.evidence["sample_evidence"] == [
+        f"campaign/runtime-metrics/{case.case_id}/00000001.json",
+        f"campaign/runtime-metrics/{case.case_id}/00000002.json",
+    ]
 
 
 @pytest.mark.asyncio
@@ -473,6 +553,7 @@ async def test_blocking_probes_run_off_event_loop_and_in_parallel(tmp_path: Path
         state.containers,
         state.gpus,
         state.control,
+        state.kafka_lag,
         state.gateway,
     )
     assert all(probe.thread_ids and main_thread not in probe.thread_ids for probe in probes)
@@ -665,6 +746,7 @@ async def test_before_after_summary_contains_control_and_gateway_deltas(tmp_path
             ),
         ),
     )
+    state.kafka_lag.value = 11
     state.gateway.value = GatewayMetrics(
         counters=GatewayCounters(
             requests_total=16,

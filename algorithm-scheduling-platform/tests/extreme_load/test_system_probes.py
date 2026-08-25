@@ -21,6 +21,7 @@ from scripts.extreme_load.system_probes import (
     KafkaLagProbe,
     LoadHostProbe,
     NvidiaSmiProbe,
+    ProbeAttemptsExhausted,
     ProbeDisabledError,
     ProbeError,
     SshCommandRunner,
@@ -648,7 +649,7 @@ def test_kafka_lag_probe_fails_closed_after_bounded_attempts() -> None:
         }
     )
 
-    with pytest.raises(ProbeError) as captured:
+    with pytest.raises(ProbeAttemptsExhausted) as captured:
         KafkaLagProbe(
             runner,
             compose_project="algorithm-scheduling-platform",
@@ -659,7 +660,19 @@ def test_kafka_lag_probe_fails_closed_after_bounded_attempts() -> None:
         ).collect()
 
     assert sum(call[0] == command for call in runner.calls) == 2
+    assert captured.value.attempts == 2
     assert "must-not-leak" not in str(captured.value)
+
+
+def test_kafka_lag_probe_rejects_more_than_one_retry() -> None:
+    with pytest.raises(ValueError, match="1–2"):
+        KafkaLagProbe(
+            FakeRunner({}),
+            compose_project="algorithm-scheduling-platform",
+            compose_service="kafka",
+            consumer_groups=("algorithm-orchestrator",),
+            attempts=3,
+        )
 
 
 def test_kafka_lag_probe_fails_closed_without_exact_healthy_container() -> None:
@@ -839,6 +852,21 @@ def test_control_probe_accepts_explicit_verified_external_kafka_lag_source() -> 
     ).collect()
 
     assert metrics.kafka_lag == 17
+    assert all(not url.endswith("/metrics") for url, _, _ in client.calls)
+
+
+def test_control_probe_can_defer_kafka_lag_to_independent_surface() -> None:
+    origin = "http://control.test:18100"
+    client = FakeHttpClient(
+        {
+            f"{origin}/ops/queues": _json_response({"queues": [], "outbox_pending": 0}),
+            f"{origin}/ops/operator-instances/snapshot": _json_response([]),
+        }
+    )
+
+    metrics = ControlMetricsProbe(client, origin, include_kafka_lag=False).collect()
+
+    assert metrics.kafka_lag == 0
     assert all(not url.endswith("/metrics") for url, _, _ in client.calls)
 
 

@@ -2171,3 +2171,20 @@
   聚焦套件共 `88 passed`；Ruff 与 strict Mypy 通过。
 - Evidence tier and verdict: 达到静态与单元验证层级，允许形成新发布 SHA；OpenSpec 12.2
   仍为未执行，必须在 `.11` 同 revision 发布后创建新 attempt 并从阶段 0 顺序重跑。
+
+## 2026-08-25 - Kafka lag 独立采集面与失败证据索引
+
+- Previous state: `7efb2a0` 的长课窗口把 Kafka CLI 超时归为 `control`，失败采样没有独立 JSON，
+  成功收尾样本只能显示锁存 STOP，不能直接定位失败事件路径。
+- Target state: Kafka lag 使用独立 `kafka_lag` 采集面和默认 20 秒超时，配置只允许 15–30 秒；
+  单次 all-groups 快照最多尝试 2 次、默认 2 次、默认间隔 0.25 秒，Control HTTP 等其他探针
+  仍保持 5 秒。持续失败写入脱敏、只增不改的 `failures/*.json`，outcome 通过独立
+  `failure_evidence` 列表公开，不污染成功 `sample_evidence`，后续采样恢复也不能解除 STOP。
+- Changed files: runtime metrics、system probe、production adapter、外部运行时 TOML 模板及聚焦
+  测试；OpenSpec 的第 15 节和资源护栏规格、Harness 场景同步当前合同。历史 attempt 不改写。
+- Contract impact: 不改变 A 服务、算子、四平台服务或 Kafka 消费合同；只提高 Campaign 指标
+  归因、超时隔离和失败证据可发现性。
+- Evidence tier and verdict: 三组聚焦测试 `89 passed`，完整 `tests/extreme_load` 为
+  `412 passed`；Ruff、strict Mypy、compileall、OpenSpec strict、部署手册 `11 passed`、
+  Harness 一致性 `5 passed` 和 `git diff --check` 均通过。当前达到静态与单元验证层级，
+  仅授权形成新 SHA 并从阶段 0 新建 attempt，不补足 12.2。

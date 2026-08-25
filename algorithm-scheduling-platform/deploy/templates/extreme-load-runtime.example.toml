@@ -61,6 +61,8 @@ kafka_consumer_groups = [
   "vision-orchestrator",
 ]
 # 单次 Kafka CLI 瞬时超时先在同一采样内有限重试；全部失败后仍触发 STOP。
+# Kafka CLI 独立使用较宽超时，不放大全部 HTTP、Docker 和 GPU 探针等待。
+kafka_probe_timeout_seconds = 20.0
 kafka_probe_attempts = 2
 kafka_probe_retry_delay_seconds = 0.25
 regular_seconds = 5.0

@@ -68,6 +68,16 @@ class ProbeError(RuntimeError):
     pass
 
 
+class ProbeAttemptsExhausted(ProbeError):
+    """只公开尝试次数，不携带远端命令输出。"""
+
+    def __init__(self, attempts: int) -> None:
+        if type(attempts) is not int or attempts <= 0:
+            raise ValueError("探针尝试次数必须是正整数")
+        super().__init__(f"探针在 {attempts} 次尝试后仍失败")
+        self.attempts = attempts
+
+
 class ProbeDisabledError(ProbeError):
     pass
 
@@ -881,8 +891,8 @@ class KafkaLagProbe:
         self.compose_service = compose_service
         self.consumer_groups = groups
         self.timeout_seconds = _bounded_timeout(timeout_seconds)
-        if type(attempts) is not int or not 1 <= attempts <= 5:
-            raise ValueError("Kafka lag 探针尝试次数必须位于 1–5")
+        if type(attempts) is not int or not 1 <= attempts <= 2:
+            raise ValueError("Kafka lag 探针尝试次数必须位于 1–2")
         if (
             isinstance(retry_delay_seconds, bool)
             or not isinstance(retry_delay_seconds, (int, float))
@@ -928,9 +938,9 @@ class KafkaLagProbe:
                     "--describe",
                     "--all-groups",
                 )
-            except ProbeError:
+            except ProbeError as error:
                 if attempt == self.attempts:
-                    raise
+                    raise ProbeAttemptsExhausted(self.attempts) from error
                 time.sleep(self.retry_delay_seconds)
                 continue
             return _parse_consumer_groups_lag(output, self.consumer_groups)
@@ -1240,6 +1250,7 @@ class ControlMetricsProbe:
         timeout_seconds: float = 5,
         max_bytes: int = 2 * 1024 * 1024,
         kafka_lag_source: Callable[[], int] | None = None,
+        include_kafka_lag: bool = True,
     ) -> None:
         self.client = client
         self.origin = _probe_origin(control_origin, 18100)
@@ -1247,7 +1258,12 @@ class ControlMetricsProbe:
         if type(max_bytes) is not int or not 1 <= max_bytes <= 4 * 1024 * 1024:
             raise ValueError("Control 指标响应上限不合法")
         self.max_bytes = max_bytes
+        if type(include_kafka_lag) is not bool:
+            raise ValueError("include_kafka_lag 必须是布尔值")
+        if not include_kafka_lag and kafka_lag_source is not None:
+            raise ValueError("独立 Kafka lag 采集不能同时注入 Control lag source")
         self.kafka_lag_source = kafka_lag_source
+        self.include_kafka_lag = include_kafka_lag
 
     def _get(self, path: str) -> HttpResponse:
         return self.client.get(
@@ -1330,11 +1346,13 @@ class ControlMetricsProbe:
 
     def collect(self) -> ControlPlaneMetrics:
         queue_depth, outbox_pending = self._collect_queue()
-        kafka_lag = (
-            self._collect_kafka_lag()
-            if self.kafka_lag_source is None
-            else _parse_non_negative_int(self.kafka_lag_source(), "external.kafka_lag")
-        )
+        kafka_lag = 0
+        if self.include_kafka_lag:
+            kafka_lag = (
+                self._collect_kafka_lag()
+                if self.kafka_lag_source is None
+                else _parse_non_negative_int(self.kafka_lag_source(), "external.kafka_lag")
+            )
         return ControlPlaneMetrics(
             task_queue_depth=queue_depth,
             outbox_pending=outbox_pending,

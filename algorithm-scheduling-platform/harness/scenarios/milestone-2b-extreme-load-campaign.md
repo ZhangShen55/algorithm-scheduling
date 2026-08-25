@@ -573,8 +573,25 @@ Campaign/release/SHA/case/phase 身份校验发布。
 - 修复边界是减少探针自身负载并保留 fail-close：每个采样只执行一次 Kafka
   `--describe --all-groups`，精确汇总 `algorithm-orchestrator`、
   `algorithm-orchestrator-visual-events`、`vision-orchestrator`，CLI 瞬时失败默认最多尝试
-  2 次、间隔 0.25 秒；全部失败或组/分区不可证明仍锁存 `STOP`。修复必须经新 SHA、11 镜像
-  同 revision 和全新 write-once attempt 从阶段 0 重跑。
+  2 次、间隔 0.25 秒。Kafka 从 Control HTTP 中拆为独立 `kafka_lag` 采集面，独立超时默认
+  20 秒、合法范围 15–30 秒，其他探针仍保持 5 秒。全部失败或组/分区不可证明仍锁存 `STOP`；
+  脱敏失败事件写入 case 的 `failures/` 子目录，由 outcome 的 `failure_evidence` 单独列出，不能
+  混入成功样本 `sample_evidence`。修复必须经新 SHA、11 镜像同 revision 和全新 write-once
+  attempt 从阶段 0 重跑。
 - 本地实现验证为 Campaign/适配器聚焦 `526 passed`、Ruff 通过、strict Mypy 23 个源文件通过、
   compileall 通过、OpenSpec strict 通过及 `git diff --check` 通过。回归同时证明单次瞬时失败
   会在第二次成功后继续采样，连续两次失败仍抛出脱敏 `ProbeError` 并由运行时护栏锁存 STOP。
+
+## 2026-08-25 - `.12` 媒体源与负载机边界复核
+
+- 通过用户本轮提供的连接方式完成只读审计，未修改 `.12` 的文件、容器或配置，凭据未写入
+  Git、Harness、普通报告或命令证据。主机为 40 核、46 GiB 内存，根盘约 860 GiB 可用；
+  5555 只读媒体服务和 5556 受控慢响应探针均在运行，冻结短 T/S/P fixture 的 Range 总长度
+  与 Campaign manifest 一致。
+- `.12` 当前 shell soft `nofile=1024`，主网卡 RX drop 计数在观察窗口继续增长；该主机还承载
+  既有 ASR/PPT 业务容器。当前只把它作为媒体源、慢响应反例端点和源端辅助遥测，不把它作为
+  1000 图片并发或 150 路实时 ASR 的权威负载 worker，避免把源机文件句柄或网卡上限误归因
+  到 `.11` 调度平台。
+- 当前代码复审后的聚焦测试为 `89 passed`，完整 `tests/extreme_load` 为 `412 passed`；Ruff、
+  strict Mypy、compileall 和 `git diff --check` 通过。`.12` 接入补足测试输入与源端观测能力，
+  不改变旧 `OFF-LONG-COURSE-6` 的 blocked 结论，也不直接完成 OpenSpec 12.2。
