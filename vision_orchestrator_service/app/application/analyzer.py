@@ -173,7 +173,10 @@ class CourseVisualAnalyzer:
             }
 
         await progress(20, "粗粒度扫描", "正在执行教师行为粗粒度扫描")
-        scan_duration = max(min(duration, duration - 0.001), 0.001)
+        scan_duration = _safe_sampling_end(
+            duration,
+            settings.scan.end_frame_margin_seconds,
+        )
         scan = await planner.scan_async(
             duration_seconds=scan_duration,
             detector=detect,
@@ -227,7 +230,11 @@ class CourseVisualAnalyzer:
             "interval_seconds",
             self._settings.scan.default_interval_seconds,
         )
-        points = _sample_points(duration, interval)
+        points = _sample_points(
+            duration,
+            interval,
+            self._settings.scan.end_frame_margin_seconds,
+        )
         await progress(20, "学生抽帧", "正在抽取学生视频采样帧")
         total = await self._infer(
             command,
@@ -496,16 +503,34 @@ def _intervals_from_observations(
     return intervals
 
 
-def _sample_points(duration_seconds: float, interval_seconds: float) -> list[float]:
+def _sample_points(
+    duration_seconds: float,
+    interval_seconds: float,
+    end_frame_margin_seconds: float,
+) -> list[float]:
     if not math.isfinite(duration_seconds) or duration_seconds <= 0:
         raise ValueError("视频时长必须大于 0")
     points: list[float] = []
     point = 0.0
-    last_safe = max(duration_seconds - 0.001, 0.0)
+    last_safe = _safe_sampling_end(duration_seconds, end_frame_margin_seconds)
     while point <= last_safe:
         points.append(round(point, 6))
         point += interval_seconds
     return points or [0.0]
+
+
+def _safe_sampling_end(
+    duration_seconds: float,
+    end_frame_margin_seconds: float,
+) -> float:
+    if not math.isfinite(duration_seconds) or duration_seconds <= 0:
+        raise ValueError("视频时长必须大于 0")
+    if not math.isfinite(end_frame_margin_seconds) or end_frame_margin_seconds <= 0:
+        raise ValueError("视频末端抽帧裕量必须大于 0")
+    return max(
+        duration_seconds - end_frame_margin_seconds,
+        duration_seconds / 2,
+    )
 
 
 def _strategy_positive_float(

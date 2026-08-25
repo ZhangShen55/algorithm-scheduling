@@ -24,6 +24,21 @@ from app.utils.uri import redact_uri_for_log
 logger = get_logger("video_stream")
 
 MIN_FRAMES_OK = settings.MIN_FRAMES_OK
+_FRAME_QUEUE_EOF = object()
+_FRAME_QUEUE_ERROR = object()
+_FRAME_QUEUE_CANCELLED = object()
+
+
+def _publish_stream_terminal(task: LocalVideoAnalysisTaskObject, terminal: object) -> None:
+    """Wake the consumer when the producer reaches any terminal state."""
+    while True:
+        try:
+            task.frame_queue.put(terminal, timeout=1)
+            return
+        except queue.Full:
+            # 消费线程失败或任务取消后不能因满队列阻塞生产线程退出。
+            if task.cancel_event.is_set():
+                return
 
 
 def open_stream(task: LocalVideoAnalysisTaskObject, get_stream_error_event: threading.Event):
@@ -82,6 +97,7 @@ def get_stream(task: LocalVideoAnalysisTaskObject, get_stream_error_event: threa
     ui_video_sec = 0
 
     container = None
+    stream_completed = False
     frame_rate = task.fps
     try:
         container = open_stream(task, get_stream_error_event)
@@ -178,6 +194,8 @@ def get_stream(task: LocalVideoAnalysisTaskObject, get_stream_error_event: threa
                         else:
                             continue
 
+        else:
+            stream_completed = True
         logger.debug(f"完成读取视频流 video_path={safe_video_path}")
 
     except RuntimeError as e:
@@ -196,6 +214,13 @@ def get_stream(task: LocalVideoAnalysisTaskObject, get_stream_error_event: threa
             f"get_stream 流已释放，处理结束. task_id={task.task_id}, "
             f"frame_rate={frame_rate}, file_frame_sum={task.file_frame_sum}"
         )
+        if task.cancel_event.is_set():
+            terminal = _FRAME_QUEUE_CANCELLED
+        elif get_stream_error_event.is_set() or not stream_completed:
+            terminal = _FRAME_QUEUE_ERROR
+        else:
+            terminal = _FRAME_QUEUE_EOF
+        _publish_stream_terminal(task, terminal)
         task.stream_finished_event.set()
 
 
@@ -235,20 +260,30 @@ def process_frames(task: LocalVideoAnalysisTaskObject, get_stream_error_event: t
         ),
         comparator=compare_images,
     )
+    clean_eof = False
 
     logger.info(f"process_frames 开始, task_id={task.task_id}")
 
-    while not task.cancel_event.is_set() and not get_stream_error_event.is_set():
-        try:
-            frame_data, ret = get_frame_from_queue(
-                task.frame_queue,
-                timeout=1 if task.stream_finished_event.is_set() else 30,
-            )
-        except TimeoutError:
-            logger.info("frame_queue获取帧错误, frame_queue为空")
+    while True:
+        if task.cancel_event.is_set():
             break
 
+        frame_data, ret = get_frame_from_queue(
+            task.frame_queue,
+            timeout=1 if task.stream_finished_event.is_set() else 30,
+        )
+
         if ret:
+            if frame_data is _FRAME_QUEUE_EOF:
+                clean_eof = True
+                logger.info(f"process_frames 收到正常 EOF. task_id={task.task_id}")
+                break
+            if frame_data is _FRAME_QUEUE_ERROR:
+                logger.info(f"process_frames 收到生产线程错误终态. task_id={task.task_id}")
+                break
+            if frame_data is _FRAME_QUEUE_CANCELLED:
+                logger.info(f"process_frames 收到任务取消终态. task_id={task.task_id}")
+                break
             try:
                 pipeline.observe(frame_data)
                 last_timestamp_ms = frame_data.timestamp_ms
@@ -259,7 +294,13 @@ def process_frames(task: LocalVideoAnalysisTaskObject, get_stream_error_event: t
                 task.cancel_event.set()
                 break
         else:
-            logger.info(f"process_frames get_frame_from_queue failed. task_id={task.task_id}")
+            if task.stream_finished_event.is_set():
+                reason = "视频流结束标记缺失"
+            else:
+                reason = "等待视频帧超时"
+            logger.error(f"process_frames {reason}. task_id={task.task_id}")
+            task.mark_failed(reason)
+            task.cancel_event.set()
             break
 
     try:
@@ -287,8 +328,8 @@ def process_frames(task: LocalVideoAnalysisTaskObject, get_stream_error_event: t
     elif task.failure_reason:
         terminal_status = 70
         reason = task.failure_reason
-    elif not get_stream_error_event.is_set():
-        if processed_frames > MIN_FRAMES_OK:
+    elif clean_eof and not get_stream_error_event.is_set():
+        if processed_frames >= MIN_FRAMES_OK:
             task.task_status_code = 2
             logger.debug(f"视频流处理完成, url={redact_uri_for_log(task.video_path)}")
             terminal_status = 60
@@ -298,7 +339,7 @@ def process_frames(task: LocalVideoAnalysisTaskObject, get_stream_error_event: t
             task.mark_failed(reason)
             terminal_status = 70
             logger.debug(
-                f"视频流处理异常(小于{MIN_FRAMES_OK}秒数目), url={redact_uri_for_log(task.video_path)}. "
+                f"视频流处理异常(少于{MIN_FRAMES_OK}个采样帧), url={redact_uri_for_log(task.video_path)}. "
                 f"收到视频帧数目={processed_frames}"
             )
     else:

@@ -10,7 +10,30 @@ from packages.platform_contracts.vision import (
     VisualEventType,
 )
 
+from ..domain.adaptive_scan import AdaptiveScanError
+from ..infrastructure.capacity import (
+    CapacityLeaseClientError,
+    CapacityUnavailableError,
+)
+from ..infrastructure.media import VideoFrameError
+from ..infrastructure.vbas import VbasAdapterError
+
 ProgressCallback = Callable[[int, str, str], Awaitable[None]]
+
+_TERMINAL_ANALYSIS_ERRORS = (
+    AdaptiveScanError,
+    CapacityLeaseClientError,
+    VbasAdapterError,
+    VideoFrameError,
+    FileNotFoundError,
+    KeyError,
+    TypeError,
+    ValueError,
+)
+
+
+class _ProgressDeliveryError(RuntimeError):
+    pass
 
 
 class VisualAnalyzer(Protocol):
@@ -22,6 +45,13 @@ class VisualAnalyzer(Protocol):
 
 
 class VisualResultRepository(Protocol):
+    def transition_node(
+        self,
+        node_id: int,
+        status: NodeStatus,
+        reason: str,
+    ) -> object: ...
+
     def update_node_progress(
         self,
         node_id: int,
@@ -80,25 +110,48 @@ class VisualCommandProcessor:
                 )
             )
             return
+        if getattr(existing, "status", None) is NodeStatus.FAILED:
+            await self._aggregate(existing)
+            return
 
         async def report(progress: int, stage: str, reason: str) -> None:
-            await asyncio.to_thread(
-                self._repository.update_node_progress,
-                command.node_id,
-                {"percent": progress, "stage": stage},
-                reason=reason,
-            )
-            await self._publish(
-                VisualAnalysisEvent.create(
-                    command,
-                    event_type=VisualEventType.PROGRESS,
-                    progress=progress,
-                    stage=stage,
+            try:
+                await asyncio.to_thread(
+                    self._repository.update_node_progress,
+                    command.node_id,
+                    {"percent": progress, "stage": stage},
                     reason=reason,
                 )
-            )
+                await self._publish(
+                    VisualAnalysisEvent.create(
+                        command,
+                        event_type=VisualEventType.PROGRESS,
+                        progress=progress,
+                        stage=stage,
+                        reason=reason,
+                    )
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # 进度存储或事件发布失败属于基础设施故障，不能伪装成单任务分析失败。
+                raise _ProgressDeliveryError(
+                    f"视觉进度基础设施处理失败: {exc}"
+                ) from exc
 
-        analyzed = await self._analyzer.analyze(command, report)
+        try:
+            analyzed = await self._analyzer.analyze(command, report)
+        except CapacityUnavailableError:
+            raise
+        except _TERMINAL_ANALYSIS_ERRORS as exc:
+            failed = await asyncio.to_thread(
+                self._repository.transition_node,
+                command.node_id,
+                NodeStatus.FAILED,
+                f"视觉分析失败: {exc}",
+            )
+            await self._aggregate(failed, fallback=existing)
+            return
         if isinstance(analyzed, NodeResultWrite):
             result = NodeResultWrite(
                 result=analyzed.result,
@@ -118,14 +171,7 @@ class VisualCommandProcessor:
             result,
             reason="视觉分析完成",
         )
-        aggregate = getattr(self._repository, "aggregate_task_type_state", None)
-        if callable(aggregate):
-            course_task_type_id = getattr(existing, "course_task_type_id", None)
-            if course_task_type_id is None and callable(get_node):
-                completed = await asyncio.to_thread(get_node, command.node_id)
-                course_task_type_id = getattr(completed, "course_task_type_id", None)
-            if isinstance(course_task_type_id, int):
-                await asyncio.to_thread(aggregate, course_task_type_id)
+        await self._aggregate(existing)
         await self._publish(
             VisualAnalysisEvent.create(
                 command,
@@ -143,3 +189,13 @@ class VisualCommandProcessor:
             event.to_bytes(),
             key,
         )
+
+    async def _aggregate(self, node: object, *, fallback: object = None) -> None:
+        aggregate = getattr(self._repository, "aggregate_task_type_state", None)
+        if not callable(aggregate):
+            return
+        course_task_type_id = getattr(node, "course_task_type_id", None)
+        if course_task_type_id is None:
+            course_task_type_id = getattr(fallback, "course_task_type_id", None)
+        if isinstance(course_task_type_id, int):
+            await asyncio.to_thread(aggregate, course_task_type_id)

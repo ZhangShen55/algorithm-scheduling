@@ -1526,3 +1526,43 @@ MYPYPATH="$PWD/.." .venv/bin/mypy --strict --explicit-package-bases \
 `git diff --check` 均通过。该核验达到真实北向业务终态的验证层级 6，但没有生成规范 PPT
 case 证据；`BASE-OFFLINE-ASR`、`BASE-OFFLINE-TEACHER`、`BASE-OFFLINE-STUDENT` 未开始，
 所以不得发布 `PHASE-0-COMPLETE` 或完整阶段 0 通过结论。
+
+## 2026-08-25 PPT EOF、视觉失败终态和新 fixture 验证
+
+从工作区根分别执行：
+
+```bash
+conda run -n ppt_slice python -m pytest -q
+algorithm-scheduling-platform/.venv/bin/python -m pytest -q \
+  vision_orchestrator_service
+algorithm-scheduling-platform/.venv/bin/python -m pytest -q \
+  orchestrator_service
+MYPYPATH=algorithm-scheduling-platform \
+  algorithm-scheduling-platform/.venv/bin/mypy --strict --explicit-package-bases \
+  orchestrator_service/app/application/vision_events.py \
+  orchestrator_service/tests/test_visual_runtime.py
+```
+
+结果依次为 PPT `104 passed`、Vision `44 passed`、Orchestrator `63 passed`，视觉修改源文件
+和 Orchestrator 视觉事件文件 strict Mypy 通过；三项目 `compileall` 和 `app.main:app` 导入通过。
+PPT 环境没有安装 Ruff，平台 Ruff 对 PPT 文件还会报告该项目既有风格债务，因此不把本轮结果
+扩写为 PPT Ruff 全通过。
+
+Git 工作区外 `fixture-manifest.yaml` 的三条短媒体已切换为同一课程 50.040 秒 T/S/P，并通过
+`create-plan` schema/摘要校验。T/S/P 完整 SHA-256 为
+`4b63885bcefb15cd3bdf9dec52c267b6b50bf63a58c4e9a1c93ff3dc76eff4e4`、
+`b9819f5aef0fb2b193daef7d6213ea982f25436623692fbd4538bdf9f571e440`、
+`f91ef623f0a62de6acdb5f578ac15b1afd9fe4574a079433c1d240da3dcfd775`，manifest SHA-256 为
+`51ee3f8c1244fa08dc1566b6ff5f43fec35845adcce65d644e7568ba082ecedb`。`.12` 源文件只读
+`stat`/`sha256sum` 与 manifest 一致；`.12` 上已完成 ffprobe、完整解码和末端抽帧，`.11`
+宿主机与 `orchestrator-service` 容器对三条 URL 的首个 4096 字节均返回 HTTP `206` 且内容
+摘要一致。新 T 片段的北向 ASR-only 任务返回平台业务码 `0`、任务/节点状态 `60`、结果标准
+字段和 `23` 个 segments；核验命令只选择这些字段，没有输出或持久化完整转写文本。
+
+从工作区根运行平台完整测试，结果为 `3223 passed, 3 skipped`，三个 skip 均因本机没有
+canonical FaceRec GPU 容器。视觉普通单任务错误与进度基础设施异常隔离的聚焦测试为
+`21 passed`，视觉事件源文件 strict Mypy 和服务 `compileall` 通过。根目录直接运行 Vision
+项目全量测试会因项目合同要求的顶层 `app` 导入路径产生 8 个环境型失败；按项目根目录并设置
+`PYTHONPATH=../algorithm-scheduling-platform` 的权威命令重跑为上述 `44 passed`，前一命令不作
+代码失败结论。本节只完成实现与 fixture 前置，不能替代新 SHA 的 11 镜像 attestation、
+29/29 healthy、阶段 0 规范 case 或后续 Campaign。

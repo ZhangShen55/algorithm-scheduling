@@ -5,9 +5,9 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
-
 from packages.platform_contracts.status import Priority, TaskType
 from packages.platform_contracts.vision import VisualAnalysisCommand
+
 from vision_orchestrator_service.app.application.analyzer import CourseVisualAnalyzer
 from vision_orchestrator_service.app.core.config import VisionSettings
 from vision_orchestrator_service.app.domain.evidence import VisionEvidencePublisher
@@ -37,6 +37,7 @@ class FrameExtractor:
     def __init__(self, root: Path, *, duration: float = 30.0) -> None:
         self.root = root
         self.duration = duration
+        self.requested_timestamps: list[list[float]] = []
 
     async def duration_seconds(self, video_path: Path) -> float:
         assert video_path.is_absolute()
@@ -51,6 +52,7 @@ class FrameExtractor:
         timestamps: list[float],
     ) -> list[ExtractedFrame]:
         del video_path
+        self.requested_timestamps.append(list(timestamps))
         output = self.root / task_id / stream.value.lower()
         output.mkdir(parents=True, exist_ok=True)
         frames = []
@@ -200,6 +202,89 @@ async def test_teacher_analysis_refines_hits_and_persists_empty_safe_intervals(
     assert result.artifact_count and result.artifact_count > 0
     assert Path(result.artifact_path or "").is_dir()
     assert [item[0] for item in progress] == [5, 20, 75, 95]
+
+
+@pytest.mark.parametrize(
+    ("duration", "expected_safe_end"),
+    ((5.0, 4.5), (0.4, 0.2)),
+)
+@pytest.mark.asyncio
+async def test_teacher_analysis_avoids_unstable_video_end_but_keeps_real_duration(
+    tmp_path: Path,
+    duration: float,
+    expected_safe_end: float,
+) -> None:
+    analyzer = _analyzer(tmp_path)
+    extractor = analyzer._frames
+    assert isinstance(extractor, FrameExtractor)
+    extractor.duration = duration
+
+    async def report(percent: int, stage: str, reason: str) -> None:
+        del percent, stage, reason
+
+    result = await analyzer.analyze(
+        _command(
+            tmp_path,
+            TaskType.TEACHER_BEHAVIOR,
+            strategy={"coarse_interval_seconds": 10},
+        ),
+        report,
+    )
+
+    requested = sorted(
+        {
+            point
+            for timestamps in extractor.requested_timestamps
+            for point in timestamps
+        }
+    )
+    assert requested == [0.0, expected_safe_end]
+    assert isinstance(result.result, dict)
+    assert result.result["duration_seconds"] == duration
+
+
+@pytest.mark.asyncio
+async def test_teacher_interval_uses_real_duration_after_safe_end_sampling(
+    tmp_path: Path,
+) -> None:
+    class AlwaysWritingVbas(Vbas):
+        async def analyze(self, **kwargs):
+            results = await super().analyze(**kwargs)
+            for result in results:
+                for item in result["response"]["ResultList"]:
+                    if item["ObjectType"] == 203:
+                        item["ObjectCount"] = 1
+                        item["ObjectPostList"] = [{"Confidence": 0.9}]
+            return results
+
+    analyzer = _analyzer(tmp_path)
+    extractor = analyzer._frames
+    assert isinstance(extractor, FrameExtractor)
+    extractor.duration = 5.0
+    analyzer._vbas = AlwaysWritingVbas()
+
+    async def report(percent: int, stage: str, reason: str) -> None:
+        del percent, stage, reason
+
+    result = await analyzer.analyze(
+        _command(
+            tmp_path,
+            TaskType.TEACHER_BEHAVIOR,
+            strategy={
+                "coarse_interval_seconds": 10,
+                "refinement_intervals_seconds": [2, 1],
+            },
+        ),
+        report,
+    )
+
+    assert isinstance(result.result, dict)
+    assert max(
+        point
+        for timestamps in extractor.requested_timestamps
+        for point in timestamps
+    ) == 4.5
+    assert result.result["writing_intervals"][-1]["end_seconds"] == 5.0
 
 
 @pytest.mark.asyncio

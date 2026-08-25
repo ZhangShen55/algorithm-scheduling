@@ -303,6 +303,7 @@ class ProcessingPipelineTests(unittest.TestCase):
                         timestamp=timestamp,
                     )
                 )
+            frame_queue.put(video_processor._FRAME_QUEUE_EOF)
             task = LocalVideoAnalysisTaskObject(
                 task_id="course-pipeline",
                 operator_task_id="ppt-run-pipeline",

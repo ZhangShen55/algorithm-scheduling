@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from typing import Annotated
 
+from packages.platform_common.config import LoggingConfig
 from pydantic import BaseModel, Field, StrictInt
 from pydantic_settings import (
     BaseSettings,
@@ -11,8 +12,6 @@ from pydantic_settings import (
     SettingsConfigDict,
     TomlConfigSettingsSource,
 )
-
-from packages.platform_common.config import LoggingConfig
 
 SERVICE_ROOT = Path(__file__).resolve().parents[2]
 
@@ -70,6 +69,10 @@ class ScanConfig(BaseModel):
     batch_size: int = 8
     default_interval_seconds: float = 10.0
     refinement_intervals_seconds: tuple[float, ...] = (5.0, 2.0)
+    end_frame_margin_seconds: Annotated[
+        float,
+        Field(gt=0, allow_inf_nan=False),
+    ] = 0.5
     min_interval_seconds: float = 2.0
     max_interval_seconds: float = 60.0
     max_candidate_windows: int = 128

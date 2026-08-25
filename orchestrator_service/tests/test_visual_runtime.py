@@ -8,13 +8,6 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
-
-from orchestrator_service.app.application.vision_events import (
-    VisualCommandPublisher,
-    VisualEventConsumerLoop,
-    VisualEventProcessor,
-    VisualNodeCoordinator,
-)
 from packages.platform_common.kafka import KafkaMessage
 from packages.platform_common.repository import (
     NodeRecord,
@@ -26,6 +19,13 @@ from packages.platform_contracts.vision import (
     VisualAnalysisCommand,
     VisualAnalysisEvent,
     VisualEventType,
+)
+
+from orchestrator_service.app.application.vision_events import (
+    VisualCommandPublisher,
+    VisualEventConsumerLoop,
+    VisualEventProcessor,
+    VisualNodeCoordinator,
 )
 
 
@@ -134,17 +134,18 @@ class Repository:
         return self.task
 
 
-class ProgressCompletionRaceRepository(Repository):
-    def __init__(self) -> None:
+class ProgressTerminalRaceRepository(Repository):
+    def __init__(self, terminal_status: NodeStatus = NodeStatus.COMPLETED) -> None:
         super().__init__(running=[_node(NodeStatus.RUNNING)])
         self._reads = 0
+        self._terminal_status = terminal_status
 
     def get_node(self, node_id: int) -> NodeRecord:
         assert node_id == 31
         self._reads += 1
         if self._reads == 1:
             return _node(NodeStatus.RUNNING)
-        return _node(NodeStatus.COMPLETED)
+        return _node(self._terminal_status)
 
     def update_node_progress(
         self,
@@ -158,7 +159,7 @@ class ProgressCompletionRaceRepository(Repository):
         )
 
 
-class ProgressFailureRepository(ProgressCompletionRaceRepository):
+class ProgressFailureRepository(ProgressTerminalRaceRepository):
     def get_node(self, node_id: int) -> NodeRecord:
         assert node_id == 31
         return _node(NodeStatus.RUNNING)
@@ -396,9 +397,73 @@ async def test_progress_repository_error_remains_fatal_while_node_is_running() -
         await processor.handle(_event(VisualEventType.PROGRESS, progress=95))
 
 
+@pytest.mark.parametrize(
+    "terminal_status",
+    (NodeStatus.COMPLETED, NodeStatus.FAILED, NodeStatus.CANCELLED),
+)
+@pytest.mark.asyncio
+async def test_late_progress_is_committed_after_terminal_race(
+    terminal_status: NodeStatus,
+) -> None:
+    repository = ProgressTerminalRaceRepository(terminal_status)
+    consumer = Consumer(
+        [
+            KafkaMessage(
+                "visual",
+                0,
+                10,
+                None,
+                _event(VisualEventType.PROGRESS, progress=95),
+                None,
+            ),
+        ]
+    )
+    loop = VisualEventConsumerLoop(
+        consumer,
+        VisualEventProcessor(repository),
+        poll_timeout_seconds=0.1,
+    )
+
+    assert await loop.run_once() == 1
+    assert consumer.committed == [10]
+    assert repository.progress == []
+
+
+@pytest.mark.parametrize(
+    "terminal_status",
+    (NodeStatus.COMPLETED, NodeStatus.FAILED, NodeStatus.CANCELLED),
+)
+@pytest.mark.asyncio
+async def test_late_progress_is_committed_when_node_is_already_terminal(
+    terminal_status: NodeStatus,
+) -> None:
+    repository = Repository(running=[_node(terminal_status)])
+    consumer = Consumer(
+        [
+            KafkaMessage(
+                "visual",
+                0,
+                10,
+                None,
+                _event(VisualEventType.PROGRESS, progress=95),
+                None,
+            ),
+        ]
+    )
+    loop = VisualEventConsumerLoop(
+        consumer,
+        VisualEventProcessor(repository),
+        poll_timeout_seconds=0.1,
+    )
+
+    assert await loop.run_once() == 1
+    assert consumer.committed == [10]
+    assert repository.progress == []
+
+
 @pytest.mark.asyncio
 async def test_late_progress_is_committed_and_consumer_continues_to_terminal() -> None:
-    repository = ProgressCompletionRaceRepository()
+    repository = ProgressTerminalRaceRepository()
     consumer = Consumer(
         [
             KafkaMessage(

@@ -24,7 +24,7 @@ version = "V1.0.0_20260806"
 # 任务配置
 # 每个任务的解码帧生产者与切片消费者之间的内存队列容量
 max_queue_size = 25
-# 任务成功至少需要处理的采样帧数；当前完成条件为 processed_frames > min_frames_ok
+# 任务成功至少需要处理的采样帧数；完成条件为 processed_frames >= min_frames_ok
 min_frames_ok = 5
 
 [similarity]

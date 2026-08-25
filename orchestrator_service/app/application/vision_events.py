@@ -273,7 +273,11 @@ class VisualEventProcessor:
         if task.task_id != event.task_id or task.task_type is not event.task_type:
             raise ValueError("视觉事件与任务事实不一致")
         if event.event_type is VisualEventType.PROGRESS:
-            if node.status is NodeStatus.COMPLETED:
+            if node.status in {
+                NodeStatus.COMPLETED,
+                NodeStatus.FAILED,
+                NodeStatus.CANCELLED,
+            }:
                 return
             if node.status is not NodeStatus.RUNNING:
                 raise RuntimeError("视觉进度事件对应节点不在处理中")
@@ -285,16 +289,16 @@ class VisualEventProcessor:
                     reason=event.reason,
                 )
             except RepositoryStateConflictError:
-                # Vision Orchestrator persists the terminal result before publishing
-                # its completion event. A previously published progress event can
-                # therefore be consumed after the node has already completed. Re-read
-                # the node under that race and acknowledge only the completed state;
-                # all other repository validation failures remain fatal.
+                # 视觉服务先落终态再结束命令，先前进度可能在终态之后才被消费。
                 current = await asyncio.to_thread(
                     self._repository.get_node,
                     node.id,
                 )
-                if current.status is NodeStatus.COMPLETED:
+                if current.status in {
+                    NodeStatus.COMPLETED,
+                    NodeStatus.FAILED,
+                    NodeStatus.CANCELLED,
+                }:
                     return
                 raise
             return

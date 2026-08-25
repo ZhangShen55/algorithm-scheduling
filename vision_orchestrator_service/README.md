@@ -35,7 +35,9 @@ VBas 批次或平台注册容量。
 
 教师泳道先按可配置粗粒度扫描，命中板书或坐姿后按
 `scan.refinement_intervals_seconds` 逐级加密；教师行为区间和学生人数结果写入现有
-PostgreSQL 节点结果。节点完成后发布 `algorithm.visual.events` 终态事件，再提交 Kafka
+PostgreSQL 节点结果。`scan.end_frame_margin_seconds` 避开视频末端不可稳定解码的时间点，
+但结果时长和行为区间仍使用 ffprobe 返回的真实视频时长。节点完成后发布
+`algorithm.visual.events` 终态事件，再提交 Kafka
 offset。若数据库已完成但终态事件发布中断，重投命令只会补发终态事件，不重复执行推理。
 
 每个学生或教师图片批次申请一个共享 VBas 租约，并写入课程、批次、流类型和追踪上下文；

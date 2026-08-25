@@ -95,6 +95,8 @@ batch_size = 8
 default_interval_seconds = 10.0
 # 命中教师板书或坐姿后依次使用的加密检测间隔秒数。
 refinement_intervals_seconds = [5.0, 2.0]
+# 采样点距离视频末端的安全裕量；短视频自动退到视频中点并保留 0 秒采样。
+end_frame_margin_seconds = 0.5
 # 自适应扫描最小间隔秒数。
 min_interval_seconds = 2.0
 # 自适应扫描最大间隔秒数。

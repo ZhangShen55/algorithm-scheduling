@@ -1988,3 +1988,34 @@
 - Remaining risks: `BASE-OFFLINE-ASR`、`BASE-OFFLINE-TEACHER`、
   `BASE-OFFLINE-STUDENT` 未开始，PPT 规范 case 也不存在；本轮不重跑正式 case，
   `PHASE-0-COMPLETE` 和完整 12.1 仍不得声明完成。
+
+## 2026-08-25 - `2154c40` 阶段 0 故障修复与同步短媒体替换
+
+- Previous state: `phase0-rerun-2154c40cbe03-20260825122117` 的四档媒体下载通过，但 PPT
+  正常 EOF 被误判失败，ASR 短教师片段没有有效人声，教师视觉抽取末帧失败后杀死消费循环并
+  永久停留状态 50；Vision Orchestrator 为唯一 unhealthy 容器。
+- Target state: 保留原 plan、失败 case 和 runtime metric；修复 PPT EOF/最小帧边界、视觉
+  确定性失败终态和 Orchestrator 滞后进度竞态，并准备同一真实课程 50 秒同步短 T/S/P，供新
+  SHA 的 write-once attempt 使用。
+- Changed files: `ppt_slice/` 的处理器、配置、README 与测试；
+  `vision_orchestrator_service/` 的采样配置、命令处理、README 与测试；
+  `orchestrator_service/app/application/vision_events.py` 及视觉事件测试；当前 OpenSpec 设计、
+  规格、任务和三份 Harness 文档。外部 fixture manifest 不进入 Git。
+- Contract impact: 不改 A 服务 HTTP/WebSocket、任务字段、整数状态、算子路径、四服务边界或
+  端口。PPT 仍使用共享路径和一次终态通知；视觉失败使用已有状态 70，滞后进度只在节点已有
+  完成/失败/取消事实时幂等提交。
+- Verification command and environment: PPT `104 passed`、Vision `44 passed`、Orchestrator
+  `63 passed`，平台完整门禁 `3223 passed, 3 skipped`；三项目 compile/import 通过，视觉源
+  文件及 Orchestrator 视觉事件 strict Mypy 通过。新 T/S/P 完整解码、`4.999s` 抽帧和两侧
+  Range 探针通过；`.12` 源文件只读摘要与 manifest 完全一致。三条媒体 SHA-256 为
+  `4b63885bcefb15cd3bdf9dec52c267b6b50bf63a58c4e9a1c93ff3dc76eff4e4`、
+  `b9819f5aef0fb2b193daef7d6213ea982f25436623692fbd4538bdf9f571e440`、
+  `f91ef623f0a62de6acdb5f578ac15b1afd9fe4574a079433c1d240da3dcfd775`，manifest SHA-256 为
+  `51ee3f8c1244fa08dc1566b6ff5f43fec35845adcce65d644e7568ba082ecedb`。北向 ASR-only 返回平台
+  业务码 `0`、任务/节点状态 `60`、`23` 个 segments，未输出或持久化完整转写文本。
+- Evidence tier and verdict: 修复达到本地算子/服务单元与合同层；新 fixture 达到外部媒体
+  解码、北向 ASR 可识别语音和网络可读前置层。原 `2154c40` attempt 仍为失败诊断证据，
+  不因代码修复改写。
+- Remaining risks: 新修复尚未形成提交 SHA，目标机仍运行 `2154c40` 且 Vision unhealthy。
+  必须先提交推送、按新 SHA 重建全部 11 镜像并恢复 29/29 healthy，再从阶段 0 全量重跑；
+  `12.1`、阶段 1–6、217/26/6、4 小时长稳和最终清理均未完成。

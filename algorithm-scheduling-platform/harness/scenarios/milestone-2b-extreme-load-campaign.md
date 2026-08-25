@@ -422,3 +422,44 @@ Campaign/release/SHA/case/phase 身份校验发布。
   `tests/extreme_load` 为 `375 passed`，Ruff、strict Mypy、`compileall` 和
   `git diff --check` 均通过。由于 PPT 规范 case 证据缺失且另三项离线基线未开始，
   `PHASE-0-COMPLETE` 仍不得声明完成。
+
+## 2026-08-25 - `2154c40` 阶段 0 诊断、运行时修复与新短媒体
+
+- 诊断 attempt 为 `phase0-rerun-2154c40cbe03-20260825122117`，绑定完整 SHA
+  `2154c40cbe03b7cef7a8d24caa62bea119d94b9c`、seed `2608252220`。四个正式媒体下载 case
+  全部通过；30 并发为 `30/30` 成功、接收约 27.08 GB、聚合吞吐约 115.85 MB/s，前后护栏
+  均为 `CLEAR`。首次容器内短媒体预检因 Compose 插值缺失失败，原证据保留；专用重试预检
+  通过，三轮 T/S/P 首块均可读。
+- `BASE-OFFLINE-PPT` 在 32.27 秒进入失败终态，规范 case SHA-256 为
+  `45dc663ce32c044cdaa5b01c9efa9497590efcc52cba6aa01531cb4013a12be9`。只读北向查询显示
+  `PPT_SLICE=70`、原因“接收网络码流帧异常”，`PPT_OCR=20`。真实处理已读取 151 帧、形成
+  5 个 observation 和 1 张切片；根因是正常 EOF 未唤醒消费者、EOF 与队列超时混用，以及
+  恰好 5 帧时使用了错误的严格大于阈值。
+- `BASE-OFFLINE-ASR` 在 2.06 秒进入失败终态，规范 case SHA-256 为
+  `53c72d8ec1b17dff76b09fa004a6bc8c0cddc209ca68cd8919e76ad3813ecd4b`。算子 HTTP 成功返回，
+  业务码为 `4008`“音频文件为空或未检测到任何人声”；旧 5 秒教师 fixture 不具备有效授课
+  语音，因此不能作为 ASR 质量或容量结论。
+- 教师视觉任务停留在 `TEACHER_BEHAVIOR_ANALYSIS=50`，Vision Orchestrator 随后 unhealthy。
+  5 秒视频在 `4.999s` 没有生成帧，异常未写失败终态而直接结束消费循环；此前 5% 进度晚于
+  失败事实到达时还会触发 Orchestrator 状态冲突。现场保持 29/29 容器运行、28/29 healthy、
+  21/21 注册、18 个 GPU 进程归属正确，零 OOM、零重启、零活跃租约。
+- PPT 现用独立正常 EOF/错误/取消信号立即唤醒消费者，并将成功条件收敛为
+  `processed_frames >= min_frames_ok`。视觉采样增加 0.5 秒末端裕量；确定性分析异常写失败
+  终态、聚合后提交命令，容量不足仍重试；Orchestrator 幂等忽略完成/失败/取消节点的滞后
+  进度。PPT 全量 `104 passed`，Vision 全量 `38 passed`，Orchestrator 全量 `63 passed`。
+- 新短 T/S/P 位于 Git 工作区外，取同一节 `0912` 课程 `360–410s`，三路均为 50.040 秒、
+  1080p/25fps、H.264 High/yuv420p、AAC，首帧关键帧、完整解码和 `4.999s` 抽帧通过。
+  T/S/P SHA-256 分别为
+  `4b63885bcefb15cd3bdf9dec52c267b6b50bf63a58c4e9a1c93ff3dc76eff4e4`、
+  `b9819f5aef0fb2b193daef7d6213ea982f25436623692fbd4538bdf9f571e440`、
+  `f91ef623f0a62de6acdb5f578ac15b1afd9fe4574a079433c1d240da3dcfd775`；manifest SHA-256 为
+  `51ee3f8c1244fa08dc1566b6ff5f43fec35845adcce65d644e7568ba082ecedb`。`.12` 源文件只读
+  `stat`/`sha256sum` 与 manifest 完全一致；`.11` 宿主机及 Orchestrator 容器读取三路首块均为
+  HTTP `206` 且摘要一致。教师音频非静音探针后，又通过北向 ASR-only 任务取得平台业务码
+  `0`、任务/节点状态 `60` 和 `23` 个 segments；未输出或持久化完整转写文本。
+- 视觉普通 `ValueError`、`TypeError`、`KeyError`、`FileNotFoundError` 现按单任务失败终结，
+  进度落库或视觉事件发布异常仍失败关闭；聚焦消费续跑与基础设施隔离测试通过。Vision 全量
+  更新为 `44 passed`，平台完整门禁为 `3223 passed, 3 skipped`，三个 skip 均因本机没有
+  canonical FaceRec GPU 容器。
+- 原 attempt 和失败任务保持只读，`12.1` 继续未完成。上述修复必须提交为新 SHA，11 个镜像
+  同 revision 重建并恢复 29/29 healthy 后，以新 seed、Campaign ID 和 attempt 从阶段 0 重跑。

@@ -63,6 +63,32 @@ Campaign 系统 SHALL 使用短媒体执行 100、300、1000 个唯一任务的�
 - **WHEN** PPT-only、ASR-only、教师-only 或学生-only 查询返回一个已请求任务和三个 `status=0` 的未请求任务
 - **THEN** Campaign 终态轮询 SHALL 排除未请求项，只根据至少一个已请求项判断成功、失败或继续等待；四项全部为 `0` 时不得提前成功
 
+### Requirement: 短媒体基线必须验证输入有效性和确定性终态
+Campaign 系统 SHALL 使用同一真实课程、同一时间窗口的短 T/S/P 片段执行离线基线，并冻结
+URL、字节数、时长和 SHA-256。教师短片段 MUST 包含可识别的真实人声；三路 MUST 完成
+ffprobe、完整解码和安全末端抽帧验证。PPT 与视觉单任务遇到确定性处理错误时 MUST 进入失败
+终态并允许消费循环继续处理后续命令，不得永久停留在运行中或使整个后台循环退出。
+
+#### Scenario: 无有效人声的 ASR fixture
+- **WHEN** 离线 ASR 返回“音频文件为空或未检测到任何人声”，且音频探针证明短教师 fixture 没有有效授课语音
+- **THEN** 当前基线 SHALL 归因为 fixture 前置条件失败，并使用新的有效短片段和全新 attempt 重跑，不得把该结果写成 ASR 模型容量不符合
+
+#### Scenario: PPT 正常 EOF 恰好达到最小帧数
+- **WHEN** PPT 视频正常结束且已处理采样帧数恰好等于 `min_frames_ok`
+- **THEN** PPT Slice SHALL 立即消费正常 EOF 并按成功终态处理，不得等待队列超时或误报网络码流异常
+
+#### Scenario: 视觉确定性失败后继续消费
+- **WHEN** 一个视觉命令因媒体抽帧或分析错误写入失败终态，且先前发布的进度事件随后到达
+- **THEN** Vision Orchestrator SHALL 聚合失败任务并提交命令，Orchestrator SHALL 幂等提交已终态节点的滞后进度，后续视觉命令仍可继续执行
+
+#### Scenario: 单任务分析错误不吞掉基础设施错误
+- **WHEN** 视觉分析边界出现媒体缺失、非法策略、VBas 结果字段缺失或证据文件缺失
+- **THEN** `ValueError`、`TypeError`、`KeyError`、`FileNotFoundError` SHALL 写入当前节点失败终态并允许消费后续命令；进度落库、事件发布、终态持久化或 Kafka 提交异常 MUST 继续失败关闭，不得伪装成任务失败
+
+#### Scenario: 修复后创建全新发布 attempt
+- **WHEN** 某一阶段 0 attempt 已因实现或 fixture 缺陷产生失败或部分证据
+- **THEN** 系统 MUST 保留原证据，使用包含修复的新完整 Git SHA 重建 11 个镜像，并以新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑
+
 ### Requirement: 幂等、追加任务类型与优先级必须在压力下保持语义
 Campaign 系统 SHALL 对同一 `task_id` 执行 30、100、300、1000 次并发相同提交，并验证分批追加 `task_types`、已完成结果复用和冲突媒体请求。Campaign 还 SHALL 在堆积的 `NORMAL` 后注入 `URGENT`，验证只对未领取节点插队。Control 课程查询的节点字典 MUST 从 PostgreSQL 节点事实返回可空 `claimed_at` 和 `started_at`，Campaign MUST 使用它们证明领取和开始顺序。
 

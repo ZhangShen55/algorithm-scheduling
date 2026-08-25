@@ -197,7 +197,7 @@ Compose 继续管理实例 ID、服务 URL、注册 Token、`CONFIG_PATH`、端�
 | `app.version` | `APP_VERSION` | `V1.0.0_20260806` | FastAPI 文档、健康信息和版本接口返回的版本 |
 | `platform.max_concurrent_requests` | 无 | `10` | 平台容量及单 Uvicorn worker 最大后台任务数 |
 | `task.max_queue_size` | `MAX_QUEUE_SIZE` | `25` | 单任务帧队列容量 |
-| `task.min_frames_ok` | `MIN_FRAMES_OK` | `5` | 任务成功至少需要处理的采样帧数，完成条件为处理帧数大于该值 |
+| `task.min_frames_ok` | `MIN_FRAMES_OK` | `5` | 任务成功至少需要处理的采样帧数，完成条件为处理帧数不少于该值 |
 | `similarity.default_contiguous_similarity` | `DEFAULT_CONTIGUOUS_SIMILARITY` | `0.99` | 相邻采样画面的稳定相似度阈值 |
 | `similarity.default_saved_similarity` | `DEFAULT_SAVED_SIMILARITY` | `0.98` | 无请求级阈值的 Harness 运行所用 PPT 去重阈值 |
 | `paths.result_root` | `RESULT_ROOT` | `./shared_results` | 共享结果根目录 |
