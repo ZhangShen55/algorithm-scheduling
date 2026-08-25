@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import wave
@@ -30,6 +31,7 @@ from scripts.extreme_load.execution import (
     CaseRunOutcome,
     PriorityCheckpointResult,
     _http_outcome,
+    _poll_one_task,
 )
 from scripts.extreme_load.online_images import ScheduledImageRequest
 from scripts.extreme_load.plan import CampaignPlan, build_campaign_plan, read_case_evidence
@@ -111,6 +113,121 @@ def _result(
     evidence: dict[str, object] | None = None,
 ) -> LoadResult:
     return LoadResult(request_id, category, 0.01, 200, 0, evidence or {})
+
+
+def _fixed_course_tasks(statuses: Sequence[int]) -> dict[str, object]:
+    task_types = ("PPT", "ASR", "TEACHER_BEHAVIOR", "STUDENT_BEHAVIOR")
+    assert len(statuses) == len(task_types)
+    return {
+        "code": 0,
+        "data": {
+            "task_id": "course-1",
+            "tasks": [
+                {"task_type": task_type, "status": status}
+                for task_type, status in zip(task_types, statuses, strict=True)
+            ],
+        },
+    }
+
+
+async def _poll_fixed_course_statuses(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status_sequence: Sequence[Sequence[int]],
+) -> tuple[str, int]:
+    case = _case("offline_baseline")
+    plan = _plan(tmp_path, case)
+    request_count = 0
+    monotonic_tick = 0
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    def monotonic() -> float:
+        nonlocal monotonic_tick
+        monotonic_tick += 1
+        return float(monotonic_tick)
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        index = min(request_count, len(status_sequence) - 1)
+        request_count += 1
+        return httpx.Response(200, json=_fixed_course_tasks(status_sequence[index]))
+
+    monkeypatch.setattr("scripts.extreme_load.execution.asyncio.sleep", no_sleep)
+    monkeypatch.setattr("scripts.extreme_load.execution.time.monotonic", monotonic)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        outcome = await _poll_one_task(
+            client,
+            plan,
+            "course-1",
+            deadline=5,
+            semaphore=asyncio.Semaphore(1),
+        )
+    return outcome, request_count
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "statuses",
+    (
+        (60, 0, 0, 0),
+        (60, 60, 0, 0),
+    ),
+)
+async def test_poll_task_ignores_unrequested_fixed_task_slots_when_requested_work_succeeds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    statuses: tuple[int, int, int, int],
+) -> None:
+    outcome, request_count = await _poll_fixed_course_statuses(
+        tmp_path,
+        monkeypatch,
+        (statuses,),
+    )
+
+    assert outcome == "success"
+    assert request_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "initial_statuses",
+    (
+        (50, 0, 0, 0),
+        (0, 0, 0, 0),
+    ),
+)
+async def test_poll_task_waits_for_requested_terminal_work_and_requires_one_requested_slot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    initial_statuses: tuple[int, int, int, int],
+) -> None:
+    outcome, request_count = await _poll_fixed_course_statuses(
+        tmp_path,
+        monkeypatch,
+        (initial_statuses, (60, 0, 0, 0)),
+    )
+
+    assert outcome == "success"
+    assert request_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_status", (70, 80))
+async def test_poll_task_fails_when_requested_work_reaches_failure_terminal_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    terminal_status: int,
+) -> None:
+    outcome, request_count = await _poll_fixed_course_statuses(
+        tmp_path,
+        monkeypatch,
+        ((terminal_status, 0, 0, 0),),
+    )
+
+    assert outcome == "failed"
+    assert request_count == 1
 
 
 def _course_observation(

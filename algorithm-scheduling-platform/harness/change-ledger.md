@@ -1962,3 +1962,29 @@
 - Verification command and environment:
 - Evidence tier and verdict:
 - Remaining risks:
+
+## 2026-08-25 - 源端遥测正式执行与离线 PPT 轮询修复
+
+- Previous state: 当前 attempt 的旧 partial 下载证据仍记录 `.12` 源端四项遥测
+  `NOT_COLLECTED`；阶段 0 只完成五个在线定位基线，四个正式下载和离线基线没有新结论。
+- Target state: 在不覆盖历史证据的前提下记录正式源端遥测和四档下载结果，保留 PPT 中断时的
+  53 个指标样本，修正固定四任务查询中未请求 `status=0` 槽位导致的无限轮询。
+- Changed files: `scripts/extreme_load/execution.py`、`tests/extreme_load/test_execution.py`、
+  `harness/scenarios/milestone-2b-extreme-load-campaign.md`、`harness/verification.md`、
+  `harness/change-ledger.md`，以及当前 attempt 新增的
+  `attempt-interruption-offline-polling.json`；未修改 OpenSpec task，也未改写正式 case 或
+  partial 证据。
+- Contract impact: 不改变 A 服务路径、方法、字段、整数状态、算子合同、四服务边界或端口；
+  Runner 只忽略固定查询响应中的未请求零状态槽位，仍要求至少一个请求槽位，并保持
+  `60/70/80` 终态语义。
+- Verification command and environment: 同一 attempt 的 `.12` 遥测标识为
+  `source-fileserver-media-download-rerun2-20260825T103743+0800`；四个下载 case 合计
+  `44/44` passed。PPT 确定性任务只读复核为 `PPT=60`、`PPT_SLICE=60`、`PPT_OCR=60`，
+  三个未请求槽位为 `0`。聚焦测试 `6 passed`、`test_execution.py` `18 passed`、Campaign
+  全集 `375 passed`，Ruff、strict Mypy、`compileall` 和 `git diff --check` 通过。
+- Evidence tier and verdict: 下载证据包含正式源端 CPU、内存、发送网络和连接数；PPT 达到真实
+  北向业务终态层级 6。Runner 中断前仅留下 53 个 runtime metric，未发布规范 PPT case；
+  中断原因、任务 ID、证据路径和终态字段以 `0600` 单链接 JSON 记录。
+- Remaining risks: `BASE-OFFLINE-ASR`、`BASE-OFFLINE-TEACHER`、
+  `BASE-OFFLINE-STUDENT` 未开始，PPT 规范 case 也不存在；本轮不重跑正式 case，
+  `PHASE-0-COMPLETE` 和完整 12.1 仍不得声明完成。

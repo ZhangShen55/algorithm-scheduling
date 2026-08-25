@@ -59,6 +59,10 @@ Campaign 系统 SHALL 使用短媒体执行 100、300、1000 个唯一任务的�
 - **WHEN** 当前长课阶梯结束后剩余空间已低于配置的警戒线
 - **THEN** Campaign 系统 SHALL 禁止启动下一阶梯，继续排空当前任务并把用例标记为护栏中止
 
+#### Scenario: 单任务泳道忽略未请求任务字典
+- **WHEN** PPT-only、ASR-only、教师-only 或学生-only 查询返回一个已请求任务和三个 `status=0` 的未请求任务
+- **THEN** Campaign 终态轮询 SHALL 排除未请求项，只根据至少一个已请求项判断成功、失败或继续等待；四项全部为 `0` 时不得提前成功
+
 ### Requirement: 幂等、追加任务类型与优先级必须在压力下保持语义
 Campaign 系统 SHALL 对同一 `task_id` 执行 30、100、300、1000 次并发相同提交，并验证分批追加 `task_types`、已完成结果复用和冲突媒体请求。Campaign 还 SHALL 在堆积的 `NORMAL` 后注入 `URGENT`，验证只对未领取节点插队。Control 课程查询的节点字典 MUST 从 PostgreSQL 节点事实返回可空 `claimed_at` 和 `started_at`，Campaign MUST 使用它们证明领取和开始顺序。
 

@@ -1502,3 +1502,27 @@ MYPYPATH="$PWD/.." .venv/bin/mypy --strict --explicit-package-bases \
 `course_jobs=18`、`course_task_types=45`、全零 `submission_id=0`、跨课程复用
 `submission_id=0`，且不存在非 `public` 同名账本。该证据只证明远端满足采纳前数据门禁，
 不代表采纳、`0007` 或常驻启动已执行。
+
+## 2026-08-25 阶段 0 下载与 PPT 轮询中断核验
+
+当前 SHA `e91f5b21cb458983f8ab1eea2518e33579f4836d`、attempt
+`phase0-online-e91f5b21cb45-20260825001147` 的四份正式下载证据均为非 symlink `0600`
+单链接文件。其内嵌同一源端遥测标识
+`source-fileserver-media-download-rerun2-20260825T103743+0800`，证明 `.12` 的 CPU、内存、
+发送网络和连接数正式遥测已经可用；四档结果为 `1/1`、`3/3`、`10/10`、`30/30`，合计
+`44/44` 成功。旧 partial 证据中 `NOT_COLLECTED` 的历史陈述不作改写。
+
+`BASE-OFFLINE-PPT` 目录保留连续 `00000001.json` 至 `00000053.json`，共 53 份 `0600`
+单链接运行指标；首末时间为 `2026-08-25T03:02:59.635483Z` 和
+`2026-08-25T03:07:39.361109Z`，护栏均为 `CLEAR`。规范
+`campaign/phase-0-baseline/base-offline-ppt.json` 不存在。对确定性任务 ID 执行一次只读
+`GET /api/course-jobs/{task_id}` 并只选择状态字段，得到 `PPT=60`、两个 PPT 节点均为 `60`，
+其余三个未请求固定槽位均为 `0`；这证明业务成功，也证明旧 Runner 因错误等待 `status=0`
+槽位而中止发布 case 证据。脱敏中断记录为 attempt 根的
+`attempt-interruption-offline-polling.json`，不含响应正文、媒体、文本、凭据或源端密码。
+
+轮询修复验证结果为：新增聚焦用例 `6 passed`、完整 `test_execution.py` 为 `18 passed`、
+完整 `tests/extreme_load` 为 `375 passed`；Ruff、strict Mypy、`compileall` 和
+`git diff --check` 均通过。该核验达到真实北向业务终态的验证层级 6，但没有生成规范 PPT
+case 证据；`BASE-OFFLINE-ASR`、`BASE-OFFLINE-TEACHER`、`BASE-OFFLINE-STUDENT` 未开始，
+所以不得发布 `PHASE-0-COMPLETE` 或完整阶段 0 通过结论。

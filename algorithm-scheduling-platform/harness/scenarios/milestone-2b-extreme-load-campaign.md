@@ -395,3 +395,30 @@ Campaign/release/SHA/case/phase 身份校验发布。
   `NOT_COLLECTED`。因此下载归因状态仍为 `BLOCKED`，OpenSpec 4.9、11.1、四个正式
   `BASE-MEDIA-DOWNLOAD-*` 和 `PHASE-0-COMPLETE` 继续阻断；不得以目标端下载或五个在线通过
   结果进入阶段 1，也不得发布完整阶段 0 符合结论。
+
+## 2026-08-25 - 源端遥测补齐与 PPT 轮询中断事实
+
+- 同一 attempt 随后的正式执行已取得 `192.168.29.12` 源端遥测，证据标识为
+  `source-fileserver-media-download-rerun2-20260825T103743+0800`，采集时间为
+  `2026-08-25T10:43:14.167033+08:00`。CPU、内存、发送网络和连接数四项均嵌入四份
+  `BASE-MEDIA-DOWNLOAD-*` 规范 case 证据；此前 `NOT_COLLECTED` 的 partial 文件是当时事实，
+  继续原样保留，不回写也不删除。
+- `BASE-MEDIA-DOWNLOAD-1/3/10/30` 四案全部为 `passed`，请求数分别为 `1/3/10/30`，
+  合计 `44/44` 成功、零失败。规范证据位于当前 attempt 的
+  `campaign/phase-0-baseline/base-media-download-{1,3,10,30}.json`。
+- Runner 随后提交 `BASE-OFFLINE-PPT`，任务 ID 为
+  `load-campaign-v1-0_260825-e91f5b21cb458983f8ab1eea2518e33579f4-72934bede6903f60-base-offline-ppt-0-b89649ed404a37c2`。
+  只读北向终态复核得到 `PPT=60`，`PPT_SLICE=60`、`PPT_OCR=60`；固定返回的未请求
+  `ASR/TEACHER_BEHAVIOR/STUDENT_BEHAVIOR` 槽位均为 `0`。PPT 业务实际执行成功，但旧轮询器把
+  四个固定槽位一起要求为终态，因而没有结束该 case。
+- 中断时没有发布规范 `campaign/phase-0-baseline/base-offline-ppt.json`。已保留
+  `campaign/runtime-metrics/BASE-OFFLINE-PPT/00000001.json` 至 `00000053.json` 共 53 个部分
+  运行指标样本，时间范围为 `2026-08-25T03:02:59.635483Z` 至
+  `2026-08-25T03:07:39.361109Z`，首末护栏均为 `CLEAR`。中断事实另存为 attempt 根目录的
+  `attempt-interruption-offline-polling.json`；未重跑正式 case，也未覆盖既有证据。
+- `BASE-OFFLINE-ASR`、`BASE-OFFLINE-TEACHER` 和 `BASE-OFFLINE-STUDENT` 尚未开始。轮询修复现只
+  评价非零请求槽位，仍把 `60` 判为成功、`70/80` 判为失败，并要求至少存在一个请求槽位；
+  新增聚焦用例 `6 passed`，`test_execution.py` 为 `18 passed`，完整
+  `tests/extreme_load` 为 `375 passed`，Ruff、strict Mypy、`compileall` 和
+  `git diff --check` 均通过。由于 PPT 规范 case 证据缺失且另三项离线基线未开始，
+  `PHASE-0-COMPLETE` 仍不得声明完成。

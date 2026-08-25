@@ -306,13 +306,16 @@ async def _poll_one_task(
             tasks = data.get("tasks") if isinstance(data, dict) else None
             if isinstance(tasks, list) and tasks:
                 statuses = [item.get("status") for item in tasks if isinstance(item, dict)]
-                all_terminal = len(statuses) == len(tasks) and all(
-                    status in _TERMINAL_STATUSES for status in statuses
+                requested_statuses = [status for status in statuses if status != 0]
+                all_terminal = (
+                    len(statuses) == len(tasks)
+                    and bool(requested_statuses)
+                    and all(status in _TERMINAL_STATUSES for status in requested_statuses)
                 )
                 if all_terminal:
                     return (
                         "success"
-                        if all(status == _SUCCESS_STATUS for status in statuses)
+                        if all(status == _SUCCESS_STATUS for status in requested_statuses)
                         else "failed"
                     )
             await asyncio.sleep(2)
