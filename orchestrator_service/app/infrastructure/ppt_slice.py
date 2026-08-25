@@ -9,11 +9,10 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-
 from packages.platform_common.repository import NodeResultWrite
 from packages.platform_common.state_machine import InvalidNodeTransition
 from packages.platform_contracts.status import NodeStatus
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..domain.ppt_work import make_ppt_image_id
 

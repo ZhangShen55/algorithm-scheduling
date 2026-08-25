@@ -53,6 +53,9 @@ def test_runbook_covers_current_topology_and_lifecycle() -> None:
         "nvidia-ctk runtime configure --runtime=docker",
         "docker-running.before-nvidia-runtime.txt",
         "docker run --rm --gpus all",
+        "probe_attempts=2",
+        "probe_retry_delay_seconds=0.25",
+        "deploy/scripts/extreme-load-fault-probe",
     )
     for value in required:
         assert value in document
@@ -246,6 +249,7 @@ def test_lifecycle_entrypoints_are_executable_and_runbook_does_not_embed_secrets
         "stop-production-stack",
         "apply-database-migrations",
         "production-image-lifecycle",
+        "extreme-load-fault-probe",
     ):
         assert (PROJECT_ROOT / "deploy/scripts" / entrypoint).stat().st_mode & 0o111
 

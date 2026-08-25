@@ -293,6 +293,14 @@ Campaign 系统 SHALL 至少每 5 秒发起宿主机、Docker、GPU、磁盘、K
 - **WHEN** `kafka_lag` 采集面在全部尝试后仍失败，后续收尾采样重新成功
 - **THEN** 当前用例 MUST 保持 `STOP`，系统 MUST 写入仅含 case、时间、采集面、异常类型和尝试次数的脱敏失败 JSON，并通过独立 `failure_evidence` 路径列表公开；失败事件 MUST NOT 混入成功样本的 `sample_evidence`
 
+#### Scenario: 其他只读采集面瞬时失败在同一采样内恢复
+- **WHEN** 宿主机、Docker、GPU、Control、Gateway 或其他只读采集面第一次调用失败，但在配置的有限尝试次数内恢复
+- **THEN** 当前采样 SHALL 继续并使用恢复后的完整结果，不写失败事件；尝试次数 MUST 不超过 2 次且默认 2 次，默认重试间隔 MUST 为 0.25 秒，全部尝试失败时 MUST 写入实际尝试次数并锁存 `STOP`；Kafka lag MUST 继续使用自己的独立超时和重试而不得嵌套放大
+
+#### Scenario: 两次只读采集均失败
+- **WHEN** 任一非 Kafka 只读采集面在同一采样的两次有界尝试中都失败
+- **THEN** Campaign MUST 保留既有成功样本，发布不含命令输出和凭据的失败 JSON，将当前及后续结果保持为 `STOP`，不得因之后采样恢复而改写当前用例通过
+
 #### Scenario: 磁盘达到红线
 - **WHEN** 宿主机或关键数据目录所在文件系统剩余空间低于 100 GiB 或 10%
 - **THEN** Campaign 系统 MUST 立即停止新请求/会话，发布红线证据，保留 `/data/result` 并进入受控排空/恢复

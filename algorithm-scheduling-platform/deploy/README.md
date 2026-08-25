@@ -537,6 +537,8 @@ aggregator 强制校验该证据属于当前 release/SHA、状态为 `passed`、
 调用权威 `run-extreme-load-campaign execute-sequence`。PID、JSONL 日志和逐案退出码必须位于
 当前 write-once attempt；任一证据已存在时拒绝覆盖，runner 在 case 终态前消失时不得续写该
 attempt。完整参数与判定方式见中文部署手册。
+运行时配置中的非 Kafka 只读采集面使用同采样有限重试；Fault Adapter 的远端语义检查必须
+通过 `deploy/scripts/extreme-load-fault-probe` 使用平台 `.venv`，不能直接依赖系统 Python。
 
 `preflight runtime/operators` 对运行容器使用的最终镜像执行
 `org.opencontainers.image.revision` attestation；`run-operator-smoke --git-sha` 只把结果

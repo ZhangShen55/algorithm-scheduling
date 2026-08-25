@@ -68,6 +68,9 @@ kafka_probe_retry_delay_seconds = 0.25
 regular_seconds = 5.0
 burst_seconds = 0.5
 probe_timeout_seconds = 5.0
+# HTTP、Docker、GPU 和宿主机等只读采集面在同一采样内有限重试；全部失败后仍锁存 STOP。
+probe_attempts = 2
+probe_retry_delay_seconds = 0.25
 restart_loop_threshold = 3
 restart_loop_window_seconds = 60.0
 database_services = ["postgres", "kafka", "redis", "mongodb"]
@@ -93,7 +96,7 @@ ssh_port = 22
 delegated_lock_holder_pid = 1
 delegated_lock_path = "/data/reports/milestone-2b/releases/release-tag/.operator-lifecycle.lock"
 # 目标机 clean checkout 中的真实只读语义探针；部署时必须保留可执行位。
-semantic_probe_path = "/opt/algorithm-platform/deploy/scripts/extreme_load_fault_probe.py"
+semantic_probe_path = "/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/scripts/extreme-load-fault-probe"
 # 两个路径均位于目标机；release 根必须精确绑定当前 release tag/完整 Git SHA，证据根只能是其子目录。
 semantic_probe_release_root = "/data/reports/milestone-2b/releases/release-tag/0000000000000000000000000000000000000000"
 semantic_probe_evidence_root = "/data/reports/milestone-2b/releases/release-tag/0000000000000000000000000000000000000000/campaign/phase-5-recovery/fault-probes"

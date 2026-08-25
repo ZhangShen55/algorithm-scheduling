@@ -1988,3 +1988,38 @@ PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q tests/extreme_load
 `694.93s`。三个 skip 仍只因本机没有运行 canonical `facerec-gpu0`，27 条 warning
 仍为既有 Python fork `DeprecationWarning`；远程发布不得用这三个 skip 代替 `.11`
 的真实 FaceRec Smoke 和 Campaign。
+
+## 2026-08-26 运行时只读探针有限重试与 Fault Probe 入口回归
+
+在平台目录执行：
+
+```bash
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/extreme_load \
+  tests/deploy/test_deployment_runbook.py
+.venv/bin/ruff check \
+  scripts/extreme_load/runtime_metrics.py \
+  scripts/extreme_load/production_adapters.py \
+  tests/extreme_load/test_runtime_metrics.py \
+  tests/extreme_load/test_production_adapters.py \
+  tests/extreme_load/test_production_fault_adapter.py
+.venv/bin/mypy --strict \
+  scripts/extreme_load/runtime_metrics.py \
+  scripts/extreme_load/production_adapters.py
+bash -n deploy/scripts/extreme-load-fault-probe
+```
+
+聚焦回归实际为 `476 passed`，Ruff、strict Mypy 和 Bash syntax 均通过。平台权威全量回归为
+`3329 passed, 3 skipped, 27 warnings`，耗时 `757.40s`；三个 skip 仍只因本机没有运行
+canonical `facerec-gpu0`，27 条 warning 仍为既有 Python fork `DeprecationWarning`，远端
+发布必须继续以 `.11` 的真实 FaceRec Smoke 和 Campaign 补足。新增回归证明：
+非 Kafka 采集面首次失败、第二次恢复时仍产生完整正常样本且不写失败事件；连续两次失败时
+失败证据为 `ProbeAttemptsExhausted`、`attempts=2`，原始异常中的凭据文本不会泄漏，并继续
+锁存 STOP。生产配置严格拒绝尝试次数 0/3 和重试间隔 -0.1/5.1；Kafka lag 仍只使用自己的
+独立重试，未嵌套为四次。Fault Probe 包装入口固定选择项目 `.venv/bin/python`，缺失时返回
+非零。远端新 SHA 发布结果在后续证据中补齐。
+
+提交前复审还发现 `orchestrator_service/app/infrastructure/ppt_slice.py` 的已提交导入分组不符合
+当前 Ruff 规则；仅调整 import 顺序后，PPT adapter/runtime 聚焦回归为 `39 passed`，该文件
+Ruff 和使用 `MYPYPATH="$PWD/algorithm-scheduling-platform"` 的 strict Mypy 均通过，不改变
+PPT 回调、对账或北向合同。

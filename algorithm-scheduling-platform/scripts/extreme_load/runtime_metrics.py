@@ -36,6 +36,7 @@ from .system_probes import (
     DirectorySizeMetrics,
     GatewayMetrics,
     LoadHostMetrics,
+    ProbeAttemptsExhausted,
     TargetHostMetrics,
 )
 
@@ -81,11 +82,24 @@ class SurfaceProbeError(RuntimeError):
         self.attempts = attempts if type(attempts) is int and attempts > 0 else 1
 
 
-async def _collect_surface(surface: str, collect: Callable[[], _T_co]) -> _T_co:
-    try:
-        return await asyncio.to_thread(collect)
-    except Exception as error:
-        raise SurfaceProbeError(surface, error) from error
+async def _collect_surface(
+    surface: str,
+    collect: Callable[[], _T_co],
+    *,
+    attempts: int = 1,
+    retry_delay_seconds: float = 0,
+) -> _T_co:
+    for attempt in range(1, attempts + 1):
+        try:
+            return await asyncio.to_thread(collect)
+        except Exception as error:
+            if attempt == attempts:
+                exhausted: Exception = (
+                    error if attempts == 1 else ProbeAttemptsExhausted(attempts)
+                )
+                raise SurfaceProbeError(surface, exhausted) from error
+            await asyncio.sleep(retry_delay_seconds)
+    raise AssertionError("指标采集重试循环未返回")
 
 
 def _surface_failure_reason(error: Exception) -> str:
@@ -562,6 +576,8 @@ class RuntimeMetricsAdapter:
         critical_container_services: Sequence[str] = (),
         restart_loop_threshold: int = 3,
         restart_loop_window_seconds: float = 60.0,
+        probe_attempts: int = 1,
+        probe_retry_delay_seconds: float = 0,
         expected_gpu_by_pid: Mapping[int, str] | None = None,
         critical_gpu_error_probe: CriticalGpuErrorProbe | None = None,
         maintenance_lock_probe: MaintenanceLockProbe | None = None,
@@ -580,6 +596,15 @@ class RuntimeMetricsAdapter:
             or restart_loop_window_seconds <= 0
         ):
             raise ValueError("容器连续重启窗口必须是有限正数")
+        if type(probe_attempts) is not int or not 1 <= probe_attempts <= 2:
+            raise ValueError("指标采集尝试次数必须位于 1–2")
+        if (
+            isinstance(probe_retry_delay_seconds, bool)
+            or not isinstance(probe_retry_delay_seconds, (int, float))
+            or not math.isfinite(probe_retry_delay_seconds)
+            or not 0 <= probe_retry_delay_seconds <= 5
+        ):
+            raise ValueError("指标采集重试间隔必须位于 0–5 秒")
         databases = tuple(database_services)
         critical = tuple(critical_container_services)
         if any(_SAFE_SERVICE.fullmatch(item) is None for item in (*databases, *critical)):
@@ -608,6 +633,8 @@ class RuntimeMetricsAdapter:
         self.critical_container_services = critical
         self.restart_loop_threshold = restart_loop_threshold
         self.restart_loop_window_seconds = float(restart_loop_window_seconds)
+        self.probe_attempts = probe_attempts
+        self.probe_retry_delay_seconds = float(probe_retry_delay_seconds)
         self.expected_gpu_by_pid = gpu_assignment
         self.critical_gpu_error_probe = critical_gpu_error_probe
         self.maintenance_lock_probe = maintenance_lock_probe
@@ -673,38 +700,48 @@ class RuntimeMetricsAdapter:
     ]:
         critical_errors = self.critical_gpu_error_probe or (lambda: ())
         maintenance_lock = self.maintenance_lock_probe or (lambda: True)
+
+        def collect_surface(
+            surface: str,
+            collect: Callable[[], _T_co],
+            *,
+            retry: bool = True,
+        ) -> asyncio.Task[_T_co]:
+            return group.create_task(
+                _collect_surface(
+                    surface,
+                    collect,
+                    attempts=self.probe_attempts if retry else 1,
+                    retry_delay_seconds=self.probe_retry_delay_seconds,
+                )
+            )
+
         async with asyncio.TaskGroup() as group:
-            load_host_task = group.create_task(
-                _collect_surface("load_host", self.load_host_probe.collect)
+            load_host_task = collect_surface("load_host", self.load_host_probe.collect)
+            target_host_task = collect_surface("target_host", self.target_host_probe.collect)
+            containers_task = collect_surface("docker", self.docker_probe.collect)
+            gpus_task = collect_surface("gpu", self.gpu_probe.collect)
+            control_task = collect_surface("control", self.control_probe.collect)
+            # Kafka lag 自身已有独立的较宽超时和有限重试，避免嵌套放大尝试次数。
+            kafka_lag_task = collect_surface(
+                "kafka_lag",
+                self.kafka_lag_probe.collect,
+                retry=False,
             )
-            target_host_task = group.create_task(
-                _collect_surface("target_host", self.target_host_probe.collect)
-            )
-            containers_task = group.create_task(
-                _collect_surface("docker", self.docker_probe.collect)
-            )
-            gpus_task = group.create_task(_collect_surface("gpu", self.gpu_probe.collect))
-            control_task = group.create_task(
-                _collect_surface("control", self.control_probe.collect)
-            )
-            kafka_lag_task = group.create_task(
-                _collect_surface("kafka_lag", self.kafka_lag_probe.collect)
-            )
-            gateway_task = group.create_task(
-                _collect_surface("gateway", self.gateway_probe.collect)
-            )
-            critical_errors_task = group.create_task(
-                _collect_surface("gpu_critical_errors", critical_errors)
-            )
-            maintenance_lock_task = group.create_task(
-                _collect_surface("maintenance_lock", maintenance_lock)
-            )
+            gateway_task = collect_surface("gateway", self.gateway_probe.collect)
+            critical_errors_task = collect_surface("gpu_critical_errors", critical_errors)
+            maintenance_lock_task = collect_surface("maintenance_lock", maintenance_lock)
         load_host = load_host_task.result()
         target_host = target_host_task.result()
         if include_directory_sizes:
             if self.directory_size_probe is None:
                 raise RuntimeError("长课目录字节检查点缺少固定路径探针")
-            directory_sizes = await asyncio.to_thread(self.directory_size_probe)
+            directory_sizes = await _collect_surface(
+                "target_directory_sizes",
+                self.directory_size_probe,
+                attempts=self.probe_attempts,
+                retry_delay_seconds=self.probe_retry_delay_seconds,
+            )
             target_host = replace(target_host, directory_sizes=tuple(directory_sizes))
         containers = containers_task.result()
         gpus = gpus_task.result()

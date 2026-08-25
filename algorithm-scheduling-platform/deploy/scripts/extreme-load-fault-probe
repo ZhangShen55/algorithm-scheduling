@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLATFORM_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+PROJECT_PYTHON="$PLATFORM_ROOT/.venv/bin/python"
+
+if [[ ! -x "$PROJECT_PYTHON" ]]; then
+  echo "extreme-load-fault-probe: 缺少平台虚拟环境 Python: $PROJECT_PYTHON" >&2
+  exit 2
+fi
+
+exec "$PROJECT_PYTHON" "$SCRIPT_DIR/extreme_load_fault_probe.py" "$@"

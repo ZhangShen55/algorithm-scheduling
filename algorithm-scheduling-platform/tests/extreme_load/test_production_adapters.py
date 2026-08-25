@@ -113,6 +113,8 @@ def _metrics_runtime_config(
                 "regular_seconds = 5.0",
                 "burst_seconds = 0.5",
                 "probe_timeout_seconds = 5.0",
+                "probe_attempts = 2",
+                "probe_retry_delay_seconds = 0.25",
                 "restart_loop_threshold = 3",
                 "restart_loop_window_seconds = 60.0",
                 'database_services = ["postgres", "kafka", "redis", "mongodb"]',
@@ -301,6 +303,37 @@ async def test_metrics_factory_rejects_kafka_timeout_outside_independent_bounds(
     assert "运行时指标配置" in assessment.reasons[0]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("original", "replacement"),
+    (
+        ("probe_attempts = 2", "probe_attempts = 0"),
+        ("probe_attempts = 2", "probe_attempts = 3"),
+        ("probe_retry_delay_seconds = 0.25", "probe_retry_delay_seconds = -0.1"),
+        ("probe_retry_delay_seconds = 0.25", "probe_retry_delay_seconds = 5.1"),
+    ),
+)
+async def test_metrics_factory_rejects_probe_retry_values_outside_bounds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    original: str,
+    replacement: str,
+) -> None:
+    config = _metrics_runtime_config(tmp_path, enabled=True)
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(original, replacement),
+        encoding="utf-8",
+    )
+    config.chmod(0o600)
+    monkeypatch.setenv(RUNTIME_CONFIG_ENV, str(config))
+
+    adapter = metrics_factory(_plan(), tmp_path / "release")
+    assessment = await adapter.assess(_case(), "before")
+
+    assert assessment.level.value == "STOP"
+    assert "运行时指标配置" in assessment.reasons[0]
+
+
 def test_metrics_factory_assembles_explicit_read_only_probe_surfaces(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -313,6 +346,8 @@ def test_metrics_factory_assembles_explicit_read_only_probe_surfaces(
     assert isinstance(adapter, RuntimeMetricsAdapter)
     assert adapter.schedule.regular_seconds == 5.0
     assert adapter.schedule.burst_seconds == 0.5
+    assert adapter.probe_attempts == 2
+    assert adapter.probe_retry_delay_seconds == 0.25
     assert adapter.database_services == ("postgres", "kafka", "redis", "mongodb")
     assert adapter.expected_gpu_by_pid == {42: "GPU-expected"}
     remote_runner = adapter.target_host_probe.runner

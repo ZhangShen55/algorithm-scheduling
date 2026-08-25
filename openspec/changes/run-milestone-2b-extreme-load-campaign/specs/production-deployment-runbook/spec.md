@@ -33,6 +33,10 @@
 - **WHEN** 未参与脚本实现的执行者只根据手册在 `192.168.29.11` 完成预检、常驻启动、状态查询和 A 服务 Smoke
 - **THEN** 手册验证 SHALL 产生绑定当前 Git SHA 的完整成功证据，任何只能依赖口头补充才能完成的步骤都使用例失败
 
+#### Scenario: 故障语义探针使用平台虚拟环境
+- **WHEN** Fault Adapter 在目标机执行远端语义探针
+- **THEN** 权威包装入口 MUST 使用平台 `.venv/bin/python` 运行探针源码并在虚拟环境缺失时失败关闭，不得依赖目标机全局 Python 临时安装 `websockets`
+
 #### Scenario: 迁移账本引入前的完整旧库
 - **WHEN** `public` 中已存在与唯一连续 `0001`–`N` 前缀完全一致的平台 schema，但迁移账本为空
 - **THEN** 迁移入口 SHALL 先验证既有账本的完整结构，通过 `pg_class SHARE` 锁阻塞新 DDL 并要求已有事务/prepared transaction 已排空，再通过动态当前配置取得序列关系锁，在平台表和账本独占锁内二次核对账本 canonical 签名、访问方法、identity/serial 序列下一键/上下界/cycle/持久性与其他结构/数据不变量，只写入该前缀账本并正常执行剩余迁移；无唯一前缀、账本畸形、漂移或非 `public` 账本 MUST 失败关闭

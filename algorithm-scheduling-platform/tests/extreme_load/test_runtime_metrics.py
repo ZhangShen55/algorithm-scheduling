@@ -69,6 +69,19 @@ class FailingProbe(MutableProbe[LoadHostMetrics]):
         raise ValueError("raw probe detail must not be exposed")
 
 
+class TransientProbe(MutableProbe[_T]):
+    def __init__(self, value: _T, *, failures: int) -> None:
+        super().__init__(value)
+        self.failures = failures
+
+    def collect(self) -> _T:
+        self.calls += 1
+        self.thread_ids.append(threading.get_ident())
+        if self.calls <= self.failures:
+            raise ValueError("password=must-not-enter-evidence")
+        return self.value
+
+
 class AttemptsFailure(RuntimeError):
     def __init__(self, attempts: int, detail: str) -> None:
         super().__init__(detail)
@@ -497,6 +510,68 @@ async def test_kafka_lag_failure_is_independent_and_recovery_cannot_clear_stop(
         f"campaign/runtime-metrics/{case.case_id}/00000001.json",
         f"campaign/runtime-metrics/{case.case_id}/00000002.json",
     ]
+
+
+@pytest.mark.asyncio
+async def test_transient_surface_failure_recovers_within_same_sample(tmp_path: Path) -> None:
+    case = _case()
+    state = _state()
+    target_host = TransientProbe(_target(), failures=1)
+    state.target_host = target_host
+    adapter = _adapter(
+        tmp_path,
+        case,
+        state,
+        probe_attempts=2,
+        probe_retry_delay_seconds=0,
+        schedule=SamplingSchedule(regular_seconds=5, burst_seconds=0.5),
+    )
+
+    before = await adapter.assess(case, "before")
+    after = await adapter.assess(case, "after")
+    outcome = await adapter.execute(case)
+
+    assert before.level is GuardrailLevel.CLEAR
+    assert after.level is GuardrailLevel.CLEAR
+    assert outcome.status == "passed"
+    assert target_host.calls >= 3
+    assert outcome.evidence["failure_evidence"] == []
+
+
+@pytest.mark.asyncio
+async def test_persistent_surface_failure_exhausts_attempts_and_latches_stop(
+    tmp_path: Path,
+) -> None:
+    case = _case()
+    state = _state()
+    target_host = TransientProbe(_target(), failures=10)
+    state.target_host = target_host
+    adapter = _adapter(
+        tmp_path,
+        case,
+        state,
+        probe_attempts=2,
+        probe_retry_delay_seconds=0,
+    )
+
+    assessment = await adapter.assess(case, "before")
+
+    assert assessment.level is GuardrailLevel.STOP
+    assert target_host.calls == 2
+    failure_path = (
+        tmp_path
+        / "release"
+        / "campaign"
+        / "runtime-metrics"
+        / case.case_id
+        / "failures"
+        / "00000001.json"
+    )
+    document = json.loads(failure_path.read_text(encoding="utf-8"))
+    assert document["surface"] == "target_host"
+    assert document["exception_type"] == "ProbeAttemptsExhausted"
+    assert document["attempts"] == 2
+    assert "must-not-enter-evidence" not in failure_path.read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio

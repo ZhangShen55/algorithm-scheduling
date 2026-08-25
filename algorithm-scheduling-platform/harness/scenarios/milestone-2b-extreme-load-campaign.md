@@ -715,3 +715,29 @@ Campaign/release/SHA/case/phase 身份校验发布。
   因此它只作媒体源、慢响应反例端点和源端遥测，不作权威高并发负载机。该主机上的
   旧 ASR/PPT 容器不属于被测拓扑，Campaign 不得停止它们；阶段 0 前重新记录 RX drop
   基线，后续结论持续分离源端/网络与 `.11` 平台容量。
+
+## 2026-08-26 - `c4fece8` PPT 1000 业务成功与 SSH 指标瞬时阻断
+
+- 当前 SHA `c4fece820609da845fa361a12a352a7536211b15` 已完成 Stage45：29/29 healthy、
+  21/21 注册、18/18 GPU 真实进程、3/3 CPU PPT 与 7/7 算子 Smoke。新 Campaign 计划共
+  172 案、171 案必测，唯一可选项为 `SOAK-8H-OPTIONAL`。
+- 固定 attempt `full-campaign-c4fece82-20260826042342` 的阶段 0 为 14/14 passed；阶段 1
+  四条单泳道、PPT 100 和 PPT 300 均通过。`OFF-UNIQUE-PPT-1000` 的 1000/1000 北向请求
+  成功，耗时 2601.19 秒，停止后任务队列、Outbox、三个 Kafka consumer group lag 和租约
+  均归零，29 个容器仍健康。
+- 同一 case 在 `2026-08-25T22:00:29Z` 的一个采样内同时出现 `gpu` 与 `target_host`
+  `ProbeError`，两份失败证据均为 `attempts=1`。失败前样本 372 和最终样本 373 均保持
+  18 个 GPU 进程、无不健康容器、无 OOM 增量；最终样本只因失败已经锁存而为 STOP。
+- `.11` 只读审计显示 05:55–06:05 的 sshd、secure、kernel 和 system journal 没有
+  MaxStartups、监听队列溢出、限流、重启、OOM、网卡中断或 GPU Xid。故障前目标机约
+  95.3 GB 可用内存，容器 CPU 合计约为 80 核中的 5.42 核。现有脱敏失败 JSON 不含
+  SSH 子原因，只能证明客户端到 sshd 认证前阶段的瞬时失败，不能断言退出码 255、5 秒
+  命令超时或客户端瞬时资源错误中的哪一种。
+- 372 个样本期间共有 4,888 次成功 SSH 认证，约每样本 13 次。当前收敛为：Kafka lag
+  保留独立 `20s/2 次/0.25s`；其他只读面使用单次 5 秒超时、同采样最多 2 次、间隔 0.25 秒。
+  首次失败、第二次恢复不产生 failure evidence；两次都失败时记录 `attempts=2` 并永久锁存
+  STOP。SSH 连接复用或合并远端快照保留为后续优化，不作为此次 Campaign 中途的大改。
+- Fault Adapter 的远端语义探针改由 `deploy/scripts/extreme-load-fault-probe` 使用平台
+  `.venv/bin/python` 启动，部署手册的 metrics factory 同步修正为 `metrics_factory`。
+  当前 attempt 保持只读，不能把业务成功补写为规范通过；修复形成新 SHA 后必须重建并
+  inspect 11 个镜像，以新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑。

@@ -74,6 +74,8 @@ _METRICS_CONFIG_KEYS = frozenset(
         "regular_seconds",
         "burst_seconds",
         "probe_timeout_seconds",
+        "probe_attempts",
+        "probe_retry_delay_seconds",
         "restart_loop_threshold",
         "restart_loop_window_seconds",
         "database_services",
@@ -159,6 +161,8 @@ class _RuntimeMetricsSettings:
     compose_projects: tuple[str, ...]
     schedule: SamplingSchedule
     probe_timeout_seconds: float
+    probe_attempts: int
+    probe_retry_delay_seconds: float
     restart_loop_threshold: int
     restart_loop_window_seconds: float
     database_services: tuple[str, ...]
@@ -416,6 +420,15 @@ def _load_metrics_settings() -> _RuntimeMetricsSettings:
         timeout = _number(metrics["probe_timeout_seconds"], "probe_timeout_seconds")
         if not 0 < timeout <= 30:
             raise ValueError("探针超时必须位于 0–30 秒")
+        probe_attempts = metrics["probe_attempts"]
+        if type(probe_attempts) is not int or not 1 <= probe_attempts <= 2:
+            raise ValueError("指标采集尝试次数必须位于 1–2")
+        probe_retry_delay_seconds = _number(
+            metrics["probe_retry_delay_seconds"],
+            "probe_retry_delay_seconds",
+        )
+        if not 0 <= probe_retry_delay_seconds <= 5:
+            raise ValueError("指标采集重试间隔必须位于 0–5 秒")
         kafka_probe_timeout = _number(
             metrics["kafka_probe_timeout_seconds"],
             "kafka_probe_timeout_seconds",
@@ -454,6 +467,8 @@ def _load_metrics_settings() -> _RuntimeMetricsSettings:
                 burst_seconds=_number(metrics["burst_seconds"], "burst_seconds"),
             ),
             probe_timeout_seconds=timeout,
+            probe_attempts=probe_attempts,
+            probe_retry_delay_seconds=probe_retry_delay_seconds,
             restart_loop_threshold=restart_threshold,
             restart_loop_window_seconds=_number(
                 metrics["restart_loop_window_seconds"],
@@ -948,6 +963,8 @@ def metrics_factory(
             critical_container_services=settings.critical_container_services,
             restart_loop_threshold=settings.restart_loop_threshold,
             restart_loop_window_seconds=settings.restart_loop_window_seconds,
+            probe_attempts=settings.probe_attempts,
+            probe_retry_delay_seconds=settings.probe_retry_delay_seconds,
             expected_gpu_by_pid=settings.expected_gpu_by_pid,
         )
     except (OSError, ValueError) as error:

@@ -2333,3 +2333,30 @@
   业务容器。
 - Evidence tier and verdict: 达到静态与单元验证层级；新完整 SHA、`.11` 的 11 镜像重建、
   完整拓扑恢复和新 write-once attempt 仍属于 11.10，本地结果不替代 12.1–12.8。
+
+## 2026-08-26 - 运行时只读探针有限重试与 Fault Probe 虚拟环境入口
+
+- Previous state: `c4fece820609da845fa361a12a352a7536211b15` 的 Campaign 已通过阶段 0
+  14 案和阶段 1 前 6 案；`OFF-UNIQUE-PPT-1000` 业务为 1000/1000 成功并最终排空，但一次
+  `gpu/target_host` 单次 SSH 采集失败触发永久 STOP。冻结 attempt 与全部 case、样本、失败
+  JSON 和 runner 日志保持只读。
+- Target state: Kafka lag 保留独立重试；其他只读采集面在同一采样最多尝试两次，第二次恢复
+  时继续采样，两次都失败时仍发布脱敏失败证据并永久锁存 STOP。故障语义探针只通过平台
+  `.venv` 启动，不依赖目标机全局 Python 包。
+- Changed files: `runtime_metrics.py`、`production_adapters.py`、运行时 TOML 模板、Fault Probe
+  包装入口、部署手册、聚焦测试、PPT adapter import 分组，以及当前 OpenSpec、平台 AGENTS
+  和三份 Harness 文档。
+  用户未纳管文件、冻结 attempt、`.12` 凭据、媒体和远端历史 release 不修改。
+- Contract impact: 不修改 A 服务字段、HTTP/WebSocket、算子协议、四服务边界、容量或护栏
+  红线；只把“单次只读采集失败即 STOP”收敛为“同采样有限尝试全部失败才 STOP”。
+- Verification command and environment: 平台 `.venv` 的 Campaign、生产适配器、Fault Adapter、
+  语义探针和部署手册聚焦回归为 `476 passed`；平台权威全量为
+  `3329 passed, 3 skipped, 27 warnings`，耗时 `757.40s`；三个 skip 只因本机没有运行
+  canonical `facerec-gpu0`，warnings 为既有 Python fork `DeprecationWarning`。受影响源文件
+  Ruff、strict Mypy、Bash syntax 均通过；PPT adapter/runtime 补充聚焦为 `39 passed`。
+- Evidence tier and verdict: 达到静态、单元和平台全量回归层级。远端审计排除了服务端 MaxStartups、
+  监听溢出、限流、sshd 重启、OOM、GPU 与容器故障，但旧脱敏证据不能确定更细的客户端
+  失败类型。新 SHA 的 11 镜像重建、Stage45 和全新 Campaign 仍是 11.11/12.1–12.8 门禁。
+- Remaining risks: 旧采集模型约每样本 13 次 SSH 认证；有限重试降低单次抖动误阻断，但不会
+  减少握手数量。连接复用或合并远端只读快照需要独立设计与证据，不能在当前冻结 attempt
+  上验证，也不能以此跳过本次新 SHA 的完整重跑。

@@ -114,6 +114,7 @@
 - [x] 10.20 保留 `4dc40757` attempt 在 `OFF-UNIQUE-PPT-100` 的第 33 份运行时 `STOP` 证据；修复 PPT 终态回调与对账并发命中同一节点时的同终态幂等竞态，验证冲突终态仍失败关闭，不补写中断 case。
 - [x] 10.21 保留 `da1f5e37` attempt 在 `OFF-UNIQUE-ASR-300` 已提交但缺少规范终态和退出码的执行器中断证据，并记录已接受任务自然排空；阶段 0/3 与阶段 4/6 的实时 ASR 成功必须收到 `finished=true`，并为下一 attempt 固化脱离交互终端的持久 runner、PID、日志和逐案退出码边界。
 - [x] 10.22 保留 `5a5760ef` 的父进程回收 attempt 和 `BASE-ASR-WS` 规范失败 attempt；将独立、混合、长稳实时 ASR 统一为 `0.48s/7680 samples/15360 bytes`，末帧补齐并追加 6 个有界静音块，以 `finished=true` 作为完整语句证据而不是连接终态；以单调绝对 deadline 防止节拍累积漂移，记录实时证据，接收异常失败关闭，容量拒绝后立即停发并校验分块计数不变式，完成协议聚焦回归。
+- [x] 10.23 保留 `c4fece8` attempt 在 `OFF-UNIQUE-PPT-1000` 的业务成功和 `gpu/target_host` 单次探针失败证据；为非 Kafka 只读采集面增加同采样最多两次的有限重试，持续失败仍写脱敏证据并锁存 STOP；增加使用平台 `.venv` 的故障语义探针包装入口，修正部署手册 factory 名并完成聚焦与全量回归。
 
 ## 11. `192.168.29.11` 七算子四平台发布
 
@@ -126,7 +127,8 @@
 - [x] 11.7 由未依赖隐式开发上下文的执行者按部署手册在 `192.168.29.11` 复现预检、常驻启动、状态查询和 A 服务 Smoke，记录口头补充、命令漂移或缺失步骤并修正手册。
 - [x] 11.8 将阶段 0 修复形成并推送为新完整 Git SHA，在 `192.168.29.11` 重新构建并逐 ID inspect 全部七算子和四平台镜像，恢复同 revision 的 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT 与 7/7 Smoke；11.3–11.7 的旧 SHA 证据只保留为历史发布事实，不得直接授权 12.1。
 - [x] 11.9 将 PPT 终态并发幂等修复形成新完整 Git SHA，重建并 inspect 11 个同 revision 镜像，恢复 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT 与 7/7 Smoke；使用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写 `4dc40757` 中断 attempt。
-- [ ] 11.10 将实时 ASR 完整语句门禁、权威分块和持久 runner 约束形成新完整 Git SHA，重建并 inspect 11 个同 revision 镜像，恢复完整拓扑；使用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写 `da1f5e37` 或 `5a5760ef` 的任何冻结 attempt。
+- [x] 11.10 将实时 ASR 完整语句门禁、权威分块和持久 runner 约束形成新完整 Git SHA，重建并 inspect 11 个同 revision 镜像，恢复完整拓扑；使用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写 `da1f5e37` 或 `5a5760ef` 的任何冻结 attempt。
+- [ ] 11.11 将运行时只读探针有限重试与故障探针 `.venv` 入口形成新完整 Git SHA，重建并 inspect 11 个同 revision 镜像，恢复 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT 和 7/7 Smoke；使用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写 `c4fece8` 的冻结 attempt。
 
 ## 12. 远端极限负载 Campaign 执行
 

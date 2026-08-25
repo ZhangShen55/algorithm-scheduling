@@ -29,6 +29,7 @@ from scripts.extreme_load.system_probes import CommandResult
 from scripts.run_extreme_load_campaign import _load_adapter_factories
 
 _GIT_SHA = "a" * 40
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _OPERATOR_CODES = (
     "asr_offline",
     "asr_online",
@@ -45,6 +46,14 @@ _PLATFORM_SERVICES = (
     "vision-orchestrator-service",
     "online-gateway-service",
 )
+
+
+def test_semantic_probe_wrapper_uses_platform_virtualenv() -> None:
+    wrapper = _PROJECT_ROOT / "deploy/scripts/extreme-load-fault-probe"
+    source = wrapper.read_text(encoding="utf-8")
+
+    assert 'PROJECT_PYTHON="$PLATFORM_ROOT/.venv/bin/python"' in source
+    assert 'exec "$PROJECT_PYTHON" "$SCRIPT_DIR/extreme_load_fault_probe.py" "$@"' in source
 
 
 def _case(case_id: str, load: dict[str, object]) -> CaseSpec:
@@ -110,7 +119,10 @@ def _settings(tmp_path: Path) -> production_fault_adapter.FaultAdapterSettings:
         ssh_port=22,
         delegated_lock_holder_pid=4242,
         delegated_lock_path=remote_release.parent / ".operator-lifecycle.lock",
-        semantic_probe_path="/opt/algorithm-platform/deploy/scripts/extreme_load_fault_probe.py",
+        semantic_probe_path=(
+            "/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/"
+            "deploy/scripts/extreme-load-fault-probe"
+        ),
         semantic_probe_release_root=str(remote_release),
         semantic_probe_evidence_root=str(
             remote_release / "campaign" / "phase-5-recovery" / "fault-probes"
@@ -668,7 +680,8 @@ def _fault_config(
         f"delegated_lock_path = {json.dumps(str(lock_path))}",
         (
             'semantic_probe_path = "'
-            '/opt/algorithm-platform/deploy/scripts/extreme_load_fault_probe.py"'
+            "/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/"
+            'deploy/scripts/extreme-load-fault-probe"'
         ),
         (
             "semantic_probe_release_root = "
