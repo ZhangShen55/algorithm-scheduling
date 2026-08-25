@@ -595,3 +595,37 @@ Campaign/release/SHA/case/phase 身份校验发布。
 - 当前代码复审后的聚焦测试为 `89 passed`，完整 `tests/extreme_load` 为 `412 passed`；Ruff、
   strict Mypy、compileall 和 `git diff --check` 通过。`.12` 接入补足测试输入与源端观测能力，
   不改变旧 `OFF-LONG-COURSE-6` 的 blocked 结论，也不直接完成 OpenSpec 12.2。
+
+## 2026-08-25 - `28e74d7` 生产栈闭环与 Fault Adapter 预执行阻断
+
+- 当前候选完整 SHA 为 `28e74d7a0422d35d612571f515e4e45f9e555b65`。目标机同 revision
+  的七算子和四平台镜像为 `11/11`，常驻栈为 `29/29 healthy`、`21/21` 注册、18 个 GPU
+  算子进程和 3 个 CPU PPT 实例；三张 GPU 各承载六类算子，最终算子直接 Smoke 为 `7/7`
+  通过。租约、队列、Outbox 和容器 restart 均为零。
+- 新计划使用 seed `2026082503`、Campaign ID
+  `campaign-v1-0_260825-28e74d7a0422d35d612571f515e4e45f9e55-a3d28b435e021c7d`，attempt
+  为 `full-campaign-28e74d7a0422-20260825202700`，catalog 共 172 个 case。该 attempt 只完成
+  `BASE-MEDIA-DOWNLOAD-1/3/10`，三案分别为 `1/1`、`3/3`、`10/10` 通过，前后护栏均为
+  `CLEAR`。
+- `BASE-MEDIA-DOWNLOAD-30`、四条离线基线、四条在线图片基线、实时 ASR 基线、
+  `PHASE-0-COMPLETE` 以及阶段 1–6 均未启动。它们必须记为未执行，不能由前三档下载或旧 SHA
+  的阶段 0 证据补足。
+- 启动后续 case 前的只读审计发现两项结构性问题：旧 Fault Adapter 不识别
+  `<tag>/<sha>/attempts/<attempt-id>` 形式的 attempt root；同一
+  `delegated_lock_holder_pid/path` 又被要求同时通过 Mac 本地和 `.11` 远端验证。两台主机不
+  共享 PID/锁文件系统，因此阶段 5 在旧配置语义下必然阻断。执行器据此自然停止，没有继续
+  运行 30 档或业务流量，也没有覆盖已有 case。
+- 修复合同固定为：Fault Adapter 严格支持 attempt root，并显式兼容 direct release root；
+  Mac 侧通过专用 `_LocalCampaignLockGuard` 获取并在每个 fault case 全程持有当前 attempt 根
+  下的 `.campaign-fault.lock`。锁为当前用户所有的 `0600` 单链接，内容绑定 schema、Campaign
+  ID 和 attempt root，每次动作验证目录、inode、权限及 mtime/ctime；delegated PID/path 只
+  表示 `.11` canonical 锁，每次远端 Docker 动作同时执行本地 lock probe 和 semantic probe
+  SSH challenge。结果以 `local_release_layout=attempt|legacy_direct` 和
+  `maintenance_lock_binding=local_attempt_and_remote_canonical` 公开实际绑定。修复完成后必须
+  形成新 SHA、重建/inspect 11 个镜像、恢复完整常驻拓扑，并以新 seed、Campaign ID 和 attempt
+  从阶段 0 重跑。当前 attempt 继续只读保留。
+- 实现后的 Fault Adapter 聚焦测试为 `37 passed`，故障计划、远端语义探针与生产适配器组合
+  为 `121 passed`，完整 Campaign 测试为 `420 passed`；平台权威全量回归为
+  `3274 passed, 3 skipped`。Ruff、strict Mypy、compileall、OpenSpec strict、Harness 一致性和
+  `git diff --check` 均通过。3 个 skip 仅因本机未运行 canonical `facerec-gpu0`，不以模拟结果
+  补足；上述本地结果只完成 10.19，不替代新 SHA 的 11 镜像和远端阶段 0–6。

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import math
 import os
@@ -33,7 +34,6 @@ from deploy.scripts.extreme_load_faults import (
     build_redis_scenario,
     build_single_operator_scenarios,
 )
-from scripts.milestone_2b_case_runners.safety import DelegatedMaintenanceLockGuard
 
 from .catalog import CampaignPhase, CaseSpec
 from .plan import CampaignPlan
@@ -79,6 +79,7 @@ _OPERATOR_SERVICES = frozenset((*_GPU_SERVICES, *_CPU_SERVICES))
 _PLATFORM_TARGET_SERVICES = frozenset((*_PLATFORM_SERVICES, *_MIDDLEWARE_SERVICES))
 _ALL_TARGET_SERVICES = _OPERATOR_SERVICES | _PLATFORM_TARGET_SERVICES
 _FULL_CONTAINER_ID = re.compile(r"[0-9a-f]{64}")
+_SAFE_ATTEMPT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 _SAFE_REMOTE_PATH = re.compile(r"/[A-Za-z0-9_./-]{1,511}")
 _EVIDENCE_REFERENCE = re.compile(
     r"release:(?P<path>[A-Za-z0-9_.\-/]{1,512})#sha256:(?P<sha>[0-9a-f]{64})"
@@ -139,7 +140,7 @@ class _HeldLockGuard(Protocol):
     def held_for(self, release_root: Path) -> bool: ...
 
 
-LockGuardFactory = Callable[[Path, int, Path], AbstractContextManager[_HeldLockGuard]]
+LockGuardFactory = Callable[[Path], AbstractContextManager[_HeldLockGuard]]
 RuntimeFactory = Callable[[str, Callable[[], bool]], FaultRuntime]
 
 
@@ -184,12 +185,12 @@ class FaultAdapterSettings:
         ):
             raise ValueError("故障 SSH 目标必须是已批准的 root@192.168.29.11:22")
         if type(self.delegated_lock_holder_pid) is not int or self.delegated_lock_holder_pid <= 0:
-            raise ValueError("委托维护锁 holder PID 必须是正整数")
+            raise ValueError("远端委托维护锁 holder PID 必须是正整数")
         if (
             not self.delegated_lock_path.is_absolute()
             or self.delegated_lock_path.name != ".operator-lifecycle.lock"
         ):
-            raise ValueError("委托维护锁必须是 release tag 根目录中的精确规范路径")
+            raise ValueError("远端委托维护锁必须是 release tag 根目录中的精确规范路径")
         _validate_remote_path(self.semantic_probe_path, "semantic_probe_path")
         _validate_remote_path(
             self.semantic_probe_release_root,
@@ -235,6 +236,186 @@ class _CampaignLockBinding:
     @property
     def acquired(self) -> bool:
         return self.guard.held_for(self.release_root)
+
+
+class _LocalCampaignLockGuard:
+    """在负载机当前 attempt 内串行化故障 case；远端锁另行逐动作证明。"""
+
+    _LOCK_NAME = ".campaign-fault.lock"
+
+    def __init__(self, release_root: Path, campaign_id: str) -> None:
+        self._release_root = release_root
+        self._campaign_id = campaign_id
+        self._directory_fd = -1
+        self._lock_fd = -1
+        self._held = False
+        self._opened_lock: os.stat_result | None = None
+
+    @property
+    def lock_path(self) -> Path:
+        return self._release_root / self._LOCK_NAME
+
+    @staticmethod
+    def _validate_root(metadata: os.stat_result) -> None:
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o022
+        ):
+            raise ValueError("本地 Campaign attempt 根目录身份或权限无效")
+
+    @staticmethod
+    def _validate_lock(metadata: os.stat_result) -> None:
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_nlink != 1
+        ):
+            raise ValueError("本地 Campaign 维护锁身份或权限无效")
+
+    @staticmethod
+    def _same_inode(left: os.stat_result, right: os.stat_result) -> bool:
+        return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+
+    def _binding_document(self) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "campaign_id": self._campaign_id,
+            "attempt_root": str(self._release_root),
+        }
+
+    def __enter__(self) -> _LocalCampaignLockGuard:
+        if self._held:
+            raise ValueError("本地 Campaign 维护锁已持有")
+        named_root = os.lstat(self._release_root)
+        self._validate_root(named_root)
+        directory_flags = (
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        try:
+            self._directory_fd = os.open(self._release_root, directory_flags)
+            opened_root = os.fstat(self._directory_fd)
+            self._validate_root(opened_root)
+            if not self._same_inode(named_root, opened_root):
+                raise ValueError("本地 Campaign attempt 根目录在打开期间发生替换")
+            created = False
+            try:
+                self._lock_fd = os.open(
+                    self._LOCK_NAME,
+                    os.O_RDWR
+                    | os.O_CREAT
+                    | os.O_EXCL
+                    | getattr(os, "O_NOFOLLOW", 0),
+                    0o600,
+                    dir_fd=self._directory_fd,
+                )
+                created = True
+            except FileExistsError:
+                self._lock_fd = os.open(
+                    self._LOCK_NAME,
+                    os.O_RDWR | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=self._directory_fd,
+                )
+            opened_lock = os.fstat(self._lock_fd)
+            named_lock = os.stat(
+                self._LOCK_NAME,
+                dir_fd=self._directory_fd,
+                follow_symlinks=False,
+            )
+            self._validate_lock(opened_lock)
+            self._validate_lock(named_lock)
+            if not self._same_inode(opened_lock, named_lock):
+                raise ValueError("本地 Campaign 维护锁在打开期间发生替换")
+            try:
+                fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise ValueError("当前 attempt 已有其他故障执行者") from error
+            opened_lock = os.fstat(self._lock_fd)
+            self._validate_lock(opened_lock)
+            expected = self._binding_document()
+            if created:
+                payload = json.dumps(expected, ensure_ascii=False, sort_keys=True).encode("utf-8")
+                if os.write(self._lock_fd, payload) != len(payload):
+                    raise OSError("本地 Campaign 维护锁内容未完整写入")
+                os.fsync(self._lock_fd)
+            else:
+                if opened_lock.st_size > 64 * 1024:
+                    raise ValueError("本地 Campaign 维护锁内容超限")
+                os.lseek(self._lock_fd, 0, os.SEEK_SET)
+                try:
+                    existing = json.loads(os.read(self._lock_fd, 64 * 1024))
+                except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                    raise ValueError("本地 Campaign 维护锁内容无效") from error
+                after_read = os.fstat(self._lock_fd)
+                if (
+                    after_read.st_size != opened_lock.st_size
+                    or after_read.st_mtime_ns != opened_lock.st_mtime_ns
+                    or after_read.st_ctime_ns != opened_lock.st_ctime_ns
+                    or after_read.st_nlink != 1
+                ):
+                    raise ValueError("本地 Campaign 维护锁在读取期间发生修改")
+                if existing != expected:
+                    raise ValueError("本地 Campaign 维护锁不属于当前 attempt")
+            self._opened_lock = os.fstat(self._lock_fd)
+            self._held = True
+            if not self.held_for(self._release_root):
+                raise ValueError("本地 Campaign 维护锁绑定在获取后发生变化")
+            return self
+        except BaseException:
+            self._close()
+            raise
+
+    def __exit__(self, *_: object) -> None:
+        self._close()
+
+    def held_for(self, release_root: Path) -> bool:
+        if (
+            not self._held
+            or release_root != self._release_root
+            or self._directory_fd < 0
+            or self._lock_fd < 0
+            or self._opened_lock is None
+        ):
+            return False
+        try:
+            named_root = os.lstat(self._release_root)
+            opened_root = os.fstat(self._directory_fd)
+            named_lock = os.stat(
+                self._LOCK_NAME,
+                dir_fd=self._directory_fd,
+                follow_symlinks=False,
+            )
+            opened_lock = os.fstat(self._lock_fd)
+            self._validate_root(named_root)
+            self._validate_root(opened_root)
+            self._validate_lock(named_lock)
+            self._validate_lock(opened_lock)
+            return (
+                self._same_inode(named_root, opened_root)
+                and self._same_inode(named_lock, opened_lock)
+                and self._same_inode(opened_lock, self._opened_lock)
+                and opened_lock.st_size == self._opened_lock.st_size
+                and opened_lock.st_mtime_ns == self._opened_lock.st_mtime_ns
+                and opened_lock.st_ctime_ns == self._opened_lock.st_ctime_ns
+            )
+        except (OSError, ValueError):
+            return False
+
+    def _close(self) -> None:
+        self._held = False
+        self._opened_lock = None
+        if self._lock_fd >= 0:
+            try:
+                fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
+            finally:
+                os.close(self._lock_fd)
+                self._lock_fd = -1
+        if self._directory_fd >= 0:
+            os.close(self._directory_fd)
+            self._directory_fd = -1
 
 
 def _as_mapping(value: object, field_name: str) -> Mapping[str, object]:
@@ -1019,56 +1200,60 @@ class ProductionFaultStageAdapter(StageCaseAdapter):
                 lock_probe,
             )
         )
-        self._lock_guard_factory = lock_guard_factory or cast(
-            LockGuardFactory,
-            DelegatedMaintenanceLockGuard,
+        self._lock_guard_factory = lock_guard_factory or (
+            lambda root: _LocalCampaignLockGuard(root, plan.campaign_id)
         )
 
-    def _validate_release_binding(self) -> None:
+    def _release_layout(self) -> str:
         if not self._release_root.is_absolute():
             raise _ConfigurationBlocked("release_mismatch", "release_root 必须是绝对路径")
         if (
             self._release_root.name != self._plan.git_sha
             or self._release_root.parent.name != self._plan.release_tag
         ):
-            raise _ConfigurationBlocked(
-                "release_mismatch",
-                "release_root 未绑定当前 Campaign release tag 和完整 Git SHA",
-            )
-        expected_lock = self._release_root.parent / ".operator-lifecycle.lock"
-        if self._settings.delegated_lock_path != expected_lock:
-            raise _ConfigurationBlocked(
-                "lock_mismatch",
-                "委托维护锁路径不属于当前 Campaign release tag",
-            )
+            if (
+                self._release_root.parent.name != "attempts"
+                or self._release_root.parent.parent.name != self._plan.git_sha
+                or self._release_root.parent.parent.parent.name != self._plan.release_tag
+                or _SAFE_ATTEMPT_ID.fullmatch(self._release_root.name) is None
+            ):
+                raise _ConfigurationBlocked(
+                    "release_mismatch",
+                    "release_root 必须严格使用 <tag>/<sha>/attempts/<attempt_id>；"
+                    "仅兼容旧 <tag>/<sha> 直连布局",
+                )
+            return "attempt"
+        return "legacy_direct"
+
+    def _validate_release_binding(self) -> str:
+        layout = self._release_layout()
         remote_release = PurePosixPath(self._settings.semantic_probe_release_root)
         remote_evidence = PurePosixPath(self._settings.semantic_probe_evidence_root)
+        remote_lock = PurePosixPath(str(self._settings.delegated_lock_path))
         if (
             remote_release.name != self._plan.git_sha
             or remote_release.parent.name != self._plan.release_tag
             or remote_evidence == remote_release
             or remote_release not in remote_evidence.parents
+            or remote_lock != remote_release.parent / ".operator-lifecycle.lock"
         ):
             raise _ConfigurationBlocked(
                 "release_mismatch",
-                "远端故障语义证据根未绑定当前 Campaign release",
+                "远端故障语义证据或委托维护锁未绑定当前 Campaign release",
             )
+        return layout
 
     def _run_sync(
         self,
         case: CaseSpec,
         scenario: FaultScenario,
     ) -> tuple[FaultPlanRunResult, FaultRuntime, bool]:
-        guard_context = self._lock_guard_factory(
-            self._release_root,
-            self._settings.delegated_lock_holder_pid,
-            self._settings.delegated_lock_path,
-        )
+        guard_context = self._lock_guard_factory(self._release_root)
         with guard_context as guard:
             if not guard.held_for(self._release_root):
                 raise _ConfigurationBlocked(
                     "lock_unavailable",
-                    "当前 Campaign 委托维护锁未持有",
+                    "当前 attempt 的本地 Campaign 维护锁未持有",
                 )
             runtime = self._runtime_factory(
                 case.case_id,
@@ -1090,7 +1275,7 @@ class ProductionFaultStageAdapter(StageCaseAdapter):
 
     async def execute(self, case: CaseSpec) -> StageCaseOutcome:
         try:
-            self._validate_release_binding()
+            release_layout = self._validate_release_binding()
             scenario = _scenario_for_case(case, self._settings)
         except _CaseRejected as error:
             return StageCaseOutcome(
@@ -1148,7 +1333,8 @@ class ProductionFaultStageAdapter(StageCaseAdapter):
             "targets": [target.to_dict() for target in scenario.targets],
             "scenario_status": item.status,
             "check_evidence": check_evidence,
-            "maintenance_lock_binding": "canonical_delegated",
+            "maintenance_lock_binding": "local_attempt_and_remote_canonical",
+            "local_release_layout": release_layout,
             "target_hostname": self._settings.target_hostname,
         }
         if not lock_held:

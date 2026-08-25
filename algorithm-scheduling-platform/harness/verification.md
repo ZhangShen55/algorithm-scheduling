@@ -1793,3 +1793,50 @@ GPU 容器；Campaign 聚焦 `126 passed`，PPT runtime `16 passed`，四服务�
 实际结果为 `88 passed`，Ruff 与 strict Mypy 均通过。新增断言证明四个 `OFF-LANE-*` 用例
 各自只提交一个对应任务类型并依赖 `PHASE-0-COMPLETE`；3 节长课依赖四条单泳道，后续
 `6/12/24/36` 逐级依赖上一档。旧阶段 0 与 `OFF-UNIQUE-*` 证据不能补足这些新 ID。
+
+## 2026-08-25 `28e74d7` Fault Adapter attempt 根与跨主机锁修复验证
+
+`28e74d7a0422d35d612571f515e4e45f9e555b65` 的 attempt
+`full-campaign-28e74d7a0422-20260825202700` 只完成
+`BASE-MEDIA-DOWNLOAD-1/3/10`，三案分别为 `1/1`、`3/3`、`10/10` 通过且护栏均为
+`CLEAR`。`BASE-MEDIA-DOWNLOAD-30`、业务基线和阶段 1–6 未启动；该历史 attempt 保持只读。
+
+从 `algorithm-scheduling-platform/` 执行修复后的权威本地门禁：
+
+```bash
+.venv/bin/python -m pytest -q \
+  tests/extreme_load/test_production_fault_adapter.py
+
+.venv/bin/python -m pytest -q \
+  tests/extreme_load/test_faults.py \
+  tests/extreme_load/test_extreme_load_fault_probe.py \
+  tests/extreme_load/test_production_adapters.py \
+  tests/extreme_load/test_production_fault_adapter.py
+
+.venv/bin/python -m pytest -q tests/extreme_load
+
+PYTHONPATH="$PWD:$PWD/.." \
+  .venv/bin/python -m pytest -q -rs tests
+
+.venv/bin/ruff check scripts/extreme_load tests/extreme_load
+MYPYPATH="$PWD/.." .venv/bin/mypy --strict --explicit-package-bases \
+  scripts/extreme_load/production_fault_adapter.py \
+  tests/extreme_load/test_production_fault_adapter.py
+.venv/bin/python -m compileall -q scripts/extreme_load deploy/scripts \
+  tests/extreme_load
+.venv/bin/python -m pytest -q tests/test_harness_consistency.py
+(cd .. && openspec validate run-milestone-2b-extreme-load-campaign --strict)
+git diff --check
+```
+
+实际结果依次为 `37 passed`、`121 passed`、`420 passed` 和
+`3274 passed, 3 skipped, 27 warnings`（`671.25s`）。三个 skip 都是本机未运行 canonical
+`facerec-gpu0`，没有使用本地模拟补足。Ruff、strict Mypy 两个变更文件、compileall、Harness
+`5 passed`、OpenSpec strict 和 diff-check 全部通过。
+
+一次直接执行 `.venv/bin/pytest -q` 的非权威诊断因缺少 Harness 规定的 `PYTHONPATH`，在 deploy
+测试收集阶段产生 5 个 `No module named deploy`；按上述权威命令重跑全绿，因此该现象记录为
+命令环境错误，不作为实现失败。修复结果证明本地 attempt root 解析、`0600` 单链接
+`.campaign-fault.lock`、逐动作本地探针和远端 canonical challenge 合同成立；它只完成
+OpenSpec 10.19。下一步仍须形成新完整 SHA、重建/inspect 11 个镜像并创建新 attempt 从阶段 0
+重跑。

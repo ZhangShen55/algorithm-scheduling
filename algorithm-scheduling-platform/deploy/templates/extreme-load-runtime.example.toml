@@ -82,14 +82,16 @@ critical_container_services = [
 [runtime_metrics.expected_gpu_by_pid]
 
 [fault]
-# 只有当前 release 的 delegated maintenance lock 已持有且语义探针可证明结果时才可启用。
+# Mac 执行器自行在当前 attempt 根持有本地 Campaign 锁；只有目标机当前 release 的
+# canonical 委托锁已持有且语义探针可证明结果时才可启用。
 enabled = false
 target_hostname = "192.168.29.11"
 ssh_user = "root"
 ssh_port = 22
-# 必须填写仍持有当前 release tag 规范锁的 operator_lifecycle.py 进程 PID。
+# 以下 PID 和路径都属于目标机，不得填写 Mac 上的 PID 或本地 attempt 路径。
+# PID 必须对应仍持有目标机当前 release tag 规范锁的 operator_lifecycle.py 进程。
 delegated_lock_holder_pid = 1
-delegated_lock_path = "/absolute/release-tag/.operator-lifecycle.lock"
+delegated_lock_path = "/data/reports/milestone-2b/releases/release-tag/.operator-lifecycle.lock"
 # 目标机 clean checkout 中的真实只读语义探针；部署时必须保留可执行位。
 semantic_probe_path = "/opt/algorithm-platform/deploy/scripts/extreme_load_fault_probe.py"
 # 两个路径均位于目标机；release 根必须精确绑定当前 release tag/完整 Git SHA，证据根只能是其子目录。

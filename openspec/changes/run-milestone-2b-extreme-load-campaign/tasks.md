@@ -110,6 +110,7 @@
 - [x] 10.16 修复 PPT 正常 EOF/最小帧阈值、视觉普通单任务错误终态/基础设施错误隔离、滞后进度竞态，并在 Git 工作区外冻结同一课程 50 秒同步 T/S/P 新 fixture，通过北向 ASR-only 证明教师片段可识别，完成算子和平台聚焦回归。
 - [x] 10.17 保留 `7efb2a0` 阶段 1 的瞬时 Kafka/Control 指标阻断证据，将 Kafka lag 采集收敛为单次 all-groups 快照、三个必需消费组和同一采样内有限重试，验证持续失败仍锁存 STOP。
 - [x] 10.18 将 Kafka lag 从 Control 中拆为独立采集面，使用独立 20 秒超时和最多一次重试，原子发布脱敏失败事件并由用例结果引用，验证最终恢复不覆盖已锁存 STOP。
+- [x] 10.19 保留 `28e74d7` attempt 只完成 `BASE-MEDIA-DOWNLOAD-1/3/10` 的预执行诊断证据；修复 Fault Adapter 对 attempt root 的严格识别，并通过专用 `_LocalCampaignLockGuard` 持有当前 attempt 根下绑定 Campaign/attempt 的 `0600` 单链接 `.campaign-fault.lock`，与 `.11` delegated canonical 锁分离，验证故障 case 全程持锁、逐动作本地探针、远端 challenge 和非法绑定失败关闭。
 
 ## 11. `192.168.29.11` 七算子四平台发布
 

@@ -100,15 +100,16 @@ def _targets() -> dict[str, ContainerTarget]:
 
 
 def _settings(tmp_path: Path) -> production_fault_adapter.FaultAdapterSettings:
-    remote_release = (
-        tmp_path / "reports" / "milestone-2b" / "releases" / "release-20260825" / _GIT_SHA
+    del tmp_path
+    remote_release = Path(
+        f"/data/reports/milestone-2b/releases/release-20260825/{_GIT_SHA}"
     )
     return production_fault_adapter.FaultAdapterSettings(
         target_hostname="192.168.29.11",
         ssh_user="root",
         ssh_port=22,
         delegated_lock_holder_pid=4242,
-        delegated_lock_path=tmp_path / "release-20260825" / ".operator-lifecycle.lock",
+        delegated_lock_path=remote_release.parent / ".operator-lifecycle.lock",
         semantic_probe_path="/opt/algorithm-platform/deploy/scripts/extreme_load_fault_probe.py",
         semantic_probe_release_root=str(remote_release),
         semantic_probe_evidence_root=str(
@@ -159,6 +160,11 @@ class _FakeRuntime:
     failed_checks: set[tuple[str, str]] = field(default_factory=set)
     actions: list[tuple[str, str]] = field(default_factory=list)
     check_evidence: list[Mapping[str, object]] = field(default_factory=list)
+    lock_probe: Callable[[], bool] | None = None
+
+    def _require_local_lock(self) -> None:
+        if self.lock_probe is not None:
+            assert self.lock_probe()
 
     def inspect(self, container_id: str) -> ContainerIdentity:
         return self.identities[container_id]
@@ -169,16 +175,19 @@ class _FakeRuntime:
 
     def stop(self, container_id: str, timeout_seconds: float) -> None:
         del timeout_seconds
+        self._require_local_lock()
         self.actions.append(("stop", container_id))
         self._set_running(container_id, False)
 
     def start(self, container_id: str, timeout_seconds: float) -> None:
         del timeout_seconds
+        self._require_local_lock()
         self.actions.append(("start", container_id))
         self._set_running(container_id, True)
 
     def restart(self, container_id: str, timeout_seconds: float) -> None:
         del timeout_seconds
+        self._require_local_lock()
         self.actions.append(("restart", container_id))
         self._set_running(container_id, True)
 
@@ -332,16 +341,27 @@ def _adapter(
     runtime: _FakeRuntime | None = None,
     guard: _FakeGuard | None = None,
 ) -> tuple[production_fault_adapter.ProductionFaultStageAdapter, _FakeRuntime]:
-    release_root = tmp_path / "release-20260825" / _GIT_SHA
+    release_root = (
+        tmp_path
+        / "release-20260825"
+        / _GIT_SHA
+        / "attempts"
+        / "full-campaign-test"
+    )
     settings = _settings(tmp_path)
     selected_runtime = runtime or _runtime(settings)
     selected_guard = guard or _FakeGuard(release_root)
+
+    def runtime_factory(_case_id: str, lock_probe: Callable[[], bool]) -> _FakeRuntime:
+        selected_runtime.lock_probe = lock_probe
+        return selected_runtime
+
     adapter = production_fault_adapter.ProductionFaultStageAdapter(
         _plan(case),
         release_root,
         settings,
-        runtime_factory=lambda _case_id, _lock_probe: selected_runtime,
-        lock_guard_factory=lambda _root, _pid, _path: selected_guard,
+        runtime_factory=runtime_factory,
+        lock_guard_factory=lambda _root: selected_guard,
     )
     return adapter, selected_runtime
 
@@ -409,7 +429,7 @@ async def test_adapter_covers_each_authoritative_fault_case(
 
 
 @pytest.mark.asyncio
-async def test_adapter_requires_current_delegated_campaign_lock_before_mutation(
+async def test_adapter_requires_current_local_campaign_lock_before_mutation(
     tmp_path: Path,
 ) -> None:
     case = _all_cases()[0]
@@ -427,6 +447,156 @@ async def test_adapter_requires_current_delegated_campaign_lock_before_mutation(
     assert outcome.status == "blocked"
     assert "维护锁" in outcome.reason
     assert outcome.recovery_succeeded is None
+    assert runtime.actions == []
+
+
+@pytest.mark.asyncio
+async def test_attempt_layout_holds_local_lock_separately_from_remote_canonical_lock(
+    tmp_path: Path,
+) -> None:
+    case = _all_cases()[0]
+    settings = _settings(tmp_path)
+    runtime = _runtime(settings)
+    release_root = (
+        tmp_path
+        / "release-20260825"
+        / _GIT_SHA
+        / "attempts"
+        / "full-campaign-test"
+    )
+    release_root.mkdir(parents=True)
+
+    def runtime_factory(_case_id: str, lock_probe: Callable[[], bool]) -> _FakeRuntime:
+        runtime.lock_probe = lock_probe
+        return runtime
+
+    adapter = production_fault_adapter.ProductionFaultStageAdapter(
+        _plan(case),
+        release_root,
+        settings,
+        runtime_factory=runtime_factory,
+    )
+
+    outcome = await adapter.execute(case)
+
+    local_lock = release_root / ".campaign-fault.lock"
+    assert outcome.status == "passed"
+    assert outcome.evidence["local_release_layout"] == "attempt"
+    assert (
+        outcome.evidence["maintenance_lock_binding"]
+        == "local_attempt_and_remote_canonical"
+    )
+    assert local_lock.is_file()
+    assert settings.delegated_lock_path != local_lock
+    assert json.loads(local_lock.read_text(encoding="utf-8")) == {
+        "attempt_root": str(release_root),
+        "campaign_id": _plan(case).campaign_id,
+        "schema_version": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_legacy_direct_release_layout_remains_controlled_compatible(
+    tmp_path: Path,
+) -> None:
+    case = _all_cases()[0]
+    settings = _settings(tmp_path)
+    runtime = _runtime(settings)
+    release_root = tmp_path / "release-20260825" / _GIT_SHA
+    release_root.mkdir(parents=True)
+
+    def runtime_factory(_case_id: str, lock_probe: Callable[[], bool]) -> _FakeRuntime:
+        runtime.lock_probe = lock_probe
+        return runtime
+
+    adapter = production_fault_adapter.ProductionFaultStageAdapter(
+        _plan(case),
+        release_root,
+        settings,
+        runtime_factory=runtime_factory,
+    )
+
+    outcome = await adapter.execute(case)
+
+    assert outcome.status == "passed"
+    assert outcome.evidence["local_release_layout"] == "legacy_direct"
+    assert (release_root / ".campaign-fault.lock").is_file()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("attempt_id", ("bad attempt", "attempt@1"))
+async def test_noncanonical_attempt_layout_blocks_before_mutation(
+    tmp_path: Path,
+    attempt_id: str,
+) -> None:
+    case = _all_cases()[0]
+    settings = _settings(tmp_path)
+    runtime = _runtime(settings)
+    release_root = tmp_path / "release-20260825" / _GIT_SHA / "attempts" / attempt_id
+    adapter = production_fault_adapter.ProductionFaultStageAdapter(
+        _plan(case),
+        release_root,
+        settings,
+        runtime_factory=lambda _case_id, _lock_probe: runtime,
+        lock_guard_factory=lambda _root: _FakeGuard(release_root),
+    )
+
+    outcome = await adapter.execute(case)
+
+    assert outcome.status == "blocked"
+    assert outcome.evidence == {"configuration_state": "release_mismatch"}
+    assert runtime.actions == []
+
+
+def test_local_attempt_lock_is_exclusive_and_detects_inode_rebinding(tmp_path: Path) -> None:
+    release_root = (
+        tmp_path / "release-20260825" / _GIT_SHA / "attempts" / "attempt-1"
+    )
+    release_root.mkdir(parents=True)
+    first = production_fault_adapter._LocalCampaignLockGuard(
+        release_root,
+        "campaign-1",
+    )
+
+    with first:
+        assert first.held_for(release_root)
+        with pytest.raises(ValueError, match="其他故障执行者"):
+            with production_fault_adapter._LocalCampaignLockGuard(
+                release_root,
+                "campaign-1",
+            ):
+                pass
+        first.lock_path.unlink()
+        first.lock_path.write_text("{}", encoding="utf-8")
+        first.lock_path.chmod(0o600)
+        assert not first.held_for(release_root)
+
+
+@pytest.mark.asyncio
+async def test_remote_delegated_lock_must_bind_remote_release_tag(tmp_path: Path) -> None:
+    case = _all_cases()[0]
+    settings = replace(
+        _settings(tmp_path),
+        delegated_lock_path=Path(
+            "/data/reports/milestone-2b/releases/other/.operator-lifecycle.lock"
+        ),
+    )
+    runtime = _runtime(settings)
+    release_root = (
+        tmp_path / "release-20260825" / _GIT_SHA / "attempts" / "attempt-1"
+    )
+    adapter = production_fault_adapter.ProductionFaultStageAdapter(
+        _plan(case),
+        release_root,
+        settings,
+        runtime_factory=lambda _case_id, _lock_probe: runtime,
+        lock_guard_factory=lambda _root: _FakeGuard(release_root),
+    )
+
+    outcome = await adapter.execute(case)
+
+    assert outcome.status == "blocked"
+    assert outcome.evidence == {"configuration_state": "release_mismatch"}
     assert runtime.actions == []
 
 
@@ -482,7 +652,10 @@ def _fault_config(
     }
     if mutate is not None:
         mutate(operator_ids, platform_ids)
-    lock_path = tmp_path / "release-20260825" / ".operator-lifecycle.lock"
+    remote_release = Path(
+        f"/data/reports/milestone-2b/releases/release-20260825/{_GIT_SHA}"
+    )
+    lock_path = remote_release.parent / ".operator-lifecycle.lock"
     lines = [
         "schema_version = 1",
         "",
@@ -499,27 +672,13 @@ def _fault_config(
         ),
         (
             "semantic_probe_release_root = "
-            + json.dumps(
-                str(
-                    tmp_path
-                    / "reports"
-                    / "milestone-2b"
-                    / "releases"
-                    / "release-20260825"
-                    / _GIT_SHA
-                )
-            )
+            + json.dumps(str(remote_release))
         ),
         (
             "semantic_probe_evidence_root = "
             + json.dumps(
                 str(
-                    tmp_path
-                    / "reports"
-                    / "milestone-2b"
-                    / "releases"
-                    / "release-20260825"
-                    / _GIT_SHA
+                    remote_release
                     / "campaign"
                     / "phase-5-recovery"
                     / "fault-probes"
@@ -586,6 +745,61 @@ async def test_factory_blocks_incomplete_broad_or_duplicate_inventory_without_co
     assert outcome.status == "blocked"
     assert outcome.evidence == {"configuration_state": "config_invalid"}
     assert constructed is False
+
+
+def test_runtime_config_delegated_lock_fields_are_remote_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _fault_config(tmp_path)
+    monkeypatch.setenv(production_fault_adapter.RUNTIME_CONFIG_ENV, str(config))
+
+    settings = production_fault_adapter._load_settings()
+
+    assert settings.delegated_lock_holder_pid == 4242
+    assert settings.delegated_lock_path == Path(
+        "/data/reports/milestone-2b/releases/release-20260825/.operator-lifecycle.lock"
+    )
+    assert tmp_path not in settings.delegated_lock_path.parents
+
+
+@pytest.mark.asyncio
+async def test_factory_accepts_attempt_layout_with_separate_remote_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _all_cases()[0]
+    plan = _plan(case)
+    config = _fault_config(tmp_path)
+    monkeypatch.setenv(production_fault_adapter.RUNTIME_CONFIG_ENV, str(config))
+    settings = _settings(tmp_path)
+    runtime = _runtime(settings)
+
+    def runtime_factory(
+        _settings: production_fault_adapter.FaultAdapterSettings,
+        _plan: CampaignPlan,
+        _case_id: str,
+        lock_probe: Callable[[], bool],
+    ) -> _FakeRuntime:
+        runtime.lock_probe = lock_probe
+        return runtime
+
+    monkeypatch.setattr(production_fault_adapter, "_production_runtime", runtime_factory)
+    release_root = (
+        tmp_path
+        / "release-20260825"
+        / _GIT_SHA
+        / "attempts"
+        / "factory-attempt"
+    )
+    release_root.mkdir(parents=True)
+    adapter = production_fault_adapter.fault_factory(plan, release_root)
+
+    outcome = await adapter.execute(case)
+
+    assert outcome.status == "passed"
+    assert outcome.evidence["local_release_layout"] == "attempt"
+    assert (release_root / ".campaign-fault.lock").is_file()
 
 
 def test_remote_runtime_only_uses_exact_non_destructive_docker_commands() -> None:

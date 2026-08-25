@@ -327,6 +327,35 @@ Control 的队列和实例快照仍使用通用 5 秒上限，Kafka CLI 使用�
 `failure_evidence` 列表公开这些路径，不能混入 `sample_evidence`。旧 blocked attempt 保持只读，
 修复后必须新 SHA、新 seed、新 Campaign ID 和新 attempt 从阶段 0 重跑。
 
+### 16. Fault Adapter 必须分离本地 attempt 锁与远端 canonical 锁
+
+Campaign 的权威 `release_root` 既可能是 direct release 根
+`<report-root>/<tag>/<sha>`，也可能是 write-once attempt 根
+`<report-root>/<tag>/<sha>/attempts/<attempt-id>`。Fault Adapter 必须严格识别这两种结构并
+反解相同的 release tag 和完整 Git SHA；不得把 attempt 根当成 direct release，也不得依赖
+固定的父目录层数猜测发布身份。attempt ID 只接受
+`[A-Za-z0-9][A-Za-z0-9_.-]{0,127}`；其他目录形状、SHA/tag 不一致或 attempt 身份缺失时继续
+失败关闭。结果必须以 `local_release_layout=attempt|legacy_direct` 明确记录实际解析分支。
+
+负载控制器运行在 Mac，而受控 Docker 动作发生在 `192.168.29.11`，两台主机不共享 PID
+命名空间或锁文件系统。因此 `delegated_lock_holder_pid` 和 `delegated_lock_path` 只表示目标机
+上的 canonical 维护锁；它们不能同时充当 Mac 本地锁的 PID/path。Fault Adapter 在每个故障
+case 开始时通过专用 `_LocalCampaignLockGuard` 获取当前 attempt 根下的
+`.campaign-fault.lock`。该文件必须是当前用户所有的 `0600` 单链接，内容绑定 schema、
+Campaign ID 和 attempt root；锁以非阻塞独占方式取得，并在该 case 完整执行、远端验证和
+补偿恢复期间持续持有。每次动作都重新验证目录、inode、权限、mtime/ctime 和本地 lock probe。
+每次远端 Docker 动作仍须由 semantic probe 的 SSH challenge 校验目标机 canonical 锁，不能因
+本地 Campaign 维护锁已持有而放宽远端身份验证。结果必须记录
+`maintenance_lock_binding=local_attempt_and_remote_canonical`。
+
+`28e74d7a0422d35d612571f515e4e45f9e555b65` 的预执行审计证明旧实现无法识别 attempt root，
+并要求同一组 delegated PID/path 同时在 Mac 和目标机成立，使阶段 5 在尚未执行前就必然
+阻断。该 attempt 只完成 `BASE-MEDIA-DOWNLOAD-1/3/10`，三案均通过且护栏为 `CLEAR`；
+`BASE-MEDIA-DOWNLOAD-30`、全部业务基线和阶段 1–6 均未启动。发现结构性阻断后自然停止是
+正确行为，已有 plan、case 和指标必须保持只读。修复必须形成新完整 SHA，重建并验证 11 个
+同 revision 镜像，以新 seed、Campaign ID 和 write-once attempt 从阶段 0 完整重跑；不得在
+旧 attempt 上续写缺失用例。
+
 ## Risks / Trade-offs
 
 - [风险] 1000 提交与 36 长课可能产生大量 `/data/course` 临时文件。 → 短/长媒体分阶段，进入新阶梯前重新预估，低于 15%/150 GiB 禁止加压，低于 10%/100 GiB 立即停止。

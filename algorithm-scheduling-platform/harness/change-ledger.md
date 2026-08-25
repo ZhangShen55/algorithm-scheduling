@@ -2199,3 +2199,39 @@
   `89/412` 测试、Ruff、strict Mypy、compileall、OpenSpec strict 和 diff-check 共同授权
   形成远程候选 SHA。远程 11 镜像重建、新 attempt 与 OpenSpec 12.2 及后续任务
   仍未完成。
+
+## 2026-08-25 - `28e74d7` Campaign 预执行诊断与阶段 5 锁边界收敛
+
+- Previous state: 最终候选 SHA
+  `28e74d7a0422d35d612571f515e4e45f9e555b65` 已在 `192.168.29.11` 完成 11/11 同 revision
+  镜像、29/29 healthy、21/21 注册、18 GPU 进程、3 CPU PPT 和 7/7 Smoke；新 attempt
+  `full-campaign-28e74d7a0422-20260825202700` 已创建，但 Fault Adapter 仍按 direct release
+  父目录解析路径，并把 delegated PID/path 同时用于 Mac 与目标机锁校验。
+- Target state: release root 严格支持 `<tag>/<sha>/attempts/<attempt-id>` 并显式兼容 direct
+  `<tag>/<sha>`；Mac 侧由专用 `_LocalCampaignLockGuard` 获取当前 attempt 根下的
+  `.campaign-fault.lock` 并覆盖整个 fault case。锁必须为当前用户所有的 `0600` 单链接，内容
+  绑定 schema/Campaign/attempt 并逐动作复核目录、inode、权限和时间元数据；delegated PID/path
+  只表示 `.11` canonical 锁，远端 Docker 动作继续逐次通过本地 lock probe 和 semantic probe
+  SSH challenge 验证，结果标记 `local_attempt_and_remote_canonical`。
+- Changed files: 当前 OpenSpec 设计、A 服务极限负载规格、任务清单，以及三份 Harness 文档；
+  Fault Adapter 与测试由对应实现任务修改。历史 attempt、远端报告、媒体、模型和用户未纳管
+  文件均不改写；`.12` 登录密码未进入 Git、Harness、报告或普通配置。
+- Contract impact: 不改变 A 服务 HTTP/WebSocket、任务字段、整数状态、七算子协议、四服务
+  边界、端口或阶段顺序。锁语义只修复跨主机执行身份：本地锁保护 Campaign 控制器，远端锁
+  保护目标机受控 Docker 变更，任一身份不成立都失败关闭。
+- Verification command and environment: 本轮预执行事实为
+  `BASE-MEDIA-DOWNLOAD-1/3/10` 分别 `1/1`、`3/3`、`10/10` 通过且护栏均 `CLEAR`；
+  `BASE-MEDIA-DOWNLOAD-30` 及全部业务基线未启动。Fault Adapter 聚焦为 `37 passed`，故障计划、
+  远端语义探针和生产适配器组合为 `121 passed`，完整 Campaign 为 `420 passed`；平台权威全量
+  为 `3274 passed, 3 skipped, 27 warnings`，用时 `671.25s`，三个 skip 均因本机未运行
+  canonical `facerec-gpu0`。Ruff、strict Mypy 两个变更文件、compileall、OpenSpec strict、
+  Harness `5 passed` 和 diff-check 均通过。一次缺少 Harness 规定 `PYTHONPATH` 的非权威命令
+  在 deploy 收集阶段产生 5 个 `No module named deploy`，按权威命令重跑转绿，归因为命令环境
+  而非实现失败。
+- Evidence tier and verdict: 达到真实 x86 三 GPU 常驻栈、算子 Smoke 和前三档媒体下载层级；
+  阶段 0 未完成，阶段 1–6 未开始。审计在故障流量前证明阶段 5 必然阻断后自然停止是正确的
+  失败关闭行为，不是平台容量或算子质量失败。
+- Remaining risks: 修复必须形成新完整 Git SHA，在目标机重建并 inspect 全部 11 镜像，恢复
+  同 revision 的 29/29、21/21、18 GPU、3 PPT 和 7/7 Smoke；随后以新 seed、Campaign ID 和
+  write-once attempt 从阶段 0 完整重跑。旧 `28e74d7` attempt 保持只读，不能续写 30 档或
+  业务 case，也不能用于完成 OpenSpec 12.2–12.8。

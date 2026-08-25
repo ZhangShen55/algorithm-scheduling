@@ -221,6 +221,18 @@ Campaign 系统 SHALL 在持续受控负载中分别停止一个算子实例、�
 - **WHEN** 实时 ASR 会话存活时受控重启 Online Gateway
 - **THEN** 报告 SHALL 如实记录会话中断，验证客户端重连、旧租约最终释放和新会话恢复，不得将其表达为无感迁移
 
+#### Scenario: attempt 根必须反解同一发布身份
+- **WHEN** Fault Adapter 接收 `<tag>/<sha>/attempts/<attempt-id>` 形式的 write-once attempt 根，或显式兼容的 direct `<tag>/<sha>` release 根
+- **THEN** 系统 MUST 严格反解 release tag、完整 Git SHA 和 attempt 边界，只接受 `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}` 形式的 attempt ID，拒绝其他目录形状或身份不一致的路径，并以 `local_release_layout=attempt|legacy_direct` 记录实际分支，不得因固定父目录层数而把 attempt 误判为 release
+
+#### Scenario: 本地与远端维护锁使用独立绑定
+- **WHEN** Campaign 控制器在 Mac 运行，并通过 SSH 对 `192.168.29.11` 执行一个故障 case
+- **THEN** Fault Adapter MUST 使用专用 `_LocalCampaignLockGuard` 获取并全程持有当前 attempt 根下的 `.campaign-fault.lock`，要求该文件为当前用户所有的 `0600` 单链接且内容绑定 schema、Campaign ID 和 attempt root，并在每次动作复核目录、inode、权限与 mtime/ctime；`delegated_lock_holder_pid` 和 `delegated_lock_path` MUST 只描述目标机 canonical 锁，每次远端 Docker 动作仍 MUST 同时通过本地 lock probe 和 semantic probe SSH challenge 校验，不得要求同一个 PID/path 同时在两台主机成立，结果 MUST 标记 `maintenance_lock_binding=local_attempt_and_remote_canonical`
+
+#### Scenario: 故障前审计发现结构性阻断
+- **WHEN** 已有 attempt 只完成部分阶段 0 case，预执行审计证明阶段 5 的 attempt root 或跨主机锁绑定必然失败
+- **THEN** Campaign MUST 停止启动后续 case、保留全部既有 plan/case/指标且不补写未执行结果；修复后 MUST 使用新完整 Git SHA 重建 11 个镜像，并以新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑
+
 ### Requirement: 资源护栏必须优先于负载目标
 Campaign 系统 SHALL 至少每 5 秒发起宿主机、Docker、GPU、磁盘、Kafka lag、任务队列和容器重启指标采集；在线图片突发阶段 MUST 每 0.5–1 秒采集实例 `inflight`、活跃租约和容量峰值，并使用 Gateway 实例级请求、租约申请/拒绝/释放累计指标的阶段前后差值覆盖短租约。Kafka lag MUST 作为独立于 Control HTTP 的 `kafka_lag` 采集面，使用独立的 15–30 秒命令超时，默认 20 秒；其他探针不得因此放大超时。任一红线触发时 MUST 立即停止新负载，保留证据并执行精确恢复，不得为了完成目标并发而继续加压。
 
