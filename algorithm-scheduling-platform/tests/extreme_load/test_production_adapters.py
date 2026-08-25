@@ -105,7 +105,10 @@ def _metrics_runtime_config(
                 'kafka_compose_project = "algorithm-platform"',
                 'kafka_compose_service = "kafka"',
                 "kafka_consumer_groups = "
-                '["algorithm-orchestrator", "algorithm-orchestrator-visual-events"]',
+                '["algorithm-orchestrator", "algorithm-orchestrator-visual-events", '
+                '"vision-orchestrator"]',
+                "kafka_probe_attempts = 2",
+                "kafka_probe_retry_delay_seconds = 0.25",
                 "regular_seconds = 5.0",
                 "burst_seconds = 0.5",
                 "probe_timeout_seconds = 5.0",
@@ -294,6 +297,15 @@ def test_metrics_factory_assembles_explicit_read_only_probe_surfaces(
     assert remote_runner.target.host == "192.168.29.11"
     assert adapter.target_host_probe.directory_paths == ("/data/course", "/data/result")
     assert adapter.control_probe.kafka_lag_source is not None
+    kafka_probe = adapter.control_probe.kafka_lag_source.__self__
+    assert isinstance(kafka_probe, production_adapters.KafkaLagProbe)
+    assert kafka_probe.consumer_groups == (
+        "algorithm-orchestrator",
+        "algorithm-orchestrator-visual-events",
+        "vision-orchestrator",
+    )
+    assert kafka_probe.attempts == 2
+    assert kafka_probe.retry_delay_seconds == 0.25
 
 
 @pytest.mark.asyncio

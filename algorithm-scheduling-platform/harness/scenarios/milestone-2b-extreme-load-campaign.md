@@ -558,3 +558,23 @@ Campaign/release/SHA/case/phase 身份校验发布。
   护栏到达警戒线或产生 write-once 失败证据时，高档保持 blocked，不能跳级执行。
 - 本地聚焦验证为 `88 passed`，Ruff 和 strict Mypy 通过。该结果只补齐 12.2 的执行入口，
   不代表远端发布、阶段 0 重跑或 12.2 已完成。
+
+## 2026-08-25 - `7efb2a0` 阶段 1 长课指标瞬时阻断
+
+- `phase0-rerun-7efb2a02e964-20260825103601` 的阶段 0 为 `14/14 passed`；阶段 1 四条独立
+  单泳道和 `OFF-LONG-COURSE-3` 均通过。`OFF-LONG-COURSE-6` 的 6/6 课程四泳道也进入成功
+  终态，最终活动队列、Outbox、Kafka lag 和租约为零，29 个容器零重启。
+- 该长课用例前 59 个运行时样本连续 `CLEAR`。第 59 个样本仍有活动队列 15；随后采样中的
+  `/ops/queues` 返回 200，但 Kafka 在同一秒记录 4.5 秒控制器心跳超时，旧 lag 探针串行的
+  Kafka CLI 超过 5 秒命令上限。采样器按 fail-close 锁存 `运行时指标采集失败: control`；
+  8 分钟后的第 60 个成功收尾样本证明队列已归零，但不能覆盖已发生的 `STOP`。
+- 原 blocked case、59 个 CLEAR 样本、第 60 个锁存 STOP 样本和 Kafka/Control 日志事实保持
+  只读。OpenSpec 12.2 继续未完成，不用业务成功终态改写规范结论。
+- 修复边界是减少探针自身负载并保留 fail-close：每个采样只执行一次 Kafka
+  `--describe --all-groups`，精确汇总 `algorithm-orchestrator`、
+  `algorithm-orchestrator-visual-events`、`vision-orchestrator`，CLI 瞬时失败默认最多尝试
+  2 次、间隔 0.25 秒；全部失败或组/分区不可证明仍锁存 `STOP`。修复必须经新 SHA、11 镜像
+  同 revision 和全新 write-once attempt 从阶段 0 重跑。
+- 本地实现验证为 Campaign/适配器聚焦 `526 passed`、Ruff 通过、strict Mypy 23 个源文件通过、
+  compileall 通过、OpenSpec strict 通过及 `git diff --check` 通过。回归同时证明单次瞬时失败
+  会在第二次成功后继续采样，连续两次失败仍抛出脱敏 `ProbeError` 并由运行时护栏锁存 STOP。

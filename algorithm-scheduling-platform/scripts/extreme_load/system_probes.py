@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
@@ -794,28 +795,39 @@ class DockerMetricsProbe:
         return _parse_docker_stats(stats, identities)
 
 
-def _parse_consumer_group_lag(text: str, expected_group: str) -> int:
+def _parse_consumer_groups_lag(text: str, expected_groups: Sequence[str]) -> int:
+    expected = frozenset(expected_groups)
+    if (
+        not expected
+        or len(expected) != len(tuple(expected_groups))
+        or any(_SAFE_IDENTITY.fullmatch(group) is None for group in expected)
+    ):
+        raise ValueError("Kafka consumer group 期望集合不合法")
     header: tuple[str, ...] | None = None
     lag_index = -1
     group_index = -1
-    observed: set[tuple[str, int]] = set()
+    observed: set[tuple[str, str, int]] = set()
+    observed_groups: set[str] = set()
     total_lag = 0
     for line in text.splitlines():
         fields = tuple(line.split())
         if not fields or line.startswith("Consumer group '"):
             continue
         if {"GROUP", "TOPIC", "PARTITION", "LAG"}.issubset(fields):
-            if header is not None:
-                raise ValueError("Kafka consumer group 输出包含重复表头")
-            header = fields
+            if header is not None and fields != header:
+                raise ValueError("Kafka consumer group 输出表头发生变化")
+            header = header or fields
             lag_index = fields.index("LAG")
             group_index = fields.index("GROUP")
             continue
         if header is None or len(fields) != len(header):
             raise ValueError("Kafka consumer group 输出结构不合法")
         row = dict(zip(header, fields, strict=True))
-        if fields[group_index] != expected_group:
-            raise ValueError("Kafka consumer group 输出组名不匹配")
+        group = fields[group_index]
+        if _SAFE_IDENTITY.fullmatch(group) is None:
+            raise ValueError("Kafka consumer group 输出组名不安全")
+        if group not in expected:
+            continue
         topic = row["TOPIC"]
         partition_raw = row["PARTITION"]
         lag_raw = fields[lag_index]
@@ -825,14 +837,22 @@ def _parse_consumer_group_lag(text: str, expected_group: str) -> int:
             or _NUMBER.fullmatch(lag_raw) is None
         ):
             raise ValueError("Kafka consumer group 分区或 lag 不可证明")
-        key = (topic, int(partition_raw))
+        key = (group, topic, int(partition_raw))
         if key in observed:
             raise ValueError("Kafka consumer group 输出分区重复")
         observed.add(key)
+        observed_groups.add(group)
         total_lag += int(lag_raw)
-    if header is None or not observed:
-        raise ValueError("Kafka consumer group 没有可证明的分区 lag")
+    missing = sorted(expected - observed_groups)
+    if header is None or missing:
+        raise ValueError(
+            "Kafka consumer group 没有可证明的分区 lag: " + ", ".join(missing)
+        )
     return total_lag
+
+
+def _parse_consumer_group_lag(text: str, expected_group: str) -> int:
+    return _parse_consumer_groups_lag(text, (expected_group,))
 
 
 class KafkaLagProbe:
@@ -844,6 +864,8 @@ class KafkaLagProbe:
         compose_service: str,
         consumer_groups: Sequence[str],
         timeout_seconds: float = 10,
+        attempts: int = 2,
+        retry_delay_seconds: float = 0.25,
     ) -> None:
         groups = tuple(consumer_groups)
         if (
@@ -859,6 +881,17 @@ class KafkaLagProbe:
         self.compose_service = compose_service
         self.consumer_groups = groups
         self.timeout_seconds = _bounded_timeout(timeout_seconds)
+        if type(attempts) is not int or not 1 <= attempts <= 5:
+            raise ValueError("Kafka lag 探针尝试次数必须位于 1–5")
+        if (
+            isinstance(retry_delay_seconds, bool)
+            or not isinstance(retry_delay_seconds, (int, float))
+            or not math.isfinite(retry_delay_seconds)
+            or not 0 <= retry_delay_seconds <= 5
+        ):
+            raise ValueError("Kafka lag 探针重试间隔必须位于 0–5 秒")
+        self.attempts = attempts
+        self.retry_delay_seconds = float(retry_delay_seconds)
 
     def _run(self, *argv: str) -> str:
         return _run_checked(self.runner, argv, timeout_seconds=self.timeout_seconds)
@@ -883,21 +916,25 @@ class KafkaLagProbe:
 
     def collect(self) -> int:
         container_id = self._container_id()
-        total = 0
-        for group in self.consumer_groups:
-            output = self._run(
-                "docker",
-                "exec",
-                container_id,
-                "/opt/kafka/bin/kafka-consumer-groups.sh",
-                "--bootstrap-server",
-                "kafka:29092",
-                "--describe",
-                "--group",
-                group,
-            )
-            total += _parse_consumer_group_lag(output, group)
-        return total
+        for attempt in range(1, self.attempts + 1):
+            try:
+                output = self._run(
+                    "docker",
+                    "exec",
+                    container_id,
+                    "/opt/kafka/bin/kafka-consumer-groups.sh",
+                    "--bootstrap-server",
+                    "kafka:29092",
+                    "--describe",
+                    "--all-groups",
+                )
+            except ProbeError:
+                if attempt == self.attempts:
+                    raise
+                time.sleep(self.retry_delay_seconds)
+                continue
+            return _parse_consumer_groups_lag(output, self.consumer_groups)
+        raise AssertionError("Kafka lag 探针重试循环未返回")
 
 
 def _csv_rows(text: str, columns: int, name: str) -> tuple[tuple[str, ...], ...]:

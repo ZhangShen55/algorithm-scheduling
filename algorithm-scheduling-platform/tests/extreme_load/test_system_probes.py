@@ -521,7 +521,7 @@ def test_kafka_lag_probe_uses_exact_container_and_sums_required_groups() -> None
     ]
     group_one = "algorithm-orchestrator"
     group_two = "algorithm-orchestrator-visual-events"
-    command_prefix = (
+    command = (
         "docker",
         "exec",
         container_id,
@@ -529,20 +529,21 @@ def test_kafka_lag_probe_uses_exact_container_and_sums_required_groups() -> None
         "--bootstrap-server",
         "kafka:29092",
         "--describe",
-        "--group",
+        "--all-groups",
     )
     header = "GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG CONSUMER-ID HOST CLIENT-ID\n"
     runner = FakeRunner(
         {
             ("docker", "ps", "-q", "--no-trunc"): _ok(container_id + "\n"),
             ("docker", "inspect", container_id): _ok(json.dumps(inspect)),
-            (*command_prefix, group_one): _ok(
+            command: _ok(
                 header
                 + f"{group_one} course.commands 0 10 13 3 - - -\n"
                 + f"{group_one} course.commands 1 20 25 5 - - -\n"
-            ),
-            (*command_prefix, group_two): _ok(
-                header + f"{group_two} visual.events 0 7 11 4 - - -\n"
+                + "unrelated other.topic 0 1 100 99 - - -\n"
+                + "\n"
+                + header
+                + f"{group_two} visual.events 0 7 11 4 - - -\n"
             ),
         }
     )
@@ -557,6 +558,108 @@ def test_kafka_lag_probe_uses_exact_container_and_sums_required_groups() -> None
     assert lag == 12
     assert all(call[0][0] == "docker" for call in runner.calls)
     assert all("sh" not in call[0] and "bash" not in call[0] for call in runner.calls)
+
+
+def test_kafka_lag_probe_retries_one_transient_command_failure() -> None:
+    container_id = "f" * 64
+    inspect = [
+        _inspect_item(
+            container_id,
+            project="algorithm-scheduling-platform",
+            service="kafka",
+            restart_count=0,
+            health="healthy",
+        )
+    ]
+    command = (
+        "docker",
+        "exec",
+        container_id,
+        "/opt/kafka/bin/kafka-consumer-groups.sh",
+        "--bootstrap-server",
+        "kafka:29092",
+        "--describe",
+        "--all-groups",
+    )
+
+    @dataclass
+    class TransientRunner:
+        calls: list[tuple[tuple[str, ...], float]] = field(default_factory=list)
+        kafka_calls: int = 0
+
+        def run(self, argv: Sequence[str], *, timeout_seconds: float) -> CommandResult:
+            current = tuple(argv)
+            self.calls.append((current, timeout_seconds))
+            if current == ("docker", "ps", "-q", "--no-trunc"):
+                return _ok(container_id + "\n")
+            if current == ("docker", "inspect", container_id):
+                return _ok(json.dumps(inspect))
+            if current == command:
+                self.kafka_calls += 1
+                if self.kafka_calls == 1:
+                    return CommandResult(124, "", "transient detail must stay private")
+                return _ok(
+                    "GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG "
+                    "CONSUMER-ID HOST CLIENT-ID\n"
+                    "algorithm-orchestrator course.commands 0 1 3 2 - - -\n"
+                )
+            raise AssertionError(f"unexpected command: {current}")
+
+    runner = TransientRunner()
+    lag = KafkaLagProbe(
+        runner,
+        compose_project="algorithm-scheduling-platform",
+        compose_service="kafka",
+        consumer_groups=("algorithm-orchestrator",),
+        attempts=2,
+        retry_delay_seconds=0,
+    ).collect()
+
+    assert lag == 2
+    assert runner.kafka_calls == 2
+
+
+def test_kafka_lag_probe_fails_closed_after_bounded_attempts() -> None:
+    container_id = "a" * 64
+    inspect = [
+        _inspect_item(
+            container_id,
+            project="algorithm-scheduling-platform",
+            service="kafka",
+            restart_count=0,
+            health="healthy",
+        )
+    ]
+    command = (
+        "docker",
+        "exec",
+        container_id,
+        "/opt/kafka/bin/kafka-consumer-groups.sh",
+        "--bootstrap-server",
+        "kafka:29092",
+        "--describe",
+        "--all-groups",
+    )
+    runner = FakeRunner(
+        {
+            ("docker", "ps", "-q", "--no-trunc"): _ok(container_id + "\n"),
+            ("docker", "inspect", container_id): _ok(json.dumps(inspect)),
+            command: CommandResult(124, "", "password=must-not-leak"),
+        }
+    )
+
+    with pytest.raises(ProbeError) as captured:
+        KafkaLagProbe(
+            runner,
+            compose_project="algorithm-scheduling-platform",
+            compose_service="kafka",
+            consumer_groups=("algorithm-orchestrator",),
+            attempts=2,
+            retry_delay_seconds=0,
+        ).collect()
+
+    assert sum(call[0] == command for call in runner.calls) == 2
+    assert "must-not-leak" not in str(captured.value)
 
 
 def test_kafka_lag_probe_fails_closed_without_exact_healthy_container() -> None:

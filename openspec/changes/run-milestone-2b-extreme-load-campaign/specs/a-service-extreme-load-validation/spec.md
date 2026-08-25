@@ -232,6 +232,10 @@ Campaign 系统 SHALL 至少每 5 秒采集宿主机、Docker、GPU、磁盘、K
 - **WHEN** 用例运行窗口内任一样本出现 `WARNING` 或 `STOP`，后续精确恢复样本重新变为 `CLEAR`
 - **THEN** 运行时汇总 MUST 保留窗口内最高严重度及其去重原因，当前用例 MUST 标记为阻断；恢复后的 `CLEAR` 只证明现场恢复，不能把规范结果改写为通过
 
+#### Scenario: Kafka lag 瞬时命令失败在同一采样内有限重试
+- **WHEN** 一次 Kafka consumer group 快照命令因瞬时超时失败，但在配置的有限尝试次数内恢复
+- **THEN** 探针 SHALL 使用单次 all-groups 快照汇总 Orchestrator、视觉事件和 Vision Orchestrator 三个必需消费组，并继续当前采样；全部尝试失败、任一必需组缺失或输出不可证明时 MUST 锁存 `STOP`
+
 #### Scenario: 磁盘达到红线
 - **WHEN** 宿主机或关键数据目录所在文件系统剩余空间低于 100 GiB 或 10%
 - **THEN** Campaign 系统 MUST 立即停止新请求/会话，发布红线证据，保留 `/data/result` 并进入受控排空/恢复

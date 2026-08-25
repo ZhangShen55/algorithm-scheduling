@@ -308,6 +308,19 @@ fixture 总字节数乘课程数，计算投影剩余空间。投影低于 15% �
 零请求阻断；低于 10% 或 100 GiB 红线时按 `STOP` 处理。投影只决定能否开始本档，运行中仍
 持续执行目录、文件系统和容器护栏。
 
+### 15. Kafka lag 指标必须低开销、覆盖完整消费链并有限重试
+
+`OFF-LONG-COURSE-6` 的 59 个连续 `CLEAR` 样本后，Kafka 在重负载下出现一次 4.5 秒控制器
+心跳超时。旧探针每个采样串行启动两次 Kafka CLI，并把该子探针异常笼统归为 `control`，导致
+业务和最终队列均成功的用例被单次瞬时超时永久锁存为 `STOP`。
+
+Kafka lag 探针改为一次 `--describe --all-groups` 获取快照，只汇总配置明确列出的
+`algorithm-orchestrator`、`algorithm-orchestrator-visual-events` 和 `vision-orchestrator`，同时
+要求三个组都具有可证明的分区行。Kafka CLI 命令失败时只在同一采样内执行可配置的有限重试；
+默认 2 次、间隔 0.25 秒。全部尝试失败、输出畸形、消费组缺失或指标不可证明时仍立即锁存
+`STOP`，后续成功采样不能覆盖。旧 blocked attempt 保持只读，修复后必须新 SHA、新 seed、
+新 Campaign ID 和新 attempt 从阶段 0 重跑。
+
 ## Risks / Trade-offs
 
 - [风险] 1000 提交与 36 长课可能产生大量 `/data/course` 临时文件。 → 短/长媒体分阶段，进入新阶梯前重新预估，低于 15%/150 GiB 禁止加压，低于 10%/100 GiB 立即停止。

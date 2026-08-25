@@ -82,6 +82,8 @@ _METRICS_CONFIG_KEYS = frozenset(
         "kafka_compose_project",
         "kafka_compose_service",
         "kafka_consumer_groups",
+        "kafka_probe_attempts",
+        "kafka_probe_retry_delay_seconds",
     }
 )
 _SOURCE_EVIDENCE_KEYS = frozenset(
@@ -164,6 +166,8 @@ class _RuntimeMetricsSettings:
     kafka_compose_project: str
     kafka_compose_service: str
     kafka_consumer_groups: tuple[str, ...]
+    kafka_probe_attempts: int
+    kafka_probe_retry_delay_seconds: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -413,6 +417,15 @@ def _load_metrics_settings() -> _RuntimeMetricsSettings:
         restart_threshold = metrics["restart_loop_threshold"]
         if type(restart_threshold) is not int or restart_threshold <= 0:
             raise ValueError("容器重启阈值必须是正整数")
+        kafka_probe_attempts = metrics["kafka_probe_attempts"]
+        if type(kafka_probe_attempts) is not int or not 1 <= kafka_probe_attempts <= 5:
+            raise ValueError("Kafka lag 探针尝试次数必须位于 1–5")
+        kafka_probe_retry_delay_seconds = _number(
+            metrics["kafka_probe_retry_delay_seconds"],
+            "kafka_probe_retry_delay_seconds",
+        )
+        if not 0 <= kafka_probe_retry_delay_seconds <= 5:
+            raise ValueError("Kafka lag 探针重试间隔必须位于 0–5 秒")
         expected_raw = _as_string_mapping(metrics["expected_gpu_by_pid"])
         expected: dict[int, str] = {}
         for raw_pid, raw_uuid in expected_raw.items():
@@ -454,6 +467,8 @@ def _load_metrics_settings() -> _RuntimeMetricsSettings:
                 metrics["kafka_consumer_groups"],
                 "kafka_consumer_groups",
             ),
+            kafka_probe_attempts=kafka_probe_attempts,
+            kafka_probe_retry_delay_seconds=kafka_probe_retry_delay_seconds,
         )
     except _ConfigurationBlocked:
         raise
@@ -883,6 +898,8 @@ def metrics_factory(
             compose_service=settings.kafka_compose_service,
             consumer_groups=settings.kafka_consumer_groups,
             timeout_seconds=timeout,
+            attempts=settings.kafka_probe_attempts,
+            retry_delay_seconds=settings.kafka_probe_retry_delay_seconds,
         )
         target_host_probe = TargetHostProbe(
             remote_runner,

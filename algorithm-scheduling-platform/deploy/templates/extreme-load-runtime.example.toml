@@ -58,7 +58,11 @@ kafka_compose_service = "kafka"
 kafka_consumer_groups = [
   "algorithm-orchestrator",
   "algorithm-orchestrator-visual-events",
+  "vision-orchestrator",
 ]
+# 单次 Kafka CLI 瞬时超时先在同一采样内有限重试；全部失败后仍触发 STOP。
+kafka_probe_attempts = 2
+kafka_probe_retry_delay_seconds = 0.25
 regular_seconds = 5.0
 burst_seconds = 0.5
 probe_timeout_seconds = 5.0
