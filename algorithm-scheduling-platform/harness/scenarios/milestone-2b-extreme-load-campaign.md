@@ -707,3 +707,11 @@ Campaign/release/SHA/case/phase 身份校验发布。
   `sent_chunk_count = sent_media_chunk_count + sent_tail_silence_chunk_count`；这些实时证据
   透传到独立用例；mixed/soak 共用同一 runner 和计数正确性门禁，并同样输出会话数、计划/
   实发媒体时长、发送耗时、最大实时因子和最大正调度漂移。
+- `.12` 新连接信息只用于 SSH 核验，凭据不写入 Git、Harness 或报告。只读复核确认
+  `:5555` 仍有 38 组完整 T/S/P、114 个可解析 MP4，冻结短课的大小和 SHA-256 与基线一致；
+  从 `.11` 执行 32 并发、每路 1 MiB Range 为 `32/32` 返回 206，用时 0.439 秒。
+  `:5556/healthz` 为 200，`/timeout.mp4` 约 5 秒后为 504。
+- `.12` 宿主 shell `nofile=1024`，网卡历史 RX drop 超过 340 万且 5 秒窗口仍有增量；
+  因此它只作媒体源、慢响应反例端点和源端遥测，不作权威高并发负载机。该主机上的
+  旧 ASR/PPT 容器不属于被测拓扑，Campaign 不得停止它们；阶段 0 前重新记录 RX drop
+  基线，后续结论持续分离源端/网络与 `.11` 平台容量。

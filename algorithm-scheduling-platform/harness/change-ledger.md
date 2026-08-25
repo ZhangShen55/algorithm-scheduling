@@ -2322,7 +2322,14 @@
   只收紧 Campaign 客户端的节拍、分类和证据一致性。
 - Verification command and environment: 平台 `.venv` 的三个聚焦测试文件为 `83 passed`，
   完整 `tests/extreme_load` 为 `458 passed`；受影响文件 Ruff、三个源文件 strict Mypy 和
-  compileall 通过。新增回归显式覆盖 receiver
+  compileall 通过。平台权威全量为 `3322 passed, 3 skipped, 27 warnings`，用时
+  `694.93s`；三个 skip 仍只因本机未运行 canonical `facerec-gpu0`。新增回归显式覆盖 receiver
   意外取消、父任务取消传播、非有限超时参数、计划/实发媒体时长分离及 mixed/soak 实时证据。
+- Supplemental source-host evidence: `.12:5555` 仍有 38 组完整 T/S/P、114 个可解析
+  MP4，冻结短课摘要一致；`.11` 发起 32 并发 1 MiB Range 为 `32/32` 成功。
+  `.12:5556/healthz` 为 200，`/timeout.mp4` 约 5 秒后为 504。凭据没有写入任何
+  仓库或报告文件。由于 `.12` 的 shell `nofile=1024` 且网卡 RX drop 仍有增量，
+  它只作媒体/反例源和源端遥测，不作权威高并发负载机，也不停止其旧 ASR/PPT
+  业务容器。
 - Evidence tier and verdict: 达到静态与单元验证层级；新完整 SHA、`.11` 的 11 镜像重建、
   完整拓扑恢复和新 write-once attempt 仍属于 11.10，本地结果不替代 12.1–12.8。

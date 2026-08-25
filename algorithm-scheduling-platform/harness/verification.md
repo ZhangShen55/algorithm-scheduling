@@ -1983,3 +1983,8 @@ PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q tests/extreme_load
 非有限超时参数，并将计划媒体时长与实际已发送媒体时长分开；mixed/soak 同样输出这些实时
 证据。该结果达到静态和单元层级；必须形成新 SHA、
 在 `.11` 重建同 revision 11 镜像并以新 attempt 从阶段 0 重跑，才能完成 11.10/12.1。
+
+当前提交的平台权威全量回归为 `3322 passed, 3 skipped, 27 warnings`，用时
+`694.93s`。三个 skip 仍只因本机没有运行 canonical `facerec-gpu0`，27 条 warning
+仍为既有 Python fork `DeprecationWarning`；远程发布不得用这三个 skip 代替 `.11`
+的真实 FaceRec Smoke 和 Campaign。
