@@ -132,6 +132,7 @@ class HttpRequestSpec:
     headers: Mapping[str, str] = field(default_factory=dict)
     work_type: str = "http"
     expected_business_rejection: bool = False
+    expected_task_terminal: str | None = None
     expected_lease_acquisition: bool | None = None
 
     def __post_init__(self) -> None:
@@ -155,6 +156,10 @@ class HttpRequestSpec:
             raise ValueError("18100 业务负载只能访问 /api/course-jobs")
         if parsed.port == 18103 and not parsed.path.startswith("/api/online/"):
             raise ValueError("18103 业务负载只能访问 /api/online/")
+        if self.expected_task_terminal not in {None, "success", "failed"}:
+            raise ValueError("离线任务终态期望只允许 success 或 failed")
+        if self.expected_business_rejection and self.expected_task_terminal is not None:
+            raise ValueError("同一请求不能同时期望同步拒绝和异步终态")
 
 
 @dataclass(frozen=True)

@@ -86,6 +86,7 @@ _RUNTIME_SUMMARY_REQUIRED_KEYS = frozenset(
         "peak_gpu_utilization",
         "peak_gpu_memory_bytes",
         "minimum_target_filesystem_available_bytes",
+        "latest_guardrail",
         "target_directory_bytes_before",
         "target_directory_bytes_after",
         "target_directory_bytes_delta",
@@ -133,6 +134,59 @@ def _instance_request_values(summary: Mapping[str, object]) -> dict[str, int] | 
     ):
         return None
     return {str(instance_id): cast(int, value) for instance_id, value in raw.items()}
+
+
+def _negative_drain_observation(
+    case: CaseSpec,
+    metrics_outcome: StageCaseOutcome,
+) -> dict[str, object] | None:
+    if case.load.get("kind") != "negative_submission":
+        return None
+    summary = _runtime_metric_summary(metrics_outcome)
+    if summary is None:
+        return {
+            "status": "blocked",
+            "reason": "负向用例缺少最终排空指标",
+        }
+    scalar_names = (
+        "final_task_queue_depth",
+        "final_outbox_pending",
+        "final_kafka_lag",
+    )
+    scalar_values = {name: summary.get(name) for name in scalar_names}
+    raw_leases = summary.get("final_active_leases")
+    valid_shape = all(type(value) is int and value >= 0 for value in scalar_values.values())
+    valid_shape = valid_shape and isinstance(raw_leases, Mapping) and all(
+        isinstance(instance_id, str)
+        and bool(instance_id)
+        and type(value) is int
+        and value >= 0
+        for instance_id, value in raw_leases.items()
+    )
+    if not valid_shape:
+        return {
+            "status": "blocked",
+            "reason": "负向用例最终排空指标结构不完整",
+            **scalar_values,
+            "final_active_leases": (
+                dict(raw_leases) if isinstance(raw_leases, Mapping) else None
+            ),
+        }
+    typed_leases = cast(Mapping[object, object], raw_leases)
+    leases = {str(key): cast(int, value) for key, value in typed_leases.items()}
+    drained = all(value == 0 for value in scalar_values.values()) and not any(
+        leases.values()
+    )
+    return {
+        "status": "passed" if drained else "blocked",
+        "reason": (
+            "负向用例结束后活动队列、Outbox、Kafka lag 和容量租约均已排空"
+            if drained
+            else "负向用例结束后仍有活动队列、Outbox、Kafka lag 或容量租约"
+        ),
+        **scalar_values,
+        "final_active_leases": leases,
+    }
 
 
 def _image_boundary_observation(
@@ -914,13 +968,22 @@ class CampaignCoordinator:
             business_document,
             metrics_outcome,
         )
-        for observation in (lease_boundary_observation, face_instance_observation):
+        negative_drain_observation = _negative_drain_observation(case, metrics_outcome)
+        for observation in (
+            lease_boundary_observation,
+            face_instance_observation,
+            negative_drain_observation,
+        ):
             if (
                 final_status == "passed"
                 and observation is not None
                 and observation.get("status") != "passed"
             ):
-                final_status = "failed"
+                final_status = (
+                    "blocked"
+                    if observation.get("status") == "blocked"
+                    else "failed"
+                )
                 final_reason = str(observation.get("reason", "运行时一致性证据不完整"))
         document = dict(business_document)
         document.update(
@@ -943,6 +1006,8 @@ class CampaignCoordinator:
             document["lease_boundary_observation"] = lease_boundary_observation
         if face_instance_observation is not None:
             document["face_instance_observation"] = face_instance_observation
+        if negative_drain_observation is not None:
+            document["negative_drain_observation"] = negative_drain_observation
         validate_public_payload(document)
         output = execution_path(self.release_root, self.plan, case.case_id)
         atomic_write_report(
@@ -969,6 +1034,13 @@ class CampaignCoordinator:
                 missing = sorted(_RUNTIME_SUMMARY_REQUIRED_KEYS - set(summary))
                 if missing:
                     raise ValueError("运行时指标 summary 缺少字段: " + ",".join(missing))
+                latest_guardrail = summary.get("latest_guardrail")
+                if (
+                    not isinstance(latest_guardrail, Mapping)
+                    or latest_guardrail.get("level") != GuardrailLevel.CLEAR.value
+                    or latest_guardrail.get("reasons") != []
+                ):
+                    raise ValueError("运行时指标通过结果包含非 CLEAR 护栏")
                 sample_count = summary.get("sample_count")
                 if (
                     type(sample_count) is not int

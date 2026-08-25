@@ -296,13 +296,17 @@ class CourseRepository:
             rows = connection.execute(
                 text(
                     """
-                    SELECT status, priority, required_capability, count(*) AS count
-                    FROM task_nodes
-                    WHERE status IN (10, 20, 30, 40, 50)
-                    GROUP BY status, priority, required_capability
-                    ORDER BY status,
-                             CASE priority WHEN 'URGENT' THEN 0 ELSE 1 END,
-                             required_capability NULLS FIRST
+                    SELECT node.status, node.priority, node.required_capability,
+                           count(*) AS count
+                    FROM task_nodes AS node
+                    JOIN course_task_types AS task_type
+                      ON task_type.id = node.course_task_type_id
+                    WHERE node.status IN (10, 20, 30, 40, 50)
+                      AND task_type.status IN (10, 20, 30, 40, 50)
+                    GROUP BY node.status, node.priority, node.required_capability
+                    ORDER BY node.status,
+                             CASE node.priority WHEN 'URGENT' THEN 0 ELSE 1 END,
+                             node.required_capability NULLS FIRST
                     """
                 )
             ).mappings()
@@ -1155,6 +1159,50 @@ class CourseRepository:
                     """
                 ),
                 {"node_id": node_id, "progress": _json(progress)},
+            )
+            connection.execute(
+                text(
+                    """
+                    UPDATE task_nodes
+                    SET reason = :reason,
+                        updated_at = now()
+                    WHERE id = :node_id
+                    """
+                ),
+                {"node_id": node_id, "reason": reason},
+            )
+        return self.get_node(node_id)
+
+    def merge_node_progress(
+        self,
+        node_id: int,
+        progress_patch: JsonObject,
+        *,
+        reason: str,
+    ) -> NodeRecord:
+        with self._engine.begin() as connection:
+            current_value = connection.execute(
+                text("SELECT status FROM task_nodes WHERE id = :node_id FOR UPDATE"),
+                {"node_id": node_id},
+            ).scalar_one_or_none()
+            if current_value is None:
+                raise RepositoryNotFoundError(f"节点不存在: {node_id}")
+            if NodeStatus(current_value) is not NodeStatus.RUNNING:
+                raise RepositoryStateConflictError(
+                    f"只有处理中节点可以合并进度: {node_id}"
+                )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO node_results (task_node_id, progress)
+                    VALUES (:node_id, CAST(:progress_patch AS jsonb))
+                    ON CONFLICT (task_node_id) DO UPDATE
+                    SET progress = COALESCE(node_results.progress, '{}'::jsonb)
+                                   || EXCLUDED.progress,
+                        updated_at = now()
+                    """
+                ),
+                {"node_id": node_id, "progress_patch": _json(progress_patch)},
             )
             connection.execute(
                 text(

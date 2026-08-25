@@ -59,6 +59,10 @@ Campaign 系统 SHALL 使用短媒体执行 100、300、1000 个唯一任务的�
 - **WHEN** 当前长课阶梯结束后剩余空间已低于配置的警戒线
 - **THEN** Campaign 系统 SHALL 禁止启动下一阶梯，继续排空当前任务并把用例标记为护栏中止
 
+#### Scenario: 长课提交前投影跨越警戒线
+- **WHEN** 当前可用空间减去本档课程数乘三路长课 fixture 总字节后低于 15% 或 150 GiB 警戒线
+- **THEN** Campaign 系统 MUST 在产生任何本档请求前将该档标记为阻断，记录当前空间、预计输入、投影空间和阈值，不得先提交后依赖运行中护栏补救
+
 #### Scenario: 单任务泳道忽略未请求任务字典
 - **WHEN** PPT-only、ASR-only、教师-only 或学生-only 查询返回一个已请求任务和三个 `status=0` 的未请求任务
 - **THEN** Campaign 终态轮询 SHALL 排除未请求项，只根据至少一个已请求项判断成功、失败或继续等待；四项全部为 `0` 时不得提前成功
@@ -89,12 +93,32 @@ ffprobe、完整解码和安全末端抽帧验证。PPT 与视觉单任务遇到
 - **WHEN** 某一阶段 0 attempt 已因实现或 fixture 缺陷产生失败或部分证据
 - **THEN** 系统 MUST 保留原证据，使用包含修复的新完整 Git SHA 重建 11 个镜像，并以新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑
 
+#### Scenario: PPT 运行节点尚未持久化异步身份
+- **WHEN** PPT 节点已经进入 `RUNNING`，但异步提交返回的 `task_id` 和 `operator_task_id` 尚未写入节点进度
+- **THEN** Orchestrator 对账循环 SHALL 从所属任务类型读取持久 `task_id`，按 `ppt-node-{node_id}` 确定性恢复算子身份并继续 manifest 对账，不得终止全部后台循环或无限跳过；manifest、数据库或已持久化身份的真实错误仍 MUST 失败关闭
+
 ### Requirement: 幂等、追加任务类型与优先级必须在压力下保持语义
 Campaign 系统 SHALL 对同一 `task_id` 执行 30、100、300、1000 次并发相同提交，并验证分批追加 `task_types`、已完成结果复用和冲突媒体请求。Campaign 还 SHALL 在堆积的 `NORMAL` 后注入 `URGENT`，验证只对未领取节点插队。Control 课程查询的节点字典 MUST 从 PostgreSQL 节点事实返回可空 `claimed_at` 和 `started_at`，Campaign MUST 使用它们证明领取和开始顺序。
 
 #### Scenario: 千请求幂等竞争
 - **WHEN** 1000 个并发请求带有相同 `task_id`、相同 `task_types` 和相同媒体字段
 - **THEN** 平台 MUST 只保留一组逻辑任务/节点事实，所有响应必须可解释且不产生重复结果
+
+#### Scenario: 负向混合流量区分同步拒绝与异步失败
+- **WHEN** 负向比例同时包含缺少路径、未知任务类型、404/超时媒体和非法区域请求
+- **THEN** 缺少路径与未知类型 SHALL 同步拒绝且不创建任务或 Outbox，404/超时媒体与非法区域 SHALL 在接受后进入对应异步失败终态，正常任务 SHALL 全部成功，最终活动队列、Outbox、Kafka lag 和租约 SHALL 排空
+
+#### Scenario: 超时媒体由受控端点证明
+- **WHEN** Campaign 准备执行包含超时媒体的负向比例用例
+- **THEN** write-once plan SHALL 固化受控超时 URL，预探测 MUST 先确认同 origin 的 `/healthz` 为 `200/ok`，再以 2 秒 Range 请求证明已连接后的 `ReadTimeout` 才允许提交；`ConnectTimeout`、`WriteTimeout`、`PoolTimeout`、快速 404、连接失败或未超时响应 SHALL 使该用例零请求阻断
+
+#### Scenario: 异步负向失败必须命中对应节点
+- **WHEN** 404/读超时媒体或非法区域请求被 Control 接受并进入失败终态
+- **THEN** Campaign SHALL 查询课程任务事实，验证请求中对应 `task_type` 的状态为 `70` 且该任务类型下至少一个节点状态为 `70`；查询证据缺失时阻断，失败落在其他任务类型或没有失败节点时使用例失败
+
+#### Scenario: 终态父任务的残留节点不计入活动队列
+- **WHEN** 历史节点状态仍为 `10`–`50`，但所属课程任务类型已经进入 `60/70/80` 终态
+- **THEN** `/ops/queues` SHALL 保留数据库历史事实但不把这些节点计入活动队列深度
 
 #### Scenario: URGENT 不抢占运行节点
 - **WHEN** 300 个 `NORMAL` 任务中已有部分节点运行，随后提交 30 个 `URGENT`
@@ -199,6 +223,10 @@ Campaign 系统 SHALL 至少每 5 秒采集宿主机、Docker、GPU、磁盘、K
 #### Scenario: 短租约由高频峰值和累计差值共同取证
 - **WHEN** 在线图片请求在 5 秒常规采样周期内已完成租约申请、调用和释放
 - **THEN** Campaign 系统 SHALL 使用 0.5–1 秒峰值采样和阶段前后累计差值证明实例调度，不得因 5 秒快照未观测到租约而判定调度未发生
+
+#### Scenario: 中途护栏事件不得被恢复后的 CLEAR 覆盖
+- **WHEN** 用例运行窗口内任一样本出现 `WARNING` 或 `STOP`，后续精确恢复样本重新变为 `CLEAR`
+- **THEN** 运行时汇总 MUST 保留窗口内最高严重度及其去重原因，当前用例 MUST 标记为阻断；恢复后的 `CLEAR` 只证明现场恢复，不能把规范结果改写为通过
 
 #### Scenario: 磁盘达到红线
 - **WHEN** 宿主机或关键数据目录所在文件系统剩余空间低于 100 GiB 或 10%

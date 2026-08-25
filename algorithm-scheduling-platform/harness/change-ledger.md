@@ -2019,3 +2019,140 @@
 - Remaining risks: 新修复尚未形成提交 SHA，目标机仍运行 `2154c40` 且 Vision unhealthy。
   必须先提交推送、按新 SHA 重建全部 11 镜像并恢复 29/29 healthy，再从阶段 0 全量重跑；
   `12.1`、阶段 1–6、217/26/6、4 小时长稳和最终清理均未完成。
+
+## 2026-08-25 - `0ebaa126` 新 SHA 发布闭环与 11.8 完成
+
+- Previous state: `2154c40` 的阶段 0 暴露 PPT 正常 EOF、无有效语音 fixture 和视觉消费循环
+  三类问题；修复已提交并推送，但目标机仍运行旧 SHA，旧 Vision unhealthy，不能授权新的
+  阶段 0 attempt。
+- Target state: release `v1.0_260825` 绑定完整 SHA
+  `0ebaa126f69e3993487c503c11b42e681cad12cd`，重新构建并逐 ID 核验七算子和四平台镜像，
+  恢复 29/29 healthy、21/21 注册、18 个真实 GPU 进程、3 个 CPU PPT 和 7/7 Smoke。
+- Changed files: 仅勾选 OpenSpec 11.8，并更新三份 Harness 文档；目标机 release 证据、
+  PostgreSQL 与 `/data/result` 备份均位于 Git 工作区外。没有提交媒体、模型、人脸原图、
+  密码或完整算法结果。
+- Contract impact: 不改变 A 服务字段、路径、任务状态、四服务边界或算子协议。PPT 三实例
+  继续使用共享路径和一次终态通知；Text Analysis 不进入镜像、注册、Smoke 或当前 DAG。
+- Verification command and environment: 目标机 11 个镜像均为互异完整 ID、`amd64` 且 revision
+  精确等于新 SHA；`production-stack-status.json` 为 `PASS`，包含四中间件、四平台、21 算子、
+  18 GPU、3 CPU、21/21 注册和零租约。18 个 `nvidia-smi` PID 逐一经 cgroup 映射到唯一 GPU
+  容器，每卡 6 个；三台 PPT 无 GPU 请求。PPT cpu0/cpu1/cpu2 逐实例 Smoke 和唯一一次 7/7
+  full Smoke 均为非 mock 通过。关键摘要依次为镜像 `f30ad00d`、镜像文件系统 `f3ba0daf`、
+  常驻账本 `cc1f9266`、最终状态 `f43fe846`、端口边界 `aeeda69e`、GPU 映射 `eedbd48a`、
+  7/7 Smoke `9cdf06d9`；文件均为 root 所有、`0600`、单链接。
+- Evidence tier and verdict: OpenSpec 11.8 完成，达到真实 x86 三 GPU 服务运行、算子注册、
+  CUDA PID/cgroup、算子直接推理和 PPT 终态文件合同层级。切换前数据库账本已为连续
+  `0001`-`0007`；切换后、Smoke 前新增 PostgreSQL 与约 1.06 GB `/data/result` 成对备份，
+  `pg_restore -l`、zstd 和 SHA 校验通过，未覆盖旧备份。
+- Remaining risks: 11.8 只允许创建新 seed/Campaign ID/write-once attempt，不代表 12.1
+  已完成。阶段 0-6、217 条反例、26 条压力/恢复、6 项 B 级人工复核、4 小时长稳和验收后
+  精确清理仍待执行；旧 `2154c40` 与 `e91f5b21` 镜像只能按完整 ID 保护，禁止宽泛 prune。
+
+## 2026-08-25 - `0ebaa126` 阶段 0 全量基线与 12.1 完成
+
+- Previous state: 新 SHA 已完成发布闭环，但阶段 0 尚无新 seed、Campaign ID、源端资源证据
+  和 write-once case；旧 SHA 的在线或失败 attempt 不能补足当前门禁。
+- Target state: 固定 seed `2608252300`，创建 Campaign
+  `campaign-v1-0_260825-0ebaa126f69e3993487c503c11b42e681cad-c0f622b339eca6c5` 和 attempt
+  `phase0-rerun-0ebaa126f69e-20260825144344`，按顺序执行四档媒体下载、四条离线单泳道、
+  四类在线图片、实时 ASR 和 `PHASE-0-COMPLETE`。
+- Changed files: 勾选 OpenSpec 12.1，并更新三份 Harness 文档；Campaign 报告受 `.gitignore`
+  保护，runtime、媒体、人脸图片和 `.12` 源端遥测继续位于 Git 工作区外。新提供的登录凭据
+  未进入 Git、Harness、报告或命令证据。
+- Contract impact: 不改变 A 服务字段、接口、任务状态、四服务边界或算子协议；全部业务请求
+  仅访问 `18100/18103`，媒体下载只读访问 `.12:5555`。
+- Verification command and environment: `.12` calibration 采集 210 个连续样本，四档 44/44
+  下载成功，最大 30 个 Nginx 网络命名空间连接，源端 CPU 峰值约 2.33%，发送峰值约
+  123.10 MB/s。正式四档再次 44/44 通过，聚合吞吐约 114.78–117.62 MB/s。PPT、ASR、
+  教师、学生四条离线单泳道和 VBas、FaceRec、ScreenDet、OCR 四类在线图片均业务通过；
+  实时 ASR 为 464.12 秒、2294 块、零失败会话和零缺失终态。14 份阶段 0 case/gate 均为
+  `passed`，前后护栏全部 `CLEAR`。
+- Evidence tier and verdict: 达到真实 `.12` 媒体源、`.11` 三 GPU 正式栈、A 服务北向 HTTP/WS、
+  Outbox/Kafka/DAG、算子租约和结果终态层级；OpenSpec 12.1 完成并允许进入阶段 1。
+- Remaining risks: 12.2–12.8、217 条反例、26 条压力/恢复、6 项 B 级人工复核、至少 4 小时
+  长稳和最终精确清理仍待执行；媒体链路约 115 MB/s 的平台上限必须与 GPU 容量分开解释。
+
+## 2026-08-25 - catalog 阶段 1 的 PPT 唯一提交 100/300 档诊断与护栏汇总缺口
+
+- Previous state: `0ebaa126` 阶段 0 已全量通过，同一 write-once attempt
+  `phase0-rerun-0ebaa126f69e-20260825144344` 继续执行阶段 1 PPT-only 短媒体阶梯；当时运行时
+  汇总只保留最后一个护栏样本，活动队列也只按节点状态统计。
+- Target state: 先验证 100/300 档的真实业务排空，再根据全过程护栏决定规范结论；任何中途
+  `WARNING/STOP` 不得被恢复后的 `CLEAR` 覆盖，终态父任务下的历史残留节点不得计入活动队列。
+- Changed files: 本记录只追加已有诊断事实。随后实现范围为 PPT 对账竞态、全过程最高护栏、
+  活动父任务队列口径、负向同步/异步结果和长课提交前存储投影；旧 case、样本和报告不修改。
+- Contract impact: 不改变 A 服务字段、接口、四服务边界或算子协议。PPT 节点已 `RUNNING` 但
+  异步身份尚未落库时，从所属任务类型和确定性 `ppt-node-{node_id}` 恢复后继续对账；真实
+  数据库、manifest 错误仍失败关闭。
+- Verification command and environment: `OFF-UNIQUE-PPT-100` 为 100/100 最终成功、
+  `72.487953s`、9 个 `CLEAR` 样本，最大活动队列 179、Outbox pending 20、Kafka lag 0，规范
+  case SHA-256 为 `fbb176ed52fc0c16d929c01b7a343c207fe1c2b69cfa34575c1b2b547319b9d0`。
+  `OFF-UNIQUE-PPT-300` 为 300/300 最终成功、`686.763116s`、17 个样本，最大旧口径队列 550、
+  Outbox pending 220、Kafka lag 14；第 16 个样本在 `2026-08-25T07:28:54.577106Z` 明确为
+  `STOP`，原因为 `关键容器不健康或缺失: orchestrator-service`，第 17 个样本恢复 `CLEAR`。
+- Evidence tier and verdict: PPT-100 保留为真实业务通过事实。PPT-300 虽最终 300/300 成功，
+  但规范 case 被旧汇总器错误写成 `passed/CLEAR`，文件 SHA-256 为
+  `b3a6cdc9a9739bbe8ca0c9487fd1698195388d2405be8e9633426169f787d7d8`；第 16 样本 SHA-256 为
+  `dfb2cf0b9cb84c6461d61d1e0a055e51df986d58e0352243f939e25fda1403e7`。两项用例虽位于 catalog
+  的 `phase-1-offline`，业务语义属于 OpenSpec 12.3 的唯一提交，只能作为 12.3 的部分诊断，
+  不能补足 12.3。当前 attempt 因中途 `STOP` 整体失效并阻断后续执行；OpenSpec 12.2 的四条
+  单泳道和长课阶梯尚未执行，保持未完成而不是判定失败。
+- Remaining risks: PostgreSQL 另有 7 个 `node.status=20` 节点，其父任务均为
+  `task_type.status=70`，旧 `/ops/queues` 将其误计为活动队列。修复必须先形成新完整 SHA，
+  在目标机按同 revision 重建 11 个镜像并恢复 29/29 healthy，再创建新 seed、Campaign 和
+  write-once attempt 从阶段 0 重跑；不得从当前 attempt 进入更高阶梯。
+
+## 2026-08-25 - `.12:5556` 受控慢媒体探针准备
+
+- Previous state: 既有 `http://192.168.29.12:5555/timeout.mp4` 实际快速返回 404，无法证明
+  `TIMEOUT_MEDIA` 语义；若直接执行阶段 2，超时负向用例必须零请求阻断。
+- Target state: 不修改 `5555/fileserver`，使用独立、资源受限、可按完整 ID 删除的慢响应容器，
+  让 2 秒预探测真实超时、生产下载在约 5 秒得到 504 并进入异步失败终态。
+- Changed files: 新增 `deploy/scripts/slow_media_fixture_server.py` 及本地测试；负向 case 的 404 与
+  timeout URL 固化进新 write-once Campaign plan。`.12` 只接收脚本副本和独立容器，不保存密码。
+- Contract impact: 不改变 A 服务北向接口、现有课程媒体、`fileserver` 容器或 5555 端口。
+- Verification command and environment: `.12` 上 Python 3.9 `py_compile` 通过；脚本 SHA-256 为
+  `25549bfdc3484c9e7644265d94e96358c3a1f432341896f4f6d4923aa8b832a5`。容器完整 ID 为
+  `769b1176d15900ced01a63c8ceadab62422c31401a78512ed97a785e08343b27`，带唯一 label
+  `com.algorithm-scheduling.campaign-role=slow-media`，只绑定 `192.168.29.12:5556->8080`。
+- Evidence tier and verdict: `/healthz` 立即 200；`curl --range 0-0 --max-time 2` 为 exit 28、
+  `2.001411s`；10 秒窗口内为 HTTP 504、`5.006082s`；`5555/course/` 复核仍为 200。慢探针前置
+  通过，但这不替代新 SHA 发布、阶段 0 重跑或阶段 2 规范负向 case。
+- Remaining risks: 容器使用 `--restart no`，执行阶段 2 前仍须按 name、label、完整 ID 复核
+  running 和端口；完成相关用例后只按完整 ID 精确删除，并确认 5556 无监听、5555 仍为 200。
+
+## 2026-08-25 - 阶段 2 负向用例失败归因与排空门禁补强
+
+- Previous state: 负向用例已区分 Control 同步拒绝与异步失败，并引入 `.12:5556` 慢媒体探针，
+  但连接类超时仍可能被误当作受控读超时；课程整体失败也不足以证明故障落在注入的任务节点。
+- Target state: timeout origin 必须先通过 `/healthz=200/ok`，且只接受 `ReadTimeout`；异步负向
+  请求必须证明对应 `task_type` 和其下至少一个节点均为 `70`，最终活动队列、Outbox、Kafka lag
+  和全部租约必须归零。
+- Contract impact: 不改变 A 服务接口、算子协议、任务状态或阶段拓扑，只提高 Campaign 证据
+  的失败关闭强度。缺少节点证据标记 blocked，失败归因不匹配标记 failed。
+- Evidence tier and verdict: 本地实现与聚焦单元回归完成后，仍须新 SHA 重建远端 11 镜像并从
+  阶段 0 创建新 write-once attempt；本记录不补足 OpenSpec 12.2 或 12.3。
+
+## 2026-08-25 - 阶段 1 诊断修复的本地发布门禁
+
+- Previous state: `0ebaa126` 的 write-once attempt 已被运行窗口内的 Orchestrator `STOP`
+  阻断；PPT 异步身份窗口、活动队列口径、负向超时证明、异步失败归因和最终排空证据尚未
+  同时闭合，不能复用旧 SHA 继续远端阶段。
+- Target state: 新提交必须保留全过程最高护栏级别；PPT 缺失身份由任务事实恢复、持久身份
+  冲突失败关闭；负向媒体只请求目标泳道，受控慢端点先通过健康探测且只接受业务路径
+  `ReadTimeout`；异步失败命中对应 task type/node，最终队列、Outbox、Kafka lag 和租约归零。
+- Changed files: Campaign catalog/executor/runtime metrics/coordinator、活动队列 Repository、PPT
+  runtime、受控慢媒体脚本及其测试、OpenSpec 设计/规格/任务和三份 Harness 文档。历史 attempt
+  和 `text_analysis/` 均不改写；密码、媒体、模型和完整算法结果不进入 Git。
+- Verification command and environment: 平台 `.venv` 使用绝对 `PYTHONPATH` 单进程运行完整
+  `tests`，结果为 `3258 passed, 3 skipped`；三个 skip 均因本机没有 canonical FaceRec GPU
+  容器。四个独立 FastAPI 服务分别为 `25/70/44/49 passed`；Campaign 聚焦为 `126 passed`，
+  PPT runtime 为 `16 passed`。Ruff、strict Mypy（7 个受影响源文件）、`compileall`、Harness
+  consistency `5 passed`、OpenSpec strict 和 `git diff --check` 全部通过。
+- Evidence tier and verdict: 本地达到静态、单元、真实 PostgreSQL/Redis/Kafka 集成和四服务
+  运行合同层级；`.12:5556` 只读复核为健康 `200/ok`、2 秒读超时、5 秒后 HTTP 504，原
+  `.12:5555/course/` 保持 200。当前结果授权形成新 Git SHA 和重建 11 镜像，不完成 12.2、
+  12.3 或后续远端 Campaign。
+- Remaining risks: 目标机仍运行 `0ebaa126`；必须推送新 SHA、同 revision 重建七算子四平台、
+  恢复 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT 和 7/7 Smoke，再用新 seed/Campaign ID/
+  write-once attempt 从阶段 0 重跑。旧 attempt 的成功 case 只能作为历史诊断。

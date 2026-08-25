@@ -7,17 +7,19 @@ from typing import Any
 
 import httpx
 import pytest
+from packages.platform_common.operator_registry import CapacityLease
+from packages.platform_common.repository import NodeRecord, TaskTypeRecord
+from packages.platform_contracts.status import NodeStatus, Priority, TaskType
 
 from orchestrator_service.app.application.dispatcher import LeaseScope, NodeReservation
 from orchestrator_service.app.domain.ppt_work import PptSliceAsyncAccepted
 from orchestrator_service.app.infrastructure.ppt_runtime import PptRuntimeCoordinator
 from orchestrator_service.app.infrastructure.ppt_slice import (
+    PptSliceCallbackError,
+    PptSliceManifestError,
     PptSliceTerminalCallback,
     PptTerminalHandleResult,
 )
-from packages.platform_common.operator_registry import CapacityLease
-from packages.platform_common.repository import NodeRecord
-from packages.platform_contracts.status import NodeStatus, Priority
 
 
 def _node(*, progress: dict[str, Any] | None = None) -> NodeRecord:
@@ -48,6 +50,22 @@ def _lease() -> CapacityLease:
     )
 
 
+def _task_type() -> TaskTypeRecord:
+    return TaskTypeRecord(
+        id=7,
+        submission_id="submission-001",
+        task_id="course-001",
+        task_type=TaskType.PPT,
+        status=NodeStatus.RUNNING,
+        priority=Priority.NORMAL,
+        reason="PPT 切片处理中",
+        request_payload={"slides_video_path": "http://media/slides.mp4"},
+        effective_params=None,
+        created=False,
+        updated_at=datetime.now(UTC),
+    )
+
+
 def _callback(status: NodeStatus = NodeStatus.COMPLETED) -> PptSliceTerminalCallback:
     return PptSliceTerminalCallback(
         task_id="course-001",
@@ -67,12 +85,19 @@ class Repository:
         self.events: list[str] = []
         self.progress_writes: list[dict[str, Any]] = []
         self.fail_progress_write = False
+        self.fail_running_nodes = False
 
     def get_node(self, node_id: int) -> NodeRecord:
         assert node_id == self.node.id
         return self.node
 
+    def get_task_type(self, task_type_id: int) -> TaskTypeRecord:
+        assert task_type_id == self.node.course_task_type_id
+        return _task_type()
+
     def list_running_ppt_slice_nodes(self) -> list[NodeRecord]:
+        if self.fail_running_nodes:
+            raise RuntimeError("PostgreSQL 查询失败")
         return [self.node] if self.node.status is NodeStatus.RUNNING else []
 
     def update_node_progress(
@@ -91,6 +116,19 @@ class Repository:
         self.node = replace(self.node, progress=dict(progress), reason=reason)
         return self.node
 
+    def merge_node_progress(
+        self,
+        node_id: int,
+        progress_patch: dict[str, Any],
+        *,
+        reason: str,
+    ) -> NodeRecord:
+        progress = {
+            **(self.node.progress if isinstance(self.node.progress, dict) else {}),
+            **progress_patch,
+        }
+        return self.update_node_progress(node_id, progress, reason=reason)
+
     def aggregate_task_type_state(self, course_task_type_id: int) -> object:
         assert course_task_type_id == 7
         self.events.append("aggregate")
@@ -102,6 +140,8 @@ class TerminalHandler:
         self.repository = repository
         self.manifest_ready = False
         self.terminal_writes = 0
+        self.reconcile_calls = 0
+        self.reconcile_error: Exception | None = None
 
     def handle_callback(
         self,
@@ -127,6 +167,9 @@ class TerminalHandler:
         )
 
     def reconcile(self, *, node_id: int) -> PptTerminalHandleResult:
+        self.reconcile_calls += 1
+        if self.reconcile_error is not None:
+            raise self.reconcile_error
         if not self.manifest_ready:
             return PptTerminalHandleResult(completed=False, duplicate=False)
         return self.handle_callback(node_id=node_id, callback=_callback())
@@ -286,6 +329,113 @@ async def test_manifest_reconcile_recovers_lost_callback_and_releases() -> None:
     assert reconciled == 1
     assert repository.node.status is NodeStatus.COMPLETED
     assert leases.releases == 1
+
+
+@pytest.mark.asyncio
+async def test_reconcile_recovers_missing_identity_from_persistent_task_facts() -> None:
+    repository = Repository(
+        _node(
+            progress={
+                "lease_id": "lease-ppt-001",
+                "service_url": "http://ppt-slice-cpu0:9001",
+            }
+        )
+    )
+    leases = LeaseClient()
+    terminal = TerminalHandler(repository)
+    terminal.manifest_ready = True
+    coordinator = _coordinator(repository, terminal, leases)
+
+    reconciled = await coordinator.reconcile_once()
+
+    assert reconciled == 1
+    assert terminal.reconcile_calls == 1
+    assert repository.node.status is NodeStatus.COMPLETED
+    assert repository.progress_writes[0] == {
+        "lease_id": "lease-ppt-001",
+        "service_url": "http://ppt-slice-cpu0:9001",
+        "task_id": "course-001",
+        "operator_task_id": "ppt-node-11",
+    }
+
+
+@pytest.mark.asyncio
+async def test_reconcile_missing_identity_does_not_swallow_recovery_write_failure() -> None:
+    repository = Repository()
+    repository.fail_progress_write = True
+    coordinator = _coordinator(
+        repository,
+        TerminalHandler(repository),
+        LeaseClient(),
+    )
+
+    with pytest.raises(RuntimeError, match="PostgreSQL 写入失败"):
+        await coordinator.reconcile_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("progress", "message"),
+    (
+        (
+            {"task_id": "wrong-course", "operator_task_id": "ppt-node-11"},
+            "task_id 与任务事实不一致",
+        ),
+        (
+            {"task_id": "course-001", "operator_task_id": "ppt-node-999"},
+            "operator_task_id 与节点事实不一致",
+        ),
+        (
+            {"task_id": "wrong-course"},
+            "task_id 与任务事实不一致",
+        ),
+    ),
+)
+async def test_reconcile_rejects_persisted_identity_mismatch(
+    progress: dict[str, Any],
+    message: str,
+) -> None:
+    repository = Repository(_node(progress=progress))
+    terminal = TerminalHandler(repository)
+    coordinator = _coordinator(repository, terminal, LeaseClient())
+
+    with pytest.raises(PptSliceCallbackError, match=message):
+        await coordinator.reconcile_once()
+
+    assert terminal.reconcile_calls == 0
+    assert repository.progress_writes == []
+
+
+@pytest.mark.asyncio
+async def test_reconcile_does_not_swallow_manifest_errors() -> None:
+    repository = Repository(
+        _node(
+            progress={
+                "task_id": "course-001",
+                "operator_task_id": "ppt-node-11",
+            }
+        )
+    )
+    terminal = TerminalHandler(repository)
+    terminal.reconcile_error = PptSliceManifestError("manifest 损坏")
+    coordinator = _coordinator(repository, terminal, LeaseClient())
+
+    with pytest.raises(PptSliceManifestError, match="manifest 损坏"):
+        await coordinator.reconcile_once()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_does_not_swallow_database_errors() -> None:
+    repository = Repository()
+    repository.fail_running_nodes = True
+    coordinator = _coordinator(
+        repository,
+        TerminalHandler(repository),
+        LeaseClient(),
+    )
+
+    with pytest.raises(RuntimeError, match="PostgreSQL 查询失败"):
+        await coordinator.reconcile_once()
 
 
 @pytest.mark.asyncio

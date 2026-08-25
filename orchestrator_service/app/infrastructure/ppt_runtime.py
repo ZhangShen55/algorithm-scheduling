@@ -5,7 +5,6 @@ from contextlib import suppress
 from typing import Any, Protocol
 
 import httpx
-
 from packages.platform_common.operator_registry import CapacityLease
 from packages.platform_common.repository import NodeRecord, TaskTypeRecord
 from packages.platform_contracts.status import NodeStatus
@@ -24,12 +23,22 @@ from .ppt_slice import (
 class PptRuntimeRepository(Protocol):
     def get_node(self, node_id: int) -> NodeRecord: ...
 
+    def get_task_type(self, task_type_id: int) -> TaskTypeRecord: ...
+
     def list_running_ppt_slice_nodes(self) -> list[NodeRecord]: ...
 
     def update_node_progress(
         self,
         node_id: int,
         progress: dict[str, Any],
+        *,
+        reason: str,
+    ) -> NodeRecord: ...
+
+    def merge_node_progress(
+        self,
+        node_id: int,
+        progress_patch: dict[str, Any],
         *,
         reason: str,
     ) -> NodeRecord: ...
@@ -152,6 +161,41 @@ class PptRuntimeCoordinator:
         )
         reconciled = 0
         for node in nodes:
+            progress = node.progress if isinstance(node.progress, dict) else {}
+            task_type = await asyncio.to_thread(
+                self._repository.get_task_type,
+                node.course_task_type_id,
+            )
+            expected_task_id = task_type.task_id
+            expected_operator_task_id = f"ppt-node-{node.id}"
+            persisted_task_id = progress.get("task_id")
+            persisted_operator_task_id = progress.get("operator_task_id")
+            if (
+                isinstance(persisted_task_id, str)
+                and persisted_task_id != expected_task_id
+            ):
+                raise PptSliceCallbackError("PPT 持久化 task_id 与任务事实不一致")
+            if (
+                isinstance(persisted_operator_task_id, str)
+                and persisted_operator_task_id != expected_operator_task_id
+            ):
+                raise PptSliceCallbackError(
+                    "PPT 持久化 operator_task_id 与节点事实不一致"
+                )
+            if not isinstance(persisted_task_id, str) or not isinstance(
+                persisted_operator_task_id, str
+            ):
+                # 算子身份可由持久任务事实确定性恢复，覆盖受理后、身份落库前的重启窗口。
+                progress_patch = {
+                    "task_id": expected_task_id,
+                    "operator_task_id": expected_operator_task_id,
+                }
+                node = await asyncio.to_thread(
+                    self._repository.merge_node_progress,
+                    node.id,
+                    progress_patch,
+                    reason="PPT 异步任务身份已由持久事实恢复，等待终态对账",
+                )
             result = await asyncio.to_thread(
                 self._terminal_handler.reconcile,
                 node_id=node.id,

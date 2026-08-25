@@ -534,7 +534,14 @@ def default_catalog() -> CampaignCatalog:
             _catalog_case(
                 CampaignPhase.OFFLINE,
                 f"OFF-NEGATIVE-{percent}PCT",
-                load={"kind": "negative_submission", "ratio": percent / 100},
+                load={
+                    "kind": "negative_submission",
+                    "ratio": percent / 100,
+                    "not_found_url": (
+                        "http://192.168.29.12:5555/missing-404.mp4"
+                    ),
+                    "timeout_url": "http://192.168.29.12:5556/timeout.mp4",
+                },
                 fixture_ids=_SHORT_FIXTURES,
             )
         )

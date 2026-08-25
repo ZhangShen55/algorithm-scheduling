@@ -52,6 +52,11 @@ _BURST_CASE_KINDS = frozenset(
     }
 )
 _DIRECTORY_CHECKPOINT_CASE_KINDS = frozenset({"long_course", "mixed", "soak"})
+_GUARDRAIL_SEVERITY = {
+    GuardrailLevel.CLEAR: 0,
+    GuardrailLevel.WARNING: 1,
+    GuardrailLevel.STOP: 2,
+}
 
 _T_co = TypeVar("_T_co", covariant=True)
 
@@ -179,6 +184,10 @@ class RuntimeMetricSummary:
     max_kafka_lag: int
     max_task_queue_depth: int
     max_outbox_pending: int
+    final_kafka_lag: int
+    final_task_queue_depth: int
+    final_outbox_pending: int
+    final_active_leases: Mapping[str, int]
     container_restart_delta: Mapping[str, int]
     peak_gpu_utilization: Mapping[str, float]
     peak_gpu_memory_bytes: Mapping[str, int]
@@ -210,6 +219,10 @@ class RuntimeMetricSummary:
             "max_kafka_lag": self.max_kafka_lag,
             "max_task_queue_depth": self.max_task_queue_depth,
             "max_outbox_pending": self.max_outbox_pending,
+            "final_kafka_lag": self.final_kafka_lag,
+            "final_task_queue_depth": self.final_task_queue_depth,
+            "final_outbox_pending": self.final_outbox_pending,
+            "final_active_leases": dict(self.final_active_leases),
             "container_restart_delta": dict(self.container_restart_delta),
             "peak_gpu_utilization": dict(self.peak_gpu_utilization),
             "peak_gpu_memory_bytes": dict(self.peak_gpu_memory_bytes),
@@ -253,6 +266,81 @@ def uses_directory_checkpoint_sampling(case: CaseSpec) -> bool:
     return isinstance(kind, str) and kind in _DIRECTORY_CHECKPOINT_CASE_KINDS
 
 
+def assess_long_course_storage_projection(
+    plan: CampaignPlan,
+    case: CaseSpec,
+    target_host: TargetHostMetrics,
+    policy: GuardrailPolicy,
+) -> GuardrailAssessment | None:
+    if case.load.get("kind") != "long_course":
+        return None
+
+    count = case.load.get("count")
+    if type(count) is not int or count <= 0:
+        return GuardrailAssessment(
+            GuardrailLevel.STOP,
+            ("长课存储预估失败: count 必须是正整数",),
+        )
+
+    fixtures = {item.fixture_id: item for item in plan.fixture_manifest.fixtures}
+    selected = tuple(fixtures.get(fixture_id) for fixture_id in case.fixture_ids)
+    if len(selected) != 3 or any(
+        fixture is None
+        or fixture.kind.value != "long_course"
+        or fixture.size_bytes <= 0
+        for fixture in selected
+    ):
+        return GuardrailAssessment(
+            GuardrailLevel.STOP,
+            ("长课存储预估失败: 必须提供三个有效的长课 fixture",),
+        )
+
+    course_filesystem = next(
+        (
+            filesystem
+            for filesystem in target_host.filesystems
+            if filesystem.requested_path == "/data/course"
+        ),
+        None,
+    )
+    if course_filesystem is None:
+        return GuardrailAssessment(
+            GuardrailLevel.STOP,
+            ("长课存储预估失败: 缺少 /data/course 文件系统指标",),
+        )
+
+    estimated_input_bytes = sum(
+        fixture.size_bytes for fixture in selected if fixture is not None
+    ) * count
+    current_free_bytes = course_filesystem.available_bytes
+    projected_free_bytes = max(0, current_free_bytes - estimated_input_bytes)
+    warning_threshold_bytes = max(
+        policy.warning_free_bytes,
+        math.ceil(course_filesystem.total_bytes * policy.warning_free_ratio),
+    )
+    stop_threshold_bytes = max(
+        policy.stop_free_bytes,
+        math.ceil(course_filesystem.total_bytes * policy.stop_free_ratio),
+    )
+    if projected_free_bytes >= warning_threshold_bytes:
+        return GuardrailAssessment(GuardrailLevel.CLEAR, ())
+
+    level = (
+        GuardrailLevel.STOP
+        if projected_free_bytes < stop_threshold_bytes
+        else GuardrailLevel.WARNING
+    )
+    reason = (
+        "长课预计输入将跨越存储阈值: "
+        f"estimated_input_bytes={estimated_input_bytes}, "
+        f"current_free_bytes={current_free_bytes}, "
+        f"current_margin_bytes={current_free_bytes - warning_threshold_bytes}, "
+        f"warning_threshold_bytes={warning_threshold_bytes}, "
+        f"projected_free_bytes={projected_free_bytes}"
+    )
+    return GuardrailAssessment(level, (reason,))
+
+
 def _merge_stop_reasons(
     assessment: GuardrailAssessment,
     reasons: Sequence[str],
@@ -261,6 +349,26 @@ def _merge_stop_reasons(
         return assessment
     unique = tuple(dict.fromkeys((*assessment.reasons, *reasons)))
     return GuardrailAssessment(GuardrailLevel.STOP, unique)
+
+
+def _aggregate_guardrail_assessments(
+    assessments: Sequence[GuardrailAssessment],
+) -> GuardrailAssessment:
+    if not assessments:
+        raise ValueError("护栏评估序列不能为空")
+    level = max(
+        (assessment.level for assessment in assessments),
+        key=_GUARDRAIL_SEVERITY.__getitem__,
+    )
+    reasons = tuple(
+        dict.fromkeys(
+            reason
+            for assessment in assessments
+            if assessment.level is level
+            for reason in assessment.reasons
+        )
+    )
+    return GuardrailAssessment(level, reasons)
 
 
 def _mapping_delta(before: Mapping[str, int], after: Mapping[str, int]) -> dict[str, int]:
@@ -375,6 +483,13 @@ def summarize_runtime_metrics(samples: Sequence[RuntimeMetricSample]) -> Runtime
         max_kafka_lag=max(item.control.kafka_lag for item in ordered),
         max_task_queue_depth=max(item.control.task_queue_depth for item in ordered),
         max_outbox_pending=max(item.control.outbox_pending for item in ordered),
+        final_kafka_lag=last.control.kafka_lag,
+        final_task_queue_depth=last.control.task_queue_depth,
+        final_outbox_pending=last.control.outbox_pending,
+        final_active_leases={
+            instance.instance_id: instance.active_leases
+            for instance in last.control.instances
+        },
         container_restart_delta=_container_restart_delta(first.containers, last.containers),
         peak_gpu_utilization=peak_gpu_utilization,
         peak_gpu_memory_bytes=peak_gpu_memory,
@@ -407,7 +522,9 @@ def summarize_runtime_metrics(samples: Sequence[RuntimeMetricSample]) -> Runtime
         peak_load_host_open_file_handles=max(
             item.load_host.open_file_handle_count for item in ordered
         ),
-        latest_guardrail=last.guardrail,
+        latest_guardrail=_aggregate_guardrail_assessments(
+            tuple(sample.guardrail for sample in ordered)
+        ),
     )
 
 
@@ -691,6 +808,7 @@ class RuntimeMetricsAdapter:
         *,
         burst: bool,
         include_directory_sizes: bool = False,
+        include_long_course_projection: bool = False,
     ) -> RuntimeMetricSample | None:
         async with self._lock:
             try:
@@ -724,6 +842,17 @@ class RuntimeMetricsAdapter:
                 lock_owned=lock_owned,
                 monotonic_seconds=monotonic_seconds,
             )
+            if include_long_course_projection:
+                projection = assess_long_course_storage_projection(
+                    self.plan,
+                    case,
+                    target_host,
+                    self.guardrail_policy,
+                )
+                if projection is not None:
+                    assessment = _aggregate_guardrail_assessments(
+                        (assessment, projection)
+                    )
             sample = RuntimeMetricSample(
                 campaign_id=self.plan.campaign_id,
                 case_id=case.case_id,
@@ -795,6 +924,7 @@ class RuntimeMetricsAdapter:
             case,
             burst=burst,
             include_directory_sizes=uses_directory_checkpoint_sampling(case),
+            include_long_course_projection=True,
         )
         assessment = sample.guardrail if sample is not None else self._latest_assessment
         if assessment.level is not GuardrailLevel.CLEAR:
@@ -856,14 +986,28 @@ class RuntimeMetricsAdapter:
                 burst=False,
                 include_directory_sizes=uses_directory_checkpoint_sampling(case),
             )
-        assessment = self._latest_assessment
         summary = self.summary(case.case_id)
+        assessment = _aggregate_guardrail_assessments(
+            (summary.latest_guardrail, self._latest_assessment)
+        )
         samples = self.samples(case.case_id)[self._window_start.get(case.case_id, 0) :]
         directory_checkpoint_count = sum(
             bool(sample.target_host.directory_sizes) for sample in samples
         )
-        if uses_directory_checkpoint_sampling(case) and directory_checkpoint_count != 2:
-            assessment = self._latch_stop("长课目录字节 before/after 检查点不完整")
+        load_was_admitted = bool(samples) and (
+            samples[0].guardrail.level is GuardrailLevel.CLEAR
+        )
+        if (
+            uses_directory_checkpoint_sampling(case)
+            and load_was_admitted
+            and directory_checkpoint_count != 2
+        ):
+            assessment = _aggregate_guardrail_assessments(
+                (
+                    assessment,
+                    self._latch_stop("长课目录字节 before/after 检查点不完整"),
+                )
+            )
         summary = replace(summary, latest_guardrail=assessment)
         evidence = {
             "runtime_metrics": summary.to_dict(),

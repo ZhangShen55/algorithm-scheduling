@@ -42,6 +42,12 @@ from scripts.extreme_load.system_probes import (
 
 _T = TypeVar("_T")
 
+_LONG_COURSE_FIXTURE_SIZES = {
+    "long-teacher": 1_059_379_584,
+    "long-student": 1_034_314_032,
+    "long-slides": 454_118_660,
+}
+
 
 class MutableProbe(Generic[_T]):
     def __init__(self, value: _T, *, delay_seconds: float = 0.0) -> None:
@@ -74,12 +80,15 @@ class ProbeState:
     gateway: MutableProbe[GatewayMetrics]
 
 
-def _case(*, kind: str = "online_image") -> CaseSpec:
+def _case(*, kind: str = "online_image", count: int = 3) -> CaseSpec:
+    long_course = kind == "long_course"
     return CaseSpec(
         case_id="ONLINE-RUNTIME-METRICS",
         phase=CampaignPhase.ONLINE,
-        load={"kind": kind, "concurrency": 10},
-        fixture_ids=("online-image",),
+        load={"kind": kind, "count": count} if long_course else {"kind": kind, "concurrency": 10},
+        fixture_ids=(
+            tuple(_LONG_COURSE_FIXTURE_SIZES) if long_course else ("online-image",)
+        ),
         expected="指标完整且护栏清除",
         timeout_seconds=30.0,
         guardrails=("storage", "oom", "gpu", "restart"),
@@ -89,12 +98,32 @@ def _case(*, kind: str = "online_image") -> CaseSpec:
 
 
 def _plan(case: CaseSpec) -> CampaignPlan:
-    fixture = FixtureDescriptor(
-        fixture_id="online-image",
-        kind=FixtureKind.ONLINE_IMAGE,
-        path="/external/online-image.jpg",
-        size_bytes=1024,
-        sha256="a" * 64,
+    fixtures = (
+        tuple(
+            FixtureDescriptor(
+                fixture_id=fixture_id,
+                kind=FixtureKind.LONG_COURSE,
+                path=f"/external/{fixture_id}.mp4",
+                size_bytes=size_bytes,
+                duration_seconds=3600.0,
+                sha256=character * 64,
+            )
+            for (fixture_id, size_bytes), character in zip(
+                _LONG_COURSE_FIXTURE_SIZES.items(),
+                ("a", "b", "c"),
+                strict=True,
+            )
+        )
+        if case.load.get("kind") == "long_course"
+        else (
+            FixtureDescriptor(
+                fixture_id="online-image",
+                kind=FixtureKind.ONLINE_IMAGE,
+                path="/external/online-image.jpg",
+                size_bytes=1024,
+                sha256="a" * 64,
+            ),
+        )
     )
     return build_campaign_plan(
         release_tag="release-20260823",
@@ -102,7 +131,7 @@ def _plan(case: CaseSpec) -> CampaignPlan:
         seed=20260823,
         control_origin="http://127.0.0.1:18100",
         gateway_origin="http://127.0.0.1:18103",
-        fixture_manifest=FixtureManifest(schema_version=1, fixtures=(fixture,)),
+        fixture_manifest=FixtureManifest(schema_version=1, fixtures=fixtures),
         catalog=CampaignCatalog(schema_version=1, cases=(case,)),
     )
 
@@ -111,22 +140,28 @@ def _target(
     *,
     available_gib: int = 500,
     oom_events: int = 0,
+    include_course_filesystem: bool = True,
 ) -> TargetHostMetrics:
-    return TargetHostMetrics(
-        filesystems=(
+    filesystems = []
+    if include_course_filesystem:
+        filesystems.append(
             FilesystemMetrics(
                 requested_path="/data/course",
                 mountpoint="/data",
                 total_bytes=1000 * GiB,
                 available_bytes=available_gib * GiB,
-            ),
-            FilesystemMetrics(
-                requested_path="/data/result",
-                mountpoint="/data",
-                total_bytes=1000 * GiB,
-                available_bytes=available_gib * GiB,
-            ),
-        ),
+            )
+        )
+    filesystems.append(
+        FilesystemMetrics(
+            requested_path="/data/result",
+            mountpoint="/data",
+            total_bytes=1000 * GiB,
+            available_bytes=available_gib * GiB,
+        )
+    )
+    return TargetHostMetrics(
+        filesystems=tuple(filesystems),
         directory_sizes=(),
         memory_total_bytes=64 * GiB,
         memory_available_bytes=48 * GiB,
@@ -241,6 +276,18 @@ def _adapter(
     )
 
 
+async def _wait_for_sample_level(
+    adapter: RuntimeMetricsAdapter,
+    case: CaseSpec,
+    level: GuardrailLevel,
+) -> None:
+    for _ in range(100):
+        if any(sample.guardrail.level is level for sample in adapter.samples(case.case_id)):
+            return
+        await asyncio.sleep(0.005)
+    raise AssertionError(f"未采集到 {level.value} 护栏样本")
+
+
 @pytest.mark.parametrize(
     ("regular", "burst"),
     ((5.01, 1.0), (5.0, 0.49), (5.0, 1.01)),
@@ -329,6 +376,70 @@ async def test_assess_before_and_after_cover_case_with_continuous_sampling(
     samples = adapter.samples(case.case_id)
     assert len(samples) >= 3
     assert all(sample.burst is expected_burst for sample in samples)
+
+
+@pytest.mark.asyncio
+async def test_runtime_summary_preserves_intermittent_stop_after_exact_recovery(
+    tmp_path: Path,
+) -> None:
+    case = _case()
+    state = _state()
+    adapter = _adapter(
+        tmp_path,
+        case,
+        state,
+        critical_container_services=("vbas-gpu0",),
+    )
+
+    assert (await adapter.assess(case, "before")).level is GuardrailLevel.CLEAR
+    state.containers.value = (_container("vbas-gpu0", healthy=False),)
+    await _wait_for_sample_level(adapter, case, GuardrailLevel.STOP)
+    state.containers.value = (_container("vbas-gpu0"),)
+
+    assert (await adapter.assess(case, "after")).level is GuardrailLevel.CLEAR
+    outcome = await adapter.execute(case)
+
+    samples = adapter.samples(case.case_id)
+    assert samples[-1].guardrail.level is GuardrailLevel.CLEAR
+    assert any(sample.guardrail.level is GuardrailLevel.STOP for sample in samples[:-1])
+    assert outcome.status == "blocked"
+    assert outcome.evidence["runtime_metrics"]["latest_guardrail"] == {
+        "level": "STOP",
+        "reasons": ["关键容器不健康或缺失: vbas-gpu0"],
+    }
+    assert outcome.evidence["runtime_metrics"]["sample_count"] == len(samples)
+    assert len(outcome.evidence["sample_evidence"]) == len(samples)
+    assert all(sample.evidence_path is not None for sample in samples)
+    stop_path = next(
+        sample.evidence_path
+        for sample in samples
+        if sample.guardrail.level is GuardrailLevel.STOP
+    )
+    assert stop_path is not None
+    assert json.loads(stop_path.read_text(encoding="utf-8"))["guardrail"]["level"] == "STOP"
+
+
+@pytest.mark.asyncio
+async def test_runtime_summary_preserves_most_severe_warning_after_recovery(
+    tmp_path: Path,
+) -> None:
+    case = _case()
+    state = _state()
+    adapter = _adapter(tmp_path, case, state)
+
+    assert (await adapter.assess(case, "before")).level is GuardrailLevel.CLEAR
+    state.target_host.value = _target(available_gib=149)
+    await _wait_for_sample_level(adapter, case, GuardrailLevel.WARNING)
+    state.target_host.value = _target()
+
+    assert (await adapter.assess(case, "after")).level is GuardrailLevel.CLEAR
+    outcome = await adapter.execute(case)
+
+    assert outcome.status == "blocked"
+    latest = outcome.evidence["runtime_metrics"]["latest_guardrail"]
+    assert latest["level"] == "WARNING"
+    assert len(latest["reasons"]) == 2
+    assert all("剩余空间达到警戒线" in reason for reason in latest["reasons"])
 
 
 @pytest.mark.asyncio
@@ -585,6 +696,10 @@ async def test_before_after_summary_contains_control_and_gateway_deltas(tmp_path
     assert summary.max_task_queue_depth == 9
     assert summary.max_outbox_pending == 5
     assert summary.max_kafka_lag == 11
+    assert summary.final_task_queue_depth == 9
+    assert summary.final_outbox_pending == 5
+    assert summary.final_kafka_lag == 11
+    assert summary.final_active_leases == {"vbas-gpu0": 7}
     assert summary.target_directory_bytes_before == {
         "/data/course": 100,
         "/data/result": 200,
@@ -599,6 +714,9 @@ async def test_before_after_summary_contains_control_and_gateway_deltas(tmp_path
     }
     assert outcome.status == "passed"
     assert outcome.evidence["runtime_metrics"]["gateway_delta"]["requests_total"] == 6
+    assert outcome.evidence["runtime_metrics"]["final_active_leases"] == {
+        "vbas-gpu0": 7
+    }
     assert outcome.evidence["runtime_metrics"]["target_directory_bytes_delta"] == {
         "/data/course": 60,
         "/data/result": 75,
@@ -645,6 +763,91 @@ async def test_long_course_measures_directories_only_at_before_and_after(
     assert [
         bool(sample.target_host.directory_sizes) for sample in adapter.samples(case.case_id)
     ].count(True) == 2
+
+
+@pytest.mark.asyncio
+async def test_long_course_storage_projection_allows_six_courses_before_load(
+    tmp_path: Path,
+) -> None:
+    case = _case(kind="long_course", count=6)
+    state = _state()
+    state.target_host.value = _target(available_gib=175)
+    adapter = _adapter(tmp_path, case, state)
+
+    assessment = await adapter.assess(case, "before")
+
+    assert assessment.level is GuardrailLevel.CLEAR
+    assert adapter.is_running is True
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_long_course_storage_projection_blocks_twelve_courses_before_load(
+    tmp_path: Path,
+) -> None:
+    case = _case(kind="long_course", count=12)
+    state = _state()
+    state.target_host.value = _target(available_gib=175)
+    adapter = _adapter(tmp_path, case, state)
+
+    assessment = await adapter.assess(case, "before")
+
+    assert assessment.level is GuardrailLevel.WARNING
+    assert adapter.is_running is False
+    reason = " ".join(assessment.reasons)
+    expected_input_bytes = sum(_LONG_COURSE_FIXTURE_SIZES.values()) * 12
+    expected_current_free_bytes = 175 * GiB
+    expected_warning_threshold_bytes = 150 * GiB
+    assert f"estimated_input_bytes={expected_input_bytes}" in reason
+    assert f"current_free_bytes={expected_current_free_bytes}" in reason
+    assert (
+        f"current_margin_bytes="
+        f"{expected_current_free_bytes - expected_warning_threshold_bytes}" in reason
+    )
+    assert f"warning_threshold_bytes={expected_warning_threshold_bytes}" in reason
+    assert (
+        f"projected_free_bytes={expected_current_free_bytes - expected_input_bytes}"
+        in reason
+    )
+
+    outcome = await adapter.execute(case)
+    assert outcome.status == "blocked"
+    assert outcome.evidence["runtime_metrics"]["latest_guardrail"]["level"] == "WARNING"
+    assert "检查点不完整" not in outcome.reason
+
+
+@pytest.mark.asyncio
+async def test_storage_projection_does_not_apply_to_non_long_course(
+    tmp_path: Path,
+) -> None:
+    case = _case().model_copy(
+        update={"load": {"kind": "online_image", "count": 1_000_000_000}}
+    )
+    state = _state()
+    state.target_host.value = _target(available_gib=151)
+    adapter = _adapter(tmp_path, case, state)
+
+    assessment = await adapter.assess(case, "before")
+
+    assert assessment.level is GuardrailLevel.CLEAR
+    assert adapter.is_running is True
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_long_course_storage_projection_requires_course_filesystem(
+    tmp_path: Path,
+) -> None:
+    case = _case(kind="long_course", count=3)
+    state = _state()
+    state.target_host.value = _target(include_course_filesystem=False)
+    adapter = _adapter(tmp_path, case, state)
+
+    assessment = await adapter.assess(case, "before")
+
+    assert assessment.level is GuardrailLevel.STOP
+    assert adapter.is_running is False
+    assert "/data/course" in " ".join(assessment.reasons)
 
 
 @pytest.mark.asyncio

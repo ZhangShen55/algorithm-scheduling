@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import pytest
+
 from scripts.extreme_load.core import NorthboundTargets, ReproducibleIdentity
 from scripts.extreme_load.offline import (
     ASR_OPTIONS_DEFAULT,
     CourseMedia,
     MediaDownloadSample,
+    NegativeMediaEndpoints,
+    NegativeSubmissionExpectation,
     NegativeSubmissionKind,
     TaskCombination,
     build_append_task_type_sequence,
@@ -188,15 +192,92 @@ def test_negative_mix_is_reproducible_and_does_not_mutate_normal_requests() -> N
     replay = build_negative_submission_mix(base, ratio=0.20, seed=7)
 
     assert mixed == replay
-    assert sum(request.expected_business_rejection for request in mixed) == 20
-    assert sum(not request.expected_business_rejection for request in mixed) == 80
+    sync_rejections = [request for request in mixed if request.expected_business_rejection]
+    async_failures = [
+        request for request in mixed if request.expected_task_terminal == "failed"
+    ]
+    assert len(sync_rejections) == 8
+    assert len(async_failures) == 12
     assert all(not request.expected_business_rejection for request in base)
     negative_kinds = {
         request.work_type.partition(":")[2]
         for request in mixed
-        if request.expected_business_rejection
+        if request.work_type.startswith("negative_submission:")
     }
     assert negative_kinds == {kind.value for kind in NegativeSubmissionKind}
+    assert "conflicting_task_id" not in negative_kinds
+    assert {kind: kind.expectation for kind in NegativeSubmissionKind} == {
+        NegativeSubmissionKind.MISSING_REQUIRED_PATH: NegativeSubmissionExpectation.SYNC_REJECTION,
+        NegativeSubmissionKind.NOT_FOUND_MEDIA: (
+            NegativeSubmissionExpectation.ASYNC_TERMINAL_FAILURE
+        ),
+        NegativeSubmissionKind.TIMEOUT_MEDIA: NegativeSubmissionExpectation.ASYNC_TERMINAL_FAILURE,
+        NegativeSubmissionKind.UNKNOWN_TASK_TYPE: NegativeSubmissionExpectation.SYNC_REJECTION,
+        NegativeSubmissionKind.INVALID_REGION: NegativeSubmissionExpectation.ASYNC_TERMINAL_FAILURE,
+    }
+
+
+def test_negative_mix_uses_plan_bound_media_endpoints() -> None:
+    identity = ReproducibleIdentity("campaign-endpoints", 42)
+    base = build_unique_submission_burst(
+        TARGETS,
+        identity,
+        "NEGATIVE-ENDPOINTS",
+        100,
+        TaskCombination.ALL,
+        MEDIA,
+        student_count=38,
+    )
+    endpoints = NegativeMediaEndpoints(
+        not_found_url="http://media.example.test:5555/not-found.mp4",
+        timeout_url="http://media.example.test:5556/timeout.mp4",
+    )
+
+    mixed = build_negative_submission_mix(
+        base,
+        ratio=0.20,
+        seed=7,
+        endpoints=endpoints,
+    )
+
+    by_kind = {request.work_type: request for request in mixed}
+    assert (
+        by_kind["negative_submission:not_found_media"].json_body[
+            "slides_video_path"
+        ]
+        == endpoints.not_found_url
+    )
+    assert (
+        by_kind["negative_submission:timeout_media"].json_body[
+            "slides_video_path"
+        ]
+        == endpoints.timeout_url
+    )
+    assert by_kind["negative_submission:not_found_media"].json_body["task_types"] == [
+        "PPT"
+    ]
+    assert by_kind["negative_submission:timeout_media"].json_body["task_types"] == [
+        "PPT"
+    ]
+    invalid_region = by_kind["negative_submission:invalid_region"].json_body
+    assert invalid_region["task_types"] == ["STUDENT_BEHAVIOR"]
+    assert "teacher_video_path" not in invalid_region
+    assert "slides_video_path" not in invalid_region
+    assert invalid_region["student_video_path"] == MEDIA.student_video_path
+    assert invalid_region["student_count"] == 38
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "file:///tmp/timeout.mp4",
+        "http://user:password@media.example.test/timeout.mp4",
+        "http://media.example.test/timeout.mp4#fragment",
+    ),
+)
+def test_negative_media_endpoints_reject_unsafe_urls(url: str) -> None:
+    with pytest.raises(ValueError, match="HTTP\\(S\\) URL"):
+        NegativeMediaEndpoints(timeout_url=url)
 
 
 def test_media_download_baseline_is_a_descriptor_not_a_real_download() -> None:

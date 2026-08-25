@@ -463,3 +463,86 @@ Campaign/release/SHA/case/phase 身份校验发布。
   canonical FaceRec GPU 容器。
 - 原 attempt 和失败任务保持只读，`12.1` 继续未完成。上述修复必须提交为新 SHA，11 个镜像
   同 revision 重建并恢复 29/29 healthy 后，以新 seed、Campaign ID 和 attempt 从阶段 0 重跑。
+
+## 2026-08-25 - `0ebaa126` 发布闭环与阶段 0 重跑准入
+
+- 当前发布为 `v1.0_260825`，完整 SHA 为
+  `0ebaa126f69e3993487c503c11b42e681cad12cd`。远端 release 根为
+  `deploy/reports/milestone-2b/releases/v1.0_260825/0ebaa126f69e3993487c503c11b42e681cad12cd/`。
+- 11 个新镜像均为互异 `amd64` 完整 ID、revision 精确一致，并通过项目根 `logs/`、模型
+  哨兵文件和平台镜像禁止模型目录核验。常驻切换后为 29/29 healthy、21/21 注册、零租约；
+  三张 GPU 各有 6 个 `nvidia-smi` 进程，18 个 PID/cgroup 各自映射唯一容器；3 个 PPT
+  CPU 实例无 GPU 请求。
+- PPT cpu0/cpu1/cpu2 使用冻结 454 MB 视频逐实例执行终态回调与 manifest Smoke，三案均通过；
+  随后唯一一次 full Smoke 的 ASR Offline、ASR Online、OCR、VBas、FaceRec、ScreenDet 和
+  PPT 七案均为非 mock 通过。北向仅开放 `18100/18103`，其余 27 个端口继续绑定回环。
+- 切换前已有 PostgreSQL dump 可读性备份；切换后、Smoke 前另建立同批次 PostgreSQL 与
+  `/data/result` 成对备份，未覆盖已有文件。当前剩余空间约 242 GiB/16%，仍高于 15% 和
+  150 GiB 警戒线。
+- `.12` 当前只读复核确认 `fileserver` 使用 `nginx:latest`，将 `/data/filemanage` 只读绑定到
+  `/usr/share/nginx/html`，发布 `5555 -> 80`；三条 50.040 秒 fixture 的完整大小与 SHA 和
+  外部 manifest 一致。登录密码不进入 Git、Harness、普通报告或命令证据。
+- OpenSpec 11.8 已完成。下一步必须使用新的 seed、Campaign ID 和 write-once attempt 从阶段 0
+  重跑；旧 `e91f5b21`/`2154c40` attempt 只保留历史事实，不补足当前 12.1。
+
+## 2026-08-25 - `0ebaa126` 阶段 0 全量通过
+
+- 新 attempt 为 `phase0-rerun-0ebaa126f69e-20260825144344`，seed 为 `2608252300`，Campaign ID
+  为 `campaign-v1-0_260825-0ebaa126f69e3993487c503c11b42e681cad-c0f622b339eca6c5`。计划与
+  每个 case 均为 write-once，没有复制或覆盖旧 SHA 证据。
+- `.12` fileserver 只读 calibration 使用 420 秒、2 秒间隔，得到 210 个连续样本；1/3/10/30
+  下载 44/44 成功，严格源端证据峰值为 CPU 2.33%、内存 32.98%、发送 123.10 MB/s、
+  30 个服务连接。正式四档再次 44/44 成功，吞吐保持约 115 MB/s，说明后续离线容量结论
+  必须区分媒体源/局域网和平台/GPU。
+- `BASE-OFFLINE-PPT/ASR/TEACHER/STUDENT` 全部业务通过，固定未请求槽位不再阻塞单泳道；
+  `BASE-ONLINE-VBAS/FACE/SCREEN-DET/OCR` 全部通过真实 Gateway 租约路由。实时 ASR 发送
+  2294 个真实节拍音频块，464.12 秒后通过，零失败会话、零缺失终态。
+- 阶段 0 共 13 个业务 case 加 `PHASE-0-COMPLETE`，14/14 为 `passed`，所有前后护栏均为
+  `CLEAR`，运行指标没有 OOM、容器重启、持续 Kafka lag、Outbox 堆积或租约泄漏结论。
+- OpenSpec 12.1 完成；下一步只可按警戒线从阶段 1 的单泳道/长课阶梯继续，不能用阶段 0
+  单请求吞吐直接声明稳定容量。
+
+## 2026-08-25 - catalog 阶段 1 的 PPT 唯一提交 100/300 档诊断与重跑边界
+
+同一 `0ebaa126` attempt 的两项真实执行事实如下。规范文件保持 write-once，不回写旧结论：
+
+| 用例 | 业务终态 | 耗时 | 运行时峰值 | 全过程护栏 | 结论 |
+| --- | --- | ---: | --- | --- | --- |
+| `OFF-UNIQUE-PPT-100` | 100/100 成功 | 72.487953s | 队列 179、Outbox 20、Kafka lag 0 | 9 个 `CLEAR` | 真实业务通过事实 |
+| `OFF-UNIQUE-PPT-300` | 300/300 成功 | 686.763116s | 旧口径队列 550、Outbox 220、Kafka lag 14 | 16 个 `CLEAR`、1 个 `STOP` | 规范结论无效，当前 attempt 阻断 |
+
+- PPT-300 第 16 样本显示 `orchestrator-service` 容器不健康但未重启；精确重启唯一容器后，
+  已接受任务继续排空，第 17 样本恢复 `CLEAR`、旧口径队列为 7、Kafka lag 为 0。恢复证明
+  现场可继续排空，不会撤销已经发生的 `STOP`。
+- 根因是 PPT 节点刚写入 `RUNNING`、异步算子身份尚未写入进度时，对账循环把短暂状态当作
+  “PPT 运行中节点缺少持久化任务身份”并退出；旧运行时汇总随后又只取末帧，错误发布
+  `passed/CLEAR`。
+- 末帧队列 7 不是仍在处理的工作。只读 PostgreSQL 联表显示唯一组合为
+  `node.status=20/task_type.status=70/count=7`，必须保留历史节点但从活动队列排除。
+- `OFF-UNIQUE-PPT-100/300` 在 catalog 中位于 `phase-1-offline`，但业务语义属于 OpenSpec 12.3
+  的 100/300/1000 唯一提交；它们只是 12.3 的部分诊断，不能把 12.3 标记完成。OpenSpec 12.2
+  要求的四条单泳道和 3/6/12/24/36 长课阶梯在该 attempt 中尚未执行，因此 12.2 保持未执行。
+- 新实现必须确定性恢复未落库 PPT 身份、让最高护栏等级在整个窗口内粘滞、让活动队列
+  同时过滤终态父任务，并在长课请求产生前计算投影空间。第 16 个样本的 `STOP` 使当前旧
+  attempt 整体失效并阻断所有更高执行；修复后必须新 SHA、11 镜像同 revision、新
+  seed/Campaign/attempt，并从阶段 0 重跑。
+
+## 2026-08-25 - 负向超时媒体的独立探针边界
+
+- `192.168.29.12:5555` 的现有 `fileserver`、只读课程目录和容器配置保持不变。
+- 独立 `campaign-slow-media` 容器只绑定 `.12:5556`，`/healthz` 立即 200，`/timeout.mp4`
+  延迟 5 秒后返回 504；2 秒 Range 预探测真实超时，避免把 404 或连接失败伪装为超时。
+- 容器不挂载课程目录，使用只读根文件系统、非 root 用户、全部 capability drop、0.5 CPU、
+  256 MiB 内存、256 PID 和受限容器日志；容器 label 与完整 ID 是唯一清理身份。
+- 新 Campaign plan 固化 `not_found_url=http://192.168.29.12:5555/missing-404.mp4` 和
+  `timeout_url=http://192.168.29.12:5556/timeout.mp4`。慢探针只解除阶段 2 fixture 前置，不能
+  补足当前新 SHA 尚未执行的阶段 0/1。
+
+## 2026-08-25 - 负向用例失败关闭补强
+
+- 超时 fixture 先验证同 origin 的 `/healthz=200/ok`，再只接受 `ReadTimeout`；连接、写入、
+  连接池超时及快速 HTTP 响应均零请求阻断。
+- 异步负向任务完成后重新查询课程事实，要求请求中的对应任务类型为 `70`，且该任务类型下
+  至少一个节点为 `70`；整体课程失败不再被当作节点归因证据。
+- 规范结果继续要求最终活动队列、Outbox、Kafka lag 和全部容量租约归零。该实现只为新 SHA
+  的阶段 2 建立可执行门禁，不回写旧 attempt，也不表示 12.3 已完成。

@@ -32,6 +32,7 @@ from scripts.extreme_load.execution import (
     PriorityCheckpointResult,
     _http_outcome,
     _poll_one_task,
+    _validate_expected_failure_nodes,
 )
 from scripts.extreme_load.online_images import ScheduledImageRequest
 from scripts.extreme_load.plan import CampaignPlan, build_campaign_plan, read_case_evidence
@@ -97,6 +98,7 @@ def _request(
     task_id: str | None = None,
     *,
     rejected: bool = False,
+    terminal: str | None = None,
 ) -> HttpRequestSpec:
     return HttpRequestSpec(
         request_id=request_id,
@@ -104,6 +106,7 @@ def _request(
         url="http://192.168.29.11:18100/api/course-jobs",
         json_body=None if task_id is None else {"task_id": task_id},
         expected_business_rejection=rejected,
+        expected_task_terminal=terminal,
     )
 
 
@@ -292,6 +295,7 @@ async def test_negative_mix_polls_only_successfully_accepted_positive_tasks(
     requests = (
         _request("positive-1", "accepted-1"),
         _request("negative-1", "rejected-1", rejected=True),
+        _request("negative-async", "accepted-failure", terminal="failed"),
         _request("positive-2", "accepted-2"),
     )
 
@@ -305,6 +309,7 @@ async def test_negative_mix_polls_only_successfully_accepted_positive_tasks(
         lambda _self: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
     polled: list[tuple[str, ...]] = []
+    both_groups_started = asyncio.Event()
 
     async def fake_poll(
         _client: httpx.AsyncClient,
@@ -315,14 +320,225 @@ async def test_negative_mix_polls_only_successfully_accepted_positive_tasks(
     ) -> dict[str, int]:
         assert timeout_seconds == case.timeout_seconds
         polled.append(tuple(task_ids))
+        if len(polled) == 2:
+            both_groups_started.set()
+        await asyncio.wait_for(both_groups_started.wait(), timeout=0.5)
+        if tuple(task_ids) == ("accepted-failure",):
+            return {"failed": 1}
         return {"success": len(task_ids)}
 
     monkeypatch.setattr("scripts.extreme_load.execution._poll_tasks", fake_poll)
-    outcome, task_ids = await executor._run_http(case, requests, max_concurrency=3)
+    outcome, task_ids = await executor._run_http(case, requests, max_concurrency=4)
 
     assert outcome.status == "passed"
-    assert task_ids == ("accepted-1", "accepted-2")
-    assert polled == [("accepted-1", "accepted-2")]
+    assert task_ids == ("accepted-1", "accepted-failure", "accepted-2")
+    assert polled == [
+        ("accepted-1", "accepted-2"),
+        ("accepted-failure",),
+    ]
+    assert outcome.terminal_counts == {"failed": 1, "success": 2}
+
+
+@pytest.mark.asyncio
+async def test_unproven_timeout_fixture_blocks_before_negative_submissions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _case("negative_submission", ratio=0.05)
+    executor = CampaignCaseExecutor(_plan(tmp_path, case), tmp_path / "release")
+    submitted = False
+    timeout_request = HttpRequestSpec(
+        request_id="timeout-negative",
+        method="POST",
+        url="http://192.168.29.11:18100/api/course-jobs",
+        json_body={
+            "task_id": "timeout-task",
+            "task_types": ["PPT"],
+            "slides_video_path": "http://192.168.29.12:5555/timeout.mp4",
+        },
+        work_type="negative_submission:timeout_media",
+        expected_task_terminal="failed",
+    )
+
+    async def timeout_requests(_case: CaseSpec) -> Sequence[HttpRequestSpec]:
+        return (timeout_request,)
+
+    async def fail_if_submitted(_case: CaseSpec, *_args: object, **_kwargs: object):
+        nonlocal submitted
+        submitted = True
+        raise AssertionError("timeout fixture 未证明前不得提交负向任务")
+
+    async def unproven(_url: str) -> tuple[bool, str]:
+        return False, "timeout fixture 返回 HTTP 404"
+
+    monkeypatch.setattr(executor, "_run_http", fail_if_submitted)
+    monkeypatch.setattr(executor, "_offline_requests", timeout_requests)
+    monkeypatch.setattr(executor, "_verify_timeout_fixture", unproven)
+
+    outcome = await executor._run_offline_case(case)
+
+    assert outcome.status == "blocked"
+    assert "timeout fixture" in outcome.reason
+    assert outcome.request_count == 0
+    assert submitted is False
+
+
+def test_expected_async_failure_must_match_task_type_and_failed_node() -> None:
+    expected = {"task-1": frozenset({"PPT"})}
+
+    passed = _validate_expected_failure_nodes(
+        expected,
+        (_course_observation("task-1", 70),),
+        (),
+    )
+    mismatched = _validate_expected_failure_nodes(
+        expected,
+        (_course_observation("task-1", 60),),
+        (),
+    )
+
+    assert passed[0] == "passed"
+    assert passed[2]["mismatch_count"] == 0
+    assert mismatched[0] == "failed"
+    assert mismatched[2]["mismatches"] == ["task-1:PPT"]
+
+
+@pytest.mark.asyncio
+async def test_negative_case_rejects_wrong_async_failure_node(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _case("negative_submission", ratio=0.05)
+    executor = CampaignCaseExecutor(_plan(tmp_path, case), tmp_path / "release")
+    request = HttpRequestSpec(
+        request_id="negative-async",
+        method="POST",
+        url="http://192.168.29.11:18100/api/course-jobs",
+        json_body={"task_id": "task-1", "task_types": ["PPT"]},
+        work_type="negative_submission:not_found_media",
+        expected_task_terminal="failed",
+    )
+
+    async def requests(_case: CaseSpec) -> Sequence[HttpRequestSpec]:
+        return (request,)
+
+    async def run_http(*_args: object, **_kwargs: object):
+        return (
+            CaseRunOutcome(
+                "passed",
+                "请求与终态符合预期",
+                1,
+                {"success": 1},
+                (0.1,),
+                ("task-1",),
+                {"failed": 1},
+            ),
+            ("task-1",),
+        )
+
+    async def observations(*_args: object, **_kwargs: object):
+        return (_course_observation("task-1", 60),), ()
+
+    monkeypatch.setattr(executor, "_offline_requests", requests)
+    monkeypatch.setattr(executor, "_run_http", run_http)
+    monkeypatch.setattr(
+        "scripts.extreme_load.execution._fetch_course_query_observations",
+        observations,
+    )
+
+    outcome = await executor._run_offline_case(case)
+
+    assert outcome.status == "failed"
+    assert outcome.extra is not None
+    assert outcome.extra["async_failure_observation"]["status"] == "failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("timeout_type", "expected_verified"),
+    (
+        (httpx.ReadTimeout, True),
+        (httpx.ConnectTimeout, False),
+        (httpx.WriteTimeout, False),
+        (httpx.PoolTimeout, False),
+    ),
+)
+async def test_timeout_fixture_requires_a_proven_read_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    timeout_type: type[httpx.TimeoutException],
+    expected_verified: bool,
+) -> None:
+    case = _case("negative_submission", ratio=0.05)
+    executor = CampaignCaseExecutor(_plan(tmp_path, case), tmp_path / "release")
+    real_async_client = httpx.AsyncClient
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/healthz":
+            return httpx.Response(200, text="ok", request=request)
+        raise timeout_type("probe timeout", request=request)
+
+    def client_factory(**kwargs: object) -> httpx.AsyncClient:
+        return real_async_client(
+            transport=httpx.MockTransport(handler),
+            timeout=kwargs.get("timeout"),
+            follow_redirects=False,
+        )
+
+    monkeypatch.setattr(
+        "scripts.extreme_load.execution.httpx.AsyncClient",
+        client_factory,
+    )
+
+    verified, reason = await executor._verify_timeout_fixture(
+        "http://192.168.29.12:5556/timeout.mp4"
+    )
+
+    assert verified is expected_verified
+    if expected_verified:
+        assert "持续超时" in reason
+    else:
+        assert "不能证明" in reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("health_mode", ("read_timeout", "bad_status", "bad_body"))
+async def test_timeout_fixture_requires_a_healthy_origin_before_slow_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    health_mode: str,
+) -> None:
+    case = _case("negative_submission", ratio=0.05)
+    executor = CampaignCaseExecutor(_plan(tmp_path, case), tmp_path / "release")
+    real_async_client = httpx.AsyncClient
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/healthz":
+            if health_mode == "read_timeout":
+                raise httpx.ReadTimeout("health timeout", request=request)
+            if health_mode == "bad_status":
+                return httpx.Response(503, text="unhealthy", request=request)
+            return httpx.Response(200, text="unexpected", request=request)
+        raise AssertionError("健康端点未通过时不得探测慢媒体路径")
+
+    def client_factory(**kwargs: object) -> httpx.AsyncClient:
+        return real_async_client(
+            transport=httpx.MockTransport(handler),
+            timeout=kwargs.get("timeout"),
+            follow_redirects=False,
+        )
+
+    monkeypatch.setattr(
+        "scripts.extreme_load.execution.httpx.AsyncClient",
+        client_factory,
+    )
+
+    verified, reason = await executor._verify_timeout_fixture(
+        "http://192.168.29.12:5556/timeout.mp4"
+    )
+
+    assert verified is False
+    assert "健康端点" in reason
 
 
 @pytest.mark.asyncio

@@ -1566,3 +1566,213 @@ canonical FaceRec GPU 容器。视觉普通单任务错误与进度基础设施�
 `PYTHONPATH=../algorithm-scheduling-platform` 的权威命令重跑为上述 `44 passed`，前一命令不作
 代码失败结论。本节只完成实现与 fixture 前置，不能替代新 SHA 的 11 镜像 attestation、
 29/29 healthy、阶段 0 规范 case 或后续 Campaign。
+
+## 2026-08-25 `0ebaa126` 发布闭环核验
+
+目标机 release 根：
+
+```bash
+REMOTE_RELEASE_ROOT=/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/reports/milestone-2b/releases/v1.0_260825/0ebaa126f69e3993487c503c11b42e681cad12cd
+
+jq -e 'length == 11
+  and ([.[].architecture] | unique) == ["amd64"]
+  and ([.[].revision] | unique) == ["0ebaa126f69e3993487c503c11b42e681cad12cd"]
+  and ([.[].id] | unique | length) == 11' \
+  "$REMOTE_RELEASE_ROOT/build/release-images.inspect.json"
+
+jq -e '.status == "PASS"
+  and .git_sha == "0ebaa126f69e3993487c503c11b42e681cad12cd"
+  and .summary.infrastructure == 4
+  and .summary.platform_services == 4
+  and .summary.operator_instances == 21
+  and .summary.gpu_instances == 18
+  and .summary.cpu_instances == 3
+  and .summary.registered_instances == 21
+  and .summary.active_leases == 0' \
+  "$REMOTE_RELEASE_ROOT/production/production-stack-status.json"
+
+jq -e '.status == "PASS"
+  and .summary.compute_processes == 18
+  and .summary.mapped_containers == 18
+  and .summary.processes_per_gpu == {"0":6,"1":6,"2":6}
+  and .summary.cpu_ppt_instances == 3' \
+  "$REMOTE_RELEASE_ROOT/runtime/gpu-process-cgroup-map.json"
+
+jq -e 'length == 7 and all(.[];
+  .status == "通过" and .mock == false
+  and .git_sha == "0ebaa126f69e3993487c503c11b42e681cad12cd")' \
+  "$REMOTE_RELEASE_ROOT/smoke/cases.json"
+```
+
+实际结果为 11/11 镜像、29/29 healthy、21/21 注册、18 GPU PID/cgroup、3 CPU PPT 和
+7/7 Smoke 全部通过。三台 PPT 逐实例 `cases.json` 也分别为非 mock 通过。关键证据 SHA-256
+前缀为 `f30ad00d/f3ba0daf/cc1f9266/f43fe846/aeeda69e/eedbd48a/9cdf06d9`，均为普通
+`0600` 单链接文件。该核验完成 OpenSpec 11.8，但不替代新的阶段 0 attempt。
+
+## 2026-08-25 `0ebaa126` 阶段 0 全量核验
+
+当前 attempt 根：
+
+```bash
+ATTEMPT_ROOT="$PWD/deploy/reports/milestone-2b-load/v1.0_260825/0ebaa126f69e3993487c503c11b42e681cad12cd/attempts/phase0-rerun-0ebaa126f69e-20260825144344"
+
+find "$ATTEMPT_ROOT/campaign/phase-0-baseline" \
+  -maxdepth 1 -type f -name '*.json' -print0 |
+  xargs -0 jq -s -e '
+    length == 14
+    and ([.[].case_id] | unique | length) == 14
+    and all(.[]; .status == "passed")'
+
+jq -e '
+  .status == "passed"
+  and .business_status == "passed"
+  and .request_count == 1
+  and .extra.sent_chunks == 2294
+  and .extra.failed_session_count == 0
+  and .extra.missing_final_message_count == 0
+  and .guardrail_before.level == "CLEAR"
+  and .guardrail_after.level == "CLEAR"' \
+  "$ATTEMPT_ROOT/campaign/phase-0-baseline/base-asr-ws.json"
+```
+
+实际结果为 14/14 `passed`。正式媒体下载四档共 44/44 成功、零失败，聚合吞吐约
+`117.62/117.05/114.78/115.83 MB/s`；工作区外源端证据包含 210 个连续样本和 44/44
+calibration 下载，严格峰值为 30 个连接、CPU 2.33% 和发送 123.10 MB/s。PPT、ASR、教师、
+学生离线单泳道与四类在线图片均业务通过；实时 ASR 为 464.12 秒、2294 块、73 个运行指标
+样本，零失败会话和零缺失终态。该证据完成 OpenSpec 12.1，不替代阶段 1–6 或最终 217/26/6
+门禁。
+
+## 2026-08-25 catalog 阶段 1 的 PPT 唯一提交 100/300 档诊断核验
+
+以下命令只读检查 `0ebaa126` 的 write-once attempt，不修改 case 或运行时样本：
+
+```bash
+ATTEMPT_ROOT="$PWD/deploy/reports/milestone-2b-load/v1.0_260825/0ebaa126f69e3993487c503c11b42e681cad12cd/attempts/phase0-rerun-0ebaa126f69e-20260825144344"
+
+for CASE_ID in OFF-UNIQUE-PPT-100 OFF-UNIQUE-PPT-300; do
+  jq -s '
+    group_by(.guardrail.level)
+    | map({
+        level: .[0].guardrail.level,
+        count: length,
+        reasons: ([.[].guardrail.reasons[]] | unique)
+      })' \
+    "$ATTEMPT_ROOT/campaign/runtime-metrics/$CASE_ID"/[0-9]*.json
+done
+
+sha256sum \
+  "$ATTEMPT_ROOT/campaign/phase-1-offline/off-unique-ppt-100.json" \
+  "$ATTEMPT_ROOT/campaign/phase-1-offline/off-unique-ppt-300.json" \
+  "$ATTEMPT_ROOT/campaign/runtime-metrics/OFF-UNIQUE-PPT-300/00000016.json"
+
+jq '{case_id,status,business_status,elapsed_seconds,request_count,terminal_counts,
+     guardrail_before,guardrail_after,
+     runtime_summary:.runtime_observability.runtime_metrics}' \
+  "$ATTEMPT_ROOT/campaign/phase-1-offline/off-unique-ppt-300.json"
+
+ssh -o BatchMode=yes root@192.168.29.11 \
+  "docker exec algorithm-scheduling-platform-postgres-1 \
+   psql -U algorithm -d algorithm -Atc \\
+   \"SELECT n.status,t.status,count(*) \
+      FROM task_nodes n \
+      JOIN course_task_types t ON t.id=n.course_task_type_id \
+     WHERE n.status BETWEEN 10 AND 50 \
+     GROUP BY n.status,t.status \
+     ORDER BY n.status,t.status\""
+```
+
+实际结果：
+
+- PPT-100 护栏聚合为 `CLEAR=9`，case 为 100/100 成功、`72.487953s`，SHA-256 为
+  `fbb176ed52fc0c16d929c01b7a343c207fe1c2b69cfa34575c1b2b547319b9d0`。
+- PPT-300 原始样本聚合为 `CLEAR=16, STOP=1`；STOP 原因是
+  `关键容器不健康或缺失: orchestrator-service`。case 为 300/300 最终成功、`686.763116s`，
+  但旧汇总仍写成 `passed/CLEAR`；case 与 STOP 样本 SHA-256 分别为
+  `b3a6cdc9a9739bbe8ca0c9487fd1698195388d2405be8e9633426169f787d7d8`、
+  `dfb2cf0b9cb84c6461d61d1e0a055e51df986d58e0352243f939e25fda1403e7`。
+- PostgreSQL 联表输出为 `20|70|7`，证明旧快照中的队列 7 全部属于已失败父任务下的历史节点，
+  不是活动工作。
+
+`OFF-UNIQUE-PPT-100/300` 虽位于 catalog 的 `phase-1-offline` 目录，但业务语义属于 OpenSpec
+12.3 的唯一提交，只能作为 12.3 的部分诊断，不能补足该任务。PPT-300 不能判为通过，且
+中途 `STOP` 使当前 attempt 不能进入任何更高执行。OpenSpec 12.2 的四条单泳道和
+3/6/12/24/36 长课阶梯尚未执行，因此保持未完成而不是判定失败。
+修复门禁为：全过程任何 `WARNING/STOP` 使 case 阻断；活动队列只统计节点及父任务均为
+`10`–`50`；PPT 身份落库竞态不终止后台循环。修复形成新 SHA 后必须重新构建 11 个镜像，
+创建新 write-once attempt 并从阶段 0 重跑。
+
+## 2026-08-25 `.12:5556` 受控慢媒体探针核验
+
+远端脚本和容器使用如下非敏感只读事实复核；SSH 密码不进入命令、Git 或报告：
+
+```bash
+sha256sum /root/workspace/algorithm-scheduling-campaign/slow_media_fixture_server.py
+
+docker inspect campaign-slow-media --format \
+  '{{.Id}} {{.State.Running}} {{.State.ExitCode}} {{json .Config.Labels}} {{json .HostConfig.PortBindings}}'
+
+curl -fsS --max-time 2 http://192.168.29.12:5556/healthz
+curl --range 0-0 --max-time 2 -sS -o /dev/null \
+  -w 'probe_status=%{http_code} elapsed=%{time_total}\n' \
+  http://192.168.29.12:5556/timeout.mp4
+curl --max-time 10 -sS -o /dev/null \
+  -w 'terminal_status=%{http_code} elapsed=%{time_total}\n' \
+  http://192.168.29.12:5556/timeout.mp4
+curl -fsS --max-time 2 -o /dev/null -w 'fileserver_status=%{http_code}\n' \
+  http://192.168.29.12:5555/course/
+```
+
+实际结果为脚本 SHA-256
+`25549bfdc3484c9e7644265d94e96358c3a1f432341896f4f6d4923aa8b832a5`；容器完整 ID
+`769b1176d15900ced01a63c8ceadab62422c31401a78512ed97a785e08343b27`，running、exit code 0，
+唯一 Campaign label 正确，只绑定 `.12:5556->8080`。健康检查返回 `ok`；2 秒探测为
+HTTP `000`、exit 28、`2.001411s`；完整慢响应为 HTTP 504、`5.006082s`；既有 5555 为 200。
+
+完成负向用例后，必须先按容器 name、label 和完整 ID 二次 inspect，再只执行
+`docker rm -f <完整容器ID>`，最后确认 5556 无监听且 5555 仍为 200。当前验证只完成慢 fixture
+前置，不代表 OpenSpec 12.2、12.3 或任何更高阶段完成。
+
+## 2026-08-25 阶段 1 诊断修复最终本地回归
+
+从 `algorithm-scheduling-platform/` 使用绝对路径运行，避免临时测试目录中的同名模块污染
+标准库，也避免四个顶层 `app` 包在同一 pytest 进程冲突：
+
+```bash
+PYTHONPATH="/Users/zhangshen/Documents/workspace/算法功能调度/algorithm-scheduling-platform:/Users/zhangshen/Documents/workspace/算法功能调度" \
+  .venv/bin/python -m pytest -q -rs tests
+
+PYTHONPATH="/Users/zhangshen/Documents/workspace/算法功能调度/algorithm-scheduling-platform" \
+  .venv/bin/python -m pytest -q \
+  tests/extreme_load/test_execution.py \
+  tests/extreme_load/test_offline.py \
+  tests/extreme_load/test_runtime_metrics.py \
+  tests/extreme_load/test_coordinator.py \
+  tests/deploy/test_slow_media_fixture_server.py
+
+for service in control_service orchestrator_service \
+  vision_orchestrator_service online_gateway_service; do
+  (cd "../$service" && ../algorithm-scheduling-platform/.venv/bin/python -m pytest -q)
+done
+
+MYPYPATH="/Users/zhangshen/Documents/workspace/算法功能调度" \
+  .venv/bin/mypy --strict --explicit-package-bases \
+  scripts/extreme_load/execution.py \
+  scripts/extreme_load/offline.py \
+  scripts/extreme_load/runtime_metrics.py \
+  scripts/extreme_load/coordinator.py \
+  packages/platform_common/repository.py \
+  deploy/scripts/slow_media_fixture_server.py \
+  ../orchestrator_service/app/infrastructure/ppt_runtime.py
+
+.venv/bin/python -m compileall -q packages scripts/extreme_load deploy/scripts \
+  ../control_service/app ../orchestrator_service/app \
+  ../vision_orchestrator_service/app ../online_gateway_service/app
+.venv/bin/python -m pytest -q tests/test_harness_consistency.py
+(cd .. && openspec validate run-milestone-2b-extreme-load-campaign --strict)
+```
+
+实际结果：平台完整套件 `3258 passed, 3 skipped`，三个 skip 都是本机缺少 canonical FaceRec
+GPU 容器；Campaign 聚焦 `126 passed`，PPT runtime `16 passed`，四服务分别
+`25/70/44/49 passed`。Ruff、strict Mypy、`compileall`、Harness `5 passed`、OpenSpec strict
+和 `git diff --check` 全部通过。该记录证明新修复具备提交和远端重建条件，不将本地结果表达
+为 12.2/12.3 已完成。

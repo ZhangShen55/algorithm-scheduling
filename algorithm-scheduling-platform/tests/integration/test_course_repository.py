@@ -109,6 +109,104 @@ def test_sparse_task_type_creation_is_idempotent(repository: CourseRepository) -
     assert repository.count_courses() == 1
 
 
+def test_operations_queue_snapshot_only_counts_nodes_with_active_parent_tasks(
+    repository: CourseRepository,
+) -> None:
+    active_statuses = (
+        NodeStatus.PENDING,
+        NodeStatus.WAITING_PREREQUISITE,
+        NodeStatus.WAITING_OPERATOR,
+        NodeStatus.QUEUED,
+        NodeStatus.RUNNING,
+    )
+    for status in active_statuses:
+        task_type = repository.create_task_types(
+            task_id=f"active-parent-{status.value}",
+            writes=[TaskTypeWrite(task_type=TaskType.PPT)],
+        )[0]
+        repository.create_node(
+            course_task_type_id=task_type.id,
+            node_code=f"ACTIVE_{status.value}",
+            status=status,
+            priority=Priority.NORMAL,
+            reason="活动任务节点",
+            required_capability="ocr",
+        )
+        repository.update_task_type_state(task_type.id, status, "任务仍在处理")
+
+    for status in (
+        NodeStatus.COMPLETED,
+        NodeStatus.FAILED,
+        NodeStatus.CANCELLED,
+    ):
+        task_type = repository.create_task_types(
+            task_id=f"terminal-parent-{status.value}",
+            writes=[TaskTypeWrite(task_type=TaskType.PPT)],
+        )[0]
+        repository.create_node(
+            course_task_type_id=task_type.id,
+            node_code=f"RESIDUAL_{status.value}",
+            status=NodeStatus.WAITING_PREREQUISITE,
+            priority=Priority.NORMAL,
+            reason="终态任务下的历史残留节点",
+            required_capability="ocr",
+        )
+        repository.update_task_type_state(task_type.id, status, "任务已终态")
+
+    snapshot = repository.operations_queue_snapshot()
+
+    assert {
+        (item.status, item.priority, item.capability): item.count
+        for item in snapshot.queues
+    } == {
+        (status, Priority.NORMAL, "ocr"): 1 for status in active_statuses
+    }
+    assert snapshot.outbox_pending == len(active_statuses) + 3
+
+
+def test_merge_node_progress_preserves_concurrently_persisted_lease_context(
+    repository: CourseRepository,
+) -> None:
+    task_type = repository.create_task_types(
+        task_id="ppt-identity-recovery",
+        writes=[TaskTypeWrite(task_type=TaskType.PPT)],
+    )[0]
+    node = repository.create_node(
+        course_task_type_id=task_type.id,
+        node_code="PPT_SLICE",
+        status=NodeStatus.RUNNING,
+        priority=Priority.NORMAL,
+        reason="PPT 切片处理中",
+        required_capability="ppt_slice",
+    )
+    repository.update_node_progress(
+        node.id,
+        {
+            "lease_id": "lease-ppt-001",
+            "service_url": "http://ppt-slice-cpu0:9001",
+            "lease_status": "ACTIVE",
+        },
+        reason="PPT 算子已受理",
+    )
+
+    recovered = repository.merge_node_progress(
+        node.id,
+        {
+            "task_id": "ppt-identity-recovery",
+            "operator_task_id": f"ppt-node-{node.id}",
+        },
+        reason="PPT 身份已恢复",
+    )
+
+    assert recovered.progress == {
+        "lease_id": "lease-ppt-001",
+        "service_url": "http://ppt-slice-cpu0:9001",
+        "lease_status": "ACTIVE",
+        "task_id": "ppt-identity-recovery",
+        "operator_task_id": f"ppt-node-{node.id}",
+    }
+
+
 def test_node_result_and_completion_are_persisted_together(
     repository: CourseRepository,
 ) -> None:

@@ -46,6 +46,7 @@ from .core import (
 from .media_download import MediaDownloadAdapter
 from .offline import (
     CourseMedia,
+    NegativeMediaEndpoints,
     TaskCombination,
     build_append_task_type_sequence,
     build_completed_result_reuse_request,
@@ -88,6 +89,7 @@ SleepCallable = Callable[[float], Awaitable[None]]
 ClockCallable = Callable[[], float]
 _TERMINAL_STATUSES = {60, 70, 80}
 _SUCCESS_STATUS = 60
+_TIMEOUT_FIXTURE_PROBE_SECONDS = 2.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,12 +240,12 @@ def _load_string_list(case: CaseSpec, key: str) -> list[str]:
     return value
 
 
-def _accepted_task_ids(
+def _accepted_task_expectations(
     requests: Sequence[HttpRequestSpec],
     results: Sequence[LoadResult],
-) -> tuple[str, ...]:
+) -> dict[str, str]:
     result_by_id = {result.request_id: result for result in results}
-    accepted: list[str] = []
+    accepted: dict[str, str] = {}
     for request in requests:
         result = result_by_id.get(request.request_id)
         if (
@@ -255,8 +257,65 @@ def _accepted_task_ids(
             continue
         task_id = request.json_body.get("task_id")
         if isinstance(task_id, str):
-            accepted.append(task_id)
-    return tuple(dict.fromkeys(accepted))
+            expectation = request.expected_task_terminal or "success"
+            previous = accepted.setdefault(task_id, expectation)
+            if previous != expectation:
+                raise ValueError(f"同一 task_id 的终态期望冲突: {task_id}")
+    return accepted
+
+
+def _expected_failed_task_types(
+    requests: Sequence[HttpRequestSpec],
+) -> dict[str, frozenset[str]]:
+    expected: dict[str, frozenset[str]] = {}
+    for request in requests:
+        if request.expected_task_terminal != "failed" or request.json_body is None:
+            continue
+        task_id = request.json_body.get("task_id")
+        raw_task_types = request.json_body.get("task_types")
+        if not isinstance(task_id, str) or not isinstance(raw_task_types, list):
+            raise ValueError("异步失败请求缺少 task_id 或 task_types")
+        task_types = frozenset(
+            task_type for task_type in raw_task_types if isinstance(task_type, str)
+        )
+        if not task_types or len(task_types) != len(raw_task_types):
+            raise ValueError("异步失败请求的 task_types 不合法")
+        expected[task_id] = task_types
+    return expected
+
+
+def _validate_expected_failure_nodes(
+    expected: Mapping[str, frozenset[str]],
+    observations: Sequence[CourseQueryObservation],
+    errors: Sequence[str],
+) -> tuple[str, str, dict[str, object]]:
+    evidence: dict[str, object] = {
+        "expected_task_count": len(expected),
+        "observed_task_count": len(observations),
+        "query_error_count": len(errors),
+    }
+    if errors:
+        return "blocked", "异步失败节点查询证据不完整", evidence
+    by_task_id = {observation.task_id: observation for observation in observations}
+    if set(by_task_id) != set(expected):
+        return "blocked", "异步失败节点查询结果缺失或包含意外任务", evidence
+    mismatches: list[str] = []
+    for task_id, expected_task_types in expected.items():
+        observation = by_task_id[task_id]
+        task_statuses = dict(observation.task_statuses)
+        for task_type in expected_task_types:
+            task_failed = task_statuses.get(task_type) == 70
+            node_failed = any(
+                node.task_type == task_type and node.status == 70
+                for node in observation.nodes
+            )
+            if not task_failed or not node_failed:
+                mismatches.append(f"{task_id}:{task_type}")
+    evidence["mismatch_count"] = len(mismatches)
+    evidence["mismatches"] = mismatches[:20]
+    if mismatches:
+        return "failed", "异步负向任务未在对应任务类型节点形成失败事实", evidence
+    return "passed", "异步负向任务均在对应任务类型节点形成失败事实", evidence
 
 
 def _combine_outcomes(*outcomes: CaseRunOutcome) -> CaseRunOutcome:
@@ -442,6 +501,59 @@ class CampaignCaseExecutor:
             )
         return validate_control_readiness_response(response.status_code, body)
 
+    async def _verify_timeout_fixture(self, url: str) -> tuple[bool, str]:
+        parsed = urllib.parse.urlsplit(url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.fragment
+        ):
+            return False, "timeout fixture URL 不合法"
+        probe_seconds = _TIMEOUT_FIXTURE_PROBE_SECONDS
+        timeout = httpx.Timeout(
+            probe_seconds,
+            connect=probe_seconds,
+            read=probe_seconds,
+            write=probe_seconds,
+            pool=probe_seconds,
+        )
+        health_url = urllib.parse.urlunsplit(
+            (parsed.scheme, parsed.netloc, "/healthz", "", "")
+        )
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
+            try:
+                health = await client.get(health_url)
+            except httpx.TimeoutException:
+                return False, "timeout fixture 健康端点超时，不能证明受控慢响应"
+            except httpx.TransportError:
+                return False, "timeout fixture 健康端点连接失败"
+            if health.status_code != 200 or health.text.strip() != "ok":
+                return False, "timeout fixture 健康端点不符合预期"
+            try:
+                async with client.stream(
+                    "GET",
+                    url,
+                    headers={"Range": "bytes=0-0"},
+                ) as response:
+                    iterator = response.aiter_bytes()
+                    try:
+                        await anext(iterator)
+                    except StopAsyncIteration:
+                        pass
+            except httpx.ReadTimeout:
+                return True, "timeout fixture 在受控探测窗口内持续超时"
+            except (httpx.ConnectTimeout, httpx.WriteTimeout, httpx.PoolTimeout):
+                return False, "timeout fixture 未建立可读响应，不能证明受控读超时"
+            except httpx.TransportError:
+                return False, "timeout fixture 连接失败，不能证明超时语义"
+        return False, f"timeout fixture 未超时，返回 HTTP {response.status_code}"
+
     async def _wait_priority_normal_checkpoint(
         self,
         client: httpx.AsyncClient,
@@ -543,23 +655,52 @@ class CampaignCaseExecutor:
                 results,
                 allow_overload=_case_allows_overload(case),
             )
-            task_ids = _accepted_task_ids(requests, results)
+            expectations = _accepted_task_expectations(requests, results)
+            task_ids = tuple(expectations)
             if outcome.status == "passed" and task_ids and poll_terminal:
-                terminal = await _poll_tasks(
-                    client,
-                    self.plan,
-                    task_ids,
-                    timeout_seconds=case.timeout_seconds,
-                )
-                if terminal != {"success": len(task_ids)}:
+                terminal: Counter[str] = Counter()
+                terminal_matches = True
+                polling: list[
+                    tuple[str, tuple[str, ...], asyncio.Task[dict[str, int]]]
+                ] = []
+                async with asyncio.TaskGroup() as task_group:
+                    for expected in ("success", "failed"):
+                        selected_ids = tuple(
+                            task_id
+                            for task_id, expectation in expectations.items()
+                            if expectation == expected
+                        )
+                        if not selected_ids:
+                            continue
+                        polling.append(
+                            (
+                                expected,
+                                selected_ids,
+                                task_group.create_task(
+                                    _poll_tasks(
+                                        client,
+                                        self.plan,
+                                        selected_ids,
+                                        timeout_seconds=case.timeout_seconds,
+                                    )
+                                ),
+                            )
+                        )
+                for expected, selected_ids, polling_task in polling:
+                    observed = polling_task.result()
+                    terminal.update(observed)
+                    if observed != {expected: len(selected_ids)}:
+                        terminal_matches = False
+                terminal_counts = dict(sorted(terminal.items()))
+                if not terminal_matches:
                     outcome = CaseRunOutcome(
                         "failed",
-                        "离线任务未全部成功终态",
+                        "离线任务未全部进入预期终态",
                         outcome.request_count,
                         outcome.categories,
                         outcome.latency_seconds,
                         task_ids,
-                        terminal,
+                        terminal_counts,
                     )
                 else:
                     outcome = CaseRunOutcome(
@@ -569,13 +710,54 @@ class CampaignCaseExecutor:
                         outcome.categories,
                         outcome.latency_seconds,
                         task_ids,
-                        terminal,
+                        terminal_counts,
                     )
             return outcome, task_ids
 
     async def _run_offline_case(self, case: CaseSpec) -> CaseRunOutcome:
         requests = tuple(await self._offline_requests(case))
         kind = _load_string(case, "kind")
+        timeout_fixture_verified = False
+        if kind == "negative_submission":
+            timeout_urls: set[str] = set()
+            for request in requests:
+                if request.work_type != "negative_submission:timeout_media":
+                    continue
+                payload = request.json_body or {}
+                media_url = next(
+                    (
+                        payload.get(field_name)
+                        for field_name in (
+                            "slides_video_path",
+                            "teacher_video_path",
+                            "student_video_path",
+                        )
+                        if isinstance(payload.get(field_name), str)
+                    ),
+                    None,
+                )
+                if not isinstance(media_url, str):
+                    return CaseRunOutcome(
+                        "blocked",
+                        "timeout fixture 请求缺少媒体 URL",
+                        0,
+                        {},
+                        (),
+                        extra={"timeout_fixture_verified": False},
+                    )
+                timeout_urls.add(media_url)
+            for timeout_url in sorted(timeout_urls):
+                verified, reason = await self._verify_timeout_fixture(timeout_url)
+                if not verified:
+                    return CaseRunOutcome(
+                        "blocked",
+                        reason,
+                        0,
+                        {},
+                        (),
+                        extra={"timeout_fixture_verified": False},
+                    )
+            timeout_fixture_verified = bool(timeout_urls)
         if kind == "completed_result_reuse":
             if len(requests) != 2:
                 raise ValueError("已完成结果复用用例必须恰有首次提交和复用提交")
@@ -722,6 +904,52 @@ class CampaignCaseExecutor:
             requests,
             max_concurrency=concurrency,
         )
+        if kind == "negative_submission" and outcome.status == "passed":
+            expected_failures = _expected_failed_task_types(requests)
+            if expected_failures:
+                async with self.pool.build_client() as client:
+                    observations, errors = await _fetch_course_query_observations(
+                        client,
+                        self.plan,
+                        tuple(expected_failures),
+                    )
+                validation_status, validation_reason, validation_evidence = (
+                    _validate_expected_failure_nodes(
+                        expected_failures,
+                        observations,
+                        errors,
+                    )
+                )
+                outcome = replace(
+                    outcome,
+                    status=(
+                        outcome.status
+                        if validation_status == "passed"
+                        else validation_status
+                    ),
+                    reason=(
+                        outcome.reason
+                        if validation_status == "passed"
+                        else validation_reason
+                    ),
+                    extra={
+                        **(outcome.extra or {}),
+                        "async_failure_observation": {
+                            "status": validation_status,
+                            "reason": validation_reason,
+                            **validation_evidence,
+                        },
+                    },
+                )
+        if timeout_fixture_verified:
+            outcome = replace(
+                outcome,
+                extra={
+                    **(outcome.extra or {}),
+                    "timeout_fixture_verified": True,
+                    "timeout_fixture_count": len(timeout_urls),
+                },
+            )
         return outcome
 
     async def _offline_requests(self, case: CaseSpec) -> Sequence[HttpRequestSpec]:
@@ -821,6 +1049,10 @@ class CampaignCaseExecutor:
                 normal,
                 ratio=_load_float(case, "ratio"),
                 seed=self.plan.seed,
+                endpoints=NegativeMediaEndpoints(
+                    not_found_url=_load_string(case, "not_found_url"),
+                    timeout_url=_load_string(case, "timeout_url"),
+                ),
             )
         raise NotImplementedError(kind)
 

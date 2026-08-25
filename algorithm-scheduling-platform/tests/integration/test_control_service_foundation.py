@@ -490,6 +490,80 @@ def test_real_http_submission_is_idempotent_appendable_and_queryable(
     assert len(combined_submission_ids) == 1
 
 
+def test_control_only_rejects_synchronous_negative_submission_errors(
+    control_client: tuple[TestClient, Engine, Redis],
+) -> None:
+    client, engine, _ = control_client
+    synchronous_rejections = (
+        {
+            "task_id": "negative-missing-path",
+            "task_types": ["PPT"],
+        },
+        {
+            "task_id": "negative-unknown-task-type",
+            "task_types": ["UNKNOWN_TASK_TYPE"],
+        },
+    )
+    asynchronous_failures = (
+        {
+            "task_id": "negative-not-found-media",
+            "task_types": ["PPT"],
+            "slides_video_path": "http://192.168.29.12:5555/missing-404.mp4",
+        },
+        {
+            "task_id": "negative-timeout-media",
+            "task_types": ["PPT"],
+            "slides_video_path": "http://192.168.29.12:5555/timeout.mp4",
+        },
+        {
+            "task_id": "negative-invalid-region",
+            "task_types": ["STUDENT_BEHAVIOR"],
+            "student_video_path": "http://192.168.29.12:5555/course/S.mp4",
+            "student_count": 38,
+            "front_points": [{"X": -1, "Y": "invalid"}],
+        },
+    )
+
+    rejected = [client.post("/api/course-jobs", json=payload) for payload in synchronous_rejections]
+    accepted = [client.post("/api/course-jobs", json=payload) for payload in asynchronous_failures]
+
+    assert all(
+        response.status_code == 200 and response.json()["code"] != 0
+        for response in rejected
+    )
+    assert all(
+        response.status_code == 200 and response.json()["code"] == 0
+        for response in accepted
+    )
+    with engine.connect() as connection:
+        rejected_task_count = connection.execute(
+            text(
+                "SELECT count(*) FROM course_task_types "
+                "WHERE task_id IN ('negative-missing-path', 'negative-unknown-task-type')"
+            )
+        ).scalar_one()
+        accepted_task_count = connection.execute(
+            text(
+                "SELECT count(*) FROM course_task_types "
+                "WHERE task_id IN ("
+                "'negative-not-found-media', 'negative-timeout-media', "
+                "'negative-invalid-region')"
+            )
+        ).scalar_one()
+        accepted_outbox_count = connection.execute(
+            text(
+                "SELECT count(*) FROM outbox_events "
+                "WHERE payload->>'task_id' IN ("
+                "'negative-not-found-media', 'negative-timeout-media', "
+                "'negative-invalid-region')"
+            )
+        ).scalar_one()
+
+    assert rejected_task_count == 0
+    assert accepted_task_count == 3
+    assert accepted_outbox_count == 3
+
+
 def test_first_concurrent_http_submissions_create_one_task_type_and_outbox_event(
     control_client: tuple[TestClient, Engine, Redis],
 ) -> None:

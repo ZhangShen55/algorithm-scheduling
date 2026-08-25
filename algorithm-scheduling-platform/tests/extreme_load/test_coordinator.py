@@ -21,6 +21,7 @@ from scripts.extreme_load.coordinator import (
     CampaignCoordinator,
     CoordinatorBlockedError,
     _face_instance_observation,
+    _negative_drain_observation,
 )
 from scripts.extreme_load.guardrails import GuardrailAssessment, GuardrailLevel
 from scripts.extreme_load.plan import (
@@ -159,7 +160,12 @@ class FakeMetricsAdapter:
                     "peak_declared_capacity": {"vbas-gpu0": 10},
                     "peak_gpu_utilization": {"GPU-0": 25.0},
                     "peak_gpu_memory_bytes": {"GPU-0": 1024},
+                    "final_task_queue_depth": 0,
+                    "final_outbox_pending": 0,
+                    "final_kafka_lag": 0,
+                    "final_active_leases": {},
                     "minimum_target_filesystem_available_bytes": {"/data": 4096},
+                    "latest_guardrail": {"level": "CLEAR", "reasons": []},
                     "target_directory_bytes_before": {
                         "/data/course": 100,
                         "/data/result": 200,
@@ -185,8 +191,14 @@ def _runtime_outcome(
     rejected: int,
     released: int,
     instance_requests: dict[str, int] | None = None,
+    case_id: str = "IMG-BOUNDARY-INVALID-B64",
+    latest_guardrail: dict[str, object] | None = None,
+    final_task_queue_depth: int = 0,
+    final_outbox_pending: int = 0,
+    final_kafka_lag: int = 0,
+    final_active_leases: dict[str, int] | None = None,
 ) -> StageCaseOutcome:
-    prefix = "campaign/runtime-metrics/IMG-BOUNDARY-INVALID-B64"
+    prefix = f"campaign/runtime-metrics/{case_id}"
     return StageCaseOutcome(
         "passed",
         "指标探针通过",
@@ -205,7 +217,13 @@ def _runtime_outcome(
                 "peak_declared_capacity": {},
                 "peak_gpu_utilization": {},
                 "peak_gpu_memory_bytes": {},
+                "final_task_queue_depth": final_task_queue_depth,
+                "final_outbox_pending": final_outbox_pending,
+                "final_kafka_lag": final_kafka_lag,
+                "final_active_leases": final_active_leases or {},
                 "minimum_target_filesystem_available_bytes": {"/": 4096},
+                "latest_guardrail": latest_guardrail
+                or {"level": "CLEAR", "reasons": []},
                 "target_directory_bytes_before": {},
                 "target_directory_bytes_after": {},
                 "target_directory_bytes_delta": {},
@@ -235,6 +253,100 @@ def _face_business_evidence(
             }
         }
     }
+
+
+@pytest.mark.parametrize(
+    (
+        "final_task_queue_depth",
+        "final_outbox_pending",
+        "final_kafka_lag",
+        "final_active_leases",
+        "expected_status",
+    ),
+    (
+        (0, 0, 0, {}, "passed"),
+        (1, 0, 0, {}, "blocked"),
+        (0, 1, 0, {}, "blocked"),
+        (0, 0, 1, {}, "blocked"),
+        (0, 0, 0, {"ppt-slice-cpu0": 1}, "blocked"),
+    ),
+)
+def test_negative_submission_requires_final_queue_and_lease_drain(
+    tmp_path: Path,
+    final_task_queue_depth: int,
+    final_outbox_pending: int,
+    final_kafka_lag: int,
+    final_active_leases: dict[str, int],
+    expected_status: str,
+) -> None:
+    plan = _plan(tmp_path)
+    case = next(
+        item for item in plan.catalog.cases if item.case_id == "OFF-NEGATIVE-1PCT"
+    )
+    metrics = _runtime_outcome(
+        requests=0,
+        acquired=0,
+        rejected=0,
+        released=0,
+        case_id=case.case_id,
+        final_task_queue_depth=final_task_queue_depth,
+        final_outbox_pending=final_outbox_pending,
+        final_kafka_lag=final_kafka_lag,
+        final_active_leases=final_active_leases,
+    )
+
+    observation = _negative_drain_observation(case, metrics)
+
+    assert observation is not None
+    assert observation["status"] == expected_status
+    assert observation["final_task_queue_depth"] == final_task_queue_depth
+    assert observation["final_outbox_pending"] == final_outbox_pending
+    assert observation["final_kafka_lag"] == final_kafka_lag
+    assert observation["final_active_leases"] == final_active_leases
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("final_task_queue_depth", "expected_status"),
+    ((0, "passed"), (1, "blocked")),
+)
+async def test_negative_submission_normative_result_enforces_final_drain(
+    tmp_path: Path,
+    final_task_queue_depth: int,
+    expected_status: str,
+) -> None:
+    plan = _plan(tmp_path)
+    release_root = tmp_path / "release"
+    _pass_required_before(release_root, plan, CampaignPhase.OFFLINE)
+    metrics = FakeMetricsAdapter(
+        outcome=_runtime_outcome(
+            requests=0,
+            acquired=0,
+            rejected=0,
+            released=0,
+            case_id="OFF-NEGATIVE-1PCT",
+            final_task_queue_depth=final_task_queue_depth,
+        )
+    )
+
+    class FakeExecutor:
+        def __init__(self, observed_plan: CampaignPlan) -> None:
+            self.observed_plan = observed_plan
+
+        async def execute(self, case_id: str) -> Path:
+            return _write_evidence(release_root, self.observed_plan, case_id)
+
+    result = await CampaignCoordinator(
+        plan,
+        release_root,
+        executor_factory=lambda observed_plan, _: FakeExecutor(observed_plan),
+        adapter_factories={"metrics": _factory(metrics)},
+    ).execute_case("OFF-NEGATIVE-1PCT", allow_live_execution=True)
+
+    assert result.status == expected_status
+    document = json.loads(result.evidence_path.read_text(encoding="utf-8"))
+    assert document["business_status"] == "passed"
+    assert document["negative_drain_observation"]["status"] == expected_status
 
 
 def test_face_recognition_accepts_uneven_complete_three_instance_participation(
@@ -862,6 +974,50 @@ async def test_live_case_post_guardrail_cannot_leave_normative_evidence_passed(
         (release_root / normative["business_evidence_path"]).read_text(encoding="utf-8")
     )
     assert business["status"] == "passed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("level", ("WARNING", "STOP"))
+async def test_live_case_rejects_passed_runtime_summary_with_non_clear_guardrail(
+    tmp_path: Path,
+    level: str,
+) -> None:
+    plan = _plan(tmp_path)
+    release_root = tmp_path / "release"
+    metrics = FakeMetricsAdapter(
+        outcome=_runtime_outcome(
+            requests=0,
+            acquired=0,
+            rejected=0,
+            released=0,
+            case_id="BASE-OFFLINE-PPT",
+            latest_guardrail={"level": level, "reasons": [f"sample {level}"]},
+        )
+    )
+
+    class FakeExecutor:
+        def __init__(self, observed_plan: CampaignPlan) -> None:
+            self.observed_plan = observed_plan
+
+        async def execute(self, case_id: str) -> Path:
+            return _write_evidence(release_root, self.observed_plan, case_id)
+
+    result = await CampaignCoordinator(
+        plan,
+        release_root,
+        executor_factory=lambda observed_plan, _: FakeExecutor(observed_plan),
+        adapter_factories={"metrics": _factory(metrics)},
+    ).execute_case("BASE-OFFLINE-PPT", allow_live_execution=True)
+
+    assert result.status == "failed"
+    document = json.loads(result.evidence_path.read_text(encoding="utf-8"))
+    assert document["status"] == "failed"
+    assert document["business_status"] == "passed"
+    assert document["runtime_observability"] == {
+        "error_type": "ValueError",
+        "reason": "运行时指标汇总失败: ValueError",
+        "status": "failed",
+    }
 
 
 @pytest.mark.asyncio

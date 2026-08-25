@@ -56,6 +56,21 @@ def test_northbound_targets_allow_only_control_and_gateway_ports() -> None:
             method="GET",
             url="http://192.168.29.11:18100/api/operator-instances",
         )
+    with pytest.raises(ValueError, match="终态期望"):
+        HttpRequestSpec(
+            request_id="invalid-terminal",
+            method="POST",
+            url="http://192.168.29.11:18100/api/course-jobs",
+            expected_task_terminal="cancelled",
+        )
+    with pytest.raises(ValueError, match="同步拒绝和异步终态"):
+        HttpRequestSpec(
+            request_id="conflicting-expectations",
+            method="POST",
+            url="http://192.168.29.11:18100/api/course-jobs",
+            expected_business_rejection=True,
+            expected_task_terminal="failed",
+        )
 
 
 @pytest.mark.asyncio

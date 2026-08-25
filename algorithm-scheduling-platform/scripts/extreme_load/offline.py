@@ -19,6 +19,9 @@ ASR_OPTIONS_DEFAULT: dict[str, object] = {
     "hotWords": [],
 }
 
+_DEFAULT_NOT_FOUND_MEDIA_URL = "http://192.168.29.12:5555/missing-404.mp4"
+_DEFAULT_TIMEOUT_MEDIA_URL = "http://192.168.29.12:5556/timeout.mp4"
+
 
 class TaskCombination(StrEnum):
     PPT_ONLY = "ppt_only"
@@ -295,13 +298,47 @@ def build_long_course_ladder(per_course_input_bytes: int) -> tuple[LongCourseLev
     )
 
 
+class NegativeSubmissionExpectation(StrEnum):
+    SYNC_REJECTION = "sync_rejection"
+    ASYNC_TERMINAL_FAILURE = "async_terminal_failure"
+
+
 class NegativeSubmissionKind(StrEnum):
     MISSING_REQUIRED_PATH = "missing_required_path"
     NOT_FOUND_MEDIA = "not_found_media"
     TIMEOUT_MEDIA = "timeout_media"
     UNKNOWN_TASK_TYPE = "unknown_task_type"
     INVALID_REGION = "invalid_region"
-    CONFLICTING_TASK_ID = "conflicting_task_id"
+
+    @property
+    def expectation(self) -> NegativeSubmissionExpectation:
+        if self in {
+            NegativeSubmissionKind.MISSING_REQUIRED_PATH,
+            NegativeSubmissionKind.UNKNOWN_TASK_TYPE,
+        }:
+            return NegativeSubmissionExpectation.SYNC_REJECTION
+        return NegativeSubmissionExpectation.ASYNC_TERMINAL_FAILURE
+
+
+@dataclass(frozen=True)
+class NegativeMediaEndpoints:
+    not_found_url: str = _DEFAULT_NOT_FOUND_MEDIA_URL
+    timeout_url: str = _DEFAULT_TIMEOUT_MEDIA_URL
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("not_found_url", self.not_found_url),
+            ("timeout_url", self.timeout_url),
+        ):
+            parsed = urlsplit(value)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.fragment
+            ):
+                raise ValueError(f"{field_name} 必须是无凭据、无 fragment 的 HTTP(S) URL")
 
 
 def _first_media_field(payload: Mapping[str, Any]) -> str | None:
@@ -322,8 +359,7 @@ def _first_media_field(payload: Mapping[str, Any]) -> str | None:
 def _negative_payload(
     payload: Mapping[str, Any],
     kind: NegativeSubmissionKind,
-    *,
-    conflict_task_id: str,
+    endpoints: NegativeMediaEndpoints,
 ) -> dict[str, Any]:
     mutated = copy.deepcopy(dict(payload))
     media_field = _first_media_field(mutated)
@@ -331,18 +367,44 @@ def _negative_payload(
         if media_field is not None:
             mutated.pop(media_field)
     elif kind is NegativeSubmissionKind.NOT_FOUND_MEDIA:
-        if media_field is not None:
-            mutated[media_field] = "http://192.168.29.12:5555/missing-404.mp4"
+        mutated = {
+            key: mutated[key]
+            for key in ("task_id", "priority")
+            if key in mutated
+        }
+        mutated.update(
+            {
+                "task_types": ["PPT"],
+                "slides_video_path": endpoints.not_found_url,
+            }
+        )
     elif kind is NegativeSubmissionKind.TIMEOUT_MEDIA:
-        if media_field is not None:
-            mutated[media_field] = "http://192.168.29.12:5555/timeout.mp4"
+        mutated = {
+            key: mutated[key]
+            for key in ("task_id", "priority")
+            if key in mutated
+        }
+        mutated.update(
+            {
+                "task_types": ["PPT"],
+                "slides_video_path": endpoints.timeout_url,
+            }
+        )
     elif kind is NegativeSubmissionKind.UNKNOWN_TASK_TYPE:
         mutated["task_types"] = ["UNKNOWN_TASK_TYPE"]
     elif kind is NegativeSubmissionKind.INVALID_REGION:
-        task_types = list(mutated.get("task_types", []))
-        if "STUDENT_BEHAVIOR" not in task_types:
-            task_types.append("STUDENT_BEHAVIOR")
-        mutated["task_types"] = task_types
+        mutated = {
+            key: mutated[key]
+            for key in (
+                "task_id",
+                "priority",
+                "student_video_path",
+                "student_count",
+                "back_point",
+            )
+            if key in mutated
+        }
+        mutated["task_types"] = ["STUDENT_BEHAVIOR"]
         mutated.setdefault(
             "student_video_path",
             "http://192.168.29.12:5555/course/S.mp4",
@@ -350,9 +412,7 @@ def _negative_payload(
         mutated.setdefault("student_count", 1)
         mutated["front_points"] = [{"X": -1, "Y": "invalid"}]
     else:
-        mutated["task_id"] = conflict_task_id
-        if media_field is not None:
-            mutated[media_field] = "http://192.168.29.12:5555/course/conflicting.mp4"
+        raise AssertionError(f"未处理的负向提交类型: {kind.value}")
     return mutated
 
 
@@ -361,6 +421,7 @@ def build_negative_submission_mix(
     *,
     ratio: float,
     seed: int,
+    endpoints: NegativeMediaEndpoints | None = None,
 ) -> tuple[HttpRequestSpec, ...]:
     if ratio not in {0.01, 0.05, 0.20}:
         raise ValueError("负向比例只允许 1%、5% 或 20%")
@@ -374,30 +435,29 @@ def build_negative_submission_mix(
         request_index: list(NegativeSubmissionKind)[variant_index % len(NegativeSubmissionKind)]
         for variant_index, request_index in enumerate(selected_positions)
     }
-    conflict_source_index = next(
-        (request_index for request_index in range(len(requests)) if request_index not in selected),
-        0,
-    )
-    first_body = requests[conflict_source_index].json_body
-    if first_body is None or not isinstance(first_body.get("task_id"), str):
-        raise ValueError("负向混合需要带 task_id 的离线提交")
-    conflict_task_id = first_body["task_id"]
+    selected_endpoints = endpoints or NegativeMediaEndpoints()
     result: list[HttpRequestSpec] = []
     for index, request in enumerate(requests):
         if index not in selected:
             result.append(request)
             continue
         assert request.json_body is not None
+        kind = selected[index]
+        expectation = kind.expectation
         result.append(
             replace(
                 request,
-                json_body=_negative_payload(
-                    request.json_body,
-                    selected[index],
-                    conflict_task_id=conflict_task_id,
+                json_body=_negative_payload(request.json_body, kind, selected_endpoints),
+                work_type=f"negative_submission:{kind.value}",
+                expected_business_rejection=(
+                    expectation is NegativeSubmissionExpectation.SYNC_REJECTION
                 ),
-                work_type=f"negative_submission:{selected[index].value}",
-                expected_business_rejection=True,
+                expected_task_terminal=(
+                    "failed"
+                    if expectation
+                    is NegativeSubmissionExpectation.ASYNC_TERMINAL_FAILURE
+                    else None
+                ),
             )
         )
     return tuple(result)
