@@ -2188,3 +2188,14 @@
   `412 passed`；Ruff、strict Mypy、compileall、OpenSpec strict、部署手册 `11 passed`、
   Harness 一致性 `5 passed` 和 `git diff --check` 均通过。当前达到静态与单元验证层级，
   仅授权形成新 SHA 并从阶段 0 新建 attempt，不补足 12.2。
+
+## 2026-08-25 - Kafka lag 修复后平台完整回归
+
+- Verification command and environment: 在平台 `.venv` 中使用工作区绝对
+  `PYTHONPATH` 执行完整 `tests` 回归，结果为 `3266 passed, 3 skipped`，用时
+  `683.58s`。3 个 skip 均因本机未运行 canonical `facerec-gpu0` GPU 容器，没有用
+  单元仿真伪造该层通过。
+- Evidence tier and verdict: 新观测器实现未引入平台回归失败；该结果与聚焦
+  `89/412` 测试、Ruff、strict Mypy、compileall、OpenSpec strict 和 diff-check 共同授权
+  形成远程候选 SHA。远程 11 镜像重建、新 attempt 与 OpenSpec 12.2 及后续任务
+  仍未完成。
