@@ -629,3 +629,30 @@ Campaign/release/SHA/case/phase 身份校验发布。
   `3274 passed, 3 skipped`。Ruff、strict Mypy、compileall、OpenSpec strict、Harness 一致性和
   `git diff --check` 均通过。3 个 skip 仅因本机未运行 canonical `facerec-gpu0`，不以模拟结果
   补足；上述本地结果只完成 10.19，不替代新 SHA 的 11 镜像和远端阶段 0–6。
+
+## 2026-08-25 - `4dc40757` PPT 终态并发竞态阻断
+
+- 当前 attempt 为 `full-campaign-4dc40757-20260825214026`。阶段 0 为 `14/14 passed`；
+  阶段 1 的 `OFF-LANE-PPT/ASR/TEACHER/STUDENT` 四案全部通过，前后护栏均为
+  `CLEAR`。
+- `OFF-UNIQUE-PPT-100` 精确提交 100 个新任务后，现场状态为完成 33、运行 15、
+  待处理 52；活动队列为 PPT 待处理 52、OCR 待处理 15、OCR 等待前置 52，
+  Outbox 为 0，21 个实例均报告 `inflight=0`。
+- 第 33 份运行时样本在 `2026-08-25T14:12:28.071934Z` 锁存 `STOP`，原因为
+  `orchestrator-service` 不健康。其 SHA-256 为
+  `1bc4e81e0b63758b89c2bfad5c74bf1bd56068fe6b2044b413f8eec86ef128e2`；前 32 份样本为
+  `CLEAR`。中断后没有生成 `off-unique-ppt-100.json`，不补写、不伪造通过。
+- Orchestrator 就绪详情显示五个后台循环均已停止，`ppt_reconcile` 根因为
+  `节点状态不允许从 60 转换到 60`。PPT 回调和对账并发读到 `RUNNING`，一方先持久
+  完成，后到一方触发严格状态机；容器未重启，但运行时按失败关闭停止所有循环。
+- 已立即停止新请求，未重启或修改远端容器，未进入 300 档及任何后续 case。
+  `.12` 仅以已验证的密钥连接采集源端 CPU、内存、网络与连接数；新增登录凭据未写入
+  Git、Harness、报告或 runtime 配置。
+- `.12:5555` 只读盘点共有 38 组完整 T/S/P 真实 MP4，其中 37 组为约 47/48/55/90 分钟
+  长课，冻结短 fixture 仍为同课 50.04 秒 `0912-360-410-{T,S,P}.mp4`。从 `.11`
+  执行 32 并发、每请求 1 MiB Range 探针为 `32/32` 成功。源端网卡为 1 Gbps，
+  Nginx access log 已约 2.2 GiB 且未观测到轮转；后续容量结论必须区分媒体源网络上限，
+  长稳期间还要观测源端日志增长，不将其归因为 `.11` 平台或算子故障。
+- 修复只放行并发后与回调一致的同终态；竞争后为冲突终态时仍失败关闭。当前
+  attempt 整体阻断，修复必须形成新 SHA、重建 11 个同 revision 镜像，再以新 seed、
+  Campaign ID 和 write-once attempt 从阶段 0 重跑。

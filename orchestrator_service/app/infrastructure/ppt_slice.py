@@ -12,6 +12,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from packages.platform_common.repository import NodeResultWrite
+from packages.platform_common.state_machine import InvalidNodeTransition
 from packages.platform_contracts.status import NodeStatus
 
 from ..domain.ppt_work import make_ppt_image_id
@@ -203,7 +204,10 @@ class PptSliceManifestValidator:
         expected_manifest = task_ppt_root / "manifest.json"
         callback_path = Path(callback.path).expanduser()
         callback_manifest = Path(callback.manifest_path).expanduser()
-        if not callback_path.is_absolute() or callback_path.resolve() != expected_slices.resolve():
+        if (
+            not callback_path.is_absolute()
+            or callback_path.resolve() != expected_slices.resolve()
+        ):
             raise PptSliceManifestError("PPT path 不在当前任务结果目录")
         if (
             not callback_manifest.is_absolute()
@@ -334,6 +338,40 @@ class PptSliceTerminalHandler:
             raise PptSliceCallbackError("PPT 运行中节点缺少持久化任务身份")
         return task_id, operator_task_id
 
+    @staticmethod
+    def _duplicate_result(
+        node: Any,
+        callback: PptSliceTerminalCallback,
+    ) -> PptTerminalHandleResult:
+        if (
+            node.status is NodeStatus.COMPLETED
+            and callback.status == NodeStatus.COMPLETED
+        ):
+            persisted_result = node.result if isinstance(node.result, dict) else {}
+            expected_segments = [
+                segment.model_dump() for segment in callback.dynamic_segments
+            ]
+            if (
+                not isinstance(node.artifact_path, str)
+                or Path(node.artifact_path).expanduser().resolve()
+                != Path(callback.path).expanduser().resolve()
+                or node.artifact_count != callback.count
+                or not isinstance(persisted_result.get("manifest_path"), str)
+                or Path(cast(str, persisted_result["manifest_path"])).expanduser().resolve()
+                != Path(callback.manifest_path).expanduser().resolve()
+                or persisted_result.get("dynamic_segments") != expected_segments
+            ):
+                raise PptSliceCallbackError("PPT 重复完成回调与已持久化结果不一致")
+            return PptTerminalHandleResult(completed=True, duplicate=True)
+        if node.status is NodeStatus.FAILED and callback.status == NodeStatus.FAILED:
+            expected_reason = callback.reason or "PPT 切片处理失败"
+            if node.reason != expected_reason:
+                raise PptSliceCallbackError("PPT 重复失败回调与已持久化原因不一致")
+            return PptTerminalHandleResult(completed=False, duplicate=True)
+        raise PptSliceCallbackError(
+            f"PPT 节点终态与回调冲突: {node.status} -> {callback.status}"
+        )
+
     def handle_callback(
         self,
         *,
@@ -381,16 +419,28 @@ class PptSliceTerminalHandler:
             raise PptSliceCallbackError("PPT 终态回调 operator_task_id 不匹配")
 
         node = self._repository.get_node(node_id)
-        if node.status is NodeStatus.COMPLETED and callback.status == NodeStatus.COMPLETED:
-            return PptTerminalHandleResult(completed=True, duplicate=True)
-        if node.status is NodeStatus.FAILED and callback.status == NodeStatus.FAILED:
-            return PptTerminalHandleResult(completed=False, duplicate=True)
+        if node.status in {
+            NodeStatus.COMPLETED,
+            NodeStatus.FAILED,
+            NodeStatus.CANCELLED,
+        }:
+            return self._duplicate_result(node, callback)
         if node.status is not NodeStatus.RUNNING:
-            raise PptSliceCallbackError(f"PPT 节点当前状态不接受终态回调: {node.status}")
+            raise PptSliceCallbackError(
+                f"PPT 节点当前状态不接受终态回调: {node.status}"
+            )
 
         if callback.status == NodeStatus.FAILED:
             reason = callback.reason or "PPT 切片处理失败"
-            self._repository.transition_node(node_id, NodeStatus.FAILED, reason)
+            try:
+                self._repository.transition_node(node_id, NodeStatus.FAILED, reason)
+            except InvalidNodeTransition as exc:
+                current = self._repository.get_node(node_id)
+                if current.status is NodeStatus.FAILED:
+                    return self._duplicate_result(current, callback)
+                raise PptSliceCallbackError(
+                    f"PPT 节点终态与回调冲突: {current.status} -> {callback.status}"
+                ) from exc
             return PptTerminalHandleResult(completed=False, duplicate=False)
         if callback.status != NodeStatus.COMPLETED:
             raise PptSliceCallbackError(f"PPT 终态状态不合法: {callback.status}")
@@ -428,7 +478,16 @@ class PptSliceTerminalHandler:
             artifact_count=validated.count,
             progress=terminal_progress,
         )
-        self._repository.complete_node(node_id, result, reason="PPT 切片处理完成")
+        try:
+            self._repository.complete_node(node_id, result, reason="PPT 切片处理完成")
+        except InvalidNodeTransition as exc:
+            # 终态回调与对账可并发命中同一 manifest，只放行已持久化的同终态。
+            current = self._repository.get_node(node_id)
+            if current.status is NodeStatus.COMPLETED:
+                return self._duplicate_result(current, callback)
+            raise PptSliceCallbackError(
+                f"PPT 节点终态与回调冲突: {current.status} -> {callback.status}"
+            ) from exc
         return PptTerminalHandleResult(
             completed=True,
             duplicate=False,
@@ -554,7 +613,7 @@ class PptCapacityLeaseKeeper:
                     if self._on_renewal_failure is not None:
                         try:
                             await self._on_renewal_failure(exc)
-                        except Exception:  # noqa: BLE001 - retain the renewal root cause
+                        except Exception:  # noqa: BLE001, S110 - retain renewal root cause
                             pass
                     return
 

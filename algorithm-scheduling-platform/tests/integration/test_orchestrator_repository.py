@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from threading import Barrier
 from typing import TYPE_CHECKING
 
 import pytest
 from orchestrator_service.app.application.pipeline import pipeline_nodes
+from orchestrator_service.app.infrastructure.ppt_slice import (
+    PptSliceManifestValidator,
+    PptSliceTerminalCallback,
+    PptSliceTerminalHandler,
+)
 from sqlalchemy import Engine, text
 
 from packages.platform_common.repository import (
@@ -72,9 +81,7 @@ def test_worker_reads_task_context_and_dynamic_dispatch_capabilities(
 
     task_type = repository.get_task_type(task_type_id)
 
-    assert task_type.request_payload == {
-        "teacher_video_path": "http://media/teacher.mp4"
-    }
+    assert task_type.request_payload == {"teacher_video_path": "http://media/teacher.mp4"}
     assert task_type.effective_params == {"showSpk": True, "showEmotion": True}
     assert repository.list_dispatch_capabilities() == ["asr_offline"]
 
@@ -123,6 +130,119 @@ def test_task_type_status_is_derived_from_node_facts(repository: CourseRepositor
     }
     assert duplicate.status is NodeStatus.COMPLETED
     assert duplicate.reason == completed.reason
+
+
+def test_ppt_callback_and_reconcile_are_idempotent_under_real_database_race(
+    repository: CourseRepository,
+    tmp_path: Path,
+) -> None:
+    task_id = "course-ppt-terminal-race"
+    repository.create_task_types(
+        task_id=task_id,
+        writes=[
+            TaskTypeWrite(
+                task_type=TaskType.PPT,
+                priority=Priority.NORMAL,
+                request_payload={"slides_video_path": "http://media/slides.mp4"},
+                effective_params={},
+            )
+        ],
+    )[0]
+    nodes = repository.initialize_pipeline(
+        task_id,
+        TaskType.PPT,
+        pipeline_nodes(TaskType.PPT, Priority.NORMAL),
+    )
+    ppt_node = next(node for node in nodes if node.node_code == "PPT_SLICE")
+    claimed = repository.claim_ready_node("ppt_slice", "worker-ppt-race")
+    assert claimed is not None and claimed.id == ppt_node.id
+    repository.transition_node(ppt_node.id, NodeStatus.RUNNING, "PPT 切片处理中")
+    operator_task_id = f"ppt-node-{ppt_node.id}"
+    repository.merge_node_progress(
+        ppt_node.id,
+        {"task_id": task_id, "operator_task_id": operator_task_id},
+        reason="PPT 异步任务已受理",
+    )
+
+    ppt_root = tmp_path / task_id / "ppt"
+    slices = ppt_root / "slices"
+    slices.mkdir(parents=True)
+    image_path = slices / "ppt-0001.jpg"
+    image_path.write_bytes(b"jpeg")
+    manifest_path = ppt_root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "task_id": task_id,
+                "operator_task_id": operator_task_id,
+                "status": 60,
+                "path": str(slices),
+                "manifest_path": str(manifest_path),
+                "count": 1,
+                "reason": "",
+                "images": [{"frame_seq": 1, "snap_time": 0, "path": str(image_path)}],
+                "dynamic_segments": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    callback = PptSliceTerminalCallback(
+        task_id=task_id,
+        operator_task_id=operator_task_id,
+        status=NodeStatus.COMPLETED,
+        path=str(slices),
+        manifest_path=str(manifest_path),
+        count=1,
+        dynamic_segments=[],
+    )
+    barrier = Barrier(2)
+
+    class BarrierRepository:
+        def get_node(self, node_id: int):
+            return repository.get_node(node_id)
+
+        def complete_node(
+            self,
+            node_id: int,
+            result: NodeResultWrite,
+            *,
+            reason: str,
+        ):
+            barrier.wait(timeout=5)
+            return repository.complete_node(node_id, result, reason=reason)
+
+        def transition_node(
+            self,
+            node_id: int,
+            status: NodeStatus,
+            reason: str,
+        ):
+            return repository.transition_node(node_id, status, reason)
+
+    handler = PptSliceTerminalHandler(
+        repository=BarrierRepository(),
+        validator=PptSliceManifestValidator(
+            result_root=tmp_path,
+            max_manifest_bytes=4096,
+        ),
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(
+                lambda _: handler.handle_callback(
+                    node_id=ppt_node.id,
+                    callback=callback,
+                ),
+                range(2),
+            )
+        )
+
+    assert sorted(result.duplicate for result in results) == [False, True]
+    persisted = repository.get_node(ppt_node.id)
+    assert persisted.status is NodeStatus.COMPLETED
+    assert persisted.artifact_path == str(slices)
+    assert persisted.artifact_count == 1
 
 
 def test_failed_node_derives_failed_task_type(repository: CourseRepository) -> None:

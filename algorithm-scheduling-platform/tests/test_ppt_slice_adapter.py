@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from packages.platform_common.config import PlatformSettings
 from packages.platform_common.repository import NodeResultWrite
+from packages.platform_common.state_machine import InvalidNodeTransition
 from packages.platform_contracts.status import NodeStatus
 
 
@@ -144,9 +145,7 @@ def test_manifest_validator_rejects_dynamic_segments_that_differ_from_callback(
 ) -> None:
     manifest = _write_manifest(tmp_path)
     callback_payload = {
-        key: value
-        for key, value in manifest.items()
-        if key not in {"schema_version", "images"}
+        key: value for key, value in manifest.items() if key not in {"schema_version", "images"}
     }
     callback_payload["dynamic_segments"] = []
     callback = ppt_slice.PptSliceTerminalCallback.model_validate(callback_payload)
@@ -201,6 +200,10 @@ def test_manifest_validator_rejects_callback_outside_task_result_root(tmp_path: 
 class _Node:
     def __init__(self, status: NodeStatus) -> None:
         self.status = status
+        self.reason = ""
+        self.result: dict[str, object] | None = None
+        self.artifact_path: str | None = None
+        self.artifact_count: int | None = None
         self.progress = {
             "task_id": "course-001",
             "operator_task_id": "ppt-run-001",
@@ -224,13 +227,41 @@ class _Repository:
     def complete_node(self, node_id: int, result: NodeResultWrite, *, reason: str) -> _Node:
         self.completions.append((node_id, result, reason))
         self.node.status = NodeStatus.COMPLETED
+        self.node.reason = reason
+        self.node.result = result.result if isinstance(result.result, dict) else None
+        self.node.artifact_path = result.artifact_path
+        self.node.artifact_count = result.artifact_count
         self.node.progress = result.progress
         return self.node
 
     def transition_node(self, node_id: int, status: NodeStatus, reason: str) -> _Node:
         self.transitions.append((node_id, status, reason))
         self.node.status = status
+        self.node.reason = reason
         return self.node
+
+
+class _RacingRepository(_Repository):
+    def __init__(self, competing_status: NodeStatus) -> None:
+        super().__init__()
+        self.competing_status = competing_status
+
+    def complete_node(self, node_id: int, result: NodeResultWrite, *, reason: str) -> _Node:
+        self.node.status = self.competing_status
+        if self.competing_status is NodeStatus.COMPLETED:
+            self.node.reason = reason
+            self.node.result = result.result if isinstance(result.result, dict) else None
+            self.node.artifact_path = result.artifact_path
+            self.node.artifact_count = result.artifact_count
+            self.node.progress = result.progress
+        raise InvalidNodeTransition(f"节点状态不允许从 {self.competing_status.value} 转换到 60")
+
+    def transition_node(self, node_id: int, status: NodeStatus, reason: str) -> _Node:
+        self.node.status = self.competing_status
+        self.node.reason = reason if self.competing_status is status else "并发终态冲突"
+        raise InvalidNodeTransition(
+            f"节点状态不允许从 {self.competing_status.value} 转换到 {status.value}"
+        )
 
 
 def test_terminal_handler_is_idempotent_after_durable_completion(tmp_path: Path) -> None:
@@ -266,10 +297,7 @@ def test_terminal_handler_is_idempotent_after_durable_completion(tmp_path: Path)
     assert repository.completions[0][1].artifact_count == 2
     assert repository.completions[0][1].result is not None
     assert repository.completions[0][1].progress["lease_id"] == "lease-ppt-001"
-    assert (
-        repository.completions[0][1].progress["lease_status"]
-        == "TERMINAL_PERSISTED"
-    )
+    assert repository.completions[0][1].progress["lease_status"] == "TERMINAL_PERSISTED"
     assert repository.completions[0][1].result["dynamic_segments"] == [
         {
             "type": "SUSPECTED_VIDEO_PLAYBACK",
@@ -279,6 +307,198 @@ def test_terminal_handler_is_idempotent_after_durable_completion(tmp_path: Path)
             "reason": "sustained_visual_change",
         }
     ]
+
+
+def test_terminal_handler_treats_concurrent_completion_as_duplicate(tmp_path: Path) -> None:
+    manifest = _write_manifest(tmp_path)
+    callback = ppt_slice.PptSliceTerminalCallback.model_validate(
+        {key: value for key, value in manifest.items() if key not in {"schema_version", "images"}}
+    )
+    handler = ppt_slice.PptSliceTerminalHandler(
+        repository=_RacingRepository(NodeStatus.COMPLETED),
+        validator=ppt_slice.PptSliceManifestValidator(
+            result_root=tmp_path,
+            max_manifest_bytes=4096,
+        ),
+    )
+
+    result = handler.handle(
+        node_id=11,
+        expected_task_id="course-001",
+        expected_operator_task_id="ppt-run-001",
+        callback=callback,
+    )
+
+    assert result.completed is True
+    assert result.duplicate is True
+
+
+@pytest.mark.parametrize(
+    "competing_status",
+    (NodeStatus.FAILED, NodeStatus.CANCELLED),
+)
+def test_terminal_handler_does_not_hide_concurrent_completion_conflict(
+    tmp_path: Path,
+    competing_status: NodeStatus,
+) -> None:
+    manifest = _write_manifest(tmp_path)
+    callback = ppt_slice.PptSliceTerminalCallback.model_validate(
+        {key: value for key, value in manifest.items() if key not in {"schema_version", "images"}}
+    )
+    handler = ppt_slice.PptSliceTerminalHandler(
+        repository=_RacingRepository(competing_status),
+        validator=ppt_slice.PptSliceManifestValidator(
+            result_root=tmp_path,
+            max_manifest_bytes=4096,
+        ),
+    )
+
+    with pytest.raises(ppt_slice.PptSliceCallbackError, match="终态与回调冲突"):
+        handler.handle(
+            node_id=11,
+            expected_task_id="course-001",
+            expected_operator_task_id="ppt-run-001",
+            callback=callback,
+        )
+
+
+def test_terminal_handler_treats_concurrent_failure_as_duplicate(tmp_path: Path) -> None:
+    callback = ppt_slice.PptSliceTerminalCallback.model_validate(
+        {
+            "task_id": "course-001",
+            "operator_task_id": "ppt-run-001",
+            "status": 70,
+            "path": str(tmp_path / "course-001/ppt/slices"),
+            "manifest_path": str(tmp_path / "course-001/ppt/manifest.json"),
+            "count": 0,
+            "reason": "视频解码失败",
+            "dynamic_segments": [],
+        }
+    )
+    handler = ppt_slice.PptSliceTerminalHandler(
+        repository=_RacingRepository(NodeStatus.FAILED),
+        validator=ppt_slice.PptSliceManifestValidator(
+            result_root=tmp_path,
+            max_manifest_bytes=4096,
+        ),
+    )
+
+    result = handler.handle_callback(node_id=11, callback=callback)
+
+    assert result.completed is False
+    assert result.duplicate is True
+
+
+@pytest.mark.parametrize(
+    "competing_status",
+    (NodeStatus.COMPLETED, NodeStatus.CANCELLED),
+)
+def test_terminal_handler_does_not_hide_concurrent_failure_conflict(
+    tmp_path: Path,
+    competing_status: NodeStatus,
+) -> None:
+    callback = ppt_slice.PptSliceTerminalCallback.model_validate(
+        {
+            "task_id": "course-001",
+            "operator_task_id": "ppt-run-001",
+            "status": 70,
+            "path": str(tmp_path / "course-001/ppt/slices"),
+            "manifest_path": str(tmp_path / "course-001/ppt/manifest.json"),
+            "count": 0,
+            "reason": "视频解码失败",
+            "dynamic_segments": [],
+        }
+    )
+    handler = ppt_slice.PptSliceTerminalHandler(
+        repository=_RacingRepository(competing_status),
+        validator=ppt_slice.PptSliceManifestValidator(
+            result_root=tmp_path,
+            max_manifest_bytes=4096,
+        ),
+    )
+
+    with pytest.raises(ppt_slice.PptSliceCallbackError, match="终态与回调冲突"):
+        handler.handle_callback(node_id=11, callback=callback)
+
+
+def test_terminal_handler_rejects_duplicate_completion_with_changed_result(
+    tmp_path: Path,
+) -> None:
+    manifest = _write_manifest(tmp_path)
+    callback = ppt_slice.PptSliceTerminalCallback.model_validate(
+        {key: value for key, value in manifest.items() if key not in {"schema_version", "images"}}
+    )
+    handler = ppt_slice.PptSliceTerminalHandler(
+        repository=_Repository(),
+        validator=ppt_slice.PptSliceManifestValidator(
+            result_root=tmp_path,
+            max_manifest_bytes=4096,
+        ),
+    )
+    handler.handle_callback(node_id=11, callback=callback)
+
+    changed = callback.model_copy(update={"count": callback.count + 1})
+    with pytest.raises(ppt_slice.PptSliceCallbackError, match="已持久化结果不一致"):
+        handler.handle_callback(node_id=11, callback=changed)
+
+
+def test_terminal_handler_accepts_duplicate_completion_with_equivalent_paths(
+    tmp_path: Path,
+) -> None:
+    manifest = _write_manifest(tmp_path)
+    callback = ppt_slice.PptSliceTerminalCallback.model_validate(
+        {key: value for key, value in manifest.items() if key not in {"schema_version", "images"}}
+    )
+    handler = ppt_slice.PptSliceTerminalHandler(
+        repository=_Repository(),
+        validator=ppt_slice.PptSliceManifestValidator(
+            result_root=tmp_path,
+            max_manifest_bytes=4096,
+        ),
+    )
+    handler.handle_callback(node_id=11, callback=callback)
+
+    equivalent = callback.model_copy(
+        update={
+            "path": str(Path(callback.path) / ".." / "slices"),
+            "manifest_path": str(
+                Path(callback.manifest_path).parent / "slices" / ".." / "manifest.json"
+            ),
+        }
+    )
+    result = handler.handle_callback(node_id=11, callback=equivalent)
+
+    assert result.completed is True
+    assert result.duplicate is True
+
+
+def test_terminal_handler_rejects_duplicate_failure_with_changed_reason(
+    tmp_path: Path,
+) -> None:
+    callback = ppt_slice.PptSliceTerminalCallback.model_validate(
+        {
+            "task_id": "course-001",
+            "operator_task_id": "ppt-run-001",
+            "status": 70,
+            "path": str(tmp_path / "course-001/ppt/slices"),
+            "manifest_path": str(tmp_path / "course-001/ppt/manifest.json"),
+            "count": 0,
+            "reason": "视频解码失败",
+            "dynamic_segments": [],
+        }
+    )
+    handler = ppt_slice.PptSliceTerminalHandler(
+        repository=_Repository(),
+        validator=ppt_slice.PptSliceManifestValidator(
+            result_root=tmp_path,
+            max_manifest_bytes=4096,
+        ),
+    )
+    handler.handle_callback(node_id=11, callback=callback)
+
+    changed = callback.model_copy(update={"reason": "manifest 损坏"})
+    with pytest.raises(ppt_slice.PptSliceCallbackError, match="已持久化原因不一致"):
+        handler.handle_callback(node_id=11, callback=changed)
 
 
 def test_terminal_handler_persists_failed_terminal_state_idempotently(tmp_path: Path) -> None:
@@ -332,9 +552,7 @@ def test_manifest_reconciliation_uses_persisted_node_identity(tmp_path: Path) ->
 def test_orchestrator_exposes_terminal_callback_route(tmp_path: Path) -> None:
     manifest = _write_manifest(tmp_path)
     callback = {
-        key: value
-        for key, value in manifest.items()
-        if key not in {"schema_version", "images"}
+        key: value for key, value in manifest.items() if key not in {"schema_version", "images"}
     }
     handler = ppt_slice.PptSliceTerminalHandler(
         repository=_Repository(),
@@ -351,6 +569,11 @@ def test_orchestrator_exposes_terminal_callback_route(tmp_path: Path) -> None:
     client = TestClient(app)
     response = client.post("/internal/ppt-slice/callback/11", json=callback)
     duplicate = client.post("/internal/ppt-slice/callback/11", json=callback)
+    changed_callback = {**callback, "count": 1}
+    conflict = client.post(
+        "/internal/ppt-slice/callback/11",
+        json=changed_callback,
+    )
 
     assert response.status_code == 200
     assert response.json() == {
@@ -362,6 +585,8 @@ def test_orchestrator_exposes_terminal_callback_route(tmp_path: Path) -> None:
     }
     assert duplicate.status_code == 200
     assert duplicate.json()["duplicate"] is True
+    assert conflict.status_code == 409
+    assert "已持久化结果不一致" in conflict.json()["detail"]
 
 
 class _CapacityClient:

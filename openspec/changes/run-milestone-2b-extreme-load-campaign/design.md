@@ -356,6 +356,22 @@ Campaign ID 和 attempt root；锁以非阻塞独占方式取得，并在该 cas
 同 revision 镜像，以新 seed、Campaign ID 和 write-once attempt 从阶段 0 完整重跑；不得在
 旧 attempt 上续写缺失用例。
 
+### 17. PPT 终态回调与对账必须在并发下幂等
+
+`4dc40757f9ec2c13c2eccc4629d0bc81941e6062` 的全新 attempt 已完成阶段 0 和阶段 1
+四条独立单泳道。`OFF-UNIQUE-PPT-100` 提交 100 个任务后，PPT 终态回调与
+30 秒对账循环并发读到同一个 `RUNNING` 节点：一方先完成持久化，另一方随后
+严格执行 `60 -> 60` 并触发 `InvalidNodeTransition`。Orchestrator 按失败关闭语义停止
+全部后台循环，护栏在第 33 个运行时样本锁存 `STOP`。
+
+修复仅将“竞争后已持久化为回调所声明的同一终态，且终态载荷一致”视为
+幂等重复：完成回调核对 `path/count/manifest_path/dynamic_segments`，失败回调核对
+`reason`。竞争后的失败、取消或其他冲突终态，以及同状态但载荷不同的回调，仍作为
+可识别冲突失败关闭，不能用幂等逻辑覆盖真实冲突。中断 attempt 只保留
+四条已通过单泳道、33 份运行时样本和现场事实；不补写
+`OFF-UNIQUE-PPT-100` 规范 case，也不继续后续用例。修复必须形成新完整 SHA，
+同 revision 重建 11 个镜像并以新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑。
+
 ## Risks / Trade-offs
 
 - [风险] 1000 提交与 36 长课可能产生大量 `/data/course` 临时文件。 → 短/长媒体分阶段，进入新阶梯前重新预估，低于 15%/150 GiB 禁止加压，低于 10%/100 GiB 立即停止。

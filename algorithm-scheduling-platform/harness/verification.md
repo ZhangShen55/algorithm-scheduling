@@ -1840,3 +1840,40 @@ git diff --check
 `.campaign-fault.lock`、逐动作本地探针和远端 canonical challenge 合同成立；它只完成
 OpenSpec 10.19。下一步仍须形成新完整 SHA、重建/inspect 11 个镜像并创建新 attempt 从阶段 0
 重跑。
+
+## 2026-08-25 PPT 终态并发幂等聚焦回归
+
+`4dc40757` attempt 的 `OFF-UNIQUE-PPT-100` 在第 33 份运行时样本因
+`orchestrator-service` 不健康锁存 `STOP`。该样本 SHA-256 为
+`1bc4e81e0b63758b89c2bfad5c74bf1bd56068fe6b2044b413f8eec86ef128e2`。现场为 100 任务中
+33 完成、15 运行、52 待处理，Orchestrator 就绪详情为 `ppt_reconcile: 节点状态不允许从 60
+转换到 60`。该 attempt 不存在规范 `OFF-UNIQUE-PPT-100` case 结果，不补写。
+
+本地先运行新增并发回归，修复前结果为 `1 failed, 1 passed`，失败精确为
+`InvalidNodeTransition: 60 -> 60`。修复后执行：
+
+```bash
+algorithm-scheduling-platform/.venv/bin/pytest -q \
+  algorithm-scheduling-platform/tests/test_ppt_slice_adapter.py \
+  orchestrator_service/tests/test_ppt_runtime.py
+
+algorithm-scheduling-platform/.venv/bin/ruff check \
+  orchestrator_service/app/infrastructure/ppt_slice.py \
+  algorithm-scheduling-platform/tests/test_ppt_slice_adapter.py
+
+(cd algorithm-scheduling-platform && PYTHONPATH="$PWD:$PWD/.." \
+  .venv/bin/python -m pytest -q \
+  tests/integration/test_orchestrator_repository.py \
+  -k ppt_callback_and_reconcile)
+```
+
+实际结果为聚焦 `39 passed`，真实 PostgreSQL 双线程竞态 `1 passed`，Ruff 通过。
+回归证明并发完成和并发失败只在状态与持久化载荷一致时被视为幂等重复；
+完成/失败/取消异状态冲突、以及同状态不同结果仍以可识别冲突失败关闭。这只是本地
+聚焦和数据库竞态验证；新 SHA、
+11 镜像重建、远端就绪/Smoke 和新 attempt 阶段 0 仍属必需后续门禁。
+
+补强后在平台 `.venv` 使用权威 `PYTHONPATH="$PWD:$PWD/.."` 重跑完整 `tests`，
+最终结果为 `3283 passed, 3 skipped, 27 warnings`，用时 `667.44s`。三个 skip 仍仅因
+本机未运行 canonical `facerec-gpu0`，将由同 SHA 远端 7/7 Smoke 和 Campaign 门禁补足；
+该全量回归不替代 OpenSpec 11.9 的远端重建与新 attempt。

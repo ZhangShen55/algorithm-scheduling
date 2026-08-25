@@ -2235,3 +2235,25 @@
   同 revision 的 29/29、21/21、18 GPU、3 PPT 和 7/7 Smoke；随后以新 seed、Campaign ID 和
   write-once attempt 从阶段 0 完整重跑。旧 `28e74d7` attempt 保持只读，不能续写 30 档或
   业务 case，也不能用于完成 OpenSpec 12.2–12.8。
+
+## 2026-08-25 - PPT 终态回调/对账并发幂等修复
+
+- Previous state: `4dc40757f9ec2c13c2eccc4629d0bc81941e6062` 的阶段 0 和四条阶段 1
+  单泳道通过；`OFF-UNIQUE-PPT-100` 提交 100 任务后，PPT 回调/对账并发完成导致
+  `60 -> 60` 异常。第 33 份样本锁存 `STOP`，五个 Orchestrator 后台循环全部停止。
+- Target state: 同一 PPT 节点的并发回调/对账只在最终数据库状态与回调终态一致时返回
+  `duplicate=true`；不一致的完成、失败或取消竞争仍保持原严格状态机异常。
+- Changed files: `orchestrator_service/app/infrastructure/ppt_slice.py`、PPT 适配器并发回归，当前
+  OpenSpec 设计/规格/任务与 Harness 场景/验证/变更账本。中断 attempt 和用户未纳管文件不修改。
+- Contract impact: 不改变 A 服务字段、PPT 内部路径、节点整数状态、四服务边界或算子协议；
+  只收窄终态幂等竞态。
+- Evidence tier and verdict: 先增加失败回归证明原实现在并发完成时抛出
+  `InvalidNodeTransition`；修复后 PPT 适配器与 runtime 聚焦回归为 `39 passed`，真实
+  PostgreSQL 双线程竞态为 `1 passed`，Ruff 与 strict Mypy 通过。同状态重复还会核对
+  已持久化载荷，异状态和同状态不同载荷均不会被吞掉。该结果达到本地静态、单元与
+  真实 PostgreSQL 集成层；平台权威全量为 `3283 passed, 3 skipped, 27 warnings`，三个 skip
+  仍只是本机缺少 canonical `facerec-gpu0`。当前仍不完成 OpenSpec 11.9 或任何远端
+  Campaign 阶段。
+- Remaining risks: 必须完成平台权威全量回归、形成新 SHA，在 `.11` 重建/inspect 11 个同
+  revision 镜像，恢复 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT 和 7/7 Smoke，然后新建
+  write-once attempt 从阶段 0 重跑。

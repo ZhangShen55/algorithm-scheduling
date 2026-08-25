@@ -101,6 +101,10 @@ ffprobe、完整解码和安全末端抽帧验证。PPT 与视觉单任务遇到
 - **WHEN** PPT 节点已经进入 `RUNNING`，但异步提交返回的 `task_id` 和 `operator_task_id` 尚未写入节点进度
 - **THEN** Orchestrator 对账循环 SHALL 从所属任务类型读取持久 `task_id`，按 `ppt-node-{node_id}` 确定性恢复算子身份并继续 manifest 对账，不得终止全部后台循环或无限跳过；manifest、数据库或已持久化身份的真实错误仍 MUST 失败关闭
 
+#### Scenario: PPT 终态回调与对账并发完成
+- **WHEN** PPT 终态回调和对账循环并发处理同一运行节点，一方已率先持久化与回调一致的终态
+- **THEN** 后到一方 MUST 在状态和持久化终态载荷均一致时把它视为幂等重复并继续运行，不得因 `60 -> 60` 或 `70 -> 70` 停止 Orchestrator 后台循环；完成载荷 MUST 核对 `path/count/manifest_path/dynamic_segments`，失败载荷 MUST 核对 `reason`；若竞争后终态或载荷与回调不一致，MUST 以可识别冲突继续失败关闭
+
 ### Requirement: 幂等、追加任务类型与优先级必须在压力下保持语义
 Campaign 系统 SHALL 对同一 `task_id` 执行 30、100、300、1000 次并发相同提交，并验证分批追加 `task_types`、已完成结果复用和冲突媒体请求。Campaign 还 SHALL 在堆积的 `NORMAL` 后注入 `URGENT`，验证只对未领取节点插队。Control 课程查询的节点字典 MUST 从 PostgreSQL 节点事实返回可空 `claimed_at` 和 `started_at`，Campaign MUST 使用它们证明领取和开始顺序。
 
