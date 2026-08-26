@@ -74,6 +74,7 @@ stdout；默认单文件上限 100 MiB、归档保留 7 日，字段由各自根
 - A/远程主机只访问 `control-service:18100` 和 `online-gateway-service:18103`。`18101`、`18102`、PostgreSQL `5432`、Kafka `9092`、Redis `6379`、MongoDB `27017` 和全部 21 个算子宿主机端口必须绑定 `127.0.0.1`；容器间继续使用 `algorithm-platform` 网络和服务名。
 - Kafka 同时提供 `EXTERNAL://:9092` 与 `INTERNAL://:29092`，分别广播 `EXTERNAL://127.0.0.1:9092` 与 `INTERNAL://kafka:29092`。容器不得使用宿主机广播地址。
 - 发布构建必须显式传入完整 `EXPECTED_GIT_SHA`。四个平台运行容器通过 `preflight runtime --git-sha SHA` 校验最终镜像 revision；每个算子 profile 以及全 21 实例分别通过 `preflight operators --profile PROFILE --git-sha SHA` 和 `preflight operators --full --git-sha SHA` 校验。Smoke 的 `--git-sha` 只标记报告归属，不替代镜像 attestation。
+- 首次全量注册预检固定发布 canonical `registration/operator-registration.json`。Stage45 在实例停止、恢复和重新注册后只能使用 `preflight operators --full --evidence-checkpoint stage45-post-recovery` 发布独立的恢复后证据；该 checkpoint 不能用于 profile/instance，也不能替代聚合器所需的 canonical full 报告。两类文件都保持 write-once。
 - B 级复核只能在对应 `business/review-requests/{offline,vision}.json` 发布后按 phase 提交；输入和索引必须位于整个 Git 工作区及 release 之外，权限 `0600`。六项复核使用固定逐案 `observed` 字段，证据以 `release:<相对路径>#sha256:<摘要>` 绑定当前 release 中已存在的脱敏 `0600` 文件；不得预制、跨 phase 混合或把原视频、图片、完整 ASR/OCR 文本写入普通报告。
 - 旧八算子、24 实例 release 是不可改写的历史证据，只能用于追溯当时事实；它不能补足当前
   七算子发布的任何缺失门禁，也不能被重标或复制成当前通过证据。

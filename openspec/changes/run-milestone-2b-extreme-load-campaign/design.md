@@ -447,6 +447,26 @@ Outbox、Kafka lag 和租约全部排空，29 个容器保持健康；但一次 
 避免依赖目标机全局 Python 是否安装 `websockets`。该包装入口只改变解释器选择，不改变故障
 目标、锁绑定、探针参数或证据目录。
 
+### 21. 首次全量注册与 Stage45 恢复后注册使用独立证据检查点
+
+`4fd4fa118e7f3cb446a50d0c1176cbd5bdd1c52a` 已在 `.11` 完成 11 个同 revision 镜像构建、
+29/29 healthy、21/21 注册和 18 个 GPU 实例的真实推理/停止/恢复。常驻启动已先发布
+`registration/operator-registration.json`；Stage45 在全部 GPU 实例恢复后再次执行 full
+预检时，因为报告中的检查时间和心跳时间已经变化，write-once 正确拒绝覆盖同名 canonical
+文件。该失败是发布证据检查点命名缺陷，不是放宽 write-once 的理由。
+
+首次 `preflight operators --full` 继续固定发布 canonical
+`operator-registration.json`。Stage45 恢复后只允许显式传入固定枚举
+`--evidence-checkpoint stage45-post-recovery`，发布同一 release 下的
+`operator-registration-stage45-post-recovery.json` 并记录 `evidence_checkpoint`。checkpoint
+只能与显式 `--full` 配合；profile、instance、未知、缺值、重复或缩写参数必须在 Docker/HTTP
+检查前失败。常驻启动计划不得传 checkpoint，聚合器和清理保护门禁仍只把首次 full 文件作为
+canonical 输入。两类文件都继续 write-once，同一 checkpoint 的不同内容重跑必须拒绝覆盖。
+
+`4fd4fa1` 的 Stage45 和 release 保持只读，不能补写成通过。修复必须形成新完整 Git SHA，
+重建并 inspect 11 个同 revision 镜像，恢复完整拓扑并使用独立恢复后 checkpoint 完成
+Stage45；随后仍须用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑。
+
 ## Risks / Trade-offs
 
 - [风险] 1000 提交与 36 长课可能产生大量 `/data/course` 临时文件。 → 短/长媒体分阶段，进入新阶梯前重新预估，低于 15%/150 GiB 禁止加压，低于 10%/100 GiB 立即停止。
@@ -476,7 +496,9 @@ Outbox、Kafka lag 和租约全部排空，29 个容器保持健康；但一次 
 ## Open Questions
 
 - 150 路实时 ASR 和 1000 图片并发继续从当前 Mac 负载主机生成。`192.168.29.12`
-  的只读自检已证明它适合作媒体源、慢响应反例端点和源端遥测，但其 shell
-  `nofile=1024` 且网卡 RX drop 持续有增量，不作权威高并发负载 worker。如 Mac 自检先达上限，
-  后续使用独立、经自检的 worker 分片并保持同一 Campaign ID，不直接把 `.12` 当作替代。
+  的只读自检已证明它适合作媒体源、慢响应反例端点和源端遥测。其交互 shell
+  `nofile` soft 为 1024，但两个媒体容器主进程的 soft/hard 均为 1073741816，服务侧当前不受
+  该 shell 上限约束；真正需要持续分离的是 `eno1` RX drop 仍有增量。基于既定主机职责和
+  网络归因边界，`.12` 仍不作权威高并发负载 worker。阶段前后必须记录 RX drop 差值；如 Mac
+  自检先达上限，后续使用独立、经自检的 worker 分片并保持同一 Campaign ID。
 - 人脸库识别质量需要带真实身份标签的底图和测试图。如实施时尚未提供，可完成并发一致性和数据库验证，但人脸识别质量必须明确标记为未完成，不得伪造通过。

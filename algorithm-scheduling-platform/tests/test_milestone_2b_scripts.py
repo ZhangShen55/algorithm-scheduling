@@ -2802,6 +2802,103 @@ def test_preflight_operators_full_checks_running_topology_and_registration(
 
 
 @pytest.mark.parametrize(
+    "checkpoint_arguments",
+    (
+        ("--evidence-checkpoint", "stage45-post-recovery"),
+        ("--evidence-checkpoint=stage45-post-recovery",),
+    ),
+)
+def test_preflight_operators_forwards_stage45_registration_checkpoint(
+    fake_bin: Path,
+    tmp_path: Path,
+    readiness_server: Any,
+    checkpoint_arguments: tuple[str, ...],
+) -> None:
+    base_url, state = readiness_server
+    state.update(_registration_responses(_registered_operator_instances()))
+    course, result = _separate_shared_roots(tmp_path)
+    environment = _base_environment(
+        fake_bin,
+        COURSE_ROOT=str(course),
+        RESULT_ROOT=str(result),
+    )
+
+    completed = _run(
+        "preflight",
+        *_operator_preflight_arguments(
+            tmp_path,
+            base_url,
+            "--full",
+            *checkpoint_arguments,
+        ),
+        environment=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    output = (
+        tmp_path
+        / "reports"
+        / "milestone-2b"
+        / "releases"
+        / "v1.0_260812"
+        / ("a" * 40)
+        / "registration"
+        / "operator-registration-stage45-post-recovery.json"
+    )
+    assert json.loads(output.read_text(encoding="utf-8"))[
+        "evidence_checkpoint"
+    ] == "stage45-post-recovery"
+
+
+@pytest.mark.parametrize(
+    "selection",
+    (
+        ("--evidence-checkpoint", "stage45-post-recovery"),
+        ("--full", "--evidence-checkpoint"),
+        ("--full", "--evidence-checkpoint="),
+        ("--full", "--evidence-check", "stage45-post-recovery"),
+        ("--full", "--evidence-checkpoint", "unknown"),
+        (
+            "--profile",
+            "gpu0",
+            "--evidence-checkpoint",
+            "stage45-post-recovery",
+        ),
+        (
+            "--full",
+            "--evidence-checkpoint",
+            "stage45-post-recovery",
+            "--evidence-checkpoint",
+            "stage45-post-recovery",
+        ),
+    ),
+)
+def test_preflight_operators_rejects_invalid_checkpoint_before_inspection(
+    fake_bin: Path,
+    tmp_path: Path,
+    readiness_server: Any,
+    selection: tuple[str, ...],
+) -> None:
+    base_url, _ = readiness_server
+    environment = _base_environment(fake_bin)
+
+    completed = _run(
+        "preflight",
+        *_operator_preflight_arguments(
+            tmp_path,
+            base_url,
+            *selection,
+            timeout="0.05",
+        ),
+        environment=environment,
+    )
+
+    assert completed.returncode != 0
+    assert not _commands(environment)
+    assert not list((tmp_path / "reports").rglob("operator-registration*.json"))
+
+
+@pytest.mark.parametrize(
     ("override", "reason"),
     (
         ({"OPERATOR_PACKAGE_PROBE_VERSION": "0.1.0"}, "0.1.0"),

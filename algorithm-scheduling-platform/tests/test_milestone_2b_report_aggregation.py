@@ -3179,6 +3179,9 @@ def test_registration_paths_are_canonical_and_face_hash_is_stable() -> None:
         for profile in ("gpu0", "gpu1", "gpu2", "cpu")
     }
     assert len([key for key in paths if key.startswith("recovery:")]) == 18
+    assert Path(
+        "registration/operator-registration-stage45-post-recovery.json"
+    ) not in paths.values()
 
 
 def test_complete_registration_gpu_sources_generate_exact_cases(

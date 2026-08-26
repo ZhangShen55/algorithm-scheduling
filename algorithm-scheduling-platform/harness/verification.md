@@ -2023,3 +2023,46 @@ canonical `facerec-gpu0`，27 条 warning 仍为既有 Python fork `DeprecationW
 当前 Ruff 规则；仅调整 import 顺序后，PPT adapter/runtime 聚焦回归为 `39 passed`，该文件
 Ruff 和使用 `MYPYPATH="$PWD/algorithm-scheduling-platform"` 的 strict Mypy 均通过，不改变
 PPT 回调、对账或北向合同。
+
+## 2026-08-26 Stage45 注册证据 checkpoint 回归
+
+`4fd4fa118e7f3cb446a50d0c1176cbd5bdd1c52a` 的远端 Stage45 真实结果为：18/18 GPU
+实例生命周期通过、3/3 CPU PPT 通过、7/7 Smoke 通过、29/29 healthy、18 个 GPU 进程，
+但 `CODEX_STAGE45_COMPLETE failures=1`、退出码 1。唯一失败为恢复后 full 注册检查试图覆盖
+常驻启动的 canonical `registration/operator-registration.json`，write-once 正确拒绝；旧
+release 全程只读并未创建 Campaign attempt。
+
+本地先执行新增边界回归：
+
+```bash
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/test_milestone_2b_task9.py::test_registration_verifier_writes_distinct_stage45_checkpoint \
+  tests/test_milestone_2b_task9.py::test_registration_verifier_rejects_invalid_checkpoint_before_http \
+  tests/test_milestone_2b_task9.py::test_registration_checkpoint_rerun_preserves_write_once_bytes \
+  tests/test_milestone_2b_task9.py::test_stage45_docs_resolve_compose_container_ids_and_use_the_real_result_root \
+  tests/test_milestone_2b_scripts.py::test_preflight_operators_forwards_stage45_registration_checkpoint \
+  tests/test_milestone_2b_scripts.py::test_preflight_operators_rejects_invalid_checkpoint_before_inspection \
+  tests/deploy/test_production_stack.py::test_start_plan_uses_persistent_stages_not_canonical_restore \
+  tests/test_milestone_2b_report_aggregation.py::test_registration_paths_are_canonical_and_face_hash_is_stable
+```
+
+实际为 `20 passed`。回归证明首次 canonical 文件的字节和 inode 不变；恢复后报告写入
+`operator-registration-stage45-post-recovery.json` 且为 `0600`；同 checkpoint 不同内容重跑
+干净返回非零、无 traceback、无临时文件且不覆盖旧字节；未知、路径式、重复、profile、
+instance 和非显式 full 参数都在 Docker/HTTP 前失败。常驻启动计划仍无 checkpoint，聚合器
+仍只认 canonical full。完整 Ruff、strict Mypy、Bash syntax、OpenSpec、Harness 与平台回归
+将在本次提交前继续补齐；本地结果不完成远端 11.12。
+
+同轮对 `.12` 只读复核：SSH key 登录、`5555/course/` 和 `5556/healthz` 均通过；两个媒体
+容器实际进程 `nofile` soft/hard 均为 1073741816。`eno1` RX dropped 在 3 秒采样内增加 10，
+所以后续阶段继续把 `.12` 限定为媒体/慢响应/遥测源，并记录 RX drop 前后差值；不把源端丢包
+归因到 `.11`，也不把 `.12` 用作权威高并发负载机。未修改远端文件、容器或凭据边界。
+
+补齐底层 verifier 的显式 `--full` 后，checkpoint 聚焦与受影响 GPU evidence fixture 为
+`21 passed`。提交前最终门禁为：Ruff 通过；`verify_operator_registration.py` 使用
+`--strict --follow-imports=skip` 的 Mypy 通过；compileall 与两个 Bash 脚本 syntax 通过；
+Harness `5 passed`、部署手册 `11 passed`、全部活动 OpenSpec strict 和 `git diff --check`
+通过。平台权威全量为 `3349 passed, 3 skipped, 27 warnings`，耗时 `810.05s`；三个 skip
+只因本机没有 canonical `facerec-gpu0`，27 个 warnings 仍为既有 fork
+`DeprecationWarning`。这些本地结果完成 10.24，但新 SHA 的 11 镜像和远端 Stage45 仍必须
+完成 11.12，不能复用 `4fd4fa1` 的发布证据。

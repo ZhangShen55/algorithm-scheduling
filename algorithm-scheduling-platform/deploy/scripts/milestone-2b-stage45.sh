@@ -291,6 +291,7 @@ else
 fi
 
 if ! deploy/scripts/preflight operators --full --git-sha "$EXPECTED_GIT_SHA" \
+  --evidence-checkpoint stage45-post-recovery \
   --control-url "$CONTROL_URL" \
   --release-tag "$RELEASE_TAG" --reports-root "$REPORT_ROOT"; then
   record_stage45_failure 'full-operator-preflight'

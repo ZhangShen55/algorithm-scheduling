@@ -2360,3 +2360,31 @@
 - Remaining risks: 旧采集模型约每样本 13 次 SSH 认证；有限重试降低单次抖动误阻断，但不会
   减少握手数量。连接复用或合并远端只读快照需要独立设计与证据，不能在当前冻结 attempt
   上验证，也不能以此跳过本次新 SHA 的完整重跑。
+
+## 2026-08-26 - Stage45 恢复后注册证据检查点分离
+
+- Previous state: `4fd4fa118e7f3cb446a50d0c1176cbd5bdd1c52a` 的远端 Stage45 完成
+  18/18 GPU 生命周期、3/3 CPU PPT 和 7/7 Smoke，但恢复后再次执行 full 注册预检时与常驻
+  启动生成的 `operator-registration.json` 重名。动态心跳字节不同，write-once 拒绝覆盖；
+  最终 `failures=1`、退出码 1，release 保持只读且没有启动 Campaign。
+- Target state: 首次 full 保持 canonical；Stage45 恢复后通过固定
+  `stage45-post-recovery` checkpoint 发布独立报告。checkpoint 不能用于 profile/instance、
+  不能任意命名、不能替代聚合输入，同一路径重跑仍受 write-once 保护。
+- Changed files: 注册验证器、算子 preflight、Stage45 脚本、部署/证据文档、OpenSpec、Harness
+  和相应测试。常驻启动计划不传 checkpoint，聚合注册路径不增加恢复后文件。
+- Contract impact: 不修改 A 服务接口、算子协议、注册/租约语义、七算子四平台拓扑、镜像或
+  业务泳道；只修复同一 release 中两个不同时间注册检查的证据命名。
+- Initial verification: 新增 checkpoint 生成、非法/重复/非 full 拒绝、write-once 重跑、
+  preflight 透传、常驻计划和聚合边界回归，扩展聚焦结果为 `20 passed`。完整静态与平台回归在
+  提交前继续执行并在 verification 中补齐。
+- Final verification: 修复手工 Namespace fixture 后扩展聚焦为 `21 passed`；平台权威全量为
+  `3349 passed, 3 skipped, 27 warnings`，耗时 `810.05s`。三个 skip 只因本机没有运行
+  canonical `facerec-gpu0`，warnings 仍为既有 fork `DeprecationWarning`。Ruff、受影响文件
+  strict Mypy、compileall、Bash syntax、Harness `5 passed`、部署手册 `11 passed` 和全部活动
+  OpenSpec strict 校验通过。
+- Supplemental source-host evidence: `.12` SSH key、`:5555/course/` 与 `:5556/healthz` 正常；
+  两个媒体容器实际 `nofile` soft/hard 均为 1073741816。`eno1` RX drop 在 3 秒内增加 10，
+  后续极限压测必须记录源端前后差值并与 `.11` 结果分开归因。连接凭据未写入仓库或证据。
+- Evidence tier and verdict: 当前达到本地静态/单元层，完成 OpenSpec 10.24，并把 `4fd4fa1`
+  记录为 11.11 的失败发布事实。新 SHA 的 11 镜像、远端 Stage45 和全新 Campaign 属于
+  11.12/12.1–12.8，尚未完成。

@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from collections import Counter
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -42,6 +43,22 @@ OPERATOR_CONTRACTS = {
     entry.service_prefix: (entry.operator_code, set(entry.capabilities))
     for entry in CURRENT_TOPOLOGY.operators
 }
+EVIDENCE_CHECKPOINTS = ("stage45-post-recovery",)
+
+
+class StoreOnceAction(argparse.Action):
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: str | Sequence[Any] | None,
+        option_string: str | None = None,
+    ) -> None:
+        if getattr(namespace, self.dest, None) is not None:
+            parser.error(f"{option_string} 不能重复")
+        if not isinstance(values, str):
+            parser.error(f"{option_string} 必须提供单个值")
+        setattr(namespace, self.dest, values)
 
 
 def parse_args() -> argparse.Namespace:
@@ -55,12 +72,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reports-root", type=Path, required=True)
     parser.add_argument("--expected-compose", type=Path, default=COMPOSE_PATH)
     selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--full", action="store_true")
     selection.add_argument("--profile", action="append", default=[])
     selection.add_argument("--instance", action="append", default=[])
+    parser.add_argument(
+        "--evidence-checkpoint",
+        choices=EVIDENCE_CHECKPOINTS,
+        action=StoreOnceAction,
+    )
     parser.add_argument("--timeout-seconds", type=float, default=180)
     parser.add_argument("--poll-seconds", type=float, default=2)
     parser.add_argument("--request-timeout-seconds", type=float, default=5)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.evidence_checkpoint is not None and not args.full:
+        parser.error("--evidence-checkpoint 必须与显式 --full 配合使用")
+    return args
 
 
 def safe_component(value: str, pattern: re.Pattern[str], name: str) -> str:
@@ -415,6 +441,15 @@ def main() -> int:
             instances=args.instance,
         )
         expected_count = len(expected)
+        output_name = (
+            f"operator-registration-{args.evidence_checkpoint}.json"
+            if args.evidence_checkpoint is not None
+            else (
+                "operator-registration.json"
+                if selection["mode"] == "full"
+                else f"operator-registration-{output_suffix}.json"
+            )
+        )
         output = (
             args.reports_root
             / "milestone-2b"
@@ -422,11 +457,7 @@ def main() -> int:
             / tag
             / sha
             / "registration"
-            / (
-                "operator-registration.json"
-                if selection["mode"] == "full"
-                else f"operator-registration-{output_suffix}.json"
-            )
+            / output_name
         )
         base_report = {
             "schema_version": 1,
@@ -437,6 +468,8 @@ def main() -> int:
             "git_sha": sha,
             "started_at": started_at,
         }
+        if args.evidence_checkpoint is not None:
+            base_report["evidence_checkpoint"] = args.evidence_checkpoint
         deadline = time.monotonic() + args.timeout_seconds
         while True:
             remaining = deadline - time.monotonic()
@@ -526,22 +559,26 @@ def main() -> int:
         return 0
     except Exception as exc:  # noqa: BLE001 - CLI must persist a failure report when possible
         if output is not None and base_report is not None:
-            atomic_json(
-                output,
-                {
-                    **base_report,
-                    "status": "失败",
-                    "finished_at": datetime.now(UTC).isoformat(),
-                    "selection": selection,
-                    "summary": {
-                        "expected": expected_count,
-                        "observed": observed_count,
-                        "valid": 0,
+            try:
+                atomic_json(
+                    output,
+                    {
+                        **base_report,
+                        "status": "失败",
+                        "finished_at": datetime.now(UTC).isoformat(),
+                        "selection": selection,
+                        "summary": {
+                            "expected": expected_count,
+                            "observed": observed_count,
+                            "valid": 0,
+                        },
+                        "validated_instances": [],
+                        "issues": [str(exc)],
                     },
-                    "validated_instances": [],
-                    "issues": [str(exc)],
-                },
-            )
+                )
+            except Exception as report_exc:  # noqa: BLE001 - preserve write-once evidence
+                if str(report_exc) != str(exc):
+                    print(f"失败报告写入被拒绝: {report_exc}", file=sys.stderr)
         print(f"注册验证失败: {exc}", file=sys.stderr)
         return 2
 

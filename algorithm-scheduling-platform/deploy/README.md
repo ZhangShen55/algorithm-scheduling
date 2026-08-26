@@ -293,6 +293,13 @@ preflight 对最终 SHA 的 revision 校验。
 其中包括 `registration/operator-registration-profile-gpu0.json`、
 `negative/cases.json` 和 `load/cases.json`。阶段 6 必须先运行 aggregator，再运行 renderer：
 
+首次 `preflight operators --full` 写入
+`registration/operator-registration.json`。Stage45 在 18 个 GPU 实例完成停止、恢复与重新注册
+后，固定通过 `--evidence-checkpoint stage45-post-recovery` 写入
+`registration/operator-registration-stage45-post-recovery.json`。恢复后文件是补充证据，不进入
+canonical 聚合，也不能覆盖或替代首次 full 报告；checkpoint 不允许用于 profile 或 instance
+选择。
+
 ```bash
 .venv/bin/python scripts/aggregate_milestone_2b_cases.py \
   --release-root "$RELEASE_ROOT" \
@@ -517,6 +524,10 @@ deploy/scripts/preflight operators --full --git-sha "$EXPECTED_GIT_SHA" \
   --control-url http://127.0.0.1:18100 \
   --release-tag "$RELEASE_TAG" --reports-root "$PWD/deploy/reports"
 ```
+
+上述首次 full 报告保持 canonical。若随后执行 Stage45，恢复后全量复核必须增加
+`--evidence-checkpoint stage45-post-recovery`，使动态心跳证据写入独立文件并继续遵守
+write-once；常驻启动计划不得使用该 checkpoint。
 
 Canonical 完成全部 deployment 用例、精确恢复两个离线后台服务并重跑 runtime preflight 后，
 还必须在创建真实课程任务之前执行 `deploy/scripts/preflight-course-media`。该门禁在

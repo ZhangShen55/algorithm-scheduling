@@ -90,6 +90,7 @@ def test_start_plan_uses_persistent_stages_not_canonical_restore() -> None:
     )
     full_readiness = plan[-1].command
     assert full_readiness.count("--git-sha") == 1
+    assert "--evidence-checkpoint" not in full_readiness
 
 
 def test_release_environment_and_default_ledger_follow_cli_identity(

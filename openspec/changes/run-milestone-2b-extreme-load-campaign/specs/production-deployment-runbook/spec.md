@@ -33,6 +33,10 @@
 - **WHEN** 未参与脚本实现的执行者只根据手册在 `192.168.29.11` 完成预检、常驻启动、状态查询和 A 服务 Smoke
 - **THEN** 手册验证 SHALL 产生绑定当前 Git SHA 的完整成功证据，任何只能依赖口头补充才能完成的步骤都使用例失败
 
+#### Scenario: 首次注册与 Stage45 恢复后检查分离
+- **WHEN** 常驻启动已经发布首次 full 注册证据，Stage45 又在 18 个 GPU 实例停止、恢复和重新注册后执行 full 预检
+- **THEN** 首次检查 MUST 保持 canonical `registration/operator-registration.json`，Stage45 MUST 使用固定 `--evidence-checkpoint stage45-post-recovery` 发布 `registration/operator-registration-stage45-post-recovery.json`；checkpoint 只能与显式 `--full` 配合，不能替代 canonical 聚合输入，两个路径都 MUST 保持 write-once
+
 #### Scenario: 故障语义探针使用平台虚拟环境
 - **WHEN** Fault Adapter 在目标机执行远端语义探针
 - **THEN** 权威包装入口 MUST 使用平台 `.venv/bin/python` 运行探针源码并在虚拟环境缺失时失败关闭，不得依赖目标机全局 Python 临时安装 `websockets`

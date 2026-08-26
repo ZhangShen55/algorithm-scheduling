@@ -382,6 +382,100 @@ def test_registration_verifier_accepts_exact_ready_heartbeat_topology(tmp_path: 
     assert stat.S_IMODE(output.stat().st_mode) == 0o600
 
 
+def test_registration_verifier_writes_distinct_stage45_checkpoint(
+    tmp_path: Path,
+) -> None:
+    instances = _expected_instances()
+    with _Server(_events(instances)) as url:
+        canonical = _run_registration(tmp_path, url)
+        canonical_path = (
+            _release(tmp_path) / "registration" / "operator-registration.json"
+        )
+        canonical_bytes = canonical_path.read_bytes()
+        canonical_inode = canonical_path.stat().st_ino
+        checkpoint = _run_registration(
+            tmp_path,
+            url,
+            extra_arguments=(
+                "--full",
+                "--evidence-checkpoint",
+                "stage45-post-recovery",
+            ),
+        )
+
+    assert canonical.returncode == 0, canonical.stderr
+    assert checkpoint.returncode == 0, checkpoint.stderr
+    assert canonical_path.read_bytes() == canonical_bytes
+    assert canonical_path.stat().st_ino == canonical_inode
+    output = (
+        _release(tmp_path)
+        / "registration"
+        / "operator-registration-stage45-post-recovery.json"
+    )
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["evidence_checkpoint"] == "stage45-post-recovery"
+    assert report["selection"] == {"mode": "full", "values": []}
+    assert report["summary"] == {"expected": 21, "observed": 21, "valid": 21}
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        ("--evidence-checkpoint", "stage45-post-recovery"),
+        ("--evidence-checkpoint", "unknown"),
+        ("--evidence-checkpoint",),
+        ("--evidence-checkpoint=",),
+        ("--evidence-check", "stage45-post-recovery"),
+        ("--evidence-checkpoint", "../stage45-post-recovery"),
+        (
+            "--evidence-checkpoint",
+            "stage45-post-recovery",
+            "--evidence-checkpoint",
+            "stage45-post-recovery",
+        ),
+        ("--profile", "gpu0", "--evidence-checkpoint", "stage45-post-recovery"),
+        ("--instance", "ocr-gpu0", "--evidence-checkpoint", "stage45-post-recovery"),
+    ),
+)
+def test_registration_verifier_rejects_invalid_checkpoint_before_http(
+    tmp_path: Path,
+    arguments: tuple[str, ...],
+) -> None:
+    completed = _run_registration(
+        tmp_path,
+        "http://127.0.0.1:1",
+        timeout="0.05",
+        extra_arguments=arguments,
+    )
+
+    assert completed.returncode != 0
+    assert not list((tmp_path / "reports").rglob("operator-registration*.json"))
+
+
+def test_registration_checkpoint_rerun_preserves_write_once_bytes(
+    tmp_path: Path,
+) -> None:
+    instances = _expected_instances()
+    arguments = ("--full", "--evidence-checkpoint", "stage45-post-recovery")
+    with _Server(_events(instances)) as url:
+        first = _run_registration(tmp_path, url, extra_arguments=arguments)
+        output = (
+            _release(tmp_path)
+            / "registration"
+            / "operator-registration-stage45-post-recovery.json"
+        )
+        first_bytes = output.read_bytes()
+        second = _run_registration(tmp_path, url, extra_arguments=arguments)
+
+    assert first.returncode == 0, first.stderr
+    assert second.returncode != 0
+    assert "write-once" in second.stderr
+    assert "Traceback" not in second.stderr
+    assert output.read_bytes() == first_bytes
+    assert not list(output.parent.glob(f".{output.name}.*.tmp"))
+
+
 def test_registration_report_publish_is_idempotent_but_rejects_divergent_rerun(
     tmp_path: Path,
 ) -> None:
@@ -1056,6 +1150,7 @@ def test_stage45_docs_resolve_compose_container_ids_and_use_the_real_result_root
     scenario = (
         PLATFORM_ROOT / "harness/scenarios/milestone-2b-deploy.md"
     ).read_text(encoding="utf-8")
+    stage45 = (SCRIPTS / "milestone-2b-stage45.sh").read_text(encoding="utf-8")
 
     for document in (readme, scenario):
         assert 'mapfile -t container_ids < <(' in document
@@ -1074,6 +1169,7 @@ def test_stage45_docs_resolve_compose_container_ids_and_use_the_real_result_root
     assert '"--result-root", "/data/result"' in scenario
     assert "--result-root /data/result" in scenario
     assert "docker inspect -f '{{.State.Running}}' \"$face_instance\"" not in scenario
+    assert stage45.count("--evidence-checkpoint stage45-post-recovery") == 1
 
 
 def test_canonical_scenario_uses_atomic_stop_only_operator_ledger() -> None:

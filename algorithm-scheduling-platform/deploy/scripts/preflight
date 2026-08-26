@@ -301,6 +301,8 @@ run_operators() {
   full_requested=false
   operator_git_sha=""
   operator_git_sha_set=false
+  evidence_checkpoint=""
+  evidence_checkpoint_set=false
   selection_args=()
   registration_args=()
   while (( $# > 0 )); do
@@ -335,6 +337,22 @@ run_operators() {
         operator_git_sha_set=true
         shift
         ;;
+      --evidence-checkpoint)
+        (( $# >= 2 )) || fail "--evidence-checkpoint requires a value"
+        [[ "$2" != --* ]] || fail "--evidence-checkpoint requires a value"
+        [[ "$evidence_checkpoint_set" == "false" ]] || \
+          fail "--evidence-checkpoint cannot be repeated"
+        evidence_checkpoint="$2"
+        evidence_checkpoint_set=true
+        shift 2
+        ;;
+      --evidence-checkpoint=*)
+        [[ "$evidence_checkpoint_set" == "false" ]] || \
+          fail "--evidence-checkpoint cannot be repeated"
+        evidence_checkpoint="${1#*=}"
+        evidence_checkpoint_set=true
+        shift
+        ;;
       --control-url|--release-tag|--reports-root|--timeout-seconds|--poll-seconds|--request-timeout-seconds)
         (( $# >= 2 )) || fail "$1 requires a value"
         [[ "$2" != --* ]] || fail "$1 requires a value"
@@ -351,6 +369,16 @@ run_operators() {
     esac
   done
 
+  if [[ "$evidence_checkpoint_set" == "true" ]]; then
+    [[ "$full_requested" == "true" ]] || \
+      fail "--evidence-checkpoint requires the explicit --full selection"
+    [[ "$evidence_checkpoint" == "stage45-post-recovery" ]] || \
+      fail "unsupported operator evidence checkpoint: ${evidence_checkpoint}"
+    registration_args+=(--evidence-checkpoint "$evidence_checkpoint")
+  fi
+  if [[ "$full_requested" == "true" ]]; then
+    registration_args+=(--full)
+  fi
   [[ "$operator_git_sha_set" == "true" ]] || \
     fail "Git SHA is required and must be a full 40-character hexadecimal revision"
   normalize_git_sha "$operator_git_sha"

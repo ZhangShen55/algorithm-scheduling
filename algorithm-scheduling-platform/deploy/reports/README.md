@@ -35,6 +35,17 @@ registration/operator-registration-profile-cpu.json
 registration/operator-registration-instances-784a68323268.json
 ```
 
+Stage45 在 18 个 GPU 实例全部停止、恢复并重新注册后，额外发布：
+
+```text
+registration/operator-registration-stage45-post-recovery.json
+```
+
+该文件只证明恢复后的全量注册状态，不属于 canonical 聚合输入，也不能替代
+`operator-registration.json`。两次检查包含不同心跳时间，必须使用独立路径；不得覆盖、删除
+或复制首次 full 报告。checkpoint 参数只接受固定值 `stage45-post-recovery`，且只能与全量
+注册验证配合使用。
+
 其中 `operator-registration-instances-784a68323268.json` 是
 `facerec-gpu0`、`facerec-gpu1`、`facerec-gpu2` 同时就绪的 FaceRec instances 文件。
 18 个 GPU 实例恢复后的独立注册文件必须全部存在：

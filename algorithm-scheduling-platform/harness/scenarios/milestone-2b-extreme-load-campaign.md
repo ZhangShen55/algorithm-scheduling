@@ -741,3 +741,31 @@ Campaign/release/SHA/case/phase 身份校验发布。
   `.venv/bin/python` 启动，部署手册的 metrics factory 同步修正为 `metrics_factory`。
   当前 attempt 保持只读，不能把业务成功补写为规范通过；修复形成新 SHA 后必须重建并
   inspect 11 个镜像，以新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑。
+
+## 2026-08-26 - `4fd4fa1` Stage45 注册证据检查点冲突
+
+- `4fd4fa118e7f3cb446a50d0c1176cbd5bdd1c52a` 已在 `.11` 构建并 inspect 七算子和四平台
+  共 11 个 `amd64` 同 revision 镜像，常驻栈达到 29/29 healthy、21/21 注册、18 GPU 和
+  3 CPU PPT。
+- Stage45 自然运行到终点：18/18 GPU 实例真实推理、停止、残留检查、重启和重新注册均
+  `PASS`；`ppt-slice-cpu0/cpu1/cpu2` 真实处理均 `PASS`；正式 `smoke/cases.json` 为
+  ASR Offline、ASR Online、OCR、VBas、FaceRec、ScreenDet、PPT Slice 7/7 通过。结束时
+  29/29 无 unhealthy、GPU 进程 18、根盘剩余约 244 GiB。
+- 最终标记为 `CODEX_STAGE45_COMPLETE failures=1`、进程退出码 1。唯一失败是
+  `full-operator-preflight`：常驻启动已写入 `registration/operator-registration.json`，
+  GPU 恢复后的第二次 full 报告因时间和心跳变化具有不同字节，write-once 正确拒绝覆盖。
+  当前 release 全部证据保持只读，不能把 7/7 Smoke 反向补写成发布通过，也没有创建新的
+  Campaign attempt。
+- 修复不放宽 write-once，也不提供任意文件后缀。首次 full 继续生成 canonical 文件；
+  Stage45 固定使用 `--evidence-checkpoint stage45-post-recovery`，生成
+  `registration/operator-registration-stage45-post-recovery.json`。checkpoint 只允许显式
+  `--full`，未知、缺值、重复、profile、instance 和缩写在 Docker/HTTP 前失败。
+- 常驻启动计划与最终聚合继续只认 canonical `operator-registration.json`；恢复后文件只是
+  补充证据，不能替代 canonical。修复形成新 SHA 后必须重建/inspect 11 个镜像、重跑完整
+  Stage45，并以新 seed、Campaign ID 和 write-once attempt 从阶段 0 开始。
+- `.12` 的新增 SSH 凭据仅用于媒体源、慢响应端点和源端遥测核验，没有写入 Git、Harness、
+  release 或普通日志。只读复核确认 SSH key、`:5555/course/` 和 `:5556/healthz` 正常；主机
+  40 CPU、46 GiB 内存、约 30 GiB 可用，根盘约 860 GiB 可用。交互 shell `nofile` soft 为
+  1024，但两个媒体容器主进程的 soft/hard 均为 1073741816，不存在当前服务侧句柄上限。
+  `eno1` RX dropped 在 3 秒内从 3,439,459 增至 3,439,469，因此 `.12` 仍不作为权威高并发
+  负载机，后续用例必须同时记录源端 RX drop 前后差值。
