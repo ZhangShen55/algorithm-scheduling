@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -84,7 +86,8 @@ class RecordingRepository:
 
     def claim_ready_node(self, capability: str, worker_id: str) -> NodeRecord | None:
         self.claimed.append((capability, worker_id))
-        return self.node
+        selected, self.node = self.node, None
+        return selected
 
     def get_task_type(self, course_task_type_id: int) -> TaskTypeRecord:
         assert course_task_type_id == 7
@@ -92,8 +95,7 @@ class RecordingRepository:
 
     def transition_node(self, node_id: int, status: NodeStatus, reason: str) -> NodeRecord:
         self.transitions.append((node_id, status, reason))
-        assert self.node is not None
-        return self.node
+        return replace(_node(), id=node_id, status=status, reason=reason)
 
     def complete_node(
         self,
@@ -103,8 +105,7 @@ class RecordingRepository:
         reason: str,
     ) -> NodeRecord:
         self.completed.append((node_id, result, reason))
-        assert self.node is not None
-        return self.node
+        return replace(_node(), id=node_id, status=NodeStatus.COMPLETED)
 
     def aggregate_task_type_state(self, course_task_type_id: int) -> TaskTypeRecord:
         self.aggregated.append(course_task_type_id)
@@ -178,6 +179,115 @@ class RecordingAdapter:
             result={"stub": True, "node_code": context.node_code},
             effective_params=context.effective_params,
         )
+
+
+class RecordingWorkspaceCleaner:
+    def __init__(self) -> None:
+        self.task_ids: list[str] = []
+
+    def cleanup_if_terminal(self, task_id: str) -> bool:
+        self.task_ids.append(task_id)
+        return True
+
+
+class FailingWorkspaceCleaner:
+    def cleanup_if_terminal(self, task_id: str) -> bool:
+        raise RuntimeError(f"cleanup failed: {task_id}")
+
+
+@pytest.mark.asyncio
+async def test_executor_uses_all_concurrency_slots_for_one_capability() -> None:
+    class QueueRepository(RecordingRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.nodes = [replace(_node(), id=node_id) for node_id in range(11, 15)]
+
+        def claim_ready_node(
+            self,
+            capability: str,
+            worker_id: str,
+        ) -> NodeRecord | None:
+            self.claimed.append((capability, worker_id))
+            return self.nodes.pop(0) if self.nodes else None
+
+        def transition_node(
+            self,
+            node_id: int,
+            status: NodeStatus,
+            reason: str,
+        ) -> NodeRecord:
+            self.transitions.append((node_id, status, reason))
+            return replace(_node(), id=node_id, status=status, reason=reason)
+
+        def complete_node(
+            self,
+            node_id: int,
+            result: NodeResultWrite,
+            *,
+            reason: str,
+        ) -> NodeRecord:
+            self.completed.append((node_id, result, reason))
+            return replace(_node(), id=node_id, status=NodeStatus.COMPLETED)
+
+    class ConcurrentAdapter(RecordingAdapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.active = 0
+            self.peak = 0
+
+        async def execute(
+            self,
+            service_url: str,
+            context: NodeExecutionContext,
+        ) -> NodeResultWrite:
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            try:
+                await asyncio.sleep(0.02)
+                return await super().execute(service_url, context)
+            finally:
+                self.active -= 1
+
+    repository = QueueRepository()
+    adapter = ConcurrentAdapter()
+    executor = NodeExecutor(
+        repository,
+        LeaseAwareDispatcher(repository, RecordingLeaseClient()),
+        adapter,
+        worker_id="worker-a",
+        concurrency=4,
+    )
+
+    executed = await executor.run_once()
+
+    assert executed == 4
+    assert adapter.peak == 4
+    assert len(repository.completed) == 4
+
+
+@pytest.mark.asyncio
+async def test_executor_rotates_concurrency_slots_across_capabilities() -> None:
+    class MultiCapabilityRepository(RecordingRepository):
+        def list_dispatch_capabilities(self) -> list[str]:
+            return ["asr_offline", "ppt_slice", "ocr"]
+
+    repository = MultiCapabilityRepository()
+    executor = NodeExecutor(
+        repository,
+        LeaseAwareDispatcher(repository, RecordingLeaseClient()),
+        RecordingAdapter(),
+        worker_id="worker-a",
+        concurrency=2,
+    )
+
+    assert await executor.run_once() == 0
+    first_claims = {capability for capability, _ in repository.claimed}
+    repository.claimed.clear()
+    assert await executor.run_once() == 0
+    second_claims = {capability for capability, _ in repository.claimed}
+
+    assert first_claims == {"asr_offline", "ppt_slice"}
+    assert second_claims == {"asr_offline", "ocr"}
 
 
 @pytest.mark.asyncio
@@ -255,12 +365,14 @@ async def test_executor_persists_stub_result_aggregates_and_releases_lease() -> 
     repository = RecordingRepository(node=_node())
     leases = RecordingLeaseClient()
     adapter = RecordingAdapter()
+    workspace_cleaner = RecordingWorkspaceCleaner()
     executor = NodeExecutor(
         repository,
         LeaseAwareDispatcher(repository, leases),
         adapter,
         worker_id="worker-a",
         concurrency=2,
+        workspace_cleaner=workspace_cleaner,
     )
 
     executed = await executor.run_once()
@@ -280,6 +392,26 @@ async def test_executor_persists_stub_result_aggregates_and_releases_lease() -> 
     assert leases.bound[0][1].node_id == "11"
     assert leases.bound[0][1].work_type == "asr_transcription"
     assert leases.renewed_operations == ["lease-001"]
+    assert leases.released == ["lease-001", "lease-001"]
+    assert workspace_cleaner.task_ids == ["course-001"]
+
+
+@pytest.mark.asyncio
+async def test_workspace_cleanup_failure_does_not_reverse_completed_node() -> None:
+    repository = RecordingRepository(node=_node())
+    leases = RecordingLeaseClient()
+    executor = NodeExecutor(
+        repository,
+        LeaseAwareDispatcher(repository, leases),
+        RecordingAdapter(),
+        worker_id="worker-a",
+        concurrency=1,
+        workspace_cleaner=FailingWorkspaceCleaner(),
+    )
+
+    assert await executor.run_once() == 1
+    assert len(repository.completed) == 1
+    assert repository.aggregated == [7]
     assert leases.released == ["lease-001"]
 
 

@@ -2411,3 +2411,30 @@
   为 29/29 healthy、21/21 ready、18 GPU，队列、Outbox、Kafka lag、租约和 inflight 均归零。
 - Evidence tier and verdict: 完成 OpenSpec 10.25，并保留 11.12 的真实通过事实；11.13 与
   12.1–13.8 仍待新 SHA 远端执行，本记录不把 12 个历史 case 汇总为阶段 0 通过。
+
+## 2026-08-26 - `fc2379a` ASR 千任务超时与终态工作区修复
+
+- Previous state: `fc2379a0a312933e467c35eeb79fa05ca8703f6d` 已完成远端 Stage45 和阶段 0。
+  attempt `full-campaign-fc2379a-20260826113913` 的前 23 案通过；
+  `OFF-UNIQUE-ASR-1000` 在 3609.08 秒后以 617 成功、383 超时规范失败。1000 次北向提交
+  全部成功，但旧执行器在单一 ASR capability 下只有 1 个活跃租约，未兑现配置的
+  `node_concurrency=4`。同一窗口磁盘从 `CLEAR` 进入 14.58% 剩余空间的 `WARNING`；终态后
+  `/data/course` 仍约 55 GiB/6664 个目录，证明既有清理器没有接入运行时。
+- Target state: 单 capability 可以使用全部节点执行槽位，多 capability 使用轮转游标；普通、
+  PPT 和视觉终态在任务聚合后统一尝试安全清理临时课程目录，永不删除结果目录。清理失败只
+  写中文告警，不逆转终态、不泄漏媒体内容，也不停止后台循环。
+- Changed files: Orchestrator executor、runtime、PPT/视觉终态路径、lifecycle 协议和安全边界
+  测试；当前 OpenSpec 提案/设计/规格/任务与 Harness 场景/验证/变更账本。历史 attempt、
+  远端 release、用户未纳管文件、媒体和凭据均不修改。
+- Contract impact: 不改变 A 服务 HTTP/WebSocket、请求字段、整数状态、DAG、算子接口、
+  Redis 租约协议、四服务边界或端口。变化只让已有并发配置和临时目录清理配置真正生效。
+- Verification command and environment: 平台 `.venv` 执行 Orchestrator 全量为 `77 passed`，
+  并发/终态聚焦为 `49 passed`；受影响实现 strict Mypy、compileall、双入口导入和
+  `git diff --check` 通过。Ruff 使用平台 `pyproject.toml` 对本次受影响文件通过。
+- Remote evidence and verdict: `fc2379a` 的 25 个平台/算子运行容器 revision 一致，Stage45
+  `failures=0`；排空后连续三次队列、Outbox、Kafka lag、租约、inflight 均为 0，29 个容器和
+  18 个 GPU 进程保持正常。该事实完成 11.13 并证明平台最终一致性，但业务超时与磁盘
+  `WARNING` 使 attempt 整体失败，不完成 12.1/12.2。
+- Remaining risks: 修复必须形成新 SHA，并在 `.11` 利用现有缓存完成同 revision 11 镜像、
+  Stage45 和新 write-once attempt。部署前还必须按终态事实精确清理可删除的历史
+  `/data/course/{task_id}`，使磁盘重新高于警戒线；不得删除 `/data/result` 或用扩大阈值继续。

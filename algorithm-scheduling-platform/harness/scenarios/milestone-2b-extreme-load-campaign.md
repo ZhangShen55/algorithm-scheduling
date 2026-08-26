@@ -797,3 +797,28 @@ Campaign/release/SHA/case/phase 身份校验发布。
 - 下一次执行必须先提交最小导入分组修复，重新构建/inspect 11 个镜像并重跑完整 Stage45，
   然后以新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑；两个 `76d34cb` attempt
   均不得续写。
+
+## 2026-08-26 - `fc2379a` ASR 千任务超时与终态目录未清理
+
+- `fc2379a0a312933e467c35eeb79fa05ca8703f6d` 已在 `.11` 完成 25 个平台/算子运行容器
+  revision 一致、29/29 healthy、21/21 注册、18 GPU 进程、3 CPU PPT、7/7 Smoke 和
+  `CODEX_STAGE45_COMPLETE failures=0`；完成 OpenSpec 11.13。
+- attempt `full-campaign-fc2379a-20260826113913` 使用 171 个必测 case 的 write-once plan。
+  阶段 0 的 14 案、阶段 1 四条单泳道、PPT 100/300/1000 和 ASR 100/300 共前 23 案规范
+  通过。`OFF-UNIQUE-ASR-1000` 的 1000 次北向提交全部成功，但 3609.08 秒内只有 617 个
+  任务成功终态、383 个超时，规范写出 `case_ended=failed` 和
+  `sequence_ended exit_code=1`；后续 case 均未执行。
+- 运行窗口中的 ASR 活动租约始终只有 1 个。实现复审确认 `NodeExecutor.run_once()` 旧逻辑
+  每种 capability 只启动一次领取，即使 `node_concurrency=4` 且只有 ASR 队列，也只产生一个
+  活跃节点。修复改为按并发槽位调度，单 capability 可占满槽位，多 capability 使用轮转游标。
+- 用例开始护栏为 `CLEAR`，结束时根盘、`/data/course`、`/data/result` 均以 14.58% 剩余
+  空间锁存 `WARNING`。排空后 `/data/course` 约 55 GiB、6664 个课程目录，`/data/result`
+  约 3.3 GiB。旧配置虽启用 `cleanup_terminal_workspace=true`，运行时没有调用现有
+  `TerminalWorkspaceCleaner`。修复把它接入普通、PPT 和视觉终态路径，并保留结果目录、
+  artifact 边界、非终态与符号链接安全检查；清理失败只告警，不逆转业务终态。
+- runner 结束后未人工补写结果。已接受任务继续自然排空，连续三次只读快照均为活动队列 0、
+  Outbox 0、三个 Kafka group lag 0、活跃租约 0、reported inflight 0；29 个容器和 18 个 GPU
+  进程保持正常。旧 attempt 全部只读，不得用排空事实补写通过，也不得通过放宽 3600 秒或
+  磁盘警戒线掩盖实现问题。
+- 新修复必须形成新完整 SHA、按同 revision 重新发布 11 镜像并重跑 Stage45，再用新 seed、
+  Campaign ID 和 attempt 从阶段 0 开始。`fc2379a` 只完成 11.13，不完成 12.1–12.8。

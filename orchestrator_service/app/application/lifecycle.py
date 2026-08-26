@@ -30,6 +30,10 @@ class CleanupRepository(Protocol):
     def list_nodes(self, course_task_type_id: int) -> list[CleanupNodeRecord]: ...
 
 
+class WorkspaceCleaner(Protocol):
+    def cleanup_if_terminal(self, task_id: str) -> bool: ...
+
+
 class WorkspaceCleanupError(RuntimeError):
     pass
 

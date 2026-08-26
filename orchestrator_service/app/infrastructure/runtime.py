@@ -23,6 +23,7 @@ from packages.platform_common.repository import CourseRepository
 
 from ..application.dispatcher import LeaseAwareDispatcher
 from ..application.executor import NodeExecutor
+from ..application.lifecycle import TerminalWorkspaceCleaner
 from ..application.outbox import OutboxPublisher
 from ..application.pipeline import PipelineInitializer
 from ..application.vision_events import (
@@ -248,6 +249,15 @@ class OrchestratorRuntime:
             default_ttl_seconds=self.settings.control.default_lease_ttl_seconds,
         )
         dispatcher = LeaseAwareDispatcher(repository, lease_client)
+        workspace_cleaner = (
+            TerminalWorkspaceCleaner(
+                repository,
+                course_root=self.settings.storage.course_root,
+                result_root=self.settings.storage.result_root,
+            )
+            if self.settings.storage.cleanup_terminal_workspace
+            else None
+        )
         operator_http_client = (
             self.resources.operator_http_client or self.resources.http_client
         )
@@ -282,6 +292,7 @@ class OrchestratorRuntime:
             lease_ttl_seconds=self.settings.ppt.lease_ttl_seconds,
             lease_renew_interval_seconds=self.settings.ppt.lease_renew_interval_seconds,
             reconcile_interval_seconds=self.settings.ppt.reconcile_interval_seconds,
+            workspace_cleaner=workspace_cleaner,
         )
         self._ppt_coordinator = ppt_coordinator
         await ppt_coordinator.recover()
@@ -311,6 +322,7 @@ class OrchestratorRuntime:
                 self.settings.ppt.ocr_request_timeout_seconds,
             ),
             async_node_coordinator=ppt_coordinator,
+            workspace_cleaner=workspace_cleaner,
         )
         visual_coordinator = VisualNodeCoordinator(
             repository,
@@ -323,11 +335,15 @@ class OrchestratorRuntime:
                 self.settings.worker.worker_id
                 or f"orchestrator-visual-{uuid4().hex[:12]}"
             ),
+            workspace_cleaner=workspace_cleaner,
         )
         await visual_coordinator.recover()
         visual_event_loop = VisualEventConsumerLoop(
             self.resources.visual_event_consumer,
-            VisualEventProcessor(repository),
+            VisualEventProcessor(
+                repository,
+                workspace_cleaner=workspace_cleaner,
+            ),
             poll_timeout_seconds=self.settings.kafka.poll_timeout_seconds,
         )
         self.tasks = {

@@ -117,6 +117,7 @@
 - [x] 10.23 保留 `c4fece8` attempt 在 `OFF-UNIQUE-PPT-1000` 的业务成功和 `gpu/target_host` 单次探针失败证据；为非 Kafka 只读采集面增加同采样最多两次的有限重试，持续失败仍写脱敏证据并锁存 STOP；增加使用平台 `.venv` 的故障语义探针包装入口，修正部署手册 factory 名并完成聚焦与全量回归。
 - [x] 10.24 保留 `4fd4fa1` Stage45 的 full 注册证据重名失败及其已完成 GPU/CPU/Smoke 事实；将首次 canonical full 与恢复后检查拆为固定 `stage45-post-recovery` checkpoint，拒绝任意 suffix、非 full、重复和覆盖，证明常驻启动及聚合仍只使用 canonical 文件，并同步部署手册、OpenSpec 与 Harness。
 - [x] 10.25 保留 `76d34cb` 的完整 Stage45、runner 启动前中断 attempt 和前 12 案通过后静态门禁失效 attempt；修复 PPT adapter 导入分组，重新执行 Ruff、受影响实现 strict Mypy、compileall/import、PPT 聚焦/真实 PostgreSQL 竞态、OpenSpec strict、Harness 一致性和 diff check，不改写旧 attempt。
+- [x] 10.26 保留 `fc2379a` attempt 的阶段 0、前 23 案通过、`OFF-UNIQUE-ASR-1000` 规范失败和磁盘 `WARNING`；修正单 capability 只使用一个并发槽位的问题，将终态工作区清理接入普通/PPT/视觉路径，并以安全边界和清理失败不逆转业务终态的回归验证。
 
 ## 11. `192.168.29.11` 七算子四平台发布
 
@@ -132,7 +133,8 @@
 - [x] 11.10 将实时 ASR 完整语句门禁、权威分块和持久 runner 约束形成新完整 Git SHA，重建并 inspect 11 个同 revision 镜像，恢复完整拓扑；使用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写 `da1f5e37` 或 `5a5760ef` 的任何冻结 attempt。
 - [x] 11.11 将运行时只读探针有限重试与故障探针 `.venv` 入口形成 `4fd4fa1`，重建并 inspect 11 个同 revision 镜像，恢复 29/29 healthy、21/21 注册、18 GPU 与 3 CPU PPT；Stage45 业务验证继续完成，但恢复后 full 注册检查因与常驻启动共享 canonical 路径被 write-once 阻断。保留整个 release 只读，不创建 Campaign attempt，不冒充完整发布通过。
 - [x] 11.12 将 Stage45 注册 checkpoint 修复形成新完整 Git SHA，重建并 inspect 11 个同 revision 镜像，恢复 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT 和 7/7 Smoke，同时证明首次 canonical 与恢复后 checkpoint 均存在且互不替代；使用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写 `4fd4fa1` 或此前冻结 attempt。
-- [ ] 11.13 将静态门禁修复形成新完整 Git SHA，在 `.11` 重建并 inspect 七算子和四平台共 11 个同 revision 镜像，重新完成 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT、7/7 Smoke 和独立 Stage45 checkpoint；使用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写两个 `76d34cb` attempt。
+- [x] 11.13 将静态门禁修复形成 `fc2379a`，在 `.11` 重建并 inspect 七算子和四平台共 11 个同 revision 镜像，重新完成 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT、7/7 Smoke 和独立 Stage45 checkpoint；使用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写两个 `76d34cb` attempt。
+- [ ] 11.14 将节点并发与终态工作区清理修复形成新完整 Git SHA，在 `.11` 增量利用现有镜像缓存完成 11 个同 revision 镜像发布，重验 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT、7/7 Smoke 和独立 Stage45 checkpoint；以新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写 `fc2379a` attempt。
 
 ## 12. 远端极限负载 Campaign 执行
 

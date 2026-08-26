@@ -2111,3 +2111,43 @@ OpenSpec strict 和 diff check 通过。测试文件自身在第 301 行存在�
 未收窄，因此本轮 strict Mypy 结论明确只覆盖受影响实现文件；该既有测试类型债务不是导入
 分组修复引入，也不扩大本次修改范围。以上完成 10.25，但新的完整 Git SHA、11 镜像重建、
 Stage45 和全新 Campaign 属于 11.13/12.1–12.8，尚未完成。
+
+## 2026-08-26 `fc2379a` Campaign 失败复现与 Orchestrator 修复验证
+
+远端 `fc2379a0a312933e467c35eeb79fa05ca8703f6d` 的 Stage45 退出码为 0，
+`CODEX_STAGE45_COMPLETE failures=0`；运行中 25 个平台/算子容器均带该 revision，拓扑为
+29/29 healthy、21/21 注册、18 GPU 和 3 CPU PPT。Campaign 前 23 案通过，
+`OFF-UNIQUE-ASR-1000` 在 3609.08 秒后以 617 成功、383 超时规范失败，运行后护栏为磁盘
+`WARNING`。runner 结束后连续三份快照均证明队列、Outbox、Kafka lag、租约和 inflight 为 0。
+
+在独立修复 worktree 执行：
+
+```bash
+cd orchestrator_service
+PYTHONPATH=.. ../algorithm-scheduling-platform/.venv/bin/python -m pytest -q tests
+
+cd ../algorithm-scheduling-platform
+.venv/bin/ruff check \
+  ../orchestrator_service/app/application/executor.py \
+  ../orchestrator_service/app/application/lifecycle.py \
+  ../orchestrator_service/app/application/vision_events.py \
+  ../orchestrator_service/app/infrastructure/ppt_runtime.py \
+  ../orchestrator_service/app/infrastructure/runtime.py \
+  ../orchestrator_service/tests/test_executor.py \
+  ../orchestrator_service/tests/test_lifecycle.py \
+  ../orchestrator_service/tests/test_ppt_runtime.py \
+  ../orchestrator_service/tests/test_visual_runtime.py
+.venv/bin/mypy --strict \
+  ../orchestrator_service/app/application/executor.py \
+  ../orchestrator_service/app/application/lifecycle.py \
+  ../orchestrator_service/app/application/vision_events.py \
+  ../orchestrator_service/app/infrastructure/ppt_runtime.py \
+  ../orchestrator_service/app/infrastructure/runtime.py
+```
+
+Orchestrator 全量为 `77 passed`；其中并发/终态路径聚焦为 `49 passed`。strict Mypy、
+compileall、`app.main:app` 与 `orchestrator_service.app.main:app` 双入口导入、
+`git diff --check` 均通过。回归覆盖单能力四槽并发、多能力轮转、普通/PPT/视觉终态调用、
+清理异常不逆转终态、非终态保留、结果 artifact 越界保留、符号链接拒绝，以及只删除
+`/data/course/{task_id}` 而保留 `/data/result/{task_id}`。当前证据完成 10.26；新 SHA 的远端
+11 镜像、Stage45 和新 attempt 属于 11.14/12.1–12.8，尚未完成。

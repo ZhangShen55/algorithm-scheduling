@@ -13,6 +13,7 @@
 - 当精确镜像清理后 BuildKit 仍持有已删除镜像层且磁盘未越过警戒线时，允许经用户逐次明确批准执行 `docker buildx prune --all --force --keep-storage 100GB`；必须保留缓存与磁盘前后证据，且该例外不扩展到镜像、容器、卷或持久数据清理。
 - 交付一份与当前脚本、Compose、`config.toml`、镜像标签、迁移顺序和实际验收结果一致的中文部署手册，覆盖首次部署、升级、回滚、常驻启停、精确清理、日志、数据目录、验收和故障排查。
 - 保留现有 217 条反例、26 条压力/恢复用例和 6 项 B 级人工复核的原有语义，本 Campaign 作为额外的真实 A 端负载验证，不用简化压测覆盖或改写历史证据。
+- 将 Orchestrator 的 `node_concurrency` 落实为同一能力队列也可占用全部并发槽位，并把已存在的终态课程工作区清理器接入普通、PPT 和视觉节点终态路径，避免已完成任务持续占用 `/data/course`。
 
 ## Capabilities
 
@@ -34,3 +35,4 @@
 - `192.168.29.11`：七算子 21 实例、四平台服务、PostgreSQL、Kafka、Redis、MongoDB、`/data/course` 和 `/data/result`。
 - A 服务模拟器：仅访问 `control-service:18100` 和 `online-gateway-service:18103`，不绕过平台直连算子。
 - 文档与 Harness：记录每阶段负载、任务 ID、Git SHA、镜像 revision、原始指标、证据摘要和中文结论。
+- `orchestrator_service/`：修正通用节点执行并发调度并接通终态工作区清理；不改变北向或算子合同。

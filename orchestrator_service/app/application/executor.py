@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Protocol
 
 from packages.platform_common.repository import (
@@ -14,6 +15,9 @@ from ..domain.errors import CapacityUnavailableError
 from ..domain.ppt_work import PptSliceAsyncAccepted
 from ..infrastructure.contract_stub import NodeExecutionContext
 from .dispatcher import LeaseAwareDispatcher, NodeReservation
+from .lifecycle import WorkspaceCleaner
+
+logger = logging.getLogger(__name__)
 
 
 class ExecutionRepository(Protocol):
@@ -66,6 +70,7 @@ class NodeExecutor:
         concurrency: int,
         operator_hard_timeout_seconds: float = 7_200.0,
         async_node_coordinator: AsyncNodeCoordinator | None = None,
+        workspace_cleaner: WorkspaceCleaner | None = None,
     ) -> None:
         if concurrency <= 0:
             raise ValueError("节点执行并发数必须大于 0")
@@ -73,11 +78,14 @@ class NodeExecutor:
         self._dispatcher = dispatcher
         self._adapter = adapter
         self._worker_id = worker_id
+        self._concurrency = concurrency
         self._semaphore = asyncio.Semaphore(concurrency)
+        self._capability_cursor = 0
         if operator_hard_timeout_seconds <= 0:
             raise ValueError("算子 HTTP 硬超时必须大于 0")
         self._operator_hard_timeout_seconds = operator_hard_timeout_seconds
         self._async_node_coordinator = async_node_coordinator
+        self._workspace_cleaner = workspace_cleaner
 
     async def run_once(self) -> int:
         capabilities = await asyncio.to_thread(
@@ -85,8 +93,14 @@ class NodeExecutor:
         )
         if not capabilities:
             return 0
+        start = self._capability_cursor % len(capabilities)
+        scheduled = tuple(
+            capabilities[(start + index) % len(capabilities)]
+            for index in range(self._concurrency)
+        )
+        self._capability_cursor = (start + self._concurrency) % len(capabilities)
         executed = await asyncio.gather(
-            *(self._run_capability(capability) for capability in capabilities)
+            *(self._run_capability(capability) for capability in scheduled)
         )
         return sum(executed)
 
@@ -104,11 +118,13 @@ class NodeExecutor:
     async def _execute_reservation(self, reservation: NodeReservation) -> None:
         node = reservation.node
         reservation_transferred = False
+        task_id: str | None = None
         try:
             task_type = await asyncio.to_thread(
                 self._repository.get_task_type,
                 node.course_task_type_id,
             )
+            task_id = task_type.task_id
             await asyncio.to_thread(
                 self._repository.transition_node,
                 node.id,
@@ -172,6 +188,17 @@ class NodeExecutor:
                     self._repository.aggregate_task_type_state,
                     node.course_task_type_id,
                 )
+                if self._workspace_cleaner is not None and task_id is not None:
+                    try:
+                        await asyncio.to_thread(
+                            self._workspace_cleaner.cleanup_if_terminal,
+                            task_id,
+                        )
+                    except Exception as exc:  # noqa: BLE001 - 业务终态已经持久化
+                        logger.warning(
+                            "课程临时工作区清理失败",
+                            extra={"task_id": task_id, "reason": str(exc)},
+                        )
             finally:
                 if not reservation_transferred:
                     await self._dispatcher.release(reservation)

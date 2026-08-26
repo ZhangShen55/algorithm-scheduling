@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import NAMESPACE_URL, uuid5
@@ -17,7 +18,25 @@ from packages.platform_contracts.vision import (
     VisualEventType,
 )
 
+from .lifecycle import WorkspaceCleaner
+
 JsonObject = dict[str, Any]
+logger = logging.getLogger(__name__)
+
+
+async def _cleanup_workspace(
+    cleaner: WorkspaceCleaner | None,
+    task_id: str,
+) -> None:
+    if cleaner is None:
+        return
+    try:
+        await asyncio.to_thread(cleaner.cleanup_if_terminal, task_id)
+    except Exception as exc:  # noqa: BLE001 - 业务终态已经持久化
+        logger.warning(
+            "课程临时工作区清理失败",
+            extra={"task_id": task_id, "reason": str(exc)},
+        )
 
 
 class AsyncKafkaProducer(Protocol):
@@ -78,11 +97,13 @@ class VisualNodeCoordinator:
         publisher: VisualCommandPublisher,
         *,
         worker_id: str,
+        workspace_cleaner: WorkspaceCleaner | None = None,
     ) -> None:
         self._repository = repository
         self._media_downloader = media_downloader
         self._publisher = publisher
         self._worker_id = worker_id
+        self._workspace_cleaner = workspace_cleaner
 
     async def run_once(self) -> int:
         await asyncio.to_thread(self._repository.resume_visual_nodes)
@@ -185,6 +206,11 @@ class VisualNodeCoordinator:
             self._repository.aggregate_task_type_state,
             node.course_task_type_id,
         )
+        task = await asyncio.to_thread(
+            self._repository.get_task_type,
+            node.course_task_type_id,
+        )
+        await _cleanup_workspace(self._workspace_cleaner, task.task_id)
 
     async def _command(self, node: NodeRecord) -> VisualAnalysisCommand:
         task = await asyncio.to_thread(
@@ -260,8 +286,14 @@ class VisualEventRepository(Protocol):
 class VisualEventProcessor:
     """Idempotently acknowledge state already persisted by the vision service."""
 
-    def __init__(self, repository: VisualEventRepository) -> None:
+    def __init__(
+        self,
+        repository: VisualEventRepository,
+        *,
+        workspace_cleaner: WorkspaceCleaner | None = None,
+    ) -> None:
         self._repository = repository
+        self._workspace_cleaner = workspace_cleaner
 
     async def handle(self, value: bytes) -> None:
         event = VisualAnalysisEvent.from_bytes(value)
@@ -305,6 +337,7 @@ class VisualEventProcessor:
         if node.status is not NodeStatus.COMPLETED:
             raise RuntimeError("视觉终态事件早于结果持久化")
         if task.status is NodeStatus.COMPLETED:
+            await _cleanup_workspace(self._workspace_cleaner, task.task_id)
             return
         if task.status in {NodeStatus.FAILED, NodeStatus.CANCELLED}:
             raise RuntimeError("视觉终态事件与任务类型终态不一致")
@@ -312,6 +345,7 @@ class VisualEventProcessor:
             self._repository.aggregate_task_type_state,
             node.course_task_type_id,
         )
+        await _cleanup_workspace(self._workspace_cleaner, task.task_id)
 
 
 class VisualEventConsumer(Protocol):

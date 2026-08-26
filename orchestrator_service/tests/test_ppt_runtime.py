@@ -7,9 +7,6 @@ from typing import Any
 
 import httpx
 import pytest
-from packages.platform_common.operator_registry import CapacityLease
-from packages.platform_common.repository import NodeRecord, TaskTypeRecord
-from packages.platform_contracts.status import NodeStatus, Priority, TaskType
 
 from orchestrator_service.app.application.dispatcher import LeaseScope, NodeReservation
 from orchestrator_service.app.domain.ppt_work import PptSliceAsyncAccepted
@@ -20,6 +17,9 @@ from orchestrator_service.app.infrastructure.ppt_slice import (
     PptSliceTerminalCallback,
     PptTerminalHandleResult,
 )
+from packages.platform_common.operator_registry import CapacityLease
+from packages.platform_common.repository import NodeRecord, TaskTypeRecord
+from packages.platform_contracts.status import NodeStatus, Priority, TaskType
 
 
 def _node(*, progress: dict[str, Any] | None = None) -> NodeRecord:
@@ -207,10 +207,20 @@ class LeaseClient:
         self.events.append("release")
 
 
+class RecordingWorkspaceCleaner:
+    def __init__(self) -> None:
+        self.task_ids: list[str] = []
+
+    def cleanup_if_terminal(self, task_id: str) -> bool:
+        self.task_ids.append(task_id)
+        return True
+
+
 def _coordinator(
     repository: Repository,
     terminal: TerminalHandler,
     leases: LeaseClient,
+    cleaner: RecordingWorkspaceCleaner | None = None,
 ) -> PptRuntimeCoordinator:
     return PptRuntimeCoordinator(
         repository=repository,
@@ -219,6 +229,7 @@ def _coordinator(
         lease_ttl_seconds=1,
         lease_renew_interval_seconds=0.02,
         reconcile_interval_seconds=0.02,
+        workspace_cleaner=cleaner,
     )
 
 
@@ -287,7 +298,8 @@ async def test_callback_persists_terminal_before_releasing_lease(
     leases = LeaseClient()
     leases.events = repository.events
     terminal = TerminalHandler(repository)
-    coordinator = _coordinator(repository, terminal, leases)
+    cleaner = RecordingWorkspaceCleaner()
+    coordinator = _coordinator(repository, terminal, leases, cleaner)
     await _adopt(coordinator, repository)
 
     result = await coordinator.handle_callback(node_id=11, callback=_callback(status))
@@ -297,6 +309,7 @@ async def test_callback_persists_terminal_before_releasing_lease(
     assert repository.events.index("db_terminal") < repository.events.index("aggregate")
     assert repository.events.index("aggregate") < repository.events.index("release")
     assert leases.releases == 1
+    assert cleaner.task_ids == ["course-001"]
 
 
 @pytest.mark.asyncio

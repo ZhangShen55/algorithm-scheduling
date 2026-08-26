@@ -488,6 +488,37 @@ Stage45；随后仍须用新 seed、Campaign ID 和 write-once attempt 从阶段
 write-once attempt 从阶段 0 开始。旧 SHA 的 Stage45 和两次 attempt 只作为历史证据，不能
 授权新 SHA，也不能补写成完整阶段通过。
 
+### 23. 节点并发槽位与终态工作区清理必须兑现运行配置
+
+`fc2379a0a312933e467c35eeb79fa05ca8703f6d` 已通过完整 Stage45 和阶段 0。新 attempt
+`full-campaign-fc2379a-20260826113913` 的前 23 个 case 规范通过，但
+`OFF-UNIQUE-ASR-1000` 在 3609.08 秒后失败：1000 次北向提交全部成功，只有 617 个任务在
+用例时限内成功终态，383 个任务超时。运行窗口内 ASR 活动队列始终只有一个活跃租约，证明
+`worker.node_concurrency=4` 只限制了协程上限，旧 `run_once()` 实际仍只为每种 capability
+领取一个节点，没有让单一 ASR 队列使用四个执行槽位。
+
+同一 attempt 开始时磁盘护栏为 `CLEAR`，结束时根盘、`/data/course` 和 `/data/result` 均在
+14.58% 剩余空间触发 `WARNING`。排空后 `/data/course` 仍有约 55 GiB、6664 个课程目录，而
+`/data/result` 约 3.3 GiB。配置中的 `cleanup_terminal_workspace=true` 已存在，
+`TerminalWorkspaceCleaner` 也已实现，但旧运行时没有任何调用点，因此终态任务不会自动删除
+临时媒体。该 `WARNING` 和业务超时都必须保留，不能通过扩大超时或警戒阈值改写为通过。
+
+通用执行器现在按 `node_concurrency` 生成固定数量的领取槽位：单一 capability 可以使用全部
+槽位；多 capability 通过轮转游标分配槽位，避免列表前部长期独占。信号量继续限制实际并发，
+节点领取和容量租约仍由既有 Repository/Control Service 保证原子性与不超卖。
+
+终态工作区清理器由同一个 Orchestrator runtime 实例注入以下路径：普通节点完成/失败后聚合、
+PPT 终态持久化与任务类型聚合后、视觉准备失败终态后，以及视觉完成事件聚合后。清理器只有在
+同一 `task_id` 的全部任务类型和节点均为 `60/70/80`，且所有已记录 artifact 仍真实存在于
+`/data/result/{task_id}` 内时，才删除 `/data/course/{task_id}`；结果目录永不删除。并发重复
+清理保持幂等，符号链接、越界 artifact 和非终态事实都拒绝删除。清理是终态后的附属动作，
+任何清理或查询异常只写中文告警，不逆转已提交业务终态，也不停止 Orchestrator 后台循环。
+
+当前 attempt 已规范写出 `case_ended=failed` 和 `sequence_ended exit_code=1`，随后已接受任务
+自然排空。连续三次只读快照证明活动队列、Outbox、三个 Kafka consumer group lag、租约和
+inflight 全部归零，29 个容器仍健康且有 18 个 GPU 进程。旧 attempt 保持只读；修复必须形成
+新完整 SHA，重新发布同 revision 拓扑并以新 seed、Campaign ID 和 attempt 从阶段 0 重跑。
+
 ## Risks / Trade-offs
 
 - [风险] 1000 提交与 36 长课可能产生大量 `/data/course` 临时文件。 → 短/长媒体分阶段，进入新阶梯前重新预估，低于 15%/150 GiB 禁止加压，低于 10%/100 GiB 立即停止。

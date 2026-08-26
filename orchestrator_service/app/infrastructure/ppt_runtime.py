@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import suppress
 from typing import Any, Protocol
 
 import httpx
+
 from packages.platform_common.operator_registry import CapacityLease
 from packages.platform_common.repository import NodeRecord, TaskTypeRecord
 from packages.platform_contracts.status import NodeStatus
 
 from ..application.dispatcher import NodeReservation
+from ..application.lifecycle import WorkspaceCleaner
 from ..domain.ppt_work import PptSliceAsyncAccepted
 from .ppt_slice import (
     PptCapacityLeaseKeeper,
@@ -18,6 +21,8 @@ from .ppt_slice import (
     PptSliceTerminalHandler,
     PptTerminalHandleResult,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class PptRuntimeRepository(Protocol):
@@ -69,6 +74,7 @@ class PptRuntimeCoordinator:
         lease_ttl_seconds: int,
         lease_renew_interval_seconds: float,
         reconcile_interval_seconds: float,
+        workspace_cleaner: WorkspaceCleaner | None = None,
     ) -> None:
         if reconcile_interval_seconds <= 0:
             raise ValueError("PPT 终态对账周期必须大于 0")
@@ -78,6 +84,7 @@ class PptRuntimeCoordinator:
         self._lease_ttl_seconds = lease_ttl_seconds
         self._lease_renew_interval_seconds = lease_renew_interval_seconds
         self._reconcile_interval_seconds = reconcile_interval_seconds
+        self._workspace_cleaner = workspace_cleaner
         self._keepers: dict[int, PptCapacityLeaseKeeper] = {}
         self._terminal_nodes: set[int] = set()
         self._lock = asyncio.Lock()
@@ -319,10 +326,25 @@ class PptRuntimeCoordinator:
 
     async def _after_terminal_persistence(self, node_id: int) -> None:
         node = await asyncio.to_thread(self._repository.get_node, node_id)
+        task_type = await asyncio.to_thread(
+            self._repository.get_task_type,
+            node.course_task_type_id,
+        )
         await asyncio.to_thread(
             self._repository.aggregate_task_type_state,
             node.course_task_type_id,
         )
+        if self._workspace_cleaner is not None:
+            try:
+                await asyncio.to_thread(
+                    self._workspace_cleaner.cleanup_if_terminal,
+                    task_type.task_id,
+                )
+            except Exception as exc:  # noqa: BLE001 - PPT 终态已经持久化
+                logger.warning(
+                    "课程临时工作区清理失败",
+                    extra={"task_id": task_type.task_id, "reason": str(exc)},
+                )
         async with self._lock:
             self._terminal_nodes.add(node_id)
             keeper = self._keepers.pop(node_id, None)

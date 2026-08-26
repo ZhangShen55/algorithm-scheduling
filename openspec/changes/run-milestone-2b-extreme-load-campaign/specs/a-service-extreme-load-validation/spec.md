@@ -140,6 +140,33 @@ Campaign 系统 SHALL 对同一 `task_id` 执行 30、100、300、1000 次并发
 - **WHEN** 300 个 `NORMAL` 任务中已有部分节点运行，随后提交 30 个 `URGENT`
 - **THEN** `URGENT` SHALL 优先于尚未领取的 `NORMAL` 被领取，而已运行节点不被取消或重复执行
 
+### Requirement: Orchestrator 必须兑现节点并发并清理终态临时工作区
+Orchestrator SHALL 将 `worker.node_concurrency` 解释为通用节点执行槽位总数，而不是 capability
+种类数。即使当前只有一个 capability 有待处理节点，也 MUST 尝试使用全部槽位；多个 capability
+同时存在时 MUST 有界轮转。配置启用 `cleanup_terminal_workspace` 后，普通、PPT 和视觉任务的
+终态路径 SHALL 在任务事实聚合后尝试清理 `/data/course/{task_id}`，并始终保留
+`/data/result/{task_id}`。
+
+#### Scenario: 单一 ASR 队列使用全部执行槽位
+- **WHEN** `node_concurrency=4` 且当前只有 `asr_offline` 存在至少四个可领取节点
+- **THEN** 单次执行轮次 SHALL 并发领取并执行最多四个节点，不得因为 capability 只有一种而退化为一个活跃租约
+
+#### Scenario: 多能力队列轮转分配槽位
+- **WHEN** capability 数量大于并发槽位且多个队列持续有任务
+- **THEN** 后续执行轮次 SHALL 从上次游标继续分配槽位，避免固定列表前部长期独占
+
+#### Scenario: 全部任务终态后删除临时媒体
+- **WHEN** 同一 `task_id` 的全部任务类型和节点均为 `60/70/80`，且所有 artifact 都存在于该任务的 `/data/result` 工作区
+- **THEN** Orchestrator SHALL 幂等删除 `/data/course/{task_id}`，保留结果目录和结构化数据库结果
+
+#### Scenario: 清理边界不满足时保留临时目录
+- **WHEN** 任一任务类型或节点未终态、artifact 缺失或越出任务结果工作区，或者课程路径是符号链接/非目录
+- **THEN** 清理器 MUST 不删除该课程工作区；不安全路径 MUST 产生可识别中文告警
+
+#### Scenario: 清理失败不逆转业务终态
+- **WHEN** 节点终态和任务聚合已经提交，但工作区清理因文件系统或 Repository 异常失败
+- **THEN** Orchestrator SHALL 保留已提交终态、释放既有租约并继续后台循环，只记录不含媒体内容的中文告警
+
 ### Requirement: A 服务查询必须覆盖稳定轮询与惊群突发
 Campaign 系统 SHALL 以 50、100、300、1000 QPS 查询运行课程的全部节点状态和已完成的大 ASR 结果。正常模型 MUST 带轮询抖动，并另设无抖动同时查询的惊群用例。
 

@@ -8,6 +8,13 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+
+from orchestrator_service.app.application.vision_events import (
+    VisualCommandPublisher,
+    VisualEventConsumerLoop,
+    VisualEventProcessor,
+    VisualNodeCoordinator,
+)
 from packages.platform_common.kafka import KafkaMessage
 from packages.platform_common.repository import (
     NodeRecord,
@@ -19,13 +26,6 @@ from packages.platform_contracts.vision import (
     VisualAnalysisCommand,
     VisualAnalysisEvent,
     VisualEventType,
-)
-
-from orchestrator_service.app.application.vision_events import (
-    VisualCommandPublisher,
-    VisualEventConsumerLoop,
-    VisualEventProcessor,
-    VisualNodeCoordinator,
 )
 
 
@@ -132,6 +132,15 @@ class Repository:
         self.aggregated.append(course_task_type_id)
         self.task = replace(self.task, status=NodeStatus.COMPLETED)
         return self.task
+
+
+class RecordingWorkspaceCleaner:
+    def __init__(self) -> None:
+        self.task_ids: list[str] = []
+
+    def cleanup_if_terminal(self, task_id: str) -> bool:
+        self.task_ids.append(task_id)
+        return True
 
 
 class ProgressTerminalRaceRepository(Repository):
@@ -263,11 +272,13 @@ async def test_visual_media_failure_is_terminal_and_next_node_can_run(tmp_path: 
     repository = Repository(node=_node())
     downloader = FailingOnceDownloader(tmp_path)
     producer = Producer()
+    workspace_cleaner = RecordingWorkspaceCleaner()
     coordinator = VisualNodeCoordinator(
         repository,
         downloader,
         VisualCommandPublisher(producer, topic="visual"),
         worker_id="worker-visual",
+        workspace_cleaner=workspace_cleaner,
     )
 
     assert await coordinator.run_once() == 1
@@ -277,6 +288,7 @@ async def test_visual_media_failure_is_terminal_and_next_node_can_run(tmp_path: 
     ]
     assert repository.aggregated == [7]
     assert producer.sent == []
+    assert workspace_cleaner.task_ids == ["course-001"]
 
     repository.node = _node()
     assert await coordinator.run_once() == 1
@@ -379,11 +391,16 @@ async def test_visual_events_are_idempotent_for_progress_and_completion() -> Non
     ]
 
     completed_repository = Repository()
-    completed_processor = VisualEventProcessor(completed_repository)
+    workspace_cleaner = RecordingWorkspaceCleaner()
+    completed_processor = VisualEventProcessor(
+        completed_repository,
+        workspace_cleaner=workspace_cleaner,
+    )
     terminal = _event(VisualEventType.COMPLETED)
     await completed_processor.handle(terminal)
     await completed_processor.handle(terminal)
     assert completed_repository.aggregated == [7]
+    assert workspace_cleaner.task_ids == ["course-001", "course-001"]
 
 
 @pytest.mark.asyncio
