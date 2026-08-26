@@ -113,6 +113,14 @@ ffprobe、完整解码和安全末端抽帧验证。PPT 与视觉单任务遇到
 - **WHEN** PPT 终态回调和对账循环并发处理同一运行节点，一方已率先持久化与回调一致的终态
 - **THEN** 后到一方 MUST 在状态和持久化终态载荷均一致时把它视为幂等重复并继续运行，不得因 `60 -> 60` 或 `70 -> 70` 停止 Orchestrator 后台循环；完成载荷 MUST 核对 `path/count/manifest_path/dynamic_segments`，失败载荷 MUST 核对 `reason`；若竞争后终态或载荷与回调不一致，MUST 以可识别冲突继续失败关闭
 
+#### Scenario: PPT OCR 瞬时网络错误有限重试
+- **WHEN** 幂等的单张 PPT OCR 调用第一次遇到 `httpx.NetworkError` 或 `httpx.RemoteProtocolError`，并在配置的有限尝试内恢复
+- **THEN** Orchestrator SHALL 在同一工作项租约内按配置重试，默认最多 2 次且间隔 0.2 秒，成功后只持久化一份工作项结果；日志只能记录图片 ID、异常类型和尝试序号，不得记录 Base64、图片字节或 OCR 文本
+
+#### Scenario: PPT OCR 非瞬时错误不被重试掩盖
+- **WHEN** 图片读取、HTTP 状态、OCR `err_no`、响应结构、JSON、超时、未知错误持续失败，或允许重试的网络异常耗尽尝试次数
+- **THEN** Orchestrator MUST 不重试非瞬时错误，并将最终异常类型转换为非空中文节点原因；工作项租约 MUST 精确释放，已完成的其他图片结果 SHALL 保留，当前节点不得伪装为全部成功
+
 ### Requirement: 幂等、追加任务类型与优先级必须在压力下保持语义
 Campaign 系统 SHALL 对同一 `task_id` 执行 30、100、300、1000 次并发相同提交，并验证分批追加 `task_types`、已完成结果复用和冲突媒体请求。Campaign 还 SHALL 在堆积的 `NORMAL` 后注入 `URGENT`，验证只对未领取节点插队。Control 课程查询的节点字典 MUST 从 PostgreSQL 节点事实返回可空 `claimed_at` 和 `started_at`，Campaign MUST 使用它们证明领取和开始顺序。
 

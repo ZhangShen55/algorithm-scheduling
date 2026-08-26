@@ -163,11 +163,22 @@ class NodeExecutor:
                     str(exc),
                 )
             except Exception as exc:
+                error_detail = str(exc).strip() or type(exc).__name__
+                logger.exception(
+                    "节点执行失败",
+                    extra={
+                        "task_id": task_id,
+                        "node_id": str(node.id),
+                        "node_code": node.node_code,
+                        "exception_type": type(exc).__name__,
+                        "reason": error_detail,
+                    },
+                )
                 await asyncio.to_thread(
                     self._repository.transition_node,
                     node.id,
                     NodeStatus.FAILED,
-                    f"节点执行失败: {exc}",
+                    f"节点执行失败: {error_detail}",
                 )
             else:
                 if isinstance(result, PptSliceAsyncAccepted):

@@ -442,6 +442,29 @@ async def test_executor_marks_failed_node_then_aggregates_and_releases() -> None
 
 
 @pytest.mark.asyncio
+async def test_executor_uses_exception_type_when_error_message_is_empty() -> None:
+    repository = RecordingRepository(node=_node())
+    leases = RecordingLeaseClient()
+    executor = NodeExecutor(
+        repository,
+        LeaseAwareDispatcher(repository, leases),
+        RecordingAdapter(error=RuntimeError()),
+        worker_id="worker-a",
+        concurrency=1,
+    )
+
+    assert await executor.run_once() == 1
+
+    assert repository.transitions[-1] == (
+        11,
+        NodeStatus.FAILED,
+        "节点执行失败: RuntimeError",
+    )
+    assert repository.aggregated == [7]
+    assert leases.released == ["lease-001"]
+
+
+@pytest.mark.asyncio
 async def test_ppt_ocr_coordination_node_has_no_outer_operator_lease() -> None:
     class WorkItemRepository(RecordingRepository):
         def list_dispatch_capabilities(self) -> list[str]:

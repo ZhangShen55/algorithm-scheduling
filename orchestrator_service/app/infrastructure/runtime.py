@@ -270,7 +270,15 @@ class OrchestratorRuntime:
         ocr_pipeline = PptTextPipeline(
             repository,
             lease_client,
-            OcrAdapter(operator_http_client),
+            OcrAdapter(
+                operator_http_client,
+                transport_max_attempts=(
+                    self.settings.ppt.ocr_transport_max_attempts
+                ),
+                transport_retry_delay_seconds=(
+                    self.settings.ppt.ocr_transport_retry_delay_seconds
+                ),
+            ),
             PptWorkLimits(
                 batch_size=self.settings.ppt.ocr_batch_size,
                 max_concurrency=self.settings.ppt.ocr_max_concurrency,

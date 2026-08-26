@@ -141,6 +141,10 @@ ocr_batch_size = 8
 ocr_max_concurrency = 2
 # 单张 PPT 图片 OCR HTTP 调用的绝对硬超时秒数。
 ocr_request_timeout_seconds = 600.0
+# 幂等 OCR 单图遇到瞬时网络异常时的总尝试次数，包含首次调用。
+ocr_transport_max_attempts = 2
+# 瞬时网络异常后再次调用同一 OCR 实例前的等待秒数。
+ocr_transport_retry_delay_seconds = 0.2
 
 [asr]
 # 离线 ASR 转写请求的最长超时秒数。

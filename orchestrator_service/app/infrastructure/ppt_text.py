@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 from collections.abc import Awaitable, Iterable
 from typing import Any, Protocol
 
@@ -23,14 +24,28 @@ from ..domain.ppt_work import (
     run_bounded_work,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class PptTextAdapterError(RuntimeError):
     pass
 
 
 class OcrAdapter:
-    def __init__(self, http_client: httpx.AsyncClient) -> None:
+    def __init__(
+        self,
+        http_client: httpx.AsyncClient,
+        *,
+        transport_max_attempts: int = 2,
+        transport_retry_delay_seconds: float = 0.2,
+    ) -> None:
+        if transport_max_attempts <= 0:
+            raise ValueError("OCR 网络调用尝试次数必须大于 0")
+        if transport_retry_delay_seconds < 0:
+            raise ValueError("OCR 网络重试间隔不能小于 0")
         self._http = http_client
+        self._transport_max_attempts = transport_max_attempts
+        self._transport_retry_delay_seconds = transport_retry_delay_seconds
 
     async def recognize(
         self,
@@ -39,14 +54,20 @@ class OcrAdapter:
         *,
         enable_formula: bool = False,
     ) -> dict[str, Any]:
-        image_bytes = await asyncio.to_thread(work.image_path.read_bytes)
-        response = await self._http.post(
+        try:
+            image_bytes = await asyncio.to_thread(work.image_path.read_bytes)
+        except OSError as exc:
+            raise PptTextAdapterError(
+                f"OCR 图片读取失败（{type(exc).__name__}）: {work.ppt_image_id}"
+            ) from exc
+        response = await self._post_with_transport_retry(
             f"{instance_url.rstrip('/')}/ocr/prediction",
-            json={
+            payload={
                 "key": [work.ppt_image_id],
                 "value": [base64.b64encode(image_bytes).decode()],
                 "enable_formula": enable_formula,
             },
+            ppt_image_id=work.ppt_image_id,
         )
         response.raise_for_status()
         body = response.json()
@@ -72,6 +93,39 @@ class OcrAdapter:
             "text": text_value,
             "ocr_response": body,
         }
+
+    async def _post_with_transport_retry(
+        self,
+        url: str,
+        *,
+        payload: dict[str, Any],
+        ppt_image_id: str,
+    ) -> httpx.Response:
+        for attempt in range(1, self._transport_max_attempts + 1):
+            try:
+                return await self._http.post(url, json=payload)
+            except (httpx.NetworkError, httpx.RemoteProtocolError) as exc:
+                if attempt >= self._transport_max_attempts:
+                    raise PptTextAdapterError(
+                        f"OCR 网络调用失败（{type(exc).__name__}）"
+                    ) from exc
+                # OCR 单图请求以 ppt_image_id 幂等；日志只保留受控标识和异常类型。
+                logger.warning(
+                    "PPT OCR 瞬时网络异常，准备有限重试",
+                    extra={
+                        "ppt_image_id": ppt_image_id,
+                        "exception_type": type(exc).__name__,
+                        "attempt": attempt,
+                        "max_attempts": self._transport_max_attempts,
+                    },
+                )
+                if self._transport_retry_delay_seconds > 0:
+                    await asyncio.sleep(self._transport_retry_delay_seconds)
+            except httpx.TimeoutException as exc:
+                raise PptTextAdapterError(
+                    f"OCR 网络调用超时（{type(exc).__name__}）"
+                ) from exc
+        raise AssertionError("unreachable")
 
 
 class PptTextRepository(Protocol):

@@ -2151,3 +2151,83 @@ compileall、`app.main:app` 与 `orchestrator_service.app.main:app` 双入口导
 清理异常不逆转终态、非终态保留、结果 artifact 越界保留、符号链接拒绝，以及只删除
 `/data/course/{task_id}` 而保留 `/data/result/{task_id}`。当前证据完成 10.26；新 SHA 的远端
 11 镜像、Stage45 和新 attempt 属于 11.14/12.1–12.8，尚未完成。
+
+## 2026-08-26 `ef3f6e7` 远端 11.14 验证
+
+远端 release：
+`deploy/reports/milestone-2b/releases/v1.0_260826/ef3f6e73b49044814be9439c8951ebec0600cf83`。
+`stage45.exit` 为 `stage45_failures=0 exit_code=0`，日志包含
+`CODEX_STAGE45_COMPLETE failures=0`。通过生产账本中的 29 个完整容器 ID 重新 inspect，结果
+为 29/29 running/healthy；Control 注册查询为 21，`nvidia-smi` 计算进程为 18，生产账本中的
+CPU PPT 实例为 3。`smoke/cases.json` 恰有 7 项且状态集合仅为“通过”，七个独立算子报告均为
+`PASS`。`operator-registration.json` 与
+`operator-registration-stage45-post-recovery.json` 同时存在，二者状态均为“通过”。
+
+该证据完成 11.14。`full-campaign-ef3f6e7-20260826185048` 已在启动后暴露 Git 外 supervisor
+身份字符串错误：实际 runner 为 `run_extreme_load_campaign.py execute-sequence`，旧校验使用
+连字符脚本名并写出 `exit_code=19`。按完整 PID 精确停止后，该 attempt 保留 1 个已通过 case、
+1 个未完成 case 和独立中断证据，全部只读。
+
+当前权威 attempt `full-campaign-ef3f6e7-20260826193136` 绑定 `ef3f6e7`、seed
+`260826193136`、新 Campaign ID、171 条必测 case 和 1 条可选 8 小时长稳；运行时配置重新冻结
+当前 29 个容器 ID、维护锁 PID 和 18 个 GPU PID/UUID。新 supervisor 已匹配实际 Python runner
+并保持存活。后续 12.1–12.8 必须以它的逐案终态和退出码为准，本段不把“尚未执行”写成通过。
+
+阶段 0 的 `campaign-runner.jsonl` 已按目录顺序写出 14 个 `case_started` 与 14 个
+`case_ended=passed`，最后一案为 `PHASE-0-COMPLETE`。其中 `BASE-ASR-WS` 使用真实时钟、
+0.48 秒权威分块和尾静音门禁并成功获得 `finished=true`，没有用中间字幕替代完整语句。
+媒体下载 1/3/10/30、四类离线单请求和四类在线图片基线均有独立 case 与运行时证据，完成
+OpenSpec 12.1；后续阶段仍保持未完成状态。
+
+## 2026-08-26 `ef3f6e7` Campaign 第 21 案失败取证
+
+权威 attempt
+`~/.algorithm-scheduling-campaign/v1.0_260826/ef3f6e73b49044814be9439c8951ebec0600cf83/attempts/full-campaign-ef3f6e7-20260826193136`
+规范写出 `sequence_ended status=failed exit_code=1 completed=21 passed=20 failed=1`，外部
+supervisor 同步记录 `supervisor_exit_code=1/sequence_ended_exit_code=1`。前 20 案包含阶段 0、
+四条阶段 1 单泳道和 PPT 100/300 档。
+
+`OFF-UNIQUE-PPT-1000` 的 case 结果为提交类别 `success=1000`，终态 `success=999/failed=1`。
+失败任务节点为 `12467/PPT_SLICE=60` 和 `12468/PPT_OCR=70`；OCR 子项为一个 `60`、一个
+`10`，节点进度为 `completed_count=1/total_count=2`。失败前后护栏均为 `CLEAR`，最终任务队列、
+Outbox、Kafka lag、租约均归零，容器 29/29 healthy 且没有重启。
+
+只读文件核对证明 manifest、两张切片和 `/data/result` 仍完整，`/data/course/{task_id}` 已按
+终态合同清理。失败图片与成功图片在 OCR GPU0/1/2 上各执行一次均返回 `err_no=0`；随后从
+Orchestrator 容器使用同 HTTP 客户端配置、并发 8 对失败图执行 300 次，结果为
+`success=300/elapsed=31.47s`，没有异常。原失败时窗中 Control 的工作项租约请求与释放为 200，
+但失败图在三个 OCR access log 中均无请求；数据库只保留空字符串派生原因。故结论限制为
+“一次瞬时客户端/传输异常，精确子类型因旧实现缺少异常类型证据而不可恢复”。
+
+修复后的本地验证命令与结果：
+
+```bash
+cd algorithm-scheduling-platform
+.venv/bin/ruff check \
+  ../orchestrator_service/app/infrastructure/ppt_text.py \
+  ../orchestrator_service/app/application/executor.py \
+  ../orchestrator_service/app/core/config.py \
+  ../orchestrator_service/app/infrastructure/runtime.py \
+  tests/test_ppt_text_adapters.py tests/test_ppt_text_pipeline.py \
+  ../orchestrator_service/tests/test_executor.py \
+  ../orchestrator_service/tests/test_service_structure.py
+MYPYPATH="$PWD" .venv/bin/mypy --strict \
+  ../orchestrator_service/app/infrastructure/ppt_text.py \
+  ../orchestrator_service/app/application/executor.py \
+  ../orchestrator_service/app/core/config.py \
+  ../orchestrator_service/app/infrastructure/runtime.py
+.venv/bin/python -m compileall -q ../orchestrator_service/app
+
+cd ../orchestrator_service
+PYTHONPATH=.. ../algorithm-scheduling-platform/.venv/bin/python -m pytest -q tests
+
+cd ../algorithm-scheduling-platform
+.venv/bin/python -m pytest -q tests --ignore=tests/integration
+```
+
+结果为 Ruff、strict Mypy、compileall/导入通过；Orchestrator 全量 `78 passed`；平台非集成
+全量 `3201 passed, 3 skipped`。三个 skip 都是既有远端容器型用例在本机找不到 canonical
+`facerec-gpu0`，没有测试失败。聚焦回归额外证明 `ReadError` 首试失败后在同一工作项租约内
+成功、连续两次错误产生 `OCR 网络调用失败（ReadError）`、OCR 业务错误只调用一次、空消息
+异常写为 `节点执行失败: RuntimeError`。本地 Docker 未运行，因此本段不声称执行了新的本地
+PostgreSQL/Redis/Kafka 集成；原失败事实来自 `.11` 真实链路，新修复的远端验证属于 11.15。

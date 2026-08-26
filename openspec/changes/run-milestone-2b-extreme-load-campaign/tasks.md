@@ -118,6 +118,7 @@
 - [x] 10.24 保留 `4fd4fa1` Stage45 的 full 注册证据重名失败及其已完成 GPU/CPU/Smoke 事实；将首次 canonical full 与恢复后检查拆为固定 `stage45-post-recovery` checkpoint，拒绝任意 suffix、非 full、重复和覆盖，证明常驻启动及聚合仍只使用 canonical 文件，并同步部署手册、OpenSpec 与 Harness。
 - [x] 10.25 保留 `76d34cb` 的完整 Stage45、runner 启动前中断 attempt 和前 12 案通过后静态门禁失效 attempt；修复 PPT adapter 导入分组，重新执行 Ruff、受影响实现 strict Mypy、compileall/import、PPT 聚焦/真实 PostgreSQL 竞态、OpenSpec strict、Harness 一致性和 diff check，不改写旧 attempt。
 - [x] 10.26 保留 `fc2379a` attempt 的阶段 0、前 23 案通过、`OFF-UNIQUE-ASR-1000` 规范失败和磁盘 `WARNING`；修正单 capability 只使用一个并发槽位的问题，将终态工作区清理接入普通/PPT/视觉路径，并以安全边界和清理失败不逆转业务终态的回归验证。
+- [x] 10.27 保留 `ef3f6e7` attempt 的阶段 0、前 20 案通过和 `OFF-UNIQUE-PPT-1000` 的 999 成功/1 个 OCR 失败事实；为幂等 PPT OCR 单图调用增加配置化有限网络重试、异常类型日志和非空中文终态原因，验证瞬时恢复、耗尽失败、业务错误不重试及租约精确释放。
 
 ## 11. `192.168.29.11` 七算子四平台发布
 
@@ -134,11 +135,12 @@
 - [x] 11.11 将运行时只读探针有限重试与故障探针 `.venv` 入口形成 `4fd4fa1`，重建并 inspect 11 个同 revision 镜像，恢复 29/29 healthy、21/21 注册、18 GPU 与 3 CPU PPT；Stage45 业务验证继续完成，但恢复后 full 注册检查因与常驻启动共享 canonical 路径被 write-once 阻断。保留整个 release 只读，不创建 Campaign attempt，不冒充完整发布通过。
 - [x] 11.12 将 Stage45 注册 checkpoint 修复形成新完整 Git SHA，重建并 inspect 11 个同 revision 镜像，恢复 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT 和 7/7 Smoke，同时证明首次 canonical 与恢复后 checkpoint 均存在且互不替代；使用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写 `4fd4fa1` 或此前冻结 attempt。
 - [x] 11.13 将静态门禁修复形成 `fc2379a`，在 `.11` 重建并 inspect 七算子和四平台共 11 个同 revision 镜像，重新完成 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT、7/7 Smoke 和独立 Stage45 checkpoint；使用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写两个 `76d34cb` attempt。
-- [ ] 11.14 将节点并发与终态工作区清理修复形成新完整 Git SHA，在 `.11` 增量利用现有镜像缓存完成 11 个同 revision 镜像发布，重验 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT、7/7 Smoke 和独立 Stage45 checkpoint；以新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写 `fc2379a` attempt。
+- [x] 11.14 将节点并发与终态工作区清理修复形成新完整 Git SHA，在 `.11` 增量利用现有镜像缓存完成 11 个同 revision 镜像发布，重验 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT、7/7 Smoke 和独立 Stage45 checkpoint；以新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写 `fc2379a` attempt。
+- [ ] 11.15 将 PPT OCR 有界网络重试和可诊断错误修复形成新完整 Git SHA，在 `.11` 只使用现有缓存增量发布 11 个同 revision 镜像并重跑 Stage45；使用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写 `ef3f6e7` 的两个 attempt。
 
 ## 12. 远端极限负载 Campaign 执行
 
-- [ ] 12.1 执行阶段0的单请求与单泳道基线，建立各接口/算子的延迟、吞吐、实时率、资源和结果结构基线。
+- [x] 12.1 执行阶段0的单请求与单泳道基线，建立各接口/算子的延迟、吞吐、实时率、资源和结果结构基线。
 - [ ] 12.2 执行阶段1的 PPT、ASR、教师行为、学生行为单泳道及 3/6/12/24/36 长课阶梯，每级达到警戒线时停止升级。
 - [ ] 12.3 执行阶段2的 100/300/1000 唯一提交、幂等竞争、追加任务类型、NORMAL/URGENT 插队、负向比例和 50/100/300/1000 QPS 查询。
 - [ ] 12.4 执行阶段3的四类图片 1–1000 并发、100/300/1000 路 S 流、ASR 1–150 会话、图片边界反例和 500/1000/5000 人人脸库用例；人脸管理请求固定单实例、识别请求租约路由三实例，分别给出容量结论。

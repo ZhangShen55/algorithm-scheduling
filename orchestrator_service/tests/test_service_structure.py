@@ -92,3 +92,5 @@ def test_ppt_async_contract_has_renewal_and_reconciliation_settings() -> None:
     assert settings.ppt.terminal_callback_path == "/internal/ppt-slice/callback"
     assert settings.ppt.max_manifest_bytes > 0
     assert settings.ppt.reconcile_interval_seconds > 0
+    assert settings.ppt.ocr_transport_max_attempts == 2
+    assert settings.ppt.ocr_transport_retry_delay_seconds == 0.2

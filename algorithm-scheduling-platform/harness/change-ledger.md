@@ -2438,3 +2438,39 @@
 - Remaining risks: 修复必须形成新 SHA，并在 `.11` 利用现有缓存完成同 revision 11 镜像、
   Stage45 和新 write-once attempt。部署前还必须按终态事实精确清理可删除的历史
   `/data/course/{task_id}`，使磁盘重新高于警戒线；不得删除 `/data/result` 或用扩大阈值继续。
+
+## 2026-08-26 - `ef3f6e7` 完成 11.14 并进入全新 Campaign
+
+- Previous state: `fc2379a` 的 Stage45 通过，但 ASR 千任务因单能力只占一个执行槽而超时，
+  且终态课程目录未清理导致磁盘 `WARNING`；该 attempt 已只读冻结。
+- Target state: 以包含节点并发和终态工作区清理修复的 `ef3f6e7` 完成同 revision 发布与
+  Stage45，再用新 seed、Campaign ID 和 write-once attempt 从阶段 0 执行 171 条必测 case。
+- Remote verification: release `v1.0_260826/ef3f6e73b49044814be9439c8951ebec0600cf83`
+  为 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT；Stage45 为 `failures=0/exit_code=0`，
+  7/7 Smoke 全部“通过”，canonical 与恢复后注册 checkpoint 均有效。
+- Harness state: 完成 OpenSpec 11.14。首个 attempt
+  `full-campaign-ef3f6e7-20260826185048` 因 Git 外 supervisor 进程身份字符串不匹配而中断，
+  只完成首案并以权限 `0600` 的中断证据冻结。当前权威 attempt 为
+  `full-campaign-ef3f6e7-20260826193136`，具有新 seed/Campaign ID、171 必测和 1 项 8 小时
+  可选目录；12.1–12.8 只按其实际 write-once 结果更新，不预判 Campaign 通过。
+- Runtime progress: 当前权威 attempt 的阶段 0 共 14 案全部通过，覆盖四档媒体下载、四条
+  离线基线、四类在线图片、真实时钟 ASR WebSocket 和阶段完成门禁；完成 OpenSpec 12.1。
+  本条只记录已写出的逐案事实，不预判阶段 1–6。
+
+## 2026-08-26 - `ef3f6e7` Campaign 因单个 PPT OCR 工作项失败冻结
+
+- Previous state: `ef3f6e7` 已完成 11.14 和 12.1，权威 attempt 正在顺序执行阶段 1。
+- Observed state: 前 20 案通过；第 21 案 `OFF-UNIQUE-PPT-1000` 为 1000 次提交成功、999 个
+  PPT 任务成功、1 个任务在 2 张 OCR 工作项中完成 1 张后失败。Campaign 与 supervisor 均以
+  `exit_code=1` 规范结束，未继续后续 case。
+- Isolation evidence: 失败任务的 manifest 和两张图片完整，三个 OCR 实例对两图均成功；
+  并发 8 的 300 次失败图隔离调用为 300/300 成功。失败时租约正常，图片未到达算子 access
+  log，旧节点原因丢失异常类型。证据只支持瞬时客户端/传输异常，不支持更具体的事后断言。
+- Target state: 在不改变 HTTP 路径、请求字段、响应字段或算子合同的前提下，为幂等 PPT OCR
+  增加窄集合、有限、配置化网络重试和非空中文错误；完成聚焦/全量回归后形成新 SHA，利用
+  现有缓存发布同 revision 11 镜像并创建全新 attempt。
+- Remaining risks: 当前 attempt 永久保持失败；在新 SHA 的 Stage45 和新 Campaign 完成前，
+  OpenSpec 12.2–13.8 均不得标记完成，也不得删除旧发布或宣称里程碑 2B 符合。
+- Local verification: 已实现默认 2 次/0.2 秒的窄网络重试、超时非重试包装、空异常类型兜底和
+  结构化告警；Orchestrator `78 passed`，平台非集成全量 `3201 passed, 3 skipped`。三个 skip
+  均因本机不存在 canonical `facerec-gpu0` 容器，不属于本次回归失败。10.27 完成，11.15 待远端。

@@ -4,9 +4,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from orchestrator_service.app.domain.ppt_work import PptImageWork, PptWorkLimits
-from orchestrator_service.app.infrastructure.ppt_text import PptTextPipeline
+from orchestrator_service.app.infrastructure.ppt_text import OcrAdapter, PptTextPipeline
 
 from packages.platform_common.operator_registry import CapacityLease, WorkContext
 from packages.platform_common.repository import (
@@ -280,3 +281,52 @@ async def test_ppt_text_pipeline_releases_item_lease_when_cancelled() -> None:
     assert leases.active == 0
     assert repository.items[11]["ppt-001"] is None
     assert 11 not in repository.completed_nodes
+
+
+@pytest.mark.asyncio
+async def test_ppt_text_pipeline_reuses_one_lease_during_transport_retry(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "ppt-001.jpg"
+    image_path.write_bytes(b"jpeg-content")
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ReadError("", request=request)
+        return httpx.Response(
+            200,
+            json={
+                "err_no": 0,
+                "err_msg": "",
+                "key": ["ppt-001"],
+                "value": ["[]"],
+                "formula_results": [],
+            },
+        )
+
+    repository = FakeRepository()
+    leases = FakeLeaseClient()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        pipeline = PptTextPipeline(
+            repository,
+            leases,
+            OcrAdapter(
+                client,
+                transport_max_attempts=2,
+                transport_retry_delay_seconds=0,
+            ),
+            PptWorkLimits(batch_size=1, max_concurrency=1),
+        )
+        results = await pipeline.run_ocr(
+            task_id="course-001",
+            node_id=11,
+            work=[PptImageWork("ppt-001", image_path, 0)],
+        )
+
+    assert attempts == 2
+    assert len(leases.acquired) == 1
+    assert leases.released == ["lease-0"]
+    assert results["ppt-001"]["text"] == ""

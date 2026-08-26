@@ -822,3 +822,47 @@ Campaign/release/SHA/case/phase 身份校验发布。
   磁盘警戒线掩盖实现问题。
 - 新修复必须形成新完整 SHA、按同 revision 重新发布 11 镜像并重跑 Stage45，再用新 seed、
   Campaign ID 和 attempt 从阶段 0 开始。`fc2379a` 只完成 11.13，不完成 12.1–12.8。
+
+## 2026-08-26 - `ef3f6e7` Stage45 通过并建立全新 Campaign attempt
+
+- `ef3f6e73b49044814be9439c8951ebec0600cf83` 已在 `.11` 使用现有构建缓存完成七算子与
+  四平台共 11 个同 revision `amd64` 镜像发布，未重新执行全量无缓存构建。
+- 常驻栈只读复核为 29/29 healthy、21/21 注册、18 个 GPU 进程和 3 个 CPU PPT 实例；
+  canonical 注册与 `stage45-post-recovery` checkpoint 均为“通过”且互不覆盖。
+- Stage45 以 `stage45_failures=0 exit_code=0` 结束并写出
+  `CODEX_STAGE45_COMPLETE failures=0`。18/18 GPU 实例生命周期真实推理、3/3 CPU PPT
+  真实处理和 ASR Offline、ASR Online、OCR、VBas、FaceRec、ScreenDet、PPT Slice 7/7
+  聚合 Smoke 全部通过，完成 OpenSpec 11.14。
+- 首个 write-once attempt `full-campaign-ef3f6e7-20260826185048` 的 runner 已启动，但外部
+  supervisor 使用错误的 `run-extreme-load-campaign` 字符串校验实际
+  `run_extreme_load_campaign.py` 进程，立即写出 `exit_code=19`。发现后按完整 PID `64945`
+  精确停止；仅 `BASE-MEDIA-DOWNLOAD-1` 规范通过，第二案只有开始事件。中断证据、runner
+  日志和 case 保持只读，不续写或补写。
+- 当前权威 attempt 改为 `full-campaign-ef3f6e7-20260826193136`，绑定 seed
+  `260826193136`、新 Campaign ID 和 171 条必测 case；只修正 Git 外 supervisor 的身份字符串，
+  不修改平台代码、镜像或 release。`.12` 源端遥测已独立重启，该 attempt 从阶段 0 顺序执行，
+  当前记录不提前完成 12.1–12.8。
+- 当前权威 attempt 的阶段 0 共 14 案全部规范通过：媒体下载 1/3/10/30 并发、PPT/ASR/教师/
+  学生离线基线、VBas/FaceRec/ScreenDet/OCR 在线图片基线、真实时钟 ASR WebSocket 和
+  `PHASE-0-COMPLETE`。实时 ASR 收到完整语句门禁所需的 `finished=true`，完成 OpenSpec 12.1；
+  阶段 1 及后续只按后续逐案结果更新。
+
+## 2026-08-26 - `ef3f6e7` 第 21 案 PPT OCR 单任务失败
+
+- 权威 attempt `full-campaign-ef3f6e7-20260826193136` 已规范结束：`completed=21`、
+  `passed=20`、`failed=1`、`sequence_ended exit_code=1`。它不能续写。
+- 阶段 1 的四条单泳道和 `OFF-UNIQUE-PPT-100/300` 均通过；
+  `OFF-UNIQUE-PPT-1000` 的 1000 次北向提交全部成功，最终 999 个任务成功、1 个任务失败。
+  失败任务的 `PPT_SLICE` 成功发布 2 张切片，`PPT_OCR` 只完成 1 张，另一工作项仍为状态 10；
+  节点原因是空异常派生的 `节点执行失败:`。
+- before/after 护栏均为 `CLEAR`；最终任务队列、Outbox、三个 Kafka lag 和租约均为 0，29 个
+  容器健康且没有重启。该事实不能归因为磁盘、队列、Kafka、租约泄漏或 PPT Slice 失败。
+- 两张结果图片和 manifest 均存在。原图在 OCR GPU0/1/2 各执行一次均成功；Orchestrator 容器
+  对失败图的并发 8、300 次隔离调用为 300/300 成功。原失败时窗中租约成功发放/释放，但失败
+  图片未到达任何 OCR access log。结论限定为“单次瞬时客户端/传输异常且旧代码丢失异常类型”，
+  不虚构精确子类型，也不把隔离探针作为北向全链路通过证据。
+- 后续修复只允许对幂等 OCR 单图的 `NetworkError/RemoteProtocolError` 做默认 2 次、0.2 秒的
+  配置化重试，并补异常类型和非空中文错误；当前 attempt 及其 999/1 事实保持只读。
+- 本地修复回归已覆盖首试 `ReadError`/次试成功、连续两次失败、OCR 业务错误不重试、同一
+  工作项租约跨重试复用并只释放一次，以及任意空消息异常使用异常类型形成非空节点原因。
+  Orchestrator 全量和平台非集成全量均通过；远端同 revision 发布与新 attempt 仍属于 11.15。

@@ -107,6 +107,8 @@ class PptConfig(BaseModel):
     ocr_batch_size: int = Field(default=8, ge=1)
     ocr_max_concurrency: int = Field(default=2, ge=1)
     ocr_request_timeout_seconds: float = Field(default=600.0, gt=0)
+    ocr_transport_max_attempts: int = Field(default=2, ge=1, le=5)
+    ocr_transport_retry_delay_seconds: float = Field(default=0.2, ge=0, le=10)
 
     @field_validator("lease_renew_interval_seconds")
     @classmethod
