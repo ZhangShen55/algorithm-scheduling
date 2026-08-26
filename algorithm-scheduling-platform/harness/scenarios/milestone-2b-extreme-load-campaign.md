@@ -769,3 +769,31 @@ Campaign/release/SHA/case/phase 身份校验发布。
   1024，但两个媒体容器主进程的 soft/hard 均为 1073741816，不存在当前服务侧句柄上限。
   `eno1` RX dropped 在 3 秒内从 3,439,459 增至 3,439,469，因此 `.12` 仍不作为权威高并发
   负载机，后续用例必须同时记录源端 RX drop 前后差值。
+
+## 2026-08-26 - `76d34cb` Stage45 通过与静态门禁失效冻结
+
+- `76d34cb93b2ce7539bf3e79bbc5a64005345c42c` 已在 `.11` 完成 11 个同 revision 镜像、
+  29/29 healthy、21/21 注册、18/18 GPU、3/3 CPU PPT、7/7 Smoke 和完整 Stage45；首次
+  `operator-registration.json` 与恢复后 `operator-registration-stage45-post-recovery.json`
+  均存在、权限 `0600` 且未互相覆盖，完成 OpenSpec 11.12。
+- `full-campaign-76d34cb-20260826094605` 的持久 runner 在 `sequence_started` 前被启动环境
+  回收，没有业务请求；`attempt-interruption-runner-start.json` 已固定该事实，该 attempt
+  只读保留。
+- `full-campaign-76d34cb-20260826095246` 使用独立 `tmux` 监督。媒体下载四档、PPT、离线
+  ASR、教师/学生行为及四类在线图片共前 12 案均发布 `passed`；`BASE-ASR-WS` 只有
+  `case_started`，没有规范 case 结果或 `sequence_ended`。
+- 继续执行前发现当前 SHA 的 `orchestrator_service/app/infrastructure/ppt_slice.py` 触发 Ruff
+  `I001`。这使最终静态门禁失效，即使远端 Stage45 和前 12 案业务事实成立，也不能用该 SHA
+  完成 12.1–13.8。runner 被主动停止，attempt 新增权限 `0600` 的
+  `attempt-interruption-static-gate.json` 后保持只读，不补写 `BASE-ASR-WS`。
+- `BASE-ASR-WS` 停止前还已原子发布一份 Docker 采集面失败证据：同一采样两次尝试均失败，
+  `exception_type=ProbeAttemptsExhausted`。按护栏合同该事实会独立锁存 `STOP`；追加的
+  `attempt-interruption-runtime-failure-index.json` 只索引既有 failure 文件和 SHA-256，
+  不补写 case 终态，也不把它与 Ruff 阻断合并为单一原因。
+- 源端遥测在精确终止残留 SSH 进程后冻结为 283 条，时间范围
+  `2026-08-26T09:57:35+08:00` 至 `10:21:34+08:00`；`:5555`/`:5556` 无非 200，
+  容器身份未变化，RX error 为 0，`eno1` RX drop 增加 2880。该增量单独归因于媒体源主机，
+  不归因到 `.11` 平台或算子。`.12` 登录凭据未写入 Git、Harness 或普通报告。
+- 下一次执行必须先提交最小导入分组修复，重新构建/inspect 11 个镜像并重跑完整 Stage45，
+  然后以新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑；两个 `76d34cb` attempt
+  均不得续写。

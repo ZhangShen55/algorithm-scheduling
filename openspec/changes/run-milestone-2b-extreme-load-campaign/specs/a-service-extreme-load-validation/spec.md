@@ -11,6 +11,10 @@
 - **WHEN** 任一必需实例缺失、GPU 归属错误、镜像 revision 不同或发现当前 Text Analysis 实例
 - **THEN** Campaign 系统 SHALL 在生成业务负载前失败关闭并记录中文原因
 
+#### Scenario: 运行时通过后发现当前 SHA 静态门禁失效
+- **WHEN** 某一 Git SHA 已通过远端拓扑与 Stage45，但随后以该 SHA 的实际源码重跑当前 Ruff、类型或编译门禁时失败
+- **THEN** 已有远端证据 SHALL 保持只读并继续表示当时的运行事实，当前 Campaign attempt MUST 停止且不得补写；修复 MUST 形成新完整 Git SHA，重新构建和 inspect 11 个镜像、重跑 Stage45，并以新 seed、Campaign ID 和 write-once attempt 从阶段 0 开始
+
 ### Requirement: A 服务模拟器必须从平台北向接口加压
 A 服务模拟器 SHALL 从目标服务器之外的可识别负载主机运行，且只能访问 `control-service:18100` 和 `online-gateway-service:18103`。业务泳道验证 MUST 不直连算子、不直改 PostgreSQL 任务终态也不调用 Repository 完成方法。
 

@@ -467,6 +467,27 @@ canonical 输入。两类文件都继续 write-once，同一 checkpoint 的不�
 重建并 inspect 11 个同 revision 镜像，恢复完整拓扑并使用独立恢复后 checkpoint 完成
 Stage45；随后仍须用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑。
 
+### 22. 发布运行证据不能替代当前 SHA 的静态门禁
+
+`76d34cb93b2ce7539bf3e79bbc5a64005345c42c` 已在 `.11` 完整通过 Stage45：29/29 容器健康、
+21/21 算子注册、18/18 GPU 进程、3/3 CPU PPT、7/7 Smoke，首次 canonical 注册与
+`stage45-post-recovery` checkpoint 同时存在且互不覆盖。随后建立的第一个 Campaign attempt
+在 `sequence_started` 前被执行环境回收；第二个持久 attempt 的前 12 个阶段 0 用例全部通过，
+`BASE-ASR-WS` 只有开始事件、尚无规范终态。
+
+复审发现该 SHA 的 `orchestrator_service/app/infrastructure/ppt_slice.py` 导入分组触发 Ruff
+`I001`。远端运行和业务事实仍然有效，但最终发布要求同一 SHA 同时通过静态、运行时和业务
+门禁，因此不能继续用该 SHA 完成 Campaign，也不能用 Harness 中较早的 Ruff 通过记录覆盖
+当前源码事实。第二个 attempt 必须以“静态门禁失效”只读冻结，保留 12 个通过结果、未完成
+`BASE-ASR-WS`、runner 日志和源端遥测；修复只调整导入顺序，不改变 PPT 或平台契约。
+
+任何进入远端构建或 Campaign 的候选 SHA，都必须从 `algorithm-scheduling-platform/` 工作目录
+加载该项目 `pyproject.toml`，在提交前对候选工作树重新执行当前 Ruff、
+受影响实现文件 strict Mypy、编译/导入、聚焦回归、OpenSpec strict 和 diff check。候选 SHA
+形成后必须重建并 inspect 全部 11 个镜像、重新完成 Stage45，再使用全新 seed、Campaign ID 和
+write-once attempt 从阶段 0 开始。旧 SHA 的 Stage45 和两次 attempt 只作为历史证据，不能
+授权新 SHA，也不能补写成完整阶段通过。
+
 ## Risks / Trade-offs
 
 - [风险] 1000 提交与 36 长课可能产生大量 `/data/course` 临时文件。 → 短/长媒体分阶段，进入新阶梯前重新预估，低于 15%/150 GiB 禁止加压，低于 10%/100 GiB 立即停止。

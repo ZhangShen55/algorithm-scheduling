@@ -2388,3 +2388,26 @@
 - Evidence tier and verdict: 当前达到本地静态/单元层，完成 OpenSpec 10.24，并把 `4fd4fa1`
   记录为 11.11 的失败发布事实。新 SHA 的 11 镜像、远端 Stage45 和全新 Campaign 属于
   11.12/12.1–12.8，尚未完成。
+
+## 2026-08-26 - `76d34cb` Stage45 完成、Campaign 冻结与静态门禁修复
+
+- Previous state: `76d34cb93b2ce7539bf3e79bbc5a64005345c42c` 已通过远端完整 Stage45，
+  但第一个 Campaign attempt 在 sequence 前中断；第二个 attempt 前 12 案通过，
+  `BASE-ASR-WS` 未产生终态且已有 Docker 探针两次失败证据。复审又发现该 SHA 在平台权威
+  Ruff 配置下触发 `I001`，不能继续作为最终 Campaign SHA。
+- Target state: 两个 attempt 只读冻结；当前候选只调整 PPT adapter 导入分组，从平台目录
+  重跑静态与聚焦门禁，形成新 SHA 后重建 11 镜像、重跑 Stage45 和全新 Campaign。
+- Changed files: PPT adapter 导入顺序，当前 OpenSpec 设计/规格/任务及三份 Harness 文档。
+  工作区外只追加两份权限 `0600` 的 attempt 中断/失败索引证据；不修改既有 case、runner、
+  runtime metric、远端 release、媒体、凭据或用户不纳管文件。
+- Contract impact: 不修改 A 服务接口、PPT 回调/对账、算子协议、四服务边界、容量、路由、
+  数据库或部署拓扑。变化只恢复候选提交的静态门禁并澄清 Ruff 必须加载平台配置。
+- Verification: 从 `algorithm-scheduling-platform/` 执行受影响 Ruff、实现文件 strict Mypy、
+  compileall/import、PPT adapter/runtime、真实 PostgreSQL 竞态、Harness、OpenSpec strict 和
+  diff check，结果为 Ruff/Mypy/编译/导入全通过，`39 passed`、`1 passed, 4 deselected`、
+  Harness `5 passed`。测试文件第 301 行的既有联合类型未收窄不纳入本次实现文件 Mypy 范围。
+- Supplemental evidence: `.12` 源端遥测精确终止后冻结为 283 条，HTTP 无非 200、容器身份
+  不变、RX error 为 0，`eno1` RX drop 增加 2880；凭据不进入 Git/Harness。`.11` 在停止后
+  为 29/29 healthy、21/21 ready、18 GPU，队列、Outbox、Kafka lag、租约和 inflight 均归零。
+- Evidence tier and verdict: 完成 OpenSpec 10.25，并保留 11.12 的真实通过事实；11.13 与
+  12.1–13.8 仍待新 SHA 远端执行，本记录不把 12 个历史 case 汇总为阶段 0 通过。

@@ -2066,3 +2066,48 @@ Harness `5 passed`、部署手册 `11 passed`、全部活动 OpenSpec strict 和
 只因本机没有 canonical `facerec-gpu0`，27 个 warnings 仍为既有 fork
 `DeprecationWarning`。这些本地结果完成 10.24，但新 SHA 的 11 镜像和远端 Stage45 仍必须
 完成 11.12，不能复用 `4fd4fa1` 的发布证据。
+
+## 2026-08-26 `76d34cb` 远端 Stage45、Campaign 冻结与静态门禁复核
+
+`76d34cb93b2ce7539bf3e79bbc5a64005345c42c` 的远端 Stage45 退出码为 0，实际达到
+29/29 healthy、21/21 注册、18/18 GPU、3/3 CPU PPT 和 7/7 Smoke；canonical 注册与
+`stage45-post-recovery` checkpoint 独立存在且权限均为 `0600`，完成 OpenSpec 11.12。
+
+第一个 attempt `full-campaign-76d34cb-20260826094605` 在 `sequence_started` 前中断，业务请求
+数为 0。第二个 attempt `full-campaign-76d34cb-20260826095246` 由 `tmux` 持久 runner 执行，
+前 12 个基线 case 均为 `passed`；`BASE-ASR-WS` 只有 `case_started`，没有 case 终态或
+`sequence_ended`。该 case 期间已有一份 Docker 采集面 `ProbeAttemptsExhausted/attempts=2`
+失败证据；runner 停止后活动队列、Outbox、Kafka lag 和租约均归零，29 个容器恢复健康。
+两个 attempt 均保持只读，不能据此完成 12.1。
+
+提交前复审必须从平台工作目录加载 `algorithm-scheduling-platform/pyproject.toml`。直接从
+工作区根执行 Ruff 不会加载该权威配置，导入分类结果相反，不能作为发布证据。使用 HEAD blob
+和权威工作目录复现 `76d34cb` 的 `I001` 后，只调整 `pydantic` 与 `packages.*` 的导入分组，
+执行：
+
+```bash
+cd algorithm-scheduling-platform
+.venv/bin/ruff check \
+  ../orchestrator_service/app/infrastructure/ppt_slice.py \
+  tests/test_ppt_slice_adapter.py \
+  tests/integration/test_orchestrator_repository.py
+MYPYPATH="$PWD" .venv/bin/mypy --strict \
+  ../orchestrator_service/app/infrastructure/ppt_slice.py
+.venv/bin/python -m compileall -q ../orchestrator_service/app
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -c \
+  'from orchestrator_service.app.infrastructure.ppt_slice import PptSliceAdapter'
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/test_ppt_slice_adapter.py ../orchestrator_service/tests/test_ppt_runtime.py
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/integration/test_orchestrator_repository.py -k ppt_callback_and_reconcile
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q tests/test_harness_consistency.py
+(cd .. && openspec validate run-milestone-2b-extreme-load-campaign --strict)
+(cd .. && git diff --check)
+```
+
+结果依次为 Ruff 通过、实现文件 strict Mypy 通过、compileall/import 通过、PPT adapter/runtime
+`39 passed`、真实 PostgreSQL 双线程竞态 `1 passed, 4 deselected`、Harness `5 passed`、
+OpenSpec strict 和 diff check 通过。测试文件自身在第 301 行存在自 `cc52c1ec` 起的联合类型
+未收窄，因此本轮 strict Mypy 结论明确只覆盖受影响实现文件；该既有测试类型债务不是导入
+分组修复引入，也不扩大本次修改范围。以上完成 10.25，但新的完整 Git SHA、11 镜像重建、
+Stage45 和全新 Campaign 属于 11.13/12.1–12.8，尚未完成。
