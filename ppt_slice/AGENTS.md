@@ -63,4 +63,7 @@ Use the documented video task and callback fixture for real slicing verification
 - Publish images and the manifest through `.part` files followed by atomic replacement.
 - Send exactly one terminal callback containing metadata only. Never include Base64 image data.
 - `task_id` and `operator_task_id` must not be usable for path traversal.
+- Treat an exact duplicate of an active `operator_task_id` as an idempotent acceptance and do not
+  start a second background task. Reject the same `operator_task_id` when its task, video, callback
+  or threshold payload conflicts with the active request.
 - A single Uvicorn worker enforces `max_concurrent_tasks` atomically.

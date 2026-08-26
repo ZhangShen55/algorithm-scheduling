@@ -119,6 +119,7 @@
 - [x] 10.25 保留 `76d34cb` 的完整 Stage45、runner 启动前中断 attempt 和前 12 案通过后静态门禁失效 attempt；修复 PPT adapter 导入分组，重新执行 Ruff、受影响实现 strict Mypy、compileall/import、PPT 聚焦/真实 PostgreSQL 竞态、OpenSpec strict、Harness 一致性和 diff check，不改写旧 attempt。
 - [x] 10.26 保留 `fc2379a` attempt 的阶段 0、前 23 案通过、`OFF-UNIQUE-ASR-1000` 规范失败和磁盘 `WARNING`；修正单 capability 只使用一个并发槽位的问题，将终态工作区清理接入普通/PPT/视觉路径，并以安全边界和清理失败不逆转业务终态的回归验证。
 - [x] 10.27 保留 `ef3f6e7` attempt 的阶段 0、前 20 案通过和 `OFF-UNIQUE-PPT-1000` 的 999 成功/1 个 OCR 失败事实；为幂等 PPT OCR 单图调用增加配置化有限网络重试、异常类型日志和非空中文终态原因，验证瞬时恢复、耗尽失败、业务错误不重试及租约精确释放。
+- [x] 10.28 保留 `b44eba7` 的 Stage45 r3、supervisor 身份竞态 attempt、有效 attempt 的阶段 0 和前 5 个阶段 1 用例，以及 `OFF-UNIQUE-PPT-300` 的 300 次提交成功/299 成功终态/1 个 PPT 提交 `ReadError` 事实；为确定性 `operator_task_id` 增加 PPT Slice 在途幂等受理和配置化有限网络重试，验证瞬时恢复、耗尽失败、超时不重试、冲突载荷拒绝和不重复启动后台任务。
 
 ## 11. `192.168.29.11` 七算子四平台发布
 
@@ -136,7 +137,8 @@
 - [x] 11.12 将 Stage45 注册 checkpoint 修复形成新完整 Git SHA，重建并 inspect 11 个同 revision 镜像，恢复 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT 和 7/7 Smoke，同时证明首次 canonical 与恢复后 checkpoint 均存在且互不替代；使用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写 `4fd4fa1` 或此前冻结 attempt。
 - [x] 11.13 将静态门禁修复形成 `fc2379a`，在 `.11` 重建并 inspect 七算子和四平台共 11 个同 revision 镜像，重新完成 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT、7/7 Smoke 和独立 Stage45 checkpoint；使用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写两个 `76d34cb` attempt。
 - [x] 11.14 将节点并发与终态工作区清理修复形成新完整 Git SHA，在 `.11` 增量利用现有镜像缓存完成 11 个同 revision 镜像发布，重验 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT、7/7 Smoke 和独立 Stage45 checkpoint；以新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写 `fc2379a` attempt。
-- [ ] 11.15 将 PPT OCR 有界网络重试和可诊断错误修复形成新完整 Git SHA，在 `.11` 只使用现有缓存增量发布 11 个同 revision 镜像并重跑 Stage45；使用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写 `ef3f6e7` 的两个 attempt。
+- [x] 11.15 将 PPT OCR 有界网络重试和可诊断错误修复形成 `b44eba7`，在 `.11` 只使用现有缓存增量发布 11 个同 revision 镜像并完成 Stage45 r3；使用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写 `ef3f6e7` 的两个 attempt。首个 attempt 因 supervisor 身份竞态冻结；第二个 attempt 在第 20 案规范失败并保持只读。
+- [ ] 11.16 将 PPT Slice 在途幂等受理和异步提交有界网络重试形成新完整 Git SHA，在 `.11` 利用现有缓存发布同 revision 镜像并重跑 Stage45；使用新 seed、Campaign ID 和 write-once attempt 从阶段 0 重跑，不续写 `b44eba7` 的两个 attempt。
 
 ## 12. 远端极限负载 Campaign 执行
 

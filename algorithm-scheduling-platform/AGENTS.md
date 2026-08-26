@@ -21,6 +21,7 @@
 - 在线图像请求包含上游传入的 Base64 图像。不得向在线网关增加流接入或抽帧功能。
 - PPT 是已批准的内部破坏性契约变更：共享文件位于 `/data/result/{task_id}/ppt`，使用原子 manifest，只发送一次终态回调，不再发送 Base64 幻灯片回调。
 - PPT 提交使用规范字段 `video_path`。Orchestrator 输出准备完成的绝对本地路径；算子同时接受远程 URL，并仅将旧字段 `uri` 保留为兼容输入。
+- PPT 异步提交使用确定性 `operator_task_id`。相同载荷的在途重复提交必须幂等返回既有受理状态且不得新增后台任务；同键冲突载荷必须拒绝。Orchestrator 只允许对瞬时网络/远端协议错误进行配置化有限重试，不重试超时、HTTP、业务或未知错误。
 - Kafka 消息只能包含标识符、路径和元数据，不得包含媒体字节。
 - 当前新任务 DAG 固定为 `PPT_SLICE -> PPT_OCR` 和 `ASR_TRANSCRIPTION`。不得为新任务创建
   `PPT_KEYWORDS` 或 `COURSE_OVERVIEW`；历史任务和结果中的退役节点仍须原样可查询。

@@ -313,7 +313,15 @@ class OrchestratorRuntime:
                 course_root=self.settings.storage.course_root,
             ),
             asr_adapter=OfflineAsrAdapter(operator_http_client),
-            ppt_slice_adapter=PptSliceAdapter(operator_http_client),
+            ppt_slice_adapter=PptSliceAdapter(
+                operator_http_client,
+                transport_max_attempts=(
+                    self.settings.ppt.submit_transport_max_attempts
+                ),
+                transport_retry_delay_seconds=(
+                    self.settings.ppt.submit_transport_retry_delay_seconds
+                ),
+            ),
             ppt_callback_base_url=self.settings.ppt.callback_base_url,
             ppt_terminal_callback_path=self.settings.ppt.terminal_callback_path,
             ppt_slice_threshold=self.settings.ppt.slice_threshold,

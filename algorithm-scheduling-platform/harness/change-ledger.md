@@ -2474,3 +2474,34 @@
 - Local verification: 已实现默认 2 次/0.2 秒的窄网络重试、超时非重试包装、空异常类型兜底和
   结构化告警；Orchestrator `78 passed`，平台非集成全量 `3201 passed, 3 skipped`。三个 skip
   均因本机不存在 canonical `facerec-gpu0` 容器，不属于本次回归失败。10.27 完成，11.15 待远端。
+
+## 2026-08-26 - `b44eba7` Stage45 完成与 PPT 异步提交瞬时失败
+
+- Previous state: `b44eba7f07818a42d51f5935290ded857c98b4c1` 已在 `.11` 利用缓存完成
+  同 revision 发布，Stage45 r3 为 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT、7/7
+  Smoke，canonical 和恢复后注册证据均通过，完成 OpenSpec 11.15。首个 attempt
+  `full-campaign-b44eba7-20260826221958` 因 supervisor 在包装进程 `exec` 前检查 PID 产生
+  身份竞态，只完成 2 个 case 后按完整 PID 精确停止并冻结。
+- Observed state: 有效 attempt `full-campaign-b44eba7-20260826222254` 的阶段 0 为 14/14
+  passed；四条阶段 1 单泳道和 `OFF-UNIQUE-PPT-100` 通过。第 20 案
+  `OFF-UNIQUE-PPT-300` 为 300 次北向提交成功、299 个成功终态、1 个失败终态，runner 与
+  supervisor 均以 `exit_code=1` 规范结束。失败课程的 `PPT_SLICE=70`，原因为
+  `节点执行失败: ReadError`，`PPT_OCR=20`；失败发生在 Orchestrator 接收 PPT 提交响应头时，
+  三个 PPT 实例均无该任务的日志。护栏、队列、Outbox、Kafka lag、租约、容器和磁盘没有异常。
+- Target state: 对确定性 `operator_task_id` 的 PPT 提交仅执行默认 2 次/0.2 秒的
+  `NetworkError/RemoteProtocolError` 有限重试；同一租约和实例不变。PPT 单 worker 原子区分
+  新任务、相同在途请求、冲突载荷和容量不足，相同请求不新增后台任务，冲突载荷继续拒绝。
+- Changed files: Orchestrator PPT adapter、配置/runtime、测试和说明；PPT 算子 TaskManager、
+  提交入口、测试和说明；平台/PPT 的 `AGENTS.md`、当前 OpenSpec、部署手册及三份 Harness
+  文档。两个 `b44eba7` attempt、Stage45 release、媒体、凭据和用户未纳管文件均不修改。
+- Contract impact: HTTP 路径、请求/响应字段、端口、PPT 共享目录、manifest、终态回调、DAG、
+  算子容量与四服务边界保持不变；只新增相同在途提交的幂等行为和窄网络重试。
+- Local verification: 先运行新增测试并得到 Orchestrator `3 failed`、PPT API `2 failed`；实现后
+  聚焦为 `12 passed` 和 `22 passed`，项目全量为 Orchestrator `81 passed`、PPT Slice
+  `106 passed, 11 subtests passed`。受影响文件 Ruff、Orchestrator strict Mypy、两个项目
+  compile/import、Harness `16 passed`、OpenSpec strict 和 diff check 均通过；平台非集成全量
+  为 `3201 passed, 3 skipped, 27 warnings`，三个 skip 只因本机未运行 canonical
+  `facerec-gpu0`，warnings 为既有 fork `DeprecationWarning`。
+- Evidence tier and verdict: 达到真实远端失败归因、静态和单元层级，完成 10.28。`b44eba7`
+  的有效 attempt 永久保持 19 passed/1 failed；新修复必须形成完整 SHA，利用缓存完成 11.16、
+  Stage45 和全新 Campaign，不能从失败的第 20 案续跑。

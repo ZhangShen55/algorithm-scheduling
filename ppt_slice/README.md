@@ -94,7 +94,10 @@ Content-Type: application/json
 }
 ```
 
-当单 worker 中已有 `platform.max_concurrent_requests` 个任务时返回 `status=70`，不会启动后台处理。
+相同 `operator_task_id`、`task_id`、视频路径、回调地址和阈值的在途重复请求返回
+`status=50/reason=相同 PPT 切片任务已受理`，不新增后台任务。相同 `operator_task_id` 但载荷
+不同的请求返回 `status=70`。当单 worker 中已有 `platform.max_concurrent_requests` 个其他任务
+时同样返回 `status=70`，不会启动后台处理。
 
 ## 共享结果
 

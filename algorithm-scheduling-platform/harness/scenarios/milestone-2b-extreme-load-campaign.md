@@ -866,3 +866,27 @@ Campaign/release/SHA/case/phase 身份校验发布。
 - 本地修复回归已覆盖首试 `ReadError`/次试成功、连续两次失败、OCR 业务错误不重试、同一
   工作项租约跨重试复用并只释放一次，以及任意空消息异常使用异常类型形成非空节点原因。
   Orchestrator 全量和平台非集成全量均通过；远端同 revision 发布与新 attempt 仍属于 11.15。
+
+## 2026-08-26 - `b44eba7` 第 20 案 PPT 异步提交 `ReadError`
+
+- `b44eba7f07818a42d51f5935290ded857c98b4c1` 的 Stage45 r3 为 `failures=0`：29/29
+  healthy、21/21 注册、18 GPU、3 CPU PPT、7/7 Smoke，完成 11.15。
+- 首个 attempt `full-campaign-b44eba7-20260826221958` 因 supervisor 在包装进程 `exec` 前
+  读取 PID 身份产生竞态，只完成 2 个 case 后精确停止；中断 JSON、runner 和既有 case
+  全部只读，不续写。
+- 有效 attempt `full-campaign-b44eba7-20260826222254` 的阶段 0 为 14/14 通过；阶段 1 的
+  四条独立泳道和 PPT 100 通过。`OFF-UNIQUE-PPT-300` 为 300 次北向提交成功、299 个成功
+  终态、1 个失败终态，规范写出 `case_ended=failed` 和 `sequence_ended exit_code=1`。
+- 唯一失败课程在 PPT 提交后约 0.2 秒进入失败：`PPT_SLICE=70/reason=节点执行失败:
+  ReadError`，`PPT_OCR=20`。traceback 位于 Orchestrator 接收 PPT 算子响应头，三个 PPT
+  实例均没有该任务日志；护栏前后 `CLEAR`、队列/Outbox/Kafka lag/租约/inflight 为 0、
+  容器无重启，因此根因限定为瞬时提交传输错误。
+- 修复以 `ppt-node-{node_id}` 为幂等键，在同一租约、同一实例仅重试
+  `NetworkError/RemoteProtocolError`，默认 2 次/0.2 秒。PPT 算子对相同载荷的在途重复请求
+  返回既有 `status=50` 且不新增后台任务；同键冲突载荷返回 `status=70`；超时、HTTP、业务和
+  未知错误不重试。
+- 本地 TDD 先证明新增用例失败；实现后 Orchestrator 全量 `81 passed`、PPT Slice 全量
+  `106 passed, 11 subtests passed`，平台非集成全量 `3201 passed, 3 skipped, 27 warnings`，
+  Ruff、strict Mypy、compile/import、Harness、OpenSpec strict 和 diff check 均通过。该结果
+  完成 10.28，不完成 11.16 或 12.2；必须形成新 SHA、利用缓存重跑 Stage45，并从阶段 0
+  创建全新 write-once attempt。

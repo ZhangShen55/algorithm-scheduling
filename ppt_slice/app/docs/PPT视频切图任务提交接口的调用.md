@@ -54,7 +54,18 @@ Content-Type: application/json
 }
 ```
 
-并发容量已满或算子执行 ID 重复：
+相同在途请求重复提交时返回既有受理状态，不新增后台任务：
+
+```json
+{
+  "task_id": "course-001",
+  "operator_task_id": "ppt-run-001",
+  "status": 50,
+  "reason": "相同 PPT 切片任务已受理"
+}
+```
+
+并发容量已满时返回：
 
 ```json
 {
@@ -64,6 +75,10 @@ Content-Type: application/json
   "reason": "当前任务数已达到最大值[15]，请稍后重试"
 }
 ```
+
+相同 `operator_task_id` 但 `task_id`、`video_path`、`result_callback_uri` 或 `threshold` 不同时
+返回 `status=70/reason=operator_task_id 已存在且请求内容不一致`。`operator_task_id` 是平台
+重试的幂等键，不允许调用方在同一算子任务标识下改变载荷。
 
 `50` 表示后台处理中；受理响应不是终态。
 

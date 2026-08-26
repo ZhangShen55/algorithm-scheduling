@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from packages.platform_contracts.status import NodeStatus
 from ..domain.ppt_work import make_ppt_image_id
 
 _TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+logger = logging.getLogger(__name__)
 
 
 class PptSliceCallbackError(RuntimeError):
@@ -110,8 +112,20 @@ class PptTerminalHandleResult:
 class PptSliceAdapter:
     """Submit the platform-only PPT shared-result contract."""
 
-    def __init__(self, http_client: httpx.AsyncClient) -> None:
+    def __init__(
+        self,
+        http_client: httpx.AsyncClient,
+        *,
+        transport_max_attempts: int = 2,
+        transport_retry_delay_seconds: float = 0.2,
+    ) -> None:
+        if transport_max_attempts <= 0:
+            raise ValueError("PPT 切片提交尝试次数必须大于 0")
+        if transport_retry_delay_seconds < 0:
+            raise ValueError("PPT 切片提交重试间隔不能小于 0")
         self._http = http_client
+        self._transport_max_attempts = transport_max_attempts
+        self._transport_retry_delay_seconds = transport_retry_delay_seconds
 
     async def submit(
         self,
@@ -125,15 +139,17 @@ class PptSliceAdapter:
     ) -> PptSliceAccepted:
         if not local_video_path.is_absolute():
             raise ValueError("PPT 视频必须使用绝对本地路径")
-        response = await self._http.post(
+        response = await self._post_with_transport_retry(
             f"{instance_url.rstrip('/')}/LocalVideoPPTSliceTasks/v1.0.0",
-            json={
+            payload={
                 "video_path": str(local_video_path),
                 "task_id": task_id,
                 "operator_task_id": operator_task_id,
                 "result_callback_uri": callback_url,
                 "threshold": threshold,
             },
+            task_id=task_id,
+            operator_task_id=operator_task_id,
         )
         response.raise_for_status()
         accepted = PptSliceAccepted.model_validate(response.json())
@@ -142,6 +158,41 @@ class PptSliceAdapter:
         if accepted.status != NodeStatus.RUNNING:
             raise PptSliceCallbackError(accepted.reason or "PPT 切片任务未受理")
         return accepted
+
+    async def _post_with_transport_retry(
+        self,
+        url: str,
+        *,
+        payload: dict[str, Any],
+        task_id: str,
+        operator_task_id: str,
+    ) -> httpx.Response:
+        for attempt in range(1, self._transport_max_attempts + 1):
+            try:
+                return await self._http.post(url, json=payload)
+            except httpx.TimeoutException as exc:
+                raise PptSliceCallbackError(
+                    f"PPT 切片算子提交超时（{type(exc).__name__}）"
+                ) from exc
+            except (httpx.NetworkError, httpx.RemoteProtocolError) as exc:
+                if attempt >= self._transport_max_attempts:
+                    raise PptSliceCallbackError(
+                        f"PPT 切片算子提交网络调用失败（{type(exc).__name__}）"
+                    ) from exc
+                # operator_task_id 是算子幂等键；日志不记录视频路径或请求正文。
+                logger.warning(
+                    "PPT 切片任务提交遇到瞬时网络异常，准备有限重试",
+                    extra={
+                        "task_id": task_id,
+                        "operator_task_id": operator_task_id,
+                        "exception_type": type(exc).__name__,
+                        "attempt": attempt,
+                        "max_attempts": self._transport_max_attempts,
+                    },
+                )
+                if self._transport_retry_delay_seconds > 0:
+                    await asyncio.sleep(self._transport_retry_delay_seconds)
+        raise AssertionError("unreachable")
 
 
 class PptSliceManifestValidator:

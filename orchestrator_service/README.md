@@ -40,8 +40,12 @@ docker build -f orchestrator_service/docker/Dockerfile -t orchestrator-service .
 `PPT_OCR` 是工作项型节点：协调节点不占用外层算子租约，每个 `ppt_image_id` 独立申请 OCR
 租约，持久化单图结果后释放。幂等单图调用仅对瞬时 `NetworkError`/`RemoteProtocolError`
 执行 `[ppt]` 中配置的有限重试，默认总尝试 2 次、间隔 0.2 秒；OCR 业务错误、HTTP 超时和
-未知错误不重试，最终节点原因至少保留异常类型。全部 OCR 工作项完成后 PPT 任务直接进入终态。PPT Slice 是异步长任务，
-从算子受理到 manifest 终态持久化持续续租，终态事务完成后才释放。
+未知错误不重试，最终节点原因至少保留异常类型。全部 OCR 工作项完成后 PPT 任务直接进入终态。
+
+PPT Slice 是异步长任务，从算子受理到 manifest 终态持久化持续续租，终态事务完成后才释放。
+确定性 `operator_task_id` 的提交仅对瞬时 `NetworkError`/`RemoteProtocolError` 执行 `[ppt]`
+配置的有限重试，默认总尝试 2 次、间隔 0.2 秒；同一租约和实例不变。超时、HTTP、业务和
+未知错误不重试。PPT 算子把相同在途请求作为幂等重复返回，避免响应丢失后启动第二个后台任务。
 
 ASR 只调用离线转写算子并保存完整 v1.1.8 结果和 `effective_params`，转写完成后 ASR 任务
 直接进入终态。Orchestrator 不注册、租赁或调用 Text Analysis。

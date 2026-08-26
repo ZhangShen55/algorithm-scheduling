@@ -14,7 +14,7 @@ from app.core.logger import get_logger
 from app.models.task import LocalVideoAnalysisTaskObject
 from app.schemas import TaskAcceptedResponse, VideoPPTCutRequest
 from app.services.shared_result import SharedResultWriter, TerminalResultPublisher
-from app.services.task_manager import task_manager
+from app.services.task_manager import TaskAdmission, task_manager
 from app.services.video_processor import send_terminal_callback, start_rtsp
 from app.utils.uri import redact_uri_for_log
 
@@ -74,12 +74,32 @@ async def process_rtsp(
         task_status_code=1,
     )
 
-    accepted = task_manager.try_add_task(
+    admission = task_manager.admit_task(
         task_params.operator_task_id,
         task,
         max_tasks=settings.MAX_CONCURRENT_TASKS,
     )
-    if not accepted:
+    if admission is TaskAdmission.DUPLICATE:
+        logger.info(
+            "相同 PPT 切片任务重复提交，返回既有受理状态: %s",
+            task_params.operator_task_id,
+        )
+        return TaskAcceptedResponse(
+            task_id=task_params.task_id,
+            operator_task_id=task_params.operator_task_id,
+            status=50,
+            reason="相同 PPT 切片任务已受理",
+        )
+    if admission is TaskAdmission.CONFLICT:
+        error_msg = "operator_task_id 已存在且请求内容不一致"
+        logger.warning(error_msg)
+        return TaskAcceptedResponse(
+            task_id=task_params.task_id,
+            operator_task_id=task_params.operator_task_id,
+            status=70,
+            reason=error_msg,
+        )
+    if admission is TaskAdmission.CAPACITY:
         error_msg = f"当前任务数已达到最大值[{settings.MAX_CONCURRENT_TASKS}]，请稍后重试"
         logger.warning(error_msg)
         return TaskAcceptedResponse(

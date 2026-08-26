@@ -135,6 +135,10 @@ lease_ttl_seconds = 60
 lease_renew_interval_seconds = 20.0
 # 回调丢失时扫描运行中 PPT 节点并核对 manifest 的间隔秒数。
 reconcile_interval_seconds = 30.0
+# 幂等 PPT 异步提交遇到瞬时网络异常时的总尝试次数，包含首次调用；超时不重试。
+submit_transport_max_attempts = 2
+# 瞬时网络异常后向同一 PPT 实例重提相同 operator_task_id 前的等待秒数。
+submit_transport_retry_delay_seconds = 0.2
 # OCR 单批处理的 PPT 图片数。
 ocr_batch_size = 8
 # 单个 PPT OCR 节点同时发起的请求数。

@@ -104,6 +104,8 @@ class PptConfig(BaseModel):
     lease_ttl_seconds: int = Field(default=60, gt=0)
     lease_renew_interval_seconds: float = Field(default=20.0, gt=0)
     reconcile_interval_seconds: float = Field(default=30.0, gt=0)
+    submit_transport_max_attempts: int = Field(default=2, ge=1, le=5)
+    submit_transport_retry_delay_seconds: float = Field(default=0.2, ge=0, le=10)
     ocr_batch_size: int = Field(default=8, ge=1)
     ocr_max_concurrency: int = Field(default=2, ge=1)
     ocr_request_timeout_seconds: float = Field(default=600.0, gt=0)

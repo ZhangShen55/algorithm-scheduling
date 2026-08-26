@@ -548,6 +548,39 @@ OCR 单图识别请求由稳定 `ppt_image_id` 标识且不产生外部副作用
 租约释放回归，再形成新完整 Git SHA；远端使用现有缓存发布同 revision 11 镜像、重跑
 Stage45，并以新 seed、Campaign ID 和 write-once attempt 从阶段 0 开始。
 
+### 25. PPT Slice 异步提交使用在途幂等键和有限网络重试
+
+`b44eba7f07818a42d51f5935290ded857c98b4c1` 已在 `.11` 使用缓存完成同 revision 发布；有效
+Stage45 r3 为 29/29 healthy、21/21 注册、18 GPU、3 CPU PPT、7/7 Smoke，canonical 注册和
+`stage45-post-recovery` checkpoint 均通过，完成 11.15。第一个 Campaign attempt
+`full-campaign-b44eba7-20260826221958` 因 supervisor 在 `nohup` 包装进程 `exec` 前检查 PID
+而触发身份竞态，只完成两个 case 后被按完整 PID 精确停止并冻结。第二个 attempt
+`full-campaign-b44eba7-20260826222254` 的阶段 0 为 14/14 通过，阶段 1 四条单泳道和
+`OFF-UNIQUE-PPT-100` 通过；`OFF-UNIQUE-PPT-300` 以 300 次北向提交成功、299 个课程成功
+终态和 1 个失败终态规范结束，runner 与 supervisor 均写出 `exit_code=1`。
+
+唯一失败课程的 `PPT_SLICE` 在 0.2 秒内由 `RUNNING` 进入 `FAILED`，原因为
+`节点执行失败: ReadError`，`PPT_OCR` 因前置节点未完成保持等待。Orchestrator traceback
+明确落在 `PptSliceAdapter.submit -> httpx.AsyncClient.post` 接收响应头阶段；同一时窗三个
+PPT Slice 实例均没有该 `task_id` 的应用或 access 日志。护栏前后为 `CLEAR`，最终活动队列、
+Outbox、Kafka lag、租约和 inflight 均为 0，容器零重启。因此证据支持“Orchestrator 到 PPT
+算子提交链路的一次瞬时客户端/传输异常”，不支持归因为媒体、PPT 算法、OCR、容量或容器故障。
+
+PPT 提交使用确定性 `operator_task_id=ppt-node-{node_id}`，属于可幂等请求。Orchestrator 仅对
+`httpx.NetworkError` 和 `httpx.RemoteProtocolError` 执行配置化有限重试，默认总尝试 2 次、
+间隔 0.2 秒；整个尝试窗口复用同一实例租约和 `operator_task_id`。超时、HTTP 状态、业务拒绝、
+响应结构和未知错误不进入该重试。最终网络失败转换为包含异常类型的非空中文原因，日志只记录
+受控任务标识、异常类型和尝试序号，不记录视频路径或请求正文。
+
+为覆盖“首请求已受理但响应丢失”，PPT Slice 单 worker 在同一原子容量检查中区分四种结果：
+新受理、相同在途请求、相同 `operator_task_id` 的冲突载荷和容量不足。相同在途请求返回
+`status=50` 且不新增后台任务；冲突载荷返回 `status=70`；其他任务仍受现有容量上限约束。
+该变化不修改 HTTP 路径、请求字段、响应字段、端口、共享目录、manifest 或终态回调合同。
+
+`b44eba7` 的两个 attempt 均保持只读，失败的第 20 案不得补写或续跑。修复必须形成新完整
+Git SHA，利用现有缓存发布同 revision 镜像并重跑 Stage45；随后使用新 seed、Campaign ID 和
+write-once attempt 从阶段 0 开始，不得从 `OFF-UNIQUE-PPT-300` 之后继续。
+
 ## Risks / Trade-offs
 
 - [风险] 1000 提交与 36 长课可能产生大量 `/data/course` 临时文件。 → 短/长媒体分阶段，进入新阶梯前重新预估，低于 15%/150 GiB 禁止加压，低于 10%/100 GiB 立即停止。

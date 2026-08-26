@@ -121,6 +121,14 @@ ffprobe、完整解码和安全末端抽帧验证。PPT 与视觉单任务遇到
 - **WHEN** 图片读取、HTTP 状态、OCR `err_no`、响应结构、JSON、超时、未知错误持续失败，或允许重试的网络异常耗尽尝试次数
 - **THEN** Orchestrator MUST 不重试非瞬时错误，并将最终异常类型转换为非空中文节点原因；工作项租约 MUST 精确释放，已完成的其他图片结果 SHALL 保留，当前节点不得伪装为全部成功
 
+#### Scenario: PPT Slice 异步提交瞬时网络错误有限重试
+- **WHEN** Orchestrator 使用确定性 `operator_task_id` 向 PPT Slice 提交幂等异步任务，第一次遇到 `httpx.NetworkError` 或 `httpx.RemoteProtocolError` 并在配置的有限尝试内恢复
+- **THEN** Orchestrator SHALL 在同一算子实例租约内重提相同载荷，默认总尝试 2 次且间隔 0.2 秒；日志只能记录受控任务标识、异常类型和尝试序号，不得记录视频路径、请求正文或媒体内容
+
+#### Scenario: PPT Slice 重复受理不产生第二个后台任务
+- **WHEN** 首次请求可能已被 PPT Slice 受理但响应丢失，Orchestrator 使用相同 `operator_task_id` 和相同载荷重试
+- **THEN** PPT Slice SHALL 原子返回既有 `status=50` 受理状态且不新增后台任务；相同 `operator_task_id` 但载荷冲突 MUST 返回 `status=70`，容量不足和冲突 MUST 保持可区分；超时、HTTP、业务、响应结构和未知错误 MUST 不被瞬时网络重试掩盖
+
 ### Requirement: 幂等、追加任务类型与优先级必须在压力下保持语义
 Campaign 系统 SHALL 对同一 `task_id` 执行 30、100、300、1000 次并发相同提交，并验证分批追加 `task_types`、已完成结果复用和冲突媒体请求。Campaign 还 SHALL 在堆积的 `NORMAL` 后注入 `URGENT`，验证只对未领取节点插队。Control 课程查询的节点字典 MUST 从 PostgreSQL 节点事实返回可空 `claimed_at` 和 `started_at`，Campaign MUST 使用它们证明领取和开始顺序。
 

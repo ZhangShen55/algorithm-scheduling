@@ -2,20 +2,30 @@
 Task Management Service
 任务管理服务
 """
+from enum import StrEnum
 from threading import RLock
-from typing import Dict, Optional
-from app.models.task import LocalVideoAnalysisTaskObject
+
 from app.core.logger import get_logger
+from app.models.task import LocalVideoAnalysisTaskObject
 
 logger = get_logger("task_service")
+
+
+class TaskAdmission(StrEnum):
+    """原子区分新受理、幂等重复、身份冲突和容量不足。"""
+
+    ACCEPTED = "accepted"
+    DUPLICATE = "duplicate"
+    CONFLICT = "conflict"
+    CAPACITY = "capacity"
 
 
 class TaskManager:
     """任务管理器"""
 
     def __init__(self):
-        self._task_list: Dict[str, LocalVideoAnalysisTaskObject] = {}
-        self._fail_task_list: Dict[float, str] = {}
+        self._task_list: dict[str, LocalVideoAnalysisTaskObject] = {}
+        self._fail_task_list: dict[float, str] = {}
         self._lock = RLock()
 
     def try_add_task(
@@ -26,13 +36,44 @@ class TaskManager:
         max_tasks: int,
     ) -> bool:
         """Atomically reserve one worker-local task capacity slot."""
+        return (
+            self.admit_task(task_id, task, max_tasks=max_tasks)
+            is TaskAdmission.ACCEPTED
+        )
+
+    def admit_task(
+        self,
+        task_id: str,
+        task: LocalVideoAnalysisTaskObject,
+        *,
+        max_tasks: int,
+    ) -> TaskAdmission:
+        """原子受理任务，并保留相同在途请求的幂等语义。"""
         with self._lock:
-            if task_id in self._task_list or len(self._task_list) >= max_tasks:
-                return False
+            existing = self._task_list.get(task_id)
+            if existing is not None:
+                if self._same_request(existing, task):
+                    return TaskAdmission.DUPLICATE
+                return TaskAdmission.CONFLICT
+            if len(self._task_list) >= max_tasks:
+                return TaskAdmission.CAPACITY
             self._task_list[task_id] = task
             count = len(self._task_list)
         logger.info(f"Task added: {task_id}, total tasks: {count}")
-        return True
+        return TaskAdmission.ACCEPTED
+
+    @staticmethod
+    def _same_request(
+        existing: LocalVideoAnalysisTaskObject,
+        candidate: LocalVideoAnalysisTaskObject,
+    ) -> bool:
+        return (
+            existing.task_id == candidate.task_id
+            and existing.operator_task_id == candidate.operator_task_id
+            and existing.video_path == candidate.video_path
+            and existing.result_callback_uri == candidate.result_callback_uri
+            and existing.saved_frame_similarity == candidate.saved_frame_similarity
+        )
 
     def add_task(self, task_id: str, task: LocalVideoAnalysisTaskObject) -> None:
         """
@@ -47,7 +88,7 @@ class TaskManager:
             count = len(self._task_list)
         logger.info(f"Task added: {task_id}, total tasks: {count}")
 
-    def get_task(self, task_id: str) -> Optional[LocalVideoAnalysisTaskObject]:
+    def get_task(self, task_id: str) -> LocalVideoAnalysisTaskObject | None:
         """
         获取任务
 
@@ -60,7 +101,7 @@ class TaskManager:
         with self._lock:
             return self._task_list.get(task_id)
 
-    def del_task(self, task_id: str) -> Optional[LocalVideoAnalysisTaskObject]:
+    def del_task(self, task_id: str) -> LocalVideoAnalysisTaskObject | None:
         """
         删除任务
 

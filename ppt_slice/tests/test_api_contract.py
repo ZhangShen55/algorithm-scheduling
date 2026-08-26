@@ -4,12 +4,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from fastapi import BackgroundTasks
-from pydantic import ValidationError
-
 from app.api.v1 import video
 from app.schemas import TerminalResultCallback, VideoPPTCutRequest
 from app.services.task_manager import TaskManager
+from fastapi import BackgroundTasks
+from pydantic import ValidationError
 
 
 class RequestSchemaTests(unittest.TestCase):
@@ -131,6 +130,57 @@ class SubmissionCapacityTests(unittest.TestCase):
         self.assertEqual([response.status for response in responses], [50, 50, 70])
         self.assertEqual(manager.get_task_count(), 2)
         self.assertEqual(responses[-1].reason, "当前任务数已达到最大值[2]，请稍后重试")
+
+    def test_same_inflight_operator_task_is_idempotently_accepted(self):
+        manager = TaskManager()
+        request = VideoPPTCutRequest(
+            video_path="/data/course/course-001/media/slides.mp4",
+            task_id="course-001",
+            operator_task_id="ppt-run-001",
+            result_callback_uri="http://orchestrator/internal/ppt-slice/callback",
+        )
+        first_background = BackgroundTasks()
+        duplicate_background = BackgroundTasks()
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            video, "task_manager", manager
+        ), patch.object(video.settings, "MAX_CONCURRENT_TASKS", 2), patch.object(
+            video.settings, "RESULT_ROOT", Path(temp_dir)
+        ):
+            first = asyncio.run(video.process_rtsp(request, first_background))
+            duplicate = asyncio.run(video.process_rtsp(request, duplicate_background))
+
+        self.assertEqual(first.status, 50)
+        self.assertEqual(duplicate.status, 50)
+        self.assertEqual(duplicate.reason, "相同 PPT 切片任务已受理")
+        self.assertEqual(manager.get_task_count(), 1)
+        self.assertEqual(len(first_background.tasks), 1)
+        self.assertEqual(len(duplicate_background.tasks), 0)
+
+    def test_same_operator_task_with_conflicting_payload_is_rejected(self):
+        manager = TaskManager()
+        first_request = VideoPPTCutRequest(
+            video_path="/data/course/course-001/media/slides.mp4",
+            task_id="course-001",
+            operator_task_id="ppt-run-001",
+            result_callback_uri="http://orchestrator/internal/ppt-slice/callback",
+        )
+        conflicting_request = first_request.model_copy(
+            update={"video_path": "/data/course/course-002/media/slides.mp4"}
+        )
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            video, "task_manager", manager
+        ), patch.object(video.settings, "MAX_CONCURRENT_TASKS", 2), patch.object(
+            video.settings, "RESULT_ROOT", Path(temp_dir)
+        ):
+            first = asyncio.run(video.process_rtsp(first_request, BackgroundTasks()))
+            conflict = asyncio.run(
+                video.process_rtsp(conflicting_request, BackgroundTasks())
+            )
+
+        self.assertEqual(first.status, 50)
+        self.assertEqual(conflict.status, 70)
+        self.assertEqual(conflict.reason, "operator_task_id 已存在且请求内容不一致")
+        self.assertEqual(manager.get_task_count(), 1)
 
 
 if __name__ == "__main__":

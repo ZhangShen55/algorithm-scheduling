@@ -2231,3 +2231,66 @@ cd ../algorithm-scheduling-platform
 成功、连续两次错误产生 `OCR 网络调用失败（ReadError）`、OCR 业务错误只调用一次、空消息
 异常写为 `节点执行失败: RuntimeError`。本地 Docker 未运行，因此本段不声称执行了新的本地
 PostgreSQL/Redis/Kafka 集成；原失败事实来自 `.11` 真实链路，新修复的远端验证属于 11.15。
+
+## 2026-08-26 `b44eba7` 发布、Campaign 与 PPT 提交失败取证
+
+远端 Stage45 权威根为：
+
+```text
+/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/reports/milestone-2b/releases/v1.0_260826/b44eba7f07818a42d51f5935290ded857c98b4c1/stage45-attempts/r3/reports/milestone-2b/releases/v1.0_260826/b44eba7f07818a42d51f5935290ded857c98b4c1
+```
+
+其中 `stage45.exit=0`、最终日志为 `failures=0`，29/29 容器健康、21/21 注册、18 个 GPU
+进程、3 个 CPU PPT 和 `smoke/cases.json` 的 7/7 算子 Smoke 均通过；
+`registration/operator-registration.json` 与
+`registration/operator-registration-stage45-post-recovery.json` 同时存在且互不覆盖。
+
+首个本地 attempt
+`~/.algorithm-scheduling-campaign/v1.0_260826/b44eba7f07818a42d51f5935290ded857c98b4c1/attempts/full-campaign-b44eba7-20260826221958`
+由 `attempt-interruption-supervisor-identity-race.json` 固定为执行器中断：supervisor 在包装
+进程 `exec` 前检查 runner PID，产生 `exit_code=19`；精确停止前有 2 个 passed、第三案仅开始，
+该 attempt 不续写。
+
+有效 attempt
+`~/.algorithm-scheduling-campaign/v1.0_260826/b44eba7f07818a42d51f5935290ded857c98b4c1/attempts/full-campaign-b44eba7-20260826222254`
+规范写出 `completed=20/passed=19/failed=1/sequence_ended exit_code=1`。阶段 0 的 14 案、四条
+阶段 1 单泳道和 PPT 100 均通过；`OFF-UNIQUE-PPT-300` 的 HTTP 提交类别为
+`success=300`，终态为 `success=299/failed=1`。唯一失败任务为
+`load-campaign-v1-0_260826-b44eba7f07818a42d51f5935290ded857c98-f27fa5b84cbe176e-off-unique-ppt-300-254-63eef4a7a2ab76bd`：
+Control 查询显示 `PPT_SLICE=70/reason=节点执行失败: ReadError`，`PPT_OCR=20`。
+
+Orchestrator 在 `2026-08-26T14:44:51.703549Z` 的 traceback 明确为
+`PptSliceAdapter.submit -> httpx.AsyncClient.post -> httpcore._receive_response_headers ->
+httpx.ReadError`。同一时窗三个 PPT Slice 容器都没有该 `task_id` 的日志，最终护栏为
+`CLEAR`、runtime failure evidence 为 0，活动队列、Outbox、三个 Kafka lag、租约和 inflight
+均归零，容器重启增量为 0。该证据只支持一次 Orchestrator 到 PPT 算子的瞬时提交传输异常，
+不支持把失败归因于 PPT 算法、媒体、OCR、容量或容器健康。
+
+新增实现的本地验证命令与当前结果：
+
+```bash
+cd algorithm-scheduling-platform
+.venv/bin/ruff check \
+  ../orchestrator_service/app/infrastructure/ppt_slice.py \
+  ../orchestrator_service/app/core/config.py \
+  ../orchestrator_service/app/infrastructure/runtime.py \
+  ../orchestrator_service/tests/test_ppt_submit_adapter.py \
+  ../orchestrator_service/tests/test_service_structure.py \
+  ../ppt_slice/app/services/task_manager.py \
+  ../ppt_slice/app/api/v1/video.py \
+  ../ppt_slice/tests/test_api_contract.py
+
+cd ../orchestrator_service
+../algorithm-scheduling-platform/.venv/bin/python -m pytest -q
+
+cd ../ppt_slice
+conda run -n ppt_slice python -m pytest -q
+```
+
+结果为 Ruff 通过，Orchestrator `81 passed`，PPT Slice `106 passed, 11 subtests passed`。
+新增回归显式证明首试 `ReadError`/次试成功、两次耗尽产生非空中文错误、`ReadTimeout` 只调用
+一次、相同在途任务只创建一个后台任务、冲突载荷返回 `status=70`。Orchestrator strict Mypy、
+两个项目 compile/import、Harness `16 passed`、OpenSpec strict 和 diff check 均通过；平台
+非集成全量为 `3201 passed, 3 skipped, 27 warnings`，三个 skip 只因本机未运行 canonical
+`facerec-gpu0`，warnings 为既有 fork `DeprecationWarning`。该记录完成 OpenSpec 10.28 和
+11.15；新 SHA 的远端同 revision 发布、Stage45 与全新 attempt 属于 11.16。
