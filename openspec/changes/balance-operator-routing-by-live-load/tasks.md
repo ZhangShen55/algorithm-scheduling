@@ -36,7 +36,7 @@
 - [ ] 5.1 更新本地 `config.toml`、远端 Compose/部署变量和配置展开测试，固定 VBas `1024/1024/0` 与 Vision `8/16`，并证明运行容器实际读取的值与平台注册值一致。
 - [x] 5.2 更新相关 README、部署手册和算法功能调度平台设计文档，说明实时负载路由、共享容量、服务级 Vision 并发、无本地队列、Kafka offset 安全和 A 服务零改动边界；保留既有历史架构图与历史结论。
 - [x] 5.3 更新 `LOAD-007`、里程碑 2B Campaign 用例和 Harness 断言，废止“允许排序第一实例长期独占”的后续范围，并保留旧 `d449dbad` attempt 及历史 Text Analysis 证据为只读。
-- [ ] 5.4 记录本地自动化测试命令、输入、退出码、关键断言和证据路径；执行 `openspec validate balance-operator-routing-by-live-load --strict`、`git diff --check` 及相关服务测试后形成规范中文提交并推送完整 Git SHA。
+- [x] 5.4 记录本地自动化测试命令、输入、退出码、关键断言和证据路径；执行 `openspec validate balance-operator-routing-by-live-load --strict`、`git diff --check` 及相关服务测试后形成规范中文提交并推送完整 Git SHA。
 
 ## 6. 192.168.29.11 缓存构建与发布预检
 

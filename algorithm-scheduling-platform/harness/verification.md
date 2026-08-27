@@ -2370,3 +2370,8 @@ git diff --cached --check
 VBas 仅保留四条既有 FastAPI `on_event` 弃用告警，没有测试失败。复核前曾从工作区根目录误用
 不存在的 `.venv/bin/python`，shell 以 `127` 退出且没有加载或执行测试；本段保留该命令路径错误，
 后续正确命令结果才是本次门禁依据。
+
+实现、规格、测试和上述本地证据已形成中文规范提交
+`c52614677e1d9ac97430f021fba8130a09c40c6f`（`feat(调度): 按实时负载均衡算子实例`），并于
+2026-08-27 推送到 `origin/codex/milestone-2b-three-gpu-deployment`。远端缓存构建、同 revision
+发布和三类真实负载必须基于包含本条证据提交在内的后续完整 SHA，不能退回 `d449dbad`。
