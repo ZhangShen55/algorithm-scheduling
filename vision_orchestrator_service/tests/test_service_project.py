@@ -135,6 +135,8 @@ def test_runtime_contract_defaults_match_platform_topics_and_control_port() -> N
     assert settings.control.base_url == "http://127.0.0.1:18100"
     assert settings.media.ffmpeg_binary == "ffmpeg"
     assert settings.scan.end_frame_margin_seconds == 0.5
+    assert settings.vbas.max_batch_size == 8
+    assert settings.vbas.max_concurrency == 16
 
 
 @pytest.mark.parametrize("value", (0, -1, True, 1.5, "2"))

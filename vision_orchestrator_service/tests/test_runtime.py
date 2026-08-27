@@ -10,7 +10,11 @@ import pytest
 from fastapi import FastAPI
 from packages.platform_common.kafka import KafkaMessage
 from packages.platform_contracts.status import NodeStatus, TaskType
-from packages.platform_contracts.vision import VisualAnalysisEvent, VisualEventType
+from packages.platform_contracts.vision import (
+    VisualAnalysisCommand,
+    VisualAnalysisEvent,
+    VisualEventType,
+)
 
 from vision_orchestrator_service.app.application.events import VisualCommandProcessor
 from vision_orchestrator_service.app.core.config import VisionSettings
@@ -114,6 +118,99 @@ async def test_consumer_does_not_commit_retryable_processing_failure(tmp_path) -
     with pytest.raises(RuntimeError, match="temporary"):
         await loop.run_once()
     assert consumer.committed == []
+
+
+@pytest.mark.asyncio
+async def test_consumer_limits_concurrent_course_processing(tmp_path) -> None:
+    values = [
+        replace(
+            _command(
+                tmp_path,
+                TaskType.TEACHER_BEHAVIOR,
+                strategy={"coarse_interval_seconds": 10},
+            ),
+            command_id=UUID(f"00000000-0000-0000-0000-{index:012d}"),
+            node_id=100 + index,
+        ).to_bytes()
+        for index in range(1, 5)
+    ]
+    active = 0
+    peak = 0
+    two_active = asyncio.Event()
+    release = asyncio.Event()
+
+    class Processor:
+        async def handle(self, value: bytes) -> None:
+            nonlocal active, peak
+            del value
+            active += 1
+            peak = max(peak, active)
+            if active == 2:
+                two_active.set()
+            try:
+                await release.wait()
+            finally:
+                active -= 1
+
+    consumer = Consumer([_message(value, index) for index, value in enumerate(values)])
+    loop = VisualCommandConsumerLoop(
+        consumer,
+        Processor(),
+        poll_timeout_seconds=0.1,
+        concurrency=2,
+    )
+    task = asyncio.create_task(loop.run_once())
+    await asyncio.wait_for(two_active.wait(), timeout=1)
+
+    assert peak == 2
+    assert consumer.committed == []
+
+    release.set()
+    assert await asyncio.wait_for(task, timeout=1) == 4
+    assert consumer.committed == [0, 1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_consumer_does_not_commit_past_unfinished_partition_offset(
+    tmp_path,
+) -> None:
+    first = _command(
+        tmp_path,
+        TaskType.TEACHER_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    ).to_bytes()
+    second = replace(
+        VisualAnalysisCommand.from_bytes(first),
+        command_id=UUID("00000000-0000-0000-0000-000000000222"),
+        node_id=222,
+    ).to_bytes()
+    release_first = asyncio.Event()
+    second_finished = asyncio.Event()
+
+    class Processor:
+        async def handle(self, value: bytes) -> None:
+            command = VisualAnalysisCommand.from_bytes(value)
+            if command.node_id == 222:
+                second_finished.set()
+                return
+            await release_first.wait()
+
+    consumer = Consumer([_message(first, 10), _message(second, 11)])
+    loop = VisualCommandConsumerLoop(
+        consumer,
+        Processor(),
+        poll_timeout_seconds=0.1,
+        concurrency=2,
+    )
+    task = asyncio.create_task(loop.run_once())
+    await asyncio.wait_for(second_finished.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+    assert consumer.committed == []
+
+    release_first.set()
+    assert await asyncio.wait_for(task, timeout=1) == 2
+    assert consumer.committed == [10, 11]
 
 
 @pytest.mark.asyncio

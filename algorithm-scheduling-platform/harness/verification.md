@@ -2294,3 +2294,79 @@ conda run -n ppt_slice python -m pytest -q
 非集成全量为 `3201 passed, 3 skipped, 27 warnings`，三个 skip 只因本机未运行 canonical
 `facerec-gpu0`，warnings 为既有 fork `DeprecationWarning`。该记录完成 OpenSpec 10.28 和
 11.15；新 SHA 的远端同 revision 发布、Stage45 与全新 attempt 属于 11.16。
+
+## 2026-08-27 公共算子实时负载路由本地门禁
+
+本节对应
+[`scenarios/live-load-operator-routing.md`](scenarios/live-load-operator-routing.md) 和 OpenSpec
+`balance-operator-routing-by-live-load`。从平台目录执行：
+
+```bash
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/integration/test_redis_operator_registry.py \
+  tests/integration/test_unified_capacity_cross_service.py \
+  tests/test_operations_api.py \
+  tests/test_operator_operations.py \
+  tests/test_vbas_batch_client.py
+
+cd ../vision_orchestrator_service
+PYTHONPATH=.. ../algorithm-scheduling-platform/.venv/bin/python -m pytest -q \
+  tests/test_runtime.py \
+  tests/test_service_project.py
+
+cd ../algorithm-scheduling-platform
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m compileall -q \
+  packages/platform_common \
+  ../vision_orchestrator_service/app \
+  ../vbas/app
+
+cd ..
+openspec validate balance-operator-routing-by-live-load --strict
+git diff --check
+```
+
+关键断言包括：首次三个等负载租约覆盖三个实例；不同声明容量按负载率而非绝对数量比较；
+评分使用 `max(active leases, reported inflight)`；同负载按 capability 轮询；跨 capability 和
+在线/离线调用共享容量；Vision 的 16 个槽位为服务级共享；Kafka 同 partition 不越过未完成
+offset，关闭时未完成消息不提交。
+
+2026-08-27 实际结果：平台 Redis/共享容量/运维/VBas 客户端聚焦回归为 `58 passed`，Vision
+运行时与项目合同为 `31 passed`，合计 `89 passed`；`compileall` 和 OpenSpec strict 均退出
+`0`。首轮曾从平台目录把两个 Vision 测试文件合并执行，得到 `81 passed, 8 failed`；8 项均为
+顶层 `app` 导入的工作目录错误。按上方各项目权威工作目录拆分后全部通过，首轮退出码仍在
+本记录中保留，不把验证命令错误描述为产品缺陷。
+
+该证据最高只达到本地算法、真实 Redis 集成和服务运行时测试层级；`192.168.29.11` 的 20
+离线、1000 在线、混合场景和其他算子 16 路调查必须分别形成 write-once 证据。
+
+提交前复核使用各项目的权威工作目录再次执行：
+
+```bash
+cd algorithm-scheduling-platform
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python -m pytest -q \
+  tests/test_vbas_balanced_load_validation.py \
+  tests/integration/test_redis_operator_registry.py \
+  tests/integration/test_unified_capacity_cross_service.py \
+  tests/test_vbas_batch_client.py \
+  tests/test_operations_api.py \
+  tests/test_operator_operations.py \
+  tests/test_operator_registry_api.py
+
+cd ../vision_orchestrator_service
+PYTHONPATH=.. ../algorithm-scheduling-platform/.venv/bin/python -m pytest -q tests
+
+cd ../vbas
+conda run -n jy-tias python -m pytest -q \
+  tests/test_config_loader.py \
+  tests/test_tias_api_surface.py \
+  tests/test_tias_worker_state.py
+
+cd ..
+openspec validate balance-operator-routing-by-live-load --strict
+git diff --cached --check
+```
+
+结果依次为 `108 passed`、`46 passed`、`11 passed`，OpenSpec strict 与暂存区检查均退出 `0`。
+VBas 仅保留四条既有 FastAPI `on_event` 弃用告警，没有测试失败。复核前曾从工作区根目录误用
+不存在的 `.venv/bin/python`，shell 以 `127` 退出且没有加载或执行测试；本段保留该命令路径错误，
+后续正确命令结果才是本次门禁依据。

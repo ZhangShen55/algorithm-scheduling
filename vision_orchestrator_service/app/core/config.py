@@ -89,7 +89,7 @@ class MediaConfig(BaseModel):
 class VbasConfig(BaseModel):
     request_timeout_seconds: float = 60.0
     max_batch_size: int = 8
-    max_concurrency: int = 2
+    max_concurrency: int = 16
     lease_ttl_seconds: int = 30
 
 

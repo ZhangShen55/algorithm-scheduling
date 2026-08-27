@@ -25,7 +25,16 @@ def test_platform_logging_uses_file_and_stdout_with_trace_context(tmp_path, caps
     )
     logging.getLogger("platform-test").info(
         "任务提交成功",
-        extra={"task_id": "course-001", "request_body": "不要记录"},
+        extra={
+            "task_id": "course-001",
+            "lease_id": "lease-001",
+            "capability": "student_behavior",
+            "source_service": "vision-orchestrator-service",
+            "work_type": "vbas_student_batch",
+            "work_id": "course-001-student-0001",
+            "batch_id": "course-001-student-0001",
+            "request_body": "不要记录",
+        },
     )
     _flush_root()
 
@@ -38,6 +47,12 @@ def test_platform_logging_uses_file_and_stdout_with_trace_context(tmp_path, caps
     assert file_line["service"] == "control-service"
     assert file_line["instance_id"] == "control-local"
     assert file_line["task_id"] == "course-001"
+    assert file_line["lease_id"] == "lease-001"
+    assert file_line["capability"] == "student_behavior"
+    assert file_line["source_service"] == "vision-orchestrator-service"
+    assert file_line["work_type"] == "vbas_student_batch"
+    assert file_line["work_id"] == "course-001-student-0001"
+    assert file_line["batch_id"] == "course-001-student-0001"
     assert "request_body" not in file_line
 
 

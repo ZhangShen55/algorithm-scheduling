@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     InstanceId: str = "tias-8981"
     BaseUrl: str = "http://127.0.0.1:8981"
     AiQualityBaseUrl: str = "http://127.0.0.1:9000"
-    MaxConcurrentBatches: int = 1
+    MaxConcurrentBatches: int = 1024
     MaxQueueSize: int = 0
     HeartbeatIntervalSeconds: int = 5
     HeartbeatTimeoutSeconds: int = 15
@@ -85,7 +85,7 @@ _cfg = {
     "InstanceId": str(_tias_config.get("InstanceId", "tias-8981")),
     "BaseUrl": str(_tias_config.get("BaseUrl", "http://127.0.0.1:8981")),
     "AiQualityBaseUrl": str(_tias_config.get("AiQualityBaseUrl", "http://127.0.0.1:9000")),
-    "MaxConcurrentBatches": int(_tias_config.get("MaxConcurrentBatches", 1)),
+    "MaxConcurrentBatches": int(_tias_config.get("MaxConcurrentBatches", 1024)),
     "MaxQueueSize": int(_tias_config.get("MaxQueueSize", 0)),
     "HeartbeatIntervalSeconds": int(_tias_config.get("HeartbeatIntervalSeconds", 5)),
     "HeartbeatTimeoutSeconds": int(_tias_config.get("HeartbeatTimeoutSeconds", 15)),
@@ -94,7 +94,7 @@ _cfg = {
 settings = Settings(**_cfg)
 operator_deployment = load_operator_deployment_settings(
     CONFIG_PATH,
-    default_capacity=128,
+    default_capacity=1024,
 )
 
 device = resolve_runtime_device(

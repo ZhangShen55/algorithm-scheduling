@@ -22,7 +22,7 @@ app = FastAPI(
 worker_controller = BatchAdmissionController(
     instance_id=str(getattr(settings, "InstanceId", "tias-8981")),
     base_url=str(getattr(settings, "BaseUrl", "http://127.0.0.1:8981")),
-    max_concurrent_batches=int(getattr(settings, "MaxConcurrentBatches", 1)),
+    max_concurrent_batches=int(getattr(settings, "MaxConcurrentBatches", 1024)),
     max_queue_size=int(getattr(settings, "MaxQueueSize", 0)),
 )
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
@@ -72,5 +72,6 @@ install_operator_runtime(
     control_service_url=operator_deployment.platform.control_service_url,
     heartbeat_interval_seconds=operator_deployment.platform.heartbeat_interval_seconds,
     max_concurrent_requests=operator_deployment.platform.max_concurrent_requests,
+    inflight_provider=lambda: int(worker_controller.snapshot()["running_batches"]),
 )
 

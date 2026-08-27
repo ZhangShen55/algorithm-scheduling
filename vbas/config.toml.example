@@ -12,6 +12,18 @@ WORKERS_PER_INSTANCE = 1
 # 主模型推理设备。CPU 环境使用 "cpu"，NVIDIA GPU 环境可配置为 "0"。
 GPU_ID = "cpu"
 
+[platform]
+# 本地默认不主动向调度平台注册；受控部署配置将其设置为 true。
+registration_enabled = false
+control_service_url = ""
+heartbeat_interval_seconds = 5
+# 学生和教师能力共享的单实例容量，按 HTTP batch 计数。
+max_concurrent_requests = 1024
+
+[runtime]
+# 本地示例允许 CPU；GPU 部署配置显式设为 true。
+require_gpu = false
+
 [TIAS]
 # TIAS 实例身份和对外访问地址。
 InstanceId = "tias-8981"
@@ -23,8 +35,9 @@ AiQualityBaseUrl = "http://127.0.0.1:9000"
 # 是否暴露旧 IAS 同步任务接口。
 TiasExposeLegacySyncTasks = false
 
-# 本地推理准入控制。MaxQueueSize=0 表示不开启本地排队，满载直接返回 busy。
-MaxConcurrentBatches = 1
+# 本地推理按 HTTP batch 计数；每个 batch 最多 8 图但只占一个运行槽位。
+MaxConcurrentBatches = 1024
+# 0 表示不在实例内排队，满载时直接返回过载响应，由平台重新选择。
 MaxQueueSize = 0
 
 # 注册和心跳配置。

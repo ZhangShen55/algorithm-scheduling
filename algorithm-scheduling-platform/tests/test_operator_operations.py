@@ -37,7 +37,7 @@ def test_capacity_snapshot_marks_reported_inflight_lease_mismatch() -> None:
     assert len(snapshots) == 1
     assert snapshots[0].reported_inflight == 2
     assert snapshots[0].active_lease_count == 0
-    assert snapshots[0].schedulable_used == 0
+    assert snapshots[0].schedulable_used == 2
     assert snapshots[0].attribution_difference == 2
     assert snapshots[0].capacity_mismatch is True
     assert snapshots[0].lifecycle is OperatorLifecycle.ONLINE
@@ -49,3 +49,14 @@ def test_capacity_snapshot_does_not_flag_matching_capacity() -> None:
     )[0]
 
     assert snapshot.capacity_mismatch is False
+    assert snapshot.schedulable_used == 1
+
+
+def test_capacity_snapshot_uses_active_leases_when_they_exceed_heartbeat() -> None:
+    snapshot = build_operator_capacity_snapshot(
+        OperationsRegistry(reported_inflight=0, active_lease_count=2)
+    )[0]
+
+    assert snapshot.schedulable_used == 2
+    assert snapshot.attribution_difference == -2
+    assert snapshot.capacity_mismatch is True

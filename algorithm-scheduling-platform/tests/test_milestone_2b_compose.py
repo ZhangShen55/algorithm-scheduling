@@ -26,7 +26,7 @@ OPERATOR_CAPACITIES = {
     "asr-offline": 4,
     "asr-online": 10,
     "ocr": 256,
-    "vbas": 128,
+    "vbas": 1024,
     "facerec": 128,
     "screen-det": 128,
     "ppt-slice": 10,
@@ -133,6 +133,9 @@ def assert_operator_compose_matrix(compose: dict[str, Any]) -> None:
                 "max_concurrent_requests": OPERATOR_CAPACITIES[operator],
             }
             assert config["runtime"]["require_gpu"] is True
+            if operator == "vbas":
+                assert config["TIAS"]["MaxConcurrentBatches"] == 1024
+                assert config["TIAS"]["MaxQueueSize"] == 0
             if operator == "screen-det":
                 assert volumes["/app/config.toml"] == (
                     "./config/operators/screen_det.gpu.toml",

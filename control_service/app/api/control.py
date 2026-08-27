@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import shutil
 from pathlib import Path
 from secrets import compare_digest
@@ -10,10 +11,6 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
-from redis.exceptions import RedisError
-from sqlalchemy.exc import SQLAlchemyError
-
 from packages.platform_common.application import create_service_app
 from packages.platform_common.config import PlatformSettings
 from packages.platform_common.operator_audit_repository import OperatorInstanceEvent
@@ -43,9 +40,14 @@ from packages.platform_common.repository import (
 )
 from packages.platform_contracts.responses import BusinessCode, BusinessResponse
 from packages.platform_contracts.status import Priority, TaskType, status_text
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
+from redis.exceptions import RedisError
+from sqlalchemy.exc import SQLAlchemyError
 
 from ..infrastructure.audited_operator_registry import canonical_operator_origin
 from ..infrastructure.runtime import ControlReadinessChecker, ControlRuntime
+
+logger = logging.getLogger(__name__)
 
 
 class CourseTaskRepository(Protocol):
@@ -580,12 +582,36 @@ def create_control_app(
         try:
             registry = _operator_registry(request)
             if payload.work_context is None:
-                return registry.lease(payload.capability, payload.ttl_seconds)
-            return registry.lease(
-                payload.capability,
-                payload.ttl_seconds,
-                payload.work_context.to_domain(),
+                lease = registry.lease(payload.capability, payload.ttl_seconds)
+            else:
+                lease = registry.lease(
+                    payload.capability,
+                    payload.ttl_seconds,
+                    payload.work_context.to_domain(),
+                )
+            context = lease.work_context
+            logger.info(
+                "算子容量租约已取得",
+                extra={
+                    "audit_type": "operator_capacity_lease",
+                    "lease_id": lease.lease_id,
+                    "instance_id": lease.instance_id,
+                    "capability": lease.capability,
+                    "source_service": (
+                        context.source_service if context is not None else None
+                    ),
+                    "work_type": context.work_type if context is not None else None,
+                    "work_id": context.work_id if context is not None else None,
+                    "task_id": context.task_id if context is not None else None,
+                    "batch_id": (
+                        context.item_id
+                        if context is not None and context.item_id is not None
+                        else (context.work_id if context is not None else None)
+                    ),
+                    "outcome": "acquired",
+                },
             )
+            return lease
         except CapacityUnavailableError as exc:
             raise HTTPException(
                 status_code=503,

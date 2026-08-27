@@ -447,7 +447,7 @@ async def test_online_and_ppt_ocr_share_one_pool_without_losing_offline_work(
         ).active_lease_count == 0
 
 
-def test_deterministic_instance_preference_is_allowed_until_capacity_is_full(
+def test_normalized_live_load_replaces_deterministic_first_fit_preference(
     redis_registry: RedisOperatorRegistry,
 ) -> None:
     _register_ready(
@@ -473,8 +473,8 @@ def test_deterministic_instance_preference_is_allowed_until_capacity_is_full(
 
     assert [first.instance_id, second.instance_id, third.instance_id] == [
         "ocr-gpu0",
-        "ocr-gpu0",
         "ocr-gpu1",
+        "ocr-gpu0",
     ]
 
 
@@ -563,7 +563,7 @@ async def test_ppt_items_use_independent_leases_and_multiple_instances(
 
 
 @pytest.mark.asyncio
-async def test_control_reports_heartbeat_difference_without_using_it_for_admission(
+async def test_control_reports_heartbeat_difference_and_uses_it_for_admission(
     redis_registry: RedisOperatorRegistry,
 ) -> None:
     _register_ready(
@@ -588,12 +588,17 @@ async def test_control_reports_heartbeat_difference_without_using_it_for_admissi
         assert empty["reported_inflight"] == 1
         assert empty["attribution_difference"] == 1
 
-        lease = redis_registry.lease("ocr", 30)
+        unavailable = await client.post(
+            "/internal/operator-instances/lease",
+            json={"capability": "ocr", "ttl_seconds": 30},
+        )
+        assert unavailable.status_code == 503
         redis_registry.heartbeat(
             "ocr-observation-0",
             inflight=0,
             model_ready=True,
         )
+        lease = redis_registry.lease("ocr", 30)
         active = (
             await client.get(
                 "/ops/operator-instances/ocr-observation-0/active-leases"
@@ -608,6 +613,16 @@ async def test_control_reports_heartbeat_difference_without_using_it_for_admissi
         redis_registry.heartbeat(
             "ocr-observation-0",
             inflight=1,
+            model_ready=True,
+        )
+        unavailable = await client.post(
+            "/internal/operator-instances/lease",
+            json={"capability": "ocr", "ttl_seconds": 30},
+        )
+        assert unavailable.status_code == 503
+        redis_registry.heartbeat(
+            "ocr-observation-0",
+            inflight=0,
             model_ready=True,
         )
         replacement = redis_registry.lease("ocr", 30)

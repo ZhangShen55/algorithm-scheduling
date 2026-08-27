@@ -525,7 +525,13 @@ def test_registration_rejects_non_positive_or_non_integer_capacity(
 
 def test_capacity_lease_accepts_optional_work_context_without_breaking_legacy_request(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    logged: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        "control_service.app.api.control.logger.info",
+        lambda event, **kwargs: logged.append((event, kwargs["extra"])),
+    )
     registry = FakeOperatorRegistry()
     settings = PlatformSettings(course_root=tmp_path / "course", result_root=tmp_path / "result")
     app = create_control_app(operator_registry=registry, settings=settings)
@@ -556,6 +562,18 @@ def test_capacity_lease_accepts_optional_work_context_without_breaking_legacy_re
         "item_id": None,
     }
     assert registry.last_work_context == WorkContext(**context)
+    _, contextual_record = next(
+        record
+        for record in logged
+        if record[1].get("lease_id") == "lease-001"
+        and record[1].get("source_service") == "online-gateway-service"
+    )
+    assert contextual_record["instance_id"] == "vbas-gpu0"
+    assert contextual_record["capability"] == "ocr"
+    assert contextual_record["work_type"] == "online_ocr"
+    assert contextual_record["work_id"] == "request-001"
+    assert contextual_record["task_id"] is None
+    assert contextual_record["batch_id"] == "request-001"
 
 
 def test_capacity_lease_context_binding_maps_success_not_found_and_conflict(

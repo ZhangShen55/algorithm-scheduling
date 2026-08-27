@@ -11,7 +11,7 @@ registration_enabled = false
 control_service_url = ""  # 启用注册时填写 Control Service 地址
 heartbeat_interval_seconds = 5  # 注册心跳间隔秒数，必须为有限正数
 # 学生、教师和头部姿态能力共享本实例总容量
-max_concurrent_requests = 128
+max_concurrent_requests = 1024
 
 [runtime]
 # 本地默认允许 CPU；GPU 部署配置显式设为 true
@@ -41,8 +41,9 @@ BaseUrl = "http://127.0.0.1:8981"
 AiQualityBaseUrl = "http://127.0.0.1:9000"
 # 是否暴露旧 IAS 同步任务接口。
 TiasExposeLegacySyncTasks = false
-# 本地推理准入控制。MaxQueueSize=0 表示不开启本地排队。
-MaxConcurrentBatches = 1
+# 本地推理按 HTTP batch 计数；每个 batch 最多 8 图但只占一个运行槽位。
+MaxConcurrentBatches = 1024
+# 0 表示不在实例内排队，满载时直接返回过载响应，由平台重新选择。
 MaxQueueSize = 0
 # 注册和心跳配置。
 HeartbeatIntervalSeconds = 5

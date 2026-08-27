@@ -47,40 +47,111 @@ class VisualCommandConsumerLoop:
         *,
         poll_timeout_seconds: float,
         retry_delay_seconds: float = 1.0,
+        concurrency: int = 1,
     ) -> None:
         if retry_delay_seconds <= 0:
             raise ValueError("视觉命令重试间隔必须大于 0")
+        if concurrency <= 0:
+            raise ValueError("视觉课程并发上限必须大于 0")
         self._consumer = consumer
         self._processor = processor
         self._poll_timeout_seconds = poll_timeout_seconds
         self._retry_delay_seconds = retry_delay_seconds
+        self._concurrency = concurrency
 
     async def run_once(self, *, stop_event: asyncio.Event | None = None) -> int:
         messages = await self._consumer.poll(timeout_seconds=self._poll_timeout_seconds)
+        if not messages:
+            return 0
         handled = 0
+        completed: set[tuple[str, int, int]] = set()
+        committed: set[tuple[str, int, int]] = set()
+        slots = asyncio.Semaphore(self._concurrency)
+
+        def message_key(message: KafkaMessage) -> tuple[str, int, int]:
+            return message.topic, message.partition, message.offset
+
+        async def commit_contiguous() -> None:
+            by_partition: dict[tuple[str, int], list[KafkaMessage]] = {}
+            for candidate in messages:
+                by_partition.setdefault(
+                    (candidate.topic, candidate.partition), []
+                ).append(candidate)
+            for partition_messages in by_partition.values():
+                for candidate in sorted(
+                    partition_messages, key=lambda item: item.offset
+                ):
+                    key = message_key(candidate)
+                    if key in committed:
+                        continue
+                    if key not in completed:
+                        break
+                    await self._consumer.commit(candidate)
+                    committed.add(key)
+
+        async def process(message: KafkaMessage) -> bool:
+            async with slots:
+                while True:
+                    try:
+                        await self._processor.handle(message.value)
+                        return True
+                    except CapacityUnavailableError:
+                        if stop_event is None:
+                            raise
+                        try:
+                            await asyncio.wait_for(
+                                stop_event.wait(), timeout=self._retry_delay_seconds
+                            )
+                        except TimeoutError:
+                            continue
+                        return False
+
+        tasks: dict[asyncio.Task[bool], KafkaMessage] = {}
         for message in messages:
             try:
                 VisualAnalysisCommand.from_bytes(message.value)
             except ValueError:
-                # Invalid envelopes cannot become valid after retry and must not block a partition.
-                await self._consumer.commit(message)
+                # 非法信封重试也不会恢复，标记完成后仍按分区连续水位提交。
+                completed.add(message_key(message))
                 continue
-            while True:
-                try:
-                    await self._processor.handle(message.value)
-                    break
-                except CapacityUnavailableError:
-                    if stop_event is None:
-                        raise
+            task = asyncio.create_task(
+                process(message),
+                name=(
+                    f"vision-command-{message.topic}-{message.partition}-"
+                    f"{message.offset}"
+                ),
+            )
+            tasks[task] = message
+
+        await commit_contiguous()
+        pending = set(tasks)
+        try:
+            while pending:
+                done, pending = await asyncio.wait(
+                    pending, return_when=asyncio.FIRST_COMPLETED
+                )
+                failure: BaseException | None = None
+                for task in done:
                     try:
-                        await asyncio.wait_for(
-                            stop_event.wait(), timeout=self._retry_delay_seconds
-                        )
-                    except TimeoutError:
+                        succeeded = task.result()
+                    except BaseException as exc:
+                        failure = failure or exc
                         continue
-                    return handled
-            await self._consumer.commit(message)
-            handled += 1
+                    if succeeded:
+                        completed.add(message_key(tasks[task]))
+                        handled += 1
+                await commit_contiguous()
+                if failure is not None:
+                    for task in pending:
+                        task.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
+                    raise failure
+        finally:
+            for task in pending:
+                if not task.done():
+                    task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
         return handled
 
     async def run(self, stop_event: asyncio.Event) -> None:
@@ -249,6 +320,7 @@ class VisionOrchestratorRuntime:
                 processor,
                 poll_timeout_seconds=self.settings.kafka.poll_timeout_seconds,
                 retry_delay_seconds=self.settings.worker.poll_interval_seconds,
+                concurrency=self.settings.worker.concurrency,
             )
             self.tasks = {
                 "visual_command_consumer": asyncio.create_task(

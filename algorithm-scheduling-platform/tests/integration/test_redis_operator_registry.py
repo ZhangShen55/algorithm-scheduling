@@ -401,7 +401,7 @@ def test_reregistering_same_instance_does_not_inherit_old_leases(
     assert redis_registry.lease("teacher_behavior", 30).instance_id == "vbas-gpu0"
 
 
-def test_reported_inflight_is_observation_and_does_not_hold_released_capacity(
+def test_effective_inflight_uses_the_greater_of_leases_and_reported_load(
     redis_registry: RedisOperatorRegistry,
 ) -> None:
     redis_registry.register(vbas_instance(capacity=2))
@@ -416,16 +416,15 @@ def test_reported_inflight_is_observation_and_does_not_hold_released_capacity(
     redis_registry.release(first.lease_id)
     redis_registry.release(second.lease_id)
     redis_registry.heartbeat("vbas-gpu0", inflight=2, model_ready=True)
-    replacement = redis_registry.lease("teacher_behavior", 30)
-
-    assert replacement.instance_id == "vbas-gpu0"
+    with pytest.raises(CapacityUnavailableError):
+        redis_registry.lease("teacher_behavior", 30)
     snapshot = redis_registry.list_active_leases("vbas-gpu0")
-    assert snapshot.active_lease_count == 1
+    assert snapshot.active_lease_count == 0
     assert snapshot.reported_inflight == 2
-    assert snapshot.attribution_difference == 1
+    assert snapshot.attribution_difference == 2
 
 
-def test_expired_lease_releases_capacity_despite_reported_inflight(
+def test_expired_lease_is_cleaned_but_reported_inflight_still_holds_capacity(
     redis_registry: RedisOperatorRegistry,
 ) -> None:
     _register_ready(redis_registry, vbas_instance(capacity=1))
@@ -441,8 +440,137 @@ def test_expired_lease_releases_capacity_despite_reported_inflight(
     with pytest.raises(CapacityLeaseNotFoundError):
         redis_registry.renew(expired.lease_id, 30)
 
+    with pytest.raises(CapacityUnavailableError):
+        redis_registry.lease("teacher_behavior", 30)
+
+    redis_registry.heartbeat("vbas-gpu0", inflight=0, model_ready=True)
     replacement = redis_registry.lease("teacher_behavior", 30)
     assert replacement.instance_id == "vbas-gpu0"
+
+
+def test_lease_prefers_the_lowest_effective_load(
+    redis_registry: RedisOperatorRegistry,
+) -> None:
+    for index, inflight in enumerate((1, 0, 0)):
+        instance = replace(
+            vbas_instance(capacity=1024),
+            instance_id=f"vbas-gpu{index}",
+            service_url=f"http://127.0.0.1:{19001 + index}",
+            labels={"gpu": str(index)},
+            inflight=inflight,
+        )
+        _register_ready(redis_registry, instance)
+
+    lease = redis_registry.lease("teacher_behavior", 30)
+
+    assert lease.instance_id in {"vbas-gpu1", "vbas-gpu2"}
+
+
+def test_lease_compares_normalized_load_instead_of_absolute_work_count(
+    redis_registry: RedisOperatorRegistry,
+) -> None:
+    for instance_id, capacity, inflight in (
+        ("vbas-small", 4, 2),
+        ("vbas-large", 100, 10),
+    ):
+        instance = replace(
+            vbas_instance(capacity=capacity),
+            instance_id=instance_id,
+            service_url=f"http://{instance_id}.test",
+            inflight=inflight,
+        )
+        _register_ready(redis_registry, instance)
+
+    lease = redis_registry.lease("teacher_behavior", 30)
+
+    assert lease.instance_id == "vbas-large"
+
+
+def test_equal_load_instances_use_a_persistent_round_robin_cursor(
+    redis_registry: RedisOperatorRegistry,
+) -> None:
+    for index in range(3):
+        _register_ready(
+            redis_registry,
+            replace(
+                vbas_instance(capacity=1024),
+                instance_id=f"vbas-gpu{index}",
+                service_url=f"http://127.0.0.1:{19001 + index}",
+                labels={"gpu": str(index)},
+            ),
+        )
+
+    selected: list[str] = []
+    for _ in range(6):
+        lease = redis_registry.lease("teacher_behavior", 30)
+        selected.append(lease.instance_id)
+        redis_registry.release(lease.lease_id)
+
+    assert selected == [
+        "vbas-gpu0",
+        "vbas-gpu1",
+        "vbas-gpu2",
+        "vbas-gpu0",
+        "vbas-gpu1",
+        "vbas-gpu2",
+    ]
+
+
+def test_first_three_concurrent_leases_cover_three_equal_instances(
+    redis_registry: RedisOperatorRegistry,
+) -> None:
+    for index in range(3):
+        _register_ready(
+            redis_registry,
+            replace(
+                vbas_instance(capacity=1024),
+                instance_id=f"vbas-gpu{index}",
+                service_url=f"http://127.0.0.1:{19001 + index}",
+                labels={"gpu": str(index)},
+            ),
+        )
+    barrier = Barrier(3)
+
+    def acquire() -> str:
+        barrier.wait()
+        return redis_registry.lease("teacher_behavior", 30).instance_id
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        selected = list(executor.map(lambda _: acquire(), range(3)))
+
+    assert set(selected) == {"vbas-gpu0", "vbas-gpu1", "vbas-gpu2"}
+
+
+def test_concurrent_leases_never_oversell_total_instance_capacity(
+    redis_registry: RedisOperatorRegistry,
+) -> None:
+    for index in range(3):
+        _register_ready(
+            redis_registry,
+            replace(
+                vbas_instance(capacity=2),
+                instance_id=f"vbas-gpu{index}",
+                service_url=f"http://127.0.0.1:{19001 + index}",
+                labels={"gpu": str(index)},
+            ),
+        )
+    barrier = Barrier(18)
+
+    def acquire() -> str:
+        barrier.wait()
+        try:
+            return redis_registry.lease("teacher_behavior", 30).instance_id
+        except CapacityUnavailableError:
+            return "NO_CAPACITY"
+
+    with ThreadPoolExecutor(max_workers=18) as executor:
+        selected = list(executor.map(lambda _: acquire(), range(18)))
+
+    assert selected.count("NO_CAPACITY") == 12
+    assert {
+        instance_id: selected.count(instance_id)
+        for instance_id in {"vbas-gpu0", "vbas-gpu1", "vbas-gpu2"}
+    } == {"vbas-gpu0": 2, "vbas-gpu1": 2, "vbas-gpu2": 2}
 
 
 def test_multi_capability_instance_uses_one_shared_capacity_pool(

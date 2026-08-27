@@ -1749,25 +1749,47 @@ def _recovery_route_width(
     if len(matching_targets) != 1:
         raise RuntimeError("recovery workload must bind one exact target per operator")
     target = matching_targets[0]
-    width = 1
+    schedulable: list[str] = []
     for service in ordered:
         item = capacities.get(service)
         declared = item.get("declared_capacity") if item is not None else None
         active = item.get("active_lease_count") if item is not None else None
+        reported = item.get("reported_inflight") if item is not None else None
+        schedulable_used = item.get("schedulable_used") if item is not None else None
         if (
             item is None
             or item.get("operator_code") != operator_code
+            or item.get("lifecycle") != "ONLINE"
+            or item.get("model_ready") is not True
             or type(declared) is not int
             or type(active) is not int
+            or type(reported) is not int
+            or type(schedulable_used) is not int
             or declared <= 0
             or not 0 <= active <= declared
+            or not 0 <= reported <= declared
+            or schedulable_used != max(active, reported)
         ):
             raise RuntimeError("operator capacity cannot bound recovery routing")
-        if service == target:
-            if active >= declared:
-                raise RuntimeError("restored target has no free lease capacity")
-            break
-        width += declared - active
+        if schedulable_used < declared:
+            schedulable.append(service)
+    if target not in schedulable:
+        raise RuntimeError("restored target has no free lease capacity")
+    target_item = capacities[target]
+    target_used = int(target_item["schedulable_used"])
+    target_capacity = int(target_item["declared_capacity"])
+    if any(
+        target_used * int(capacities[service]["declared_capacity"])
+        > int(capacities[service]["schedulable_used"]) * target_capacity
+        for service in schedulable
+    ):
+        raise RuntimeError("restored target is not yet at the lowest live load")
+    # 最少负载路由下，同负载轮询的一轮即可证明恢复实例重新参与调度。
+    width = sum(
+        target_used * int(capacities[service]["declared_capacity"])
+        == int(capacities[service]["schedulable_used"]) * target_capacity
+        for service in schedulable
+    )
     if not 1 <= width <= _MAX_WITNESS_CONCURRENCY:
         raise RuntimeError("recovery routing requires unsafe witness concurrency")
     return width

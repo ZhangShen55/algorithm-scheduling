@@ -20,10 +20,14 @@ class BatchAdmissionController:
             max_concurrent_batches: int,
             max_queue_size: int,
             capabilities: Optional[List[str]] = None):
+        if type(max_concurrent_batches) is not int or max_concurrent_batches <= 0:
+            raise ValueError("MaxConcurrentBatches 必须是正整数")
+        if type(max_queue_size) is not int or max_queue_size != 0:
+            raise ValueError("MaxQueueSize 当前必须为 0，VBas 不启用本地队列")
         self.instance_id = instance_id
         self.base_url = base_url
-        self.max_concurrent_batches = max(1, int(max_concurrent_batches))
-        self.max_queue_size = max(0, int(max_queue_size))
+        self.max_concurrent_batches = max_concurrent_batches
+        self.max_queue_size = max_queue_size
         self.capabilities = capabilities or ["student_behavior", "teacher_behavior", "teacher_head_pose"]
         self.running_batches = 0
         self.queued_batches = 0
@@ -46,9 +50,12 @@ class BatchAdmissionController:
         start = time.perf_counter()
         try:
             yield
-        except Exception as exc:
+        except BaseException as exc:
             elapsed_ms = (time.perf_counter() - start) * 1000
-            await self._leave(elapsed_ms, error=str(exc))
+            # 取消同样必须释放容量，否则心跳会长期高估真实在途批次数。
+            await asyncio.shield(
+                self._leave(elapsed_ms, error=str(exc) or type(exc).__name__)
+            )
             raise
         else:
             elapsed_ms = (time.perf_counter() - start) * 1000

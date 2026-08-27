@@ -2505,3 +2505,21 @@
 - Evidence tier and verdict: 达到真实远端失败归因、静态和单元层级，完成 10.28。`b44eba7`
   的有效 attempt 永久保持 19 passed/1 failed；新修复必须形成完整 SHA，利用缓存完成 11.16、
   Stage45 和全新 Campaign，不能从失败的第 20 案续跑。
+
+## 2026-08-27 - `balance-operator-routing-by-live-load` 文档与证据边界
+
+- Previous state: 旧公共注册表使用按实例 ID 排序的首次适配；真实任务 `test-260827` 的 108 个
+  成功 VBas 批次全部进入 GPU0。`d449dbad` 及既有 Campaign attempt、旧 `LOAD-007` 结论和
+  Text Analysis 历史证据保持只读，不修改、复制或重标。
+- Target state: 公共租约使用
+  `effective_inflight=max(active_lease_count, reported_inflight)`，按声明容量归一化选择最低负载，
+  同负载候选按 capability 轮询；全部 capability、在线与离线调用共享实例容量。
+- Runtime boundary: VBas 权威值为 `1024/1024/0` 且声明容量为 `1024`；一个最多 8 图的 batch
+  占一个租约。Vision 使用全部课程共享的 `8/16` 配置，Kafka 按 partition 只提交连续完成
+  offset，停机未完成消息可重放。
+- Contract impact: A 服务课程提交/查询与在线接口的路径、字段、整数状态、响应和异步语义不变。
+  ASR、OCR、PPT Slice、FaceRec 和 ScreenDet 共享公共修复；其旧 revision 调查只建立基线，
+  必须在新 revision 上形成租约、实例日志与业务终态证据后才能判定通过。
+- Evidence state: 已新增 `scenarios/live-load-operator-routing.md`、部署/设计说明和本地验证入口。
+  本条不宣称 20 路离线、1000 路在线、混合负载、其他算子 16 路调查、新镜像发布或旧镜像
+  清理已经通过；这些结论只按后续 write-once 远端证据更新。

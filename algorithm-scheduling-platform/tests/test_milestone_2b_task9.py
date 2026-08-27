@@ -144,7 +144,7 @@ def _expected_instances() -> list[dict[str, Any]]:
         "asr-offline": ("asr_offline", ["asr_offline"], 8083, 4),
         "asr-online": ("asr_online", ["asr_online"], 8084, 10),
         "ocr": ("ocr", ["ocr"], 8866, 256),
-        "vbas": ("vbas", ["student_behavior", "teacher_behavior"], 8981, 128),
+        "vbas": ("vbas", ["student_behavior", "teacher_behavior"], 8981, 1024),
         "facerec": ("facerec", ["recognize"], 8000, 128),
         "screen-det": ("screen_det", ["detect_all"], 8880, 128),
         "ppt-slice": ("ppt_slice", ["ppt_slice"], 9001, 10),

@@ -53,7 +53,11 @@ def test_unified_capacity_change_has_machine_readable_compatibility_baseline() -
     baseline = json.loads(CAPACITY_BASELINE.read_text(encoding="utf-8"))
     topology = json.loads(OPERATOR_TOPOLOGY.read_text(encoding="utf-8"))
     assert baseline["baseline_git_revision"] == "bd59541"
-    capacities = baseline["approved_current_capacities"]
+    capacities = {
+        **baseline["approved_current_capacities"],
+        # 历史基线保持只读；当前变更单独批准 VBas 的新容量。
+        "vbas": 1024,
+    }
     current_projects = {
         operator["project_directory"] for operator in topology["operators"]
     }
@@ -137,6 +141,9 @@ def test_all_current_operator_entrypoints_install_the_shared_registry_runtime() 
         "                operator_deployment.platform.max_concurrent_requests"
     ) in ppt_source
     assert "inflight_provider=task_manager.get_task_count" in ppt_source
+    vbas_source = (WORKSPACE_ROOT / "vbas/app/main.py").read_text(encoding="utf-8")
+    assert "inflight_provider=" in vbas_source
+    assert "worker_controller.snapshot()" in vbas_source
 
 
 def test_shared_registry_wheel_defines_stable_read_only_metadata_route() -> None:
@@ -365,7 +372,7 @@ def test_operator_compose_declares_restart_health_mounts_and_instance_identity()
         "asr-offline": 4,
         "asr-online": 10,
         "ocr": 256,
-        "vbas": 128,
+        "vbas": 1024,
         "facerec": 128,
         "screen-det": 128,
         "ppt-slice": 10,

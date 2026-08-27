@@ -269,7 +269,7 @@ def _case_regression_patterns() -> dict[str, tuple[str, ...]]:
     bind(("LOAD-006",), "test_three_calling_services_renew_same_lease_across_ttl_and_release")
     bind(
         ("LOAD-007",),
-        "test_deterministic_instance_preference_is_allowed_until_capacity_is_full",
+        "test_equal_load_instances_use_a_persistent_round_robin_cursor",
     )
     bind(("LOAD-008",), "test_online_and_ppt_ocr_share_one_pool_without_losing_offline_work")
     bind(("LOAD-009",), "test_control_reports_heartbeat_difference_without_using_it_for_admission")

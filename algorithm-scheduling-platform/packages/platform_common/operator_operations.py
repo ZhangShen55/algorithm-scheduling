@@ -36,6 +36,7 @@ def build_operator_capacity_snapshot(
     snapshots: list[OperatorCapacitySnapshot] = []
     for instance in registry.list_instances():
         active_lease_count = registry.active_lease_count(instance.instance_id)
+        schedulable_used = max(active_lease_count, instance.inflight)
         snapshots.append(
             OperatorCapacitySnapshot(
                 instance_id=instance.instance_id,
@@ -45,7 +46,7 @@ def build_operator_capacity_snapshot(
                 declared_capacity=instance.declared_capacity,
                 reported_inflight=instance.inflight,
                 active_lease_count=active_lease_count,
-                schedulable_used=active_lease_count,
+                schedulable_used=schedulable_used,
                 attribution_difference=instance.inflight - active_lease_count,
                 capacity_mismatch=instance.inflight != active_lease_count,
             )

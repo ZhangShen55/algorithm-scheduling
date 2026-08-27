@@ -13,7 +13,7 @@ def _install_lightweight_tias_settings():
                 registration_enabled=False,
                 control_service_url="",
                 heartbeat_interval_seconds=5,
-                max_concurrent_requests=128,
+                max_concurrent_requests=1024,
             ),
             runtime=types.SimpleNamespace(require_gpu=False),
         ),
@@ -22,7 +22,7 @@ def _install_lightweight_tias_settings():
             InstanceId="tias-test",
             BaseUrl="http://127.0.0.1:8981",
             AiQualityBaseUrl="",
-            MaxConcurrentBatches=1,
+            MaxConcurrentBatches=1024,
             MaxQueueSize=0,
             HeartbeatIntervalSeconds=5,
             HeartbeatTimeoutSeconds=15,
@@ -78,3 +78,11 @@ def test_tias_default_api_surface_excludes_removed_routes(monkeypatch):
     assert "/AE/LogLevel" not in paths
     assert "/AE/SyncTasks" not in paths
     assert "/AE/SyncTasks2" not in paths
+    assert module.app.state.operator_runtime.status().declared_capacity == 1024
+    assert module.app.state.operator_runtime.status().inflight == 0
+
+    module.worker_controller.running_batches = 7
+    assert module.app.state.operator_runtime.status().inflight == 7
+    assert module.app.state.operator_runtime.heartbeat_status().inflight == 7
+    assert module.worker_controller.snapshot()["running_batches"] == 7
+    module.worker_controller.running_batches = 0

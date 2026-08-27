@@ -164,6 +164,89 @@ async def test_vbas_batches_use_capacity_lease_and_configured_concurrency() -> N
 
 
 @pytest.mark.asyncio
+async def test_vbas_concurrency_is_shared_across_courses() -> None:
+    active = 0
+    peak = 0
+    two_active = asyncio.Event()
+    release = asyncio.Event()
+
+    class LeaseClient:
+        @asynccontextmanager
+        async def acquire(
+            self,
+            capability: str,
+            *,
+            ttl_seconds: int = 60,
+            work_context: WorkContext | None = None,
+            renew_interval_seconds: float | None = None,
+        ):
+            del ttl_seconds, renew_interval_seconds
+            assert work_context is not None
+            yield CapacityLease(
+                f"lease-{work_context.work_id}",
+                "vbas-gpu0",
+                capability,
+                "http://vbas-gpu0:9010",
+                datetime.now(UTC) + timedelta(seconds=60),
+            )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal active, peak
+        body = json.loads(request.content)
+        active += 1
+        peak = max(peak, active)
+        if active == 2:
+            two_active.set()
+        try:
+            await release.wait()
+            return _success_response(body)
+        finally:
+            active -= 1
+
+    def frames(course: str) -> list[VbasFrame]:
+        return [
+            VbasFrame(
+                f"{course}-{index}",
+                Path(f"/data/course/{course}/frames/{index}.jpg"),
+                index,
+                float(index),
+            )
+            for index in range(3)
+        ]
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = VbasBatchClient(
+            http,
+            LeaseClient(),
+            config=VbasBatchConfig(batch_size=1, max_concurrency=2),
+        )
+        first = asyncio.create_task(
+            client.analyze(
+                task_id="course-a",
+                stream=VisionStream.STUDENT,
+                frames=frames("course-a"),
+            )
+        )
+        second = asyncio.create_task(
+            client.analyze(
+                task_id="course-b",
+                stream=VisionStream.STUDENT,
+                frames=frames("course-b"),
+            )
+        )
+        await asyncio.wait_for(two_active.wait(), timeout=1)
+
+        assert peak == 2
+
+        release.set()
+        first_results, second_results = await asyncio.gather(first, second)
+
+    assert peak == 2
+    assert len(first_results) == 3
+    assert len(second_results) == 3
+
+
+@pytest.mark.asyncio
 async def test_student_vbas_request_preserves_roi_points() -> None:
     captured: dict[str, object] = {}
 

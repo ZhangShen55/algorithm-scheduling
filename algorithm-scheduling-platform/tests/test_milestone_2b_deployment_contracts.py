@@ -113,6 +113,43 @@ image_max_bytes = 52428800
 
 
 @pytest.mark.parametrize(
+    ("field", "value", "expected_message"),
+    [
+        ("MaxConcurrentBatches", 16, "TIAS.MaxConcurrentBatches"),
+        ("MaxQueueSize", 1, "TIAS.MaxQueueSize"),
+    ],
+)
+def test_operator_toml_contract_rejects_vbas_batch_capacity_drift(
+    tmp_path: Path,
+    field: str,
+    value: int,
+    expected_message: str,
+) -> None:
+    expected = 1024 if field == "MaxConcurrentBatches" else 0
+    config = tmp_path / "vbas.toml"
+    config.write_text(
+        """
+[platform]
+registration_enabled = true
+control_service_url = "http://control-service:18100"
+heartbeat_interval_seconds = 5
+max_concurrent_requests = 1024
+
+[runtime]
+require_gpu = true
+
+[TIAS]
+MaxConcurrentBatches = 1024
+MaxQueueSize = 0
+""".replace(f"{field} = {expected}", f"{field} = {value}"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DeploymentContractError, match=expected_message):
+        validate_operator_toml_contract("vbas-gpu0", config)
+
+
+@pytest.mark.parametrize(
     "source",
     [
         "FROM python:3.11\nCOPY app /app\n",

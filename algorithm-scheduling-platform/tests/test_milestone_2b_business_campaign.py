@@ -42,9 +42,9 @@ def test_every_business_case_has_an_explicit_regression_evidence_mapping() -> No
     assert all(CASE_REGRESSION_PATTERNS[case_id] for case_id in selected)
 
 
-def test_load_007_accepts_deterministic_preference_instead_of_requiring_round_robin() -> None:
+def test_load_007_requires_live_load_routing_with_equal_load_round_robin() -> None:
     assert CASE_REGRESSION_PATTERNS["LOAD-007"] == (
-        "test_deterministic_instance_preference_is_allowed_until_capacity_is_full",
+        "test_equal_load_instances_use_a_persistent_round_robin_cursor",
     )
 
 

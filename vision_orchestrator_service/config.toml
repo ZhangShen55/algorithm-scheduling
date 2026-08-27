@@ -121,8 +121,8 @@ max_concurrent_processes = 2
 request_timeout_seconds = 60.0
 # VBas 请求允许的最大批次大小。
 max_batch_size = 8
-# VBas 请求最大并发数。
-max_concurrency = 2
+# 全部课程、流类型和区域轮次共享的 VBas 批次并发上限。
+max_concurrency = 16
 # 单个 VBas 批次容量租约的时长秒数，长调用会自动续租。
 lease_ttl_seconds = 30
 

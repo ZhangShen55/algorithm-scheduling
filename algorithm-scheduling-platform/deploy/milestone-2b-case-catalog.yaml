@@ -223,7 +223,7 @@ cases:
   - {case_id: LOAD-004, category: load, phase: final, title: "30 并发 Kafka Lag 持续不回落", expected: "停止升压", runner: load.load_004, timeout_seconds: 3600, safety: canonical_runtime}
   - {case_id: LOAD-005, category: load, phase: final, title: "未到 100 并发已达到稳定上限", expected: "记录实际上限，不强行达到 100", runner: load.load_005, timeout_seconds: 3600, safety: canonical_runtime}
   - {case_id: LOAD-006, category: load, phase: final, title: "在线图片压测与离线长任务混用同一吞吐指标", expected: "报告验收失败", runner: load.load_006, timeout_seconds: 3600, safety: canonical_runtime}
-  - {case_id: LOAD-007, category: load, phase: final, title: "确定性路由偏向排序靠前实例", expected: "允许偏向；当该实例容量用尽时才路由到下一可用实例，且不得超卖", runner: load.load_007, timeout_seconds: 3600, safety: canonical_runtime}
+  - {case_id: LOAD-007, category: load, phase: final, title: "实时负载路由出现固定实例独占", expected: "选择最低有效负载实例；同负载时轮询，健康实例不得持续饥饿且不得超卖", runner: load.load_007, timeout_seconds: 3600, safety: canonical_runtime}
   - {case_id: LOAD-008, category: load, phase: final, title: "容量统计低于实际并发", expected: "检查租约泄漏或超卖", runner: load.load_008, timeout_seconds: 3600, safety: canonical_runtime}
   - {case_id: LOAD-009, category: load, phase: final, title: "请求完成后 inflight 不下降", expected: "判为容量泄漏", runner: load.load_009, timeout_seconds: 3600, safety: canonical_runtime}
   - {case_id: LOAD-010, category: load, phase: deployment, title: "实例被 SIGTERM", expected: "停止接新任务并按优雅关闭规则退出", runner: load.load_010, timeout_seconds: 3600, safety: canonical_runtime}

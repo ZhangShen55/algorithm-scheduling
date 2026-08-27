@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "baseline_type": "live_load_operator_routing_pre_release",
+  "recorded_at": "2026-08-27T17:25:00+08:00",
+  "local": {
+    "branch": "codex/milestone-2b-three-gpu-deployment",
+    "head": "d449dbad6b5744a936a3b73cc3bde3b35442e0b8",
+    "protected_existing_changes": [
+      "docs/A服务对接指南.md",
+      "text_analysis/README.md",
+      "5{n++}",
+      "asr_offline/docker/README.md",
+      "asr_online/docker/README.md",
+      "docs/A服务对接指南-上游调用方版.md",
+      "docs/A服务对接调度指南-V1.md",
+      "docs/运维可视化平台详细设计文档-v1.md",
+      "facerec/docker/README.md",
+      "ppt_slice/docker/",
+      "text_analysis/docker/"
+    ],
+    "boundary": "上述既有 dirty/untracked 文件不由本变更覆盖、清理或提交；text_analysis 不纳入平台"
+  },
+  "remote": {
+    "host": "192.168.29.11",
+    "workspace_head": "d449dbad6b5744a936a3b73cc3bde3b35442e0b8",
+    "container_count": 29,
+    "operator_instance_count": 21,
+    "container_and_image_full_id_ledger": {
+      "path": "/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/deploy/reports/milestone-2b/releases/v1.0_260826/d449dbad6b5744a936a3b73cc3bde3b35442e0b8/production/production-stack.json",
+      "mode": "0600",
+      "owner": "root:root",
+      "hard_link_count": 1,
+      "size_bytes": 8249,
+      "sha256": "0bc1c8849ed8edc408b6c5572435edd58ab586bdb584fd689bf387428e7e9599",
+      "contract": "账本包含 29 个受控槽位的完整容器 ID、完整镜像 ID、Compose service、release tag 和 Git revision；本变更只读引用"
+    },
+    "compose_expansion": {
+      "platform_sha256": "5602069c4a21ccec661f15482fee4afa527899211cf5e8e4eb674f8ba4eae8bd",
+      "platform_lines": 367,
+      "operators_sha256": "ad2f1b38a797dd9ee8bfe9ef11297bd1b77a978aa2f39fbb1234f9759e37c64d",
+      "operators_lines": 253,
+      "note": "使用占位管理 Token 只做 docker compose config 展开；未读取或记录真实 Token"
+    },
+    "gpu": [
+      {
+        "index": 0,
+        "uuid": "GPU-812c493d-596f-a8f1-cebf-675b05a311e6",
+        "name": "NVIDIA GeForce RTX 4090 D",
+        "memory_total_mib": 24564
+      },
+      {
+        "index": 1,
+        "uuid": "GPU-a9286375-8b8a-0e46-e81c-80a27257368b",
+        "name": "NVIDIA GeForce RTX 4090 D",
+        "memory_total_mib": 24564
+      },
+      {
+        "index": 2,
+        "uuid": "GPU-8c6b7efd-2b4f-04f3-db71-b50d2482fc49",
+        "name": "NVIDIA GeForce RTX 3090",
+        "memory_total_mib": 24576
+      }
+    ],
+    "docker_disk": {
+      "images": 222,
+      "active_images": 33,
+      "image_size": "200.1GB",
+      "image_reclaimable": "176.3GB",
+      "containers": 49,
+      "active_containers": 29,
+      "build_cache": "85.31GB"
+    },
+    "registration_and_lease_observation": {
+      "registered_instances": 21,
+      "old_vbas_declared_capacity": 128,
+      "vbas_instances": [
+        "vbas-gpu0",
+        "vbas-gpu1",
+        "vbas-gpu2"
+      ],
+      "dynamic_note": "修复前 ASR/PPT/OCR 十六路调查期间存在真实活跃租约；ASR GPU0 曾因约 24 秒心跳间隔瞬时 OFFLINE 后自动恢复，详见 operator-live-load-routing-readonly-baseline.md"
+    }
+  },
+  "protection": {
+    "old_release_read_only": true,
+    "delete_before_new_validation": false,
+    "preserve_build_cache": true,
+    "preserve_volumes_models_and_results": true
+  }
+}

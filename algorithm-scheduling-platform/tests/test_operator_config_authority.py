@@ -55,7 +55,7 @@ def test_profile_matrix_covers_exactly_seven_operators() -> None:
         256,
         10,
         128,
-        128,
+        1024,
     ]
     assert [profile.deploy_require_gpu for profile in authority.OPERATOR_PROFILES] == [
         True,

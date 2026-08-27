@@ -22,7 +22,7 @@ _TOPOLOGY_CAPACITY = {
     "ocr": 256,
     "ppt_slice": 10,
     "screen_det": 128,
-    "vbas": 128,
+    "vbas": 1024,
 }
 
 
@@ -528,26 +528,17 @@ def test_offline_operator_workload_uses_a_task_bound_active_lease(
         check_index=2,
     )
     services = sorted(probe._operator_services(operator_code))
-    target_index = services.index(target_service)
     capacities = {
-        service: _capacity(
-            service,
-            operator_code,
-            active_lease_count=(
-                _TOPOLOGY_CAPACITY[operator_code]
-                if phase == "recovery" and index < target_index
-                else 0
-            ),
-        )
-        for index, service in enumerate(services)
+        service: _capacity(service, operator_code)
+        for service in services
     }
-    workload_count = probe._recovery_route_width(
+    probe._recovery_route_width(
         operator_code,
         {target_service},
         capacities,
     )
     selected_service = target_service if phase == "recovery" else services[0]
-    selected_attempt = workload_count - 1 if phase == "recovery" else 0
+    selected_attempt = services.index(target_service) if phase == "recovery" else 0
     task_id = probe._witness_id(
         request,
         f"{phase}-{operator_code}-routing",
@@ -618,18 +609,9 @@ def test_online_operator_workload_proves_exact_routed_instance(
 ) -> None:
     request = _request(tmp_path, phase=phase, check_index=2)
     services = sorted(probe._operator_services(operator_code))
-    target_index = services.index(target_service)
     capacities = {
-        service: _capacity(
-            service,
-            operator_code,
-            active_lease_count=(
-                _TOPOLOGY_CAPACITY[operator_code]
-                if phase == "recovery" and index < target_index
-                else 0
-            ),
-        )
-        for index, service in enumerate(services)
+        service: _capacity(service, operator_code)
+        for service in services
     }
     workload_count = (
         probe._recovery_route_width(operator_code, {target_service}, capacities)
@@ -642,7 +624,9 @@ def test_online_operator_workload_proves_exact_routed_instance(
         else sorted(set(services) - {target_service})[0]
     )
     if operator_code == "asr_online":
-        routed_services = [selected_service] * workload_count
+        routed_services = (
+            services if phase == "recovery" else [selected_service] * workload_count
+        )
         client = _FakeHttp(
             {},
             asr_sessions=[
@@ -660,10 +644,11 @@ def test_online_operator_workload_proves_exact_routed_instance(
             )
             for attempt in range(workload_count)
         ]
+        routed_services = services if phase == "recovery" else [selected_service]
         metrics = "".join(
             f'algorithm_capacity_lease_events_total{{capability="{capability}",'
-            f'instance_id="{selected_service}",outcome="{outcome}"}} '
-            f'{workload_count}.0\n'
+            f'instance_id="{service}",outcome="{outcome}"}} 1.0\n'
+            for service in routed_services
             for outcome in ("acquired", "released")
         )
         client = _FakeHttp(
@@ -675,7 +660,10 @@ def test_online_operator_workload_proves_exact_routed_instance(
                     {"code": 0, "data": {}},
                 )
             },
-            active_trace_routes={trace_id: selected_service for trace_id in trace_ids},
+            active_trace_routes={
+                trace_id: routed_services[index % len(routed_services)]
+                for index, trace_id in enumerate(trace_ids)
+            },
             post_delay_seconds=0.02,
         )
 
@@ -696,14 +684,13 @@ def test_online_operator_workload_proves_exact_routed_instance(
 
 @pytest.mark.parametrize(
     ("target_service", "expected_width"),
-    (("ocr-gpu0", 1), ("ocr-gpu1", 257), ("ocr-gpu2", 513)),
+    (("ocr-gpu0", 3), ("ocr-gpu1", 3), ("ocr-gpu2", 3)),
 )
-def test_recovery_width_matches_production_sorted_first_fit_selector(
+def test_recovery_width_covers_one_live_load_round_robin_cycle(
     target_service: str,
     expected_width: int,
 ) -> None:
-    assert "table.sort(instance_ids)" in _LEASE_SCRIPT
-    assert "active_leases < capacity" in _LEASE_SCRIPT
+    assert "lowest_load_candidates" in _LEASE_SCRIPT
     capacities = {
         f"ocr-gpu{index}": _capacity(f"ocr-gpu{index}", "ocr")
         for index in range(3)
@@ -716,7 +703,7 @@ def test_recovery_width_matches_production_sorted_first_fit_selector(
 
 
 @pytest.mark.parametrize("operator_code", tuple(_TOPOLOGY_CAPACITY))
-def test_gpu2_width_uses_the_authoritative_topology_capacity(operator_code: str) -> None:
+def test_recovery_width_is_one_cycle_regardless_of_topology_capacity(operator_code: str) -> None:
     prefix = probe.ALL_OPERATOR_PREFIXES[operator_code]
     device = "cpu" if operator_code == "ppt_slice" else "gpu"
     topology_capacity = {
@@ -736,7 +723,7 @@ def test_gpu2_width_uses_the_authoritative_topology_capacity(operator_code: str)
         operator_code,
         {f"{prefix}-{device}2"},
         capacities,
-    ) == 2 * _TOPOLOGY_CAPACITY[operator_code] + 1
+    ) == 3
 
 
 def test_gpu_disruption_does_not_infer_takeover_from_ttl_and_capacity_alone(

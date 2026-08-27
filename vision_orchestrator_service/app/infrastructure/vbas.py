@@ -79,6 +79,8 @@ class VbasBatchClient:
         self._lease_client = lease_client
         self._config = config or VbasBatchConfig()
         self._shutdown_event = shutdown_event
+        # 同一服务内的全部课程共享这组槽位，避免课程数放大全局 VBas 并发。
+        self._request_slots = asyncio.Semaphore(self._config.max_concurrency)
 
     async def analyze(
         self,
@@ -95,43 +97,57 @@ class VbasBatchClient:
             frame_list[index : index + self._config.batch_size]
             for index in range(0, len(frame_list), self._config.batch_size)
         ]
-        semaphore = asyncio.Semaphore(self._config.max_concurrency)
         batch_failed = asyncio.Event()
+        batch_iterator = iter(enumerate(batches))
+        batch_results: list[list[JsonObject] | None] = [None] * len(batches)
 
-        async def run_batch(batch_index: int, batch: list[VbasFrame]) -> list[JsonObject]:
-            async with semaphore:
-                if batch_failed.is_set():
-                    # A sibling already failed while this task was waiting for a slot.
-                    # Do not start another lease/HTTP request or race the original error.
-                    return []
+        async def run_batches() -> None:
+            while not batch_failed.is_set():
                 try:
-                    return await self._analyze_batch_until_available(
-                        task_id,
-                        stream,
-                        batch_index,
-                        batch,
-                        trace_id=trace_id,
-                    )
-                except BaseException:
-                    batch_failed.set()
-                    raise
+                    batch_index, batch = next(batch_iterator)
+                except StopIteration:
+                    return
+                async with self._request_slots:
+                    if batch_failed.is_set():
+                        return
+                    try:
+                        batch_results[batch_index] = (
+                            await self._analyze_batch_until_available(
+                                task_id,
+                                stream,
+                                batch_index,
+                                batch,
+                                trace_id=trace_id,
+                            )
+                        )
+                    except BaseException:
+                        batch_failed.set()
+                        raise
 
+        worker_count = min(len(batches), self._config.max_concurrency)
         tasks = [
             asyncio.create_task(
-                run_batch(index, batch),
-                name=f"vbas-{task_id}-{stream.value.lower()}-{index:04d}",
+                run_batches(),
+                name=f"vbas-{task_id}-{stream.value.lower()}-worker-{index:02d}",
             )
-            for index, batch in enumerate(batches)
+            for index in range(worker_count)
         ]
         try:
-            batch_results = await asyncio.gather(*tasks)
+            await asyncio.gather(*tasks)
         except BaseException:
             for task in tasks:
                 if not task.done():
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             raise
-        return [result for batch in batch_results for result in batch]
+        if any(result is None for result in batch_results):
+            raise VbasAdapterError(f"VBas 批次结果不完整: {task_id}/{stream.value}")
+        return [
+            result
+            for batch_result in batch_results
+            if batch_result is not None
+            for result in batch_result
+        ]
 
     async def _analyze_batch_until_available(
         self,

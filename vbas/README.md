@@ -45,12 +45,13 @@ GPU_ID = "cpu"
 | `platform.registration_enabled` | `false` | `true` | 是否主动注册到调度平台 |
 | `platform.control_service_url` | `""` | `http://control-service:18100` | 注册与心跳地址 |
 | `platform.heartbeat_interval_seconds` | `5` | `5` | 心跳间隔 |
-| `platform.max_concurrent_requests` | `128` | `128` | 学生、教师及可选头部姿态共享容量 |
+| `platform.max_concurrent_requests` | `1024` | `1024` | 学生、教师及可选头部姿态共享容量；按 HTTP batch 计数 |
 | `runtime.require_gpu` | `false` | `true` | `true` 时算子设备必须是可用 CUDA |
 
 Compose 继续管理实例 ID、服务 URL、注册 Token、物理 GPU/可见设备、`CONFIG_PATH`、端口和
-`UVICORN_WORKERS=1`。`TIAS.MaxConcurrentBatches`、`TIAS.MaxQueueSize`、模型锁和批次大小仍负责
-本地模型安全，不会被平台注册容量 `128` 覆盖；教师请求中的可选头部姿态也不形成独立容量池。
+`UVICORN_WORKERS=1`。`TIAS.MaxConcurrentBatches=1024` 与平台注册容量一致；一个最多包含 8 张
+图片的 HTTP batch 只计一个运行槽位。`TIAS.MaxQueueSize=0` 表示实例不保留本地等待队列，
+满载时直接返回过载响应，由平台重新选择。教师请求中的可选头部姿态也不形成独立容量池。
 
 必要模型放在 `models/`：
 

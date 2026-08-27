@@ -118,6 +118,9 @@ for _, operator_code in ipairs(cjson.decode(ARGV[9])) do
     allowed_operator_codes[operator_code] = true
 end
 table.sort(instance_ids)
+local lowest_load_candidates = {}
+local lowest_effective_inflight = nil
+local lowest_declared_capacity = nil
 for _, instance_id in ipairs(instance_ids) do
     local instance_key = ARGV[3] .. instance_id
     local heartbeat_key = ARGV[4] .. instance_id
@@ -141,31 +144,68 @@ for _, instance_id in ipairs(instance_ids) do
         end
         local capacity = tonumber(redis.call('HGET', instance_key, 'declared_capacity') or '0')
         local active_leases = redis.call('ZCARD', leases_key)
+        local reported_inflight = tonumber(redis.call('HGET', instance_key, 'inflight') or '0')
+        if not reported_inflight or reported_inflight < 0
+            or reported_inflight ~= math.floor(reported_inflight) then
+            reported_inflight = 0
+        end
+        local effective_inflight = math.max(active_leases, reported_inflight)
         if capacity and capacity > 0 and capacity == math.floor(capacity)
-            and active_leases < capacity then
-            local expires_at = now_ms + tonumber(ARGV[1])
-            redis.call('ZADD', leases_key, expires_at, ARGV[2])
-            local lease_key = ARGV[6] .. ARGV[2]
-            redis.call('HSET', lease_key,
-                'instance_id', instance_id,
-                'capability', ARGV[7],
-                'service_url', redis.call('HGET', instance_key, 'service_url'),
-                'acquired_at', now_ms,
-                'expires_at', expires_at,
-                'work_context', ARGV[8],
-                'redis_run_id', redis_run_id)
-            redis.call('PEXPIRE', lease_key, ARGV[1])
-            return {
-                instance_id,
-                redis.call('HGET', instance_key, 'service_url'),
-                now_ms,
-                expires_at,
-                ARGV[8]
+            and effective_inflight < capacity then
+            local candidate = {
+                instance_id = instance_id,
+                service_url = redis.call('HGET', instance_key, 'service_url'),
+                effective_inflight = effective_inflight,
+                declared_capacity = capacity
             }
+            if not lowest_effective_inflight then
+                lowest_load_candidates = {candidate}
+                lowest_effective_inflight = effective_inflight
+                lowest_declared_capacity = capacity
+            else
+                -- 交叉相乘比较负载率，避免 Lua 浮点精度影响路由。
+                local candidate_ratio = effective_inflight * lowest_declared_capacity
+                local lowest_ratio = lowest_effective_inflight * capacity
+                if candidate_ratio < lowest_ratio then
+                    lowest_load_candidates = {candidate}
+                    lowest_effective_inflight = effective_inflight
+                    lowest_declared_capacity = capacity
+                elseif candidate_ratio == lowest_ratio then
+                    table.insert(lowest_load_candidates, candidate)
+                end
+            end
         end
     end
 end
-return {}
+if #lowest_load_candidates == 0 then
+    return {}
+end
+
+table.sort(lowest_load_candidates, function(left, right)
+    return left.instance_id < right.instance_id
+end)
+local cursor = redis.call('INCR', KEYS[2])
+local selected_index = ((cursor - 1) % #lowest_load_candidates) + 1
+local selected = lowest_load_candidates[selected_index]
+local expires_at = now_ms + tonumber(ARGV[1])
+redis.call('ZADD', ARGV[5] .. selected.instance_id, expires_at, ARGV[2])
+local lease_key = ARGV[6] .. ARGV[2]
+redis.call('HSET', lease_key,
+    'instance_id', selected.instance_id,
+    'capability', ARGV[7],
+    'service_url', selected.service_url,
+    'acquired_at', now_ms,
+    'expires_at', expires_at,
+    'work_context', ARGV[8],
+    'redis_run_id', redis_run_id)
+redis.call('PEXPIRE', lease_key, ARGV[1])
+return {
+    selected.instance_id,
+    selected.service_url,
+    now_ms,
+    expires_at,
+    ARGV[8]
+}
 """
 
 
@@ -476,8 +516,9 @@ class RedisOperatorRegistry:
             list[Any],
             self._client.eval(
                 _LEASE_SCRIPT,
-                1,
+                2,
                 self._capability_key(capability),
+                f"{self._prefix}routing-cursor:{capability}",
                 str(ttl_ms),
                 lease_id,
                 f"{self._prefix}instance:",

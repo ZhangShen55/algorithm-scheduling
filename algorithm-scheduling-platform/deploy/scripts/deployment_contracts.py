@@ -275,6 +275,18 @@ def validate_operator_toml_contract(service_name: str, config_path: Path) -> Non
             raise DeploymentContractError(
                 f"{service_name} ocr.image_max_bytes must be 52428800"
             )
+    if operator_name == "vbas":
+        tias = config.get("TIAS")
+        if not isinstance(tias, Mapping):
+            raise DeploymentContractError(f"{service_name} mounted TOML requires [TIAS]")
+        if tias.get("MaxConcurrentBatches") != 1024:
+            raise DeploymentContractError(
+                f"{service_name} TIAS.MaxConcurrentBatches must be 1024"
+            )
+        if tias.get("MaxQueueSize") != 0:
+            raise DeploymentContractError(
+                f"{service_name} TIAS.MaxQueueSize must be 0"
+            )
     if operator_name == "ppt-slice":
         task = config.get("task")
         if isinstance(task, Mapping) and "max_concurrent_tasks" in task:
