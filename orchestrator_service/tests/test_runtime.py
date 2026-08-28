@@ -10,15 +10,16 @@ import httpx
 import pytest
 from aiokafka.errors import KafkaConnectionError
 from fastapi.testclient import TestClient
+from packages.platform_common.kafka import KafkaMessage
 
 from orchestrator_service.app.application.factory import create_app
 from orchestrator_service.app.core.config import OrchestratorSettings
+from orchestrator_service.app.infrastructure import runtime as runtime_module
 from orchestrator_service.app.infrastructure.runtime import (
     CourseCommandConsumerLoop,
     OrchestratorResources,
     OrchestratorRuntime,
 )
-from packages.platform_common.kafka import KafkaMessage
 
 
 class FakeRepository:
@@ -402,6 +403,31 @@ def test_readiness_reports_kafka_dependency_failure(tmp_path: Path) -> None:
         assert kafka_check["ready"] is False
         assert "依赖检查失败" in kafka_check["detail"]
         assert "Kafka 依赖不可用" in kafka_check["detail"]
+
+
+def test_started_runtime_requests_process_exit_for_fatal_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _, _ = _runtime(tmp_path)
+    exit_requests: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        "orchestrator_service.app.infrastructure.runtime.os.kill",
+        lambda pid, signum: exit_requests.append((pid, signum)),
+    )
+    runtime.settings = runtime.settings.model_copy(
+        update={
+            "service": runtime.settings.service.model_copy(
+                update={"environment": "production"}
+            )
+        }
+    )
+    runtime._started = True
+
+    runtime._request_fatal_exit("node_executor", RuntimeError("节点不变量损坏"))
+
+    assert runtime.fatal_exit_requested is True
+    assert exit_requests == [(runtime_module.os.getpid(), runtime_module.signal.SIGTERM)]
 
 
 @pytest.mark.asyncio

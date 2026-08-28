@@ -207,6 +207,42 @@ def test_merge_node_progress_preserves_concurrently_persisted_lease_context(
     }
 
 
+def test_merge_node_progress_accepts_claimed_node_before_execution(
+    repository: CourseRepository,
+) -> None:
+    task_type = repository.create_task_types(
+        task_id="claimed-lease-context",
+        writes=[TaskTypeWrite(task_type=TaskType.ASR)],
+    )[0]
+    repository.create_node(
+        course_task_type_id=task_type.id,
+        node_code="ASR_TRANSCRIPTION",
+        status=NodeStatus.PENDING,
+        priority=Priority.NORMAL,
+        reason="等待离线语音转写",
+        required_capability="asr_offline",
+    )
+    claimed = repository.claim_ready_node("asr_offline", "worker-claimed")
+
+    assert claimed is not None
+    assert claimed.status is NodeStatus.QUEUED
+
+    updated = repository.merge_node_progress(
+        claimed.id,
+        {
+            "lease_id": "lease-claimed-001",
+            "instance_id": "asr-offline-gpu0",
+        },
+        reason="节点已绑定算子容量租约，等待执行",
+    )
+
+    assert updated.status is NodeStatus.QUEUED
+    assert updated.progress == {
+        "lease_id": "lease-claimed-001",
+        "instance_id": "asr-offline-gpu0",
+    }
+
+
 def test_node_result_and_completion_are_persisted_together(
     repository: CourseRepository,
 ) -> None:

@@ -41,6 +41,10 @@ docker build -f orchestrator_service/docker/Dockerfile -t orchestrator-service .
 真实推理并发；最终同时运行数仍受算子声明容量约束。单一能力可使用全部槽位，多能力按轮转
 分配。节点从状态 10/30 原子领取，同一能力每轮只执行一次容量等待协调。
 
+Compose 部署会通过 `ORCHESTRATOR_SERVICE__ENVIRONMENT=production` 启用 fatal 退出合同：
+关键后台循环遇到不可恢复错误时，Orchestrator 主进程退出，并由 Docker
+`restart: unless-stopped` 重启。测试与本地开发环境只记录 fatal 退出意图，避免误杀测试进程。
+
 `[postgres_retry]` 只对 `40P01`、`40001` 短事务进行有界重试；认证、迁移、SQL 编程和状态
 不变量错误不会被掩盖。`[lease_renewal]` 规定同一 lease_id 的续租尝试、退避和 TTL 安全余量；
 单次 `ReadError` 不再直接失败，最终无法确认时普通幂等节点回到状态 30。过期的普通 ASR/OCR

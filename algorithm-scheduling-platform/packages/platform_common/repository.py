@@ -1502,9 +1502,10 @@ class CourseRepository:
             ).scalar_one_or_none()
             if current_value is None:
                 raise RepositoryNotFoundError(f"节点不存在: {node_id}")
-            if NodeStatus(current_value) is not NodeStatus.RUNNING:
+            current_status = NodeStatus(current_value)
+            if current_status not in {NodeStatus.QUEUED, NodeStatus.RUNNING}:
                 raise RepositoryStateConflictError(
-                    f"只有处理中节点可以合并进度: {node_id}"
+                    f"只有已领取或处理中节点可以合并进度: {node_id}"
                 )
             connection.execute(
                 text(

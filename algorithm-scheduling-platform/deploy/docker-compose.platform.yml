@@ -57,6 +57,7 @@ services:
       - "127.0.0.1:18101:18101"
     environment:
       CONFIG_PATH: /config/config.toml
+      ORCHESTRATOR_SERVICE__ENVIRONMENT: production
       ORCHESTRATOR_POSTGRES__DSN: postgresql+psycopg://algorithm:algorithm@postgres:5432/algorithm
       ORCHESTRATOR_KAFKA__BOOTSTRAP_SERVERS: '["kafka:29092"]'
       ORCHESTRATOR_CONTROL__BASE_URL: http://control-service:18100

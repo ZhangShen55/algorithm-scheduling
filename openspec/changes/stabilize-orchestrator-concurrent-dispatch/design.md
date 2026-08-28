@@ -76,6 +76,11 @@ LIMIT 1
 
 同一事务把节点写为 `40` 并返回节点事实。这样容量恢复时无需先把该能力的全部状态 30 节点批量改为 10。取得租约但没有节点时立即幂等释放租约。
 
+节点在状态 40 领取后、进入状态 50 执行前，需要先绑定 Control 租约上下文并把 `lease_id`、
+`instance_id` 和到期时间合并到节点 progress。Repository 因此允许状态 40 或 50 执行
+`merge_node_progress`，但普通 `update_node_progress` 仍只允许状态 50。这样恢复器可以在执行前
+识别租约归属，同时不会放宽其他节点进度写入边界。
+
 `ocr` 继续是工作项能力：外层 `PPT_OCR` 节点不占 OCR 实例租约，但同样通过状态 `10/30` 的原子领取进入执行；每张 `ppt_image_id` 仍单独申请、续租和释放 OCR 租约。
 
 ### 3. 容量不足只执行一次能力级等待协调
@@ -116,6 +121,10 @@ max_delay_seconds = 1.0
 | 不变量/协议/迁移错误 | 记录 fatal 原因，执行受控关闭并让容器主进程退出，由 Docker 重启 |
 
 `_record_loop_exit` 不再把异常转换为“主进程继续存活、所有循环停止”的永久状态。关键循环意外退出后，要么由 supervisor 重启该循环，要么使容器进程退出；选择由错误分类决定。`/health` 继续表示进程存活，`/ops/readiness` 必须暴露每个循环、最后瞬时错误、重试次数和 fatal 原因。
+
+Compose 必须显式把 `ORCHESTRATOR_SERVICE__ENVIRONMENT` 设为 `production`，确保 fatal
+退出请求实际向主进程发送 `SIGTERM`，并由既有 `restart: unless-stopped` 策略重启。测试与开发
+配置只记录退出意图，不能被当作远端发布配置。
 
 ### 6. 普通节点使用领取纪元和过期时间恢复
 

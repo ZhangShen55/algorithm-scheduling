@@ -122,6 +122,27 @@ Compose 展开值、Docker Mounts 和容器内配置解析结果，任何一层�
   层级 3，但不接触业务 `algorithm` 库中的课程数据。
 - 真实 Kafka、完整服务 lifespan 和目标机真实算子重跑尚未完成，不得把本记录标记为发布通过。
 
+## 首次候选发布门禁失败与修复
+
+候选 SHA `73c2bf5ae1597ac682a2bb9925354fc15ad1f36d` 的四个平台镜像均使用既有
+BuildKit 缓存构建成功，架构均为 `amd64` 且镜像 revision 一致。首次只替换四个平台容器后，
+Control、Vision 和 Online Gateway 健康，Orchestrator 在历史 ASR 节点 `21231` 上进入 fatal，
+readiness 返回“只有处理中节点可以合并进度”。本次失败未提交新业务负载，七算子和中间件均未
+重建或停止，旧平台镜像已经按完整 ID 增加 `rollback-pre-73c2bf5` 标签并保留。
+
+根因有两项：
+
+1. 新领取 SQL 把节点从状态 10/30 原子写为状态 40，Dispatcher 随后绑定租约并写入租约
+   progress，但 Repository 的合并接口仍只接受状态 50；Fake Repository 单元测试没有暴露
+   这一真实 PostgreSQL 状态约束。
+2. fatal 退出只在 `service.environment=production` 时发送 `SIGTERM`，而 Compose 没有覆盖
+   仓库默认的 `development`，所以只记录退出意图，容器仍保持运行/不健康。
+
+修复增加真实 PostgreSQL 回归，证明状态 40 可合并租约上下文且仍保持状态 40；状态 40/50
+之外继续拒绝。Compose 显式注入 `ORCHESTRATOR_SERVICE__ENVIRONMENT=production`，并新增
+进程退出请求测试。首次候选失败保持为失败事实，后续必须形成新 SHA、只重建 Orchestrator
+镜像并重新执行全部远端门禁，不能把首次 attempt 改写为通过。
+
 ## 提交前实现复审
 
 - `NodeExecutor` 先对去重后的 capability 规划 `node_concurrency` 槽位，单一能力可使用全部

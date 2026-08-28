@@ -22,8 +22,6 @@ from aiokafka.errors import (  # type: ignore[import-untyped]
     StaleMetadata,
 )
 from fastapi import FastAPI
-from sqlalchemy import Engine, create_engine
-
 from packages.platform_common.kafka import (
     AioKafkaConsumerAdapter,
     AioKafkaProducerAdapter,
@@ -37,6 +35,7 @@ from packages.platform_common.repository import (
     PostgresRetryPolicy,
     TransientInfrastructureError,
 )
+from sqlalchemy import Engine, create_engine
 
 from ..application.dispatcher import LeaseAwareDispatcher
 from ..application.executor import NodeExecutor
@@ -638,7 +637,7 @@ class OrchestratorRuntime:
                 "outcome": "fatal_exit",
             },
         )
-        # 生产容器由 Docker restart 策略恢复；测试/开发环境只记录退出意图。
+        # 生产服务必须退出并交给 Docker 重启；测试/开发环境只记录退出意图。
         if self._started and self.settings.service.environment == "production":
             os.kill(os.getpid(), signal.SIGTERM)
 

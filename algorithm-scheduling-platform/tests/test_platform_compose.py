@@ -139,6 +139,15 @@ def test_orchestrator_healthcheck_uses_runtime_readiness() -> None:
     assert "http://127.0.0.1:18101/health" not in orchestrator
 
 
+def test_orchestrator_compose_enables_production_fatal_exit() -> None:
+    rendered = _render_compose(COMPOSE_PATH)
+    services = cast(dict[str, object], rendered["services"])
+    orchestrator = cast(dict[str, object], services["orchestrator-service"])
+    environment = cast(dict[str, str], orchestrator["environment"])
+
+    assert environment["ORCHESTRATOR_SERVICE__ENVIRONMENT"] == "production"
+
+
 def test_vision_orchestrator_healthcheck_uses_runtime_readiness() -> None:
     compose = COMPOSE_PATH.read_text(encoding="utf-8")
     vision = compose.split("  vision-orchestrator-service:", 1)[1].split(
