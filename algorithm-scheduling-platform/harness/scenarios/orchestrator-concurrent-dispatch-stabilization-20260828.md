@@ -143,6 +143,26 @@ readiness 返回“只有处理中节点可以合并进度”。本次失败未�
 进程退出请求测试。首次候选失败保持为失败事实，后续必须形成新 SHA、只重建 Orchestrator
 镜像并重新执行全部远端门禁，不能把首次 attempt 改写为通过。
 
+## 第二候选的批次尾部低利用率与修复
+
+候选 SHA `6350595e1a185c4c7c94c96049924ef95de90fd5` 在目标机运行后，四个平台均健康，
+Orchestrator 六个关键循环均为 running，21/21 算子注册、18 个 GPU 算子进程、3 个 CPU PPT
+实例、三个 Kafka 消费组 lag 0、Outbox 全部 published，且 PostgreSQL deadlock 与
+Orchestrator fatal 计数均为 0。真实 Kafka、Outbox、课程命令重放、服务重启组合测试
+`test_real_milestone_2a_runtime_closes_and_recovers` 在目标机得到 `1 passed in 13.96s`。
+
+恢复历史 `tast_asr_*` 队列后，受控状态快照为状态 30：67、状态 50：5、状态 60：27、状态
+70：1。首批曾领取 12 个节点，但其中 7 个完成后，执行器仍等待余下 5 个长任务，67 个等待
+节点没有利用已经释放的 7 个槽位。根因是旧 `run_once()` 对整个 reservation 批次执行一次
+`gather`，形成批次屏障；该候选解决了死锁与 fatal，但尚未兑现“任一槽位释放后继续领取”。
+
+后续修复把节点执行器改为有界在途协程池，使用 `FIRST_COMPLETED` 在单槽位结束时立即补位；
+最后一个在途节点结束后返回 runtime，避免额外空租约探测。新增回归证明一个慢节点仍运行时，
+短节点释放的槽位可以启动第三个节点；取消执行器会取消在途调用并释放其租约。修改后的
+Orchestrator 定向测试为 `20 passed`、全量测试为 `95 passed`，Ruff、strict Mypy、
+`compileall`、应用导入和 `git diff --check` 均通过。该实现仍须形成新候选 SHA 并在目标机
+重新执行远端门禁。
+
 ## 提交前实现复审
 
 - `NodeExecutor` 先对去重后的 capability 规划 `node_concurrency` 槽位，单一能力可使用全部
@@ -181,7 +201,7 @@ readiness 返回“只有处理中节点可以合并进度”。本次失败未�
 | strict Mypy | 通过 | 1 |
 | `compileall` 及四服务 `app.main:app` 导入 | 通过 | 1 |
 | Control 全量测试 | `25 passed` | 2 |
-| Orchestrator 全量测试 | `92 passed` | 2 |
+| Orchestrator 全量测试 | `95 passed` | 2 |
 | Vision Orchestrator 全量测试 | `47 passed` | 2 |
 | Online Gateway 全量测试 | `51 passed` | 2 |
 | 真实 PostgreSQL ASR/PPT/OCR 各100节点、16线程领取 | 通过，无重复 claim、无 `40P01` | 3 |

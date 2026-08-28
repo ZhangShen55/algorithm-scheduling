@@ -18,6 +18,7 @@
 - [x] 2.6 为能力级协调增加跨进程安全边界；如保留批量等待更新，使用 capability 级 PostgreSQL advisory transaction lock 或等价原子方案，不能只依赖进程内 `asyncio.Lock`。
 - [x] 2.7 保持 `ocr` 外层节点不占实例租约，每张 `ppt_image_id` 继续独立租约；OCR 暂时无容量时保留已完成单图并有界重排未完成工作项，不得把整个 PPT 任务立即写成 70。
 - [x] 2.8 运行 ASR、PPT Slice、PPT OCR 的调度单元测试，验证同节点不重复领取、容量不超卖、优先级保持、单能力 16 槽位、多能力轮转和单槽位异常隔离。
+- [x] 2.9 将 `NodeExecutor` 改为受 `worker.node_concurrency` 限制的在途任务池，任一槽位释放后立即补位；最后一个在途节点完成后禁止额外申请整轮空租约，取消时等待全部在途租约精确释放。
 
 ## 3. PostgreSQL 瞬时事务重试
 

@@ -89,17 +89,78 @@ class NodeExecutor:
         self._workspace_cleaner = workspace_cleaner
 
     async def run_once(self) -> int:
+        running: set[asyncio.Task[None]] = set()
+        completed = 0
+        pending_error: BaseException | None = None
+        try:
+            while True:
+                available_slots = self._concurrency - len(running)
+                if available_slots > 0 and pending_error is None:
+                    reservations, reservation_errors = await self._reserve_slots(
+                        available_slots
+                    )
+                    if reservation_errors:
+                        pending_error = reservation_errors[0]
+                        logger.warning(
+                            "部分能力批次领取失败，已领取槽位继续执行后再上报",
+                            extra={
+                                "failed_capability_batches": len(reservation_errors)
+                            },
+                        )
+                    running.update(
+                        asyncio.create_task(self._run_reservation(reservation))
+                        for reservation in reservations
+                    )
+
+                if not running:
+                    if pending_error is not None:
+                        raise pending_error
+                    return completed
+
+                done, waiting = await asyncio.wait(
+                    running,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                running = set(waiting)
+                execution_errors: list[BaseException] = []
+                for task in done:
+                    try:
+                        task.result()
+                    except BaseException as exc:  # noqa: BLE001 - 槽位异常需延迟上报
+                        execution_errors.append(exc)
+                    else:
+                        completed += 1
+                if execution_errors:
+                    pending_error = pending_error or execution_errors[0]
+                    logger.error(
+                        "部分节点槽位发生基础设施异常，其他在途槽位继续收敛",
+                        extra={"failed_slots": len(execution_errors)},
+                    )
+                if not running:
+                    if pending_error is not None:
+                        raise pending_error
+                    return completed
+        except asyncio.CancelledError:
+            for task in running:
+                task.cancel()
+            await asyncio.gather(*running, return_exceptions=True)
+            raise
+
+    async def _reserve_slots(
+        self,
+        limit: int,
+    ) -> tuple[list[NodeReservation], list[BaseException]]:
         capabilities = await asyncio.to_thread(
             self._repository.list_dispatch_capabilities
         )
-        if not capabilities:
-            return 0
+        if not capabilities or limit <= 0:
+            return [], []
         start = self._capability_cursor % len(capabilities)
         scheduled = tuple(
             capabilities[(start + index) % len(capabilities)]
-            for index in range(self._concurrency)
+            for index in range(limit)
         )
-        self._capability_cursor = (start + self._concurrency) % len(capabilities)
+        self._capability_cursor = (start + limit) % len(capabilities)
         slot_plan = Counter(scheduled)
         batches = await asyncio.gather(
             *(
@@ -119,28 +180,7 @@ class NodeExecutor:
             for reservation in batch
         ]
         errors = [batch for batch in batches if isinstance(batch, BaseException)]
-        if errors and not reservations:
-            raise errors[0]
-        if errors:
-            logger.warning(
-                "部分能力批次领取失败，其他槽位继续执行",
-                extra={"failed_capability_batches": len(errors)},
-            )
-        results = await asyncio.gather(
-            *(self._run_reservation(reservation) for reservation in reservations),
-            return_exceptions=True,
-        )
-        execution_errors = [
-            result for result in results if isinstance(result, BaseException)
-        ]
-        if execution_errors:
-            logger.error(
-                "部分节点槽位发生基础设施异常",
-                extra={"failed_slots": len(execution_errors)},
-            )
-            if len(execution_errors) == len(results):
-                raise execution_errors[0]
-        return len(reservations) - len(execution_errors)
+        return reservations, errors
 
     async def _run_reservation(self, reservation: NodeReservation) -> None:
         async with self._semaphore:

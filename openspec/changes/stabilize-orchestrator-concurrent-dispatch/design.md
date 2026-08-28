@@ -190,6 +190,24 @@ Orchestrator、Vision Orchestrator、Online Gateway 和 PPT 异步 keeper 使用
 
 清理不得执行宽泛 `docker system prune`、`docker image prune -a`、`docker container prune` 或 builder/buildx prune；不得删除 CUDA/Python 等基础镜像、当前发布镜像、未变更算子镜像、BuildKit 缓存、PostgreSQL/Redis/Kafka/MongoDB volume、模型、`/data/result`、Git 或历史报告。验证失败时不删除旧回滚镜像，而是停止新负载、保存证据并按旧完整 ID 回滚。
 
+### 10. 节点执行器使用有界在途任务池即时补位
+
+候选版本 `6350595e1a185c4c7c94c96049924ef95de90fd5` 恢复历史 ASR 队列后没有再出现
+PostgreSQL 死锁或关键循环退出，但暴露了第二个吞吐缺陷：`run_once()` 会等待同一批领取的
+全部节点完成后才开始下一次领取。长短任务混合时，首批 12 个节点陆续完成到只剩 5 个以后，
+其余槽位保持空闲，状态 30 的 67 个节点不能补位；这不是算子容量不足，而是批次屏障造成的
+调度器低利用率。
+
+`NodeExecutor` 因此维护最多 `worker.node_concurrency` 个在途协程，并使用
+`asyncio.FIRST_COMPLETED` 等待任一槽位结束。只要同轮仍有其他在途节点，释放的槽位就立即按
+capability 轮转游标补领；一个槽位的基础设施异常只停止继续补领新节点，已经运行的其他槽位
+继续收敛，之后再把原异常交给 supervisor 分类处理。最后一个在途节点结束后不再申请一整轮
+空租约探测，而是返回 runtime；当本轮确实执行过节点时，runtime 会立即调用下一轮，不引入
+固定轮询等待。
+
+取消 `run_once()` 时必须取消所有在途协程并等待其 `finally` 完成，确保已经取得的租约按既有
+幂等路径释放。该设计不新增媒体下载并发参数，也不改变节点槽位、算子容量或 A 服务合同。
+
 ## 风险与权衡
 
 - **风险：直接领取状态 30 会改变运维观察到的短暂状态序列。** → 保留整数状态和最终语义；测试只允许 `30 -> 40 -> 50` 的合法推进，不改变北向字典结构。
@@ -199,6 +217,9 @@ Orchestrator、Vision Orchestrator、Online Gateway 和 PPT 异步 keeper 使用
 - **风险：fatal 时让进程退出造成短暂全服务重启。** → 比永久 unhealthy 僵尸状态可恢复；Kafka 至少一次交付、Outbox、节点幂等和启动恢复负责重新推进。
 - **风险：租约续租重试过久导致容量超卖。** → 以最近确认 `expires_at` 和安全余量为硬边界，过界立即停止使用租约。
 - **风险：本变更与 `balance-operator-routing-by-live-load` 同时修改租约调用。** → 先基于当前已实现的公共最少负载选择完成本变更；不得回退 Redis 路由算法，合并前运行公共注册表与跨服务租约回归。
+- **风险：在途池持续补位可能让一次 `run_once()` 长时间不返回。** → 在途数量始终受
+  `node_concurrency` 限制；队列收敛或最后一个槽位完成后返回，取消路径等待租约释放，关键
+  循环仍由 runtime supervisor 监督。
 
 ## 迁移计划
 

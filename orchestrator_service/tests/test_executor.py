@@ -281,6 +281,89 @@ async def test_executor_uses_all_concurrency_slots_for_one_capability() -> None:
 
 
 @pytest.mark.asyncio
+async def test_executor_refills_released_slot_before_slowest_peer_finishes() -> None:
+    class QueueRepository(RecordingRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.nodes = [replace(_node(), id=node_id) for node_id in (11, 12, 13)]
+
+        def claim_ready_node(
+            self,
+            capability: str,
+            worker_id: str,
+        ) -> NodeRecord | None:
+            self.claimed.append((capability, worker_id))
+            return self.nodes.pop(0) if self.nodes else None
+
+    class UnevenAdapter(RecordingAdapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.release_slow = asyncio.Event()
+            self.replacement_started = asyncio.Event()
+
+        async def execute(
+            self,
+            service_url: str,
+            context: NodeExecutionContext,
+        ) -> NodeResultWrite:
+            if context.node_id == 11:
+                await self.release_slow.wait()
+            if context.node_id == 13:
+                self.replacement_started.set()
+            return await super().execute(service_url, context)
+
+    repository = QueueRepository()
+    adapter = UnevenAdapter()
+    executor = NodeExecutor(
+        repository,
+        LeaseAwareDispatcher(repository, RecordingLeaseClient()),
+        adapter,
+        worker_id="worker-refill",
+        concurrency=2,
+    )
+
+    execution = asyncio.create_task(executor.run_once())
+    await asyncio.wait_for(adapter.replacement_started.wait(), timeout=0.5)
+
+    assert execution.done() is False
+    adapter.release_slow.set()
+    assert await asyncio.wait_for(execution, timeout=0.5) == 3
+    assert [context.node_id for _, context in adapter.calls] == [12, 13, 11]
+
+
+@pytest.mark.asyncio
+async def test_executor_cancellation_cancels_slot_and_releases_lease() -> None:
+    class BlockingAdapter(RecordingAdapter):
+        async def execute(
+            self,
+            service_url: str,
+            context: NodeExecutionContext,
+        ) -> NodeResultWrite:
+            del service_url, context
+            await asyncio.Event().wait()
+            raise AssertionError("取消后不应继续执行")
+
+    repository = RecordingRepository(node=_node())
+    leases = RecordingLeaseClient()
+    executor = NodeExecutor(
+        repository,
+        LeaseAwareDispatcher(repository, leases),
+        BlockingAdapter(),
+        worker_id="worker-cancel",
+        concurrency=1,
+    )
+
+    execution = asyncio.create_task(executor.run_once())
+    while not leases.bound:
+        await asyncio.sleep(0)
+    execution.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await execution
+    assert leases.released == ["lease-001"]
+
+
+@pytest.mark.asyncio
 async def test_executor_rotates_concurrency_slots_across_capabilities() -> None:
     class MultiCapabilityRepository(RecordingRepository):
         def list_dispatch_capabilities(self) -> list[str]:
