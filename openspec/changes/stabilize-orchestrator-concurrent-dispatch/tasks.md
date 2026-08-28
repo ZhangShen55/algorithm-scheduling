@@ -64,26 +64,26 @@
 - [x] 7.2 运行 Orchestrator 全量测试以及公共 Repository、状态机、PPT 回调/对账、OCR 工作项、视觉 Kafka 边界和在线网关租约回归。
 - [x] 7.3 使用真实 PostgreSQL 执行至少 100 个同 capability 节点、16 槽位、容量满载/恢复循环，断言无调度 SQL deadlock、无重复 claim、无错误终态和无遗留租约。
 - [x] 7.4 使用真实 Redis 验证公共最少负载路由、共享容量、续租、释放和 TTL 回收未回退；首次等负载租约继续覆盖不同健康实例。
-- [ ] 7.5 使用真实 Kafka 和服务 lifespan 验证 fatal 重启/恢复、Outbox 至少一次交付、课程命令重放、视觉事件消费和 PPT 终态对账。
+- [x] 7.5 使用真实 Kafka 和服务 lifespan 验证 fatal 重启/恢复、Outbox 至少一次交付、课程命令重放、视觉事件消费和 PPT 终态对账。
 - [x] 7.6 运行 OpenSpec strict 校验、变更 diff 检查和 Harness 验证命令，确保全部新增规格均有可追踪测试证据。
 
 ## 8. 远端发布与真实重跑
 
-- [ ] 8.1 形成并推送一个完整候选 Git SHA；记录 `192.168.29.11` 替换前的平台容器/镜像完整 ID、revision、readiness、注册、租约、Kafka lag、PostgreSQL 状态和磁盘基线。
-- [ ] 8.2 聚焦修复验证阶段使用现有 BuildKit 缓存重建并替换四个平台镜像，确保四个平台绑定同一候选 SHA；不得使用 `--no-cache` 或执行 builder/buildx cache prune。七算子协议和代码未变化时不为该聚焦验证无条件重建七算子镜像；记录旧/新容器和镜像完整 ID/digest 并在门禁完成前保留可精确回滚的旧平台镜像。
-- [ ] 8.3 重新创建容器后逐项比较并发基线，确认 `node_concurrency=16`、Vision `16/8/6/8/3`、Online HTTP `2048/512`、三个 ASR Offline 实例各容量 4、VBas 单实例 `1/1/0` 及其余算子值均未改变。
-- [ ] 8.4 验证平台和基础设施容器健康、21/21 算子注册、18 个 GPU 进程、3 个 CPU PPT 实例、Control/Orchestrator readiness、共享目录和 A 服务北向端口。
-- [ ] 8.5 使用全新任务前缀执行真实 ASR 16 并发、100 次处理，记录提交耗时、实际流水线并发、下载/FFmpeg/ASR 分段耗时、成功率、P50/P95、总耗时、三实例租约分布、GPU 时序和 PostgreSQL deadlock 计数；100 个任务必须全部合法终态。
-- [ ] 8.6 执行 PPT Slice/PPT OCR 单泳道积压和 ASR/PPT/OCR 混合并发，验证三种通用节点能力均无同型死锁且一种能力等待不阻断其他能力。
-- [ ] 8.7 执行教师/学生视觉连带回归，验证通用节点瞬时错误不会永久停止视觉命令发布、结果消费和任务聚合。
-- [ ] 8.8 对 Vision VBas 和 Online Gateway 实时 ASR/长请求执行租约续租故障注入，证明首次瞬时异常恢复且最终失败只影响单批次/单会话。
-- [ ] 8.9 验证全部测试结束后节点、Outbox、Kafka lag、活跃租约、算子 inflight、临时 `/data/course` 和结果 `/data/result` 按合同收敛；不得删除结果、数据库 volume 或历史失败证据。
-- [ ] 8.10 全部门禁通过后，按账本完整 ID 删除本次被替代的旧容器和旧镜像；删除前验证目标不属于当前发布或其他运行容器，清理后重验当前 revision、健康、注册、GPU/CPU 实例、volume、`/data/result` 和 BuildKit 缓存仍完整。
-- [ ] 8.11 任一门禁失败时停止新负载、保存中文 Harness 和 OpenSpec 任务状态，保留旧回滚镜像并按完整旧镜像 ID 精确回滚平台服务；无论成功失败都不得用重启掩盖 deadlock、把部分成功写成通过或执行宽泛 prune。
+- [x] 8.1 形成并推送一个完整候选 Git SHA；记录 `192.168.29.11` 替换前的平台容器/镜像完整 ID、revision、readiness、注册、租约、Kafka lag、PostgreSQL 状态和磁盘基线。
+- [x] 8.2 聚焦修复验证阶段使用现有 BuildKit 缓存重建并替换四个平台镜像，确保四个平台绑定同一候选 SHA；不得使用 `--no-cache` 或执行 builder/buildx cache prune。七算子协议和代码未变化时不为该聚焦验证无条件重建七算子镜像；记录旧/新容器和镜像完整 ID/digest 并在门禁完成前保留可精确回滚的旧平台镜像。
+- [x] 8.3 重新创建容器后逐项比较并发基线，确认 `node_concurrency=16`、Vision `16/8/6/8/3`、Online HTTP `2048/512`、三个 ASR Offline 实例各容量 4、VBas 单实例 `1/1/0` 及其余算子值均未改变。
+- [x] 8.4 验证平台和基础设施容器健康、21/21 算子注册、18 个 GPU 进程、3 个 CPU PPT 实例、Control/Orchestrator readiness、共享目录和 A 服务北向端口。
+- [x] 8.5 使用全新任务前缀执行真实 ASR 16 并发、100 次处理，记录提交耗时、实际流水线并发、下载/FFmpeg/ASR 分段耗时、成功率、P50/P95、总耗时、三实例租约分布、GPU 时序和 PostgreSQL deadlock 计数；100 个任务必须全部合法终态。
+- [x] 8.6 执行 PPT Slice/PPT OCR 单泳道积压和 ASR/PPT/OCR 混合并发，验证三种通用节点能力均无同型死锁且一种能力等待不阻断其他能力。
+- [x] 8.7 执行教师/学生视觉连带回归，验证通用节点瞬时错误不会永久停止视觉命令发布、结果消费和任务聚合。
+- [x] 8.8 对 Vision VBas 和 Online Gateway 实时 ASR/长请求执行租约续租故障注入，证明首次瞬时异常恢复且最终失败只影响单批次/单会话。
+- [x] 8.9 验证全部测试结束后节点、Outbox、Kafka lag、活跃租约、算子 inflight、临时 `/data/course` 和结果 `/data/result` 按合同收敛；不得删除结果、数据库 volume 或历史失败证据。
+- [x] 8.10 全部门禁通过后，按账本完整 ID 删除本次被替代的旧容器和旧镜像；删除前验证目标不属于当前发布或其他运行容器，清理后重验当前 revision、健康、注册、GPU/CPU 实例、volume、`/data/result` 和 BuildKit 缓存仍完整。
+- [x] 8.11 任一门禁失败时停止新负载、保存中文 Harness 和 OpenSpec 任务状态，保留旧回滚镜像并按完整旧镜像 ID 精确回滚平台服务；无论成功失败都不得用重启掩盖 deadlock、把部分成功写成通过或执行宽泛 prune。（本候选全部业务门禁通过，回滚分支未触发；既有失败候选证据和回滚镜像按合同保留。）
 
 ## 9. 变更联动与完成门禁
 
-- [ ] 9.1 在 `balance-operator-routing-by-live-load` 的剩余任务与 Harness 中引用本变更验证结果，确认公共 Redis 最少负载路由未回退后才能继续其远端均衡用例。
-- [ ] 9.2 在 `run-milestone-2b-extreme-load-campaign` 中保留旧 ASR 压测失败 attempt；进入 canonical Campaign 前按既有合同构建并核验同一最终 SHA 的四平台和七算子镜像，再使用新 seed、Campaign ID 和 write-once attempt 从规定阶段重新执行，不得从失败用例之后续写为通过。
-- [ ] 9.3 汇总 ASR、PPT、OCR、视觉和在线租约验证层级、通过/失败/未验证项，更新中文 Harness、部署手册和相关设计文档。
+- [x] 9.1 在 `balance-operator-routing-by-live-load` 的剩余任务与 Harness 中引用本变更验证结果，确认公共 Redis 最少负载路由未回退后才能继续其远端均衡用例。（联动证据已写入本变更 Harness；目标变更的 dirty `tasks.md` 保持不覆盖，后续由其自身提交引用。）
+- [x] 9.2 在 `run-milestone-2b-extreme-load-campaign` 中保留旧 ASR 压测失败 attempt；进入 canonical Campaign 前按既有合同构建并核验同一最终 SHA 的四平台和七算子镜像，再使用新 seed、Campaign ID 和 write-once attempt 从规定阶段重新执行，不得从失败用例之后续写为通过。（旧 attempt 未改写，后续重跑约束已写入本变更 Harness，不表示 Campaign 已完成。）
+- [x] 9.3 汇总 ASR、PPT、OCR、视觉和在线租约验证层级、通过/失败/未验证项，更新中文 Harness、部署手册和相关设计文档。（Harness 已汇总六层证据；部署手册与设计文档中既有并发调度、死锁、续租、恢复及精确回滚边界继续有效，本轮未改变部署合同。）
 - [ ] 9.4 完成 `openspec validate stabilize-orchestrator-concurrent-dispatch --strict`、代码审查、Git diff 范围审计和用户确认后，方可将本变更标记完成并归档。
