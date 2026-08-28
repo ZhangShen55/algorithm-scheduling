@@ -68,6 +68,7 @@ class RecordingRepository:
         self.completed: list[tuple[int, NodeResultWrite, str]] = []
         self.aggregated: list[int] = []
         self.capabilities_aggregated: list[str] = []
+        self.progress_patches: list[tuple[int, dict[str, object], str]] = []
 
     def list_dispatch_capabilities(self) -> list[str]:
         return ["asr_offline"]
@@ -84,6 +85,10 @@ class RecordingRepository:
         self.capabilities_aggregated.append(capability)
         return [_task_type()]
 
+    def coordinate_capability_waiting(self, capability: str) -> list[int]:
+        self.deferred.append(capability)
+        return [7]
+
     def claim_ready_node(self, capability: str, worker_id: str) -> NodeRecord | None:
         self.claimed.append((capability, worker_id))
         selected, self.node = self.node, None
@@ -92,6 +97,16 @@ class RecordingRepository:
     def get_task_type(self, course_task_type_id: int) -> TaskTypeRecord:
         assert course_task_type_id == 7
         return _task_type()
+
+    def merge_node_progress(
+        self,
+        node_id: int,
+        progress_patch: dict[str, object],
+        *,
+        reason: str,
+    ) -> NodeRecord:
+        self.progress_patches.append((node_id, progress_patch, reason))
+        return replace(_node(), id=node_id, progress=dict(progress_patch), reason=reason)
 
     def transition_node(self, node_id: int, status: NodeStatus, reason: str) -> NodeRecord:
         self.transitions.append((node_id, status, reason))
@@ -300,7 +315,7 @@ async def test_dispatcher_defers_nodes_without_claiming_when_capacity_is_unavail
 
     assert reservation is None
     assert repository.deferred == ["asr_offline"]
-    assert repository.capabilities_aggregated == ["asr_offline"]
+    assert repository.aggregated == [7]
     assert repository.claimed == []
     assert leases.released == []
 
@@ -314,10 +329,89 @@ async def test_dispatcher_releases_lease_when_no_node_is_ready() -> None:
     reservation = await dispatcher.reserve_next("asr_offline", "worker-a")
 
     assert reservation is None
-    assert repository.resumed == ["asr_offline"]
+    assert repository.resumed == []
     assert repository.claimed == [("asr_offline", "worker-a")]
     assert leases.released == ["lease-001"]
     assert leases.bound == []
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_coordinates_capacity_waiting_once_per_capability_batch() -> None:
+    repository = RecordingRepository(node=_node())
+    leases = RecordingLeaseClient(unavailable=True)
+    dispatcher = LeaseAwareDispatcher(repository, leases)
+
+    reservations = await dispatcher.reserve_many(
+        "asr_offline",
+        "worker-a",
+        limit=16,
+    )
+
+    assert reservations == []
+    assert leases.acquired == ["asr_offline"] * 16
+    assert repository.deferred == ["asr_offline"]
+    assert repository.aggregated == [7]
+    assert repository.resumed == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capability", ("asr_offline", "ppt_slice"))
+async def test_dispatcher_batch_does_not_repeat_global_resume_or_aggregate(
+    capability: str,
+) -> None:
+    class QueueRepository(RecordingRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.nodes = [replace(_node(), id=node_id) for node_id in range(1, 17)]
+
+        def claim_ready_node(
+            self,
+            capability: str,
+            worker_id: str,
+        ) -> NodeRecord | None:
+            self.claimed.append((capability, worker_id))
+            return self.nodes.pop() if self.nodes else None
+
+    repository = QueueRepository()
+    dispatcher = LeaseAwareDispatcher(repository, RecordingLeaseClient())
+
+    reservations = await dispatcher.reserve_many(capability, "worker-a", limit=16)
+
+    assert len(reservations) == 16
+    assert repository.resumed == []
+    assert repository.capabilities_aggregated == []
+    assert repository.deferred == []
+
+
+@pytest.mark.asyncio
+async def test_ocr_batch_claims_each_outer_node_without_operator_lease() -> None:
+    class OcrQueueRepository(RecordingRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.nodes = [replace(_node(), id=node_id) for node_id in range(1, 17)]
+
+        def claim_ready_node(
+            self,
+            capability: str,
+            worker_id: str,
+        ) -> NodeRecord | None:
+            self.claimed.append((capability, worker_id))
+            return self.nodes.pop() if self.nodes else None
+
+    repository = OcrQueueRepository()
+    leases = RecordingLeaseClient()
+
+    reservations = await LeaseAwareDispatcher(repository, leases).reserve_many(
+        "ocr",
+        "worker-a",
+        limit=16,
+    )
+
+    assert len(reservations) == 16
+    assert all(item.lease is None for item in reservations)
+    assert leases.acquired == []
+    assert repository.resumed == []
+    assert repository.capabilities_aggregated == []
 
 
 @pytest.mark.asyncio

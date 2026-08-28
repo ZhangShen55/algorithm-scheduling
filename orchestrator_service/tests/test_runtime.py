@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 import pytest
+from aiokafka.errors import KafkaConnectionError
 from fastapi.testclient import TestClient
 
 from orchestrator_service.app.application.factory import create_app
@@ -32,6 +33,10 @@ class FakeRepository:
         raise AssertionError(args)
 
     def list_dispatch_capabilities(self) -> list[str]:
+        return []
+
+    def list_stale_claimed_nodes(self, claimed_before: object) -> list[Any]:
+        del claimed_before
         return []
 
     def list_running_ppt_slice_nodes(self) -> list[Any]:
@@ -88,11 +93,13 @@ class FakeConsumer:
         poll_error: Exception | None = None,
         lag_error: Exception | None = None,
         messages: list[KafkaMessage] | None = None,
+        poll_errors: list[Exception] | None = None,
     ) -> None:
         self.events = events
         self.poll_error = poll_error
         self.lag_error = lag_error
         self.messages = list(messages or [])
+        self.poll_errors = list(poll_errors or [])
         self.started = False
         self.stopped = False
         self.committed: list[KafkaMessage] = []
@@ -107,6 +114,8 @@ class FakeConsumer:
 
     async def poll(self, *, timeout_seconds: float) -> list[KafkaMessage]:
         await asyncio.sleep(min(timeout_seconds, 0.01))
+        if self.poll_errors:
+            raise self.poll_errors.pop(0)
         if self.poll_error is not None:
             raise self.poll_error
         messages, self.messages = self.messages, []
@@ -188,6 +197,8 @@ def _settings(tmp_path: Path) -> OrchestratorSettings:
             "worker": {
                 "claim_poll_interval_seconds": 0.02,
                 "shutdown_timeout_seconds": 1.0,
+                "transient_error_base_delay_seconds": 0.01,
+                "transient_error_max_delay_seconds": 0.02,
             },
             "readiness": {"dependency_timeout_seconds": 0.5},
         }
@@ -277,6 +288,33 @@ def test_readiness_reports_required_loop_failure(tmp_path: Path) -> None:
         assert "Kafka 消费循环异常" in str(readiness.json())
 
 
+def test_lifespan_supervisor_recovers_transient_course_consumer_failure(
+    tmp_path: Path,
+) -> None:
+    runtime, _, _ = _runtime(
+        tmp_path,
+        consumer_factory=lambda events: FakeConsumer(
+            events,
+            poll_errors=[KafkaConnectionError("Kafka 暂时不可用")],
+        ),
+    )
+    app = create_app(_settings(tmp_path), runtime=runtime)
+
+    with TestClient(app) as client:
+        for _ in range(100):
+            report = client.get("/ops/readiness")
+            state = report.json()["checks"]["course_consumer"]
+            if state["recoveries"] >= 1:
+                break
+            time.sleep(0.01)
+
+        assert report.status_code == 200
+        assert state["state"] == "running"
+        assert state["transient_retries"] == 1
+        assert state["recoveries"] == 1
+        assert state["last_recovered_at"] is not None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ("acquire", "release"))
 async def test_executor_polling_retries_transient_control_transport_errors(
@@ -364,6 +402,37 @@ def test_readiness_reports_kafka_dependency_failure(tmp_path: Path) -> None:
         assert kafka_check["ready"] is False
         assert "依赖检查失败" in kafka_check["detail"]
         assert "Kafka 依赖不可用" in kafka_check["detail"]
+
+
+@pytest.mark.asyncio
+async def test_supervisor_recovers_transient_loop_and_records_recovery_time(
+    tmp_path: Path,
+) -> None:
+    runtime, _, _ = _runtime(tmp_path)
+    request = httpx.Request("GET", "http://control/health")
+    calls = 0
+    resumed = asyncio.Event()
+
+    async def runner() -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.ConnectError("control 暂时不可用", request=request)
+        resumed.set()
+        await runtime.stop_event.wait()
+
+    task = asyncio.create_task(runtime._supervise_loop("course_consumer", runner))
+    await asyncio.wait_for(resumed.wait(), timeout=0.5)
+
+    state = runtime.loop_states["course_consumer"]
+    assert state["state"] == "running"
+    assert state["transient_retries"] == 1
+    assert state["recoveries"] == 1
+    assert isinstance(state["last_recovered_at"], str)
+    assert state["last_transient_error"] is None
+
+    runtime.stop_event.set()
+    await asyncio.wait_for(task, timeout=0.5)
 
 
 def test_start_validates_required_topics_when_auto_creation_is_disabled(

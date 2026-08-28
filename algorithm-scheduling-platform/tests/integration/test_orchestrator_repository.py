@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier
 from typing import TYPE_CHECKING
@@ -14,12 +15,14 @@ from orchestrator_service.app.infrastructure.ppt_slice import (
     PptSliceTerminalCallback,
     PptSliceTerminalHandler,
 )
-from sqlalchemy import Engine, text
+from sqlalchemy import Connection, Engine, text
 
 from packages.platform_common.repository import (
     CourseRepository,
     NodeResultWrite,
+    PostgresRetryPolicy,
     TaskTypeWrite,
+    TransientInfrastructureError,
 )
 from packages.platform_contracts.status import NodeStatus, Priority, TaskType
 
@@ -280,3 +283,180 @@ def test_capability_state_changes_are_aggregated_for_affected_tasks(
 
     assert resumed[0].status is NodeStatus.PENDING
     assert resumed[0].reason == "等待节点处理: ASR_TRANSCRIPTION"
+
+
+def test_capability_level_wait_coordination_and_claims_do_not_deadlock(
+    repository: CourseRepository,
+) -> None:
+    task_type_ids: set[int] = set()
+    node_ids: set[int] = set()
+    for index in range(100):
+        task_type_id, created_node_ids = _create_asr_pipeline(
+            repository,
+            task_id=f"course-concurrent-asr-{index}",
+            priority=Priority.URGENT if index < 10 else Priority.NORMAL,
+        )
+        task_type_ids.add(task_type_id)
+        node_ids.update(created_node_ids)
+
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        coordinated = list(
+            executor.map(
+                lambda _: repository.coordinate_capability_waiting("asr_offline"),
+                range(16),
+            )
+        )
+
+    affected = {item for batch in coordinated for item in batch}
+    assert affected == task_type_ids
+    assert sum(bool(batch) for batch in coordinated) == 1
+
+    for task_type_id in sorted(affected):
+        state = repository.aggregate_task_type_state(task_type_id)
+        assert state.status is NodeStatus.WAITING_OPERATOR
+
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        claimed = list(
+            executor.map(
+                lambda index: repository.claim_ready_node(
+                    "asr_offline",
+                    f"worker-{index % 16}",
+                ),
+                range(100),
+            )
+        )
+
+    claimed_ids = {node.id for node in claimed if node is not None}
+    assert claimed_ids == node_ids
+    assert all(node is not None and node.status is NodeStatus.QUEUED for node in claimed)
+
+
+@pytest.mark.parametrize("sqlstate", ("40P01", "40001"))
+def test_real_postgres_retry_uses_fresh_transaction_then_recovers(
+    database_engine: Engine,
+    sqlstate: str,
+) -> None:
+    repository = CourseRepository(
+        database_engine,
+        postgres_retry=PostgresRetryPolicy(
+            max_attempts=3,
+            base_delay_seconds=0,
+            max_delay_seconds=0,
+            jitter_ratio=0,
+        ),
+    )
+    attempts = 0
+
+    def operation(connection: Connection) -> int:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            connection.execute(
+                text(
+                    "DO $$ BEGIN "
+                    "RAISE EXCEPTION '受控事务故障注入' USING ERRCODE = '"
+                    + sqlstate
+                    + "'; END $$"
+                )
+            )
+        return int(connection.execute(text("SELECT 1")).scalar_one())
+
+    assert repository._run_retryable_transaction("real-postgres", operation) == 1
+    assert attempts == 2
+
+
+def test_real_postgres_retry_exhaustion_and_non_retryable_error_are_distinct(
+    database_engine: Engine,
+) -> None:
+    repository = CourseRepository(
+        database_engine,
+        postgres_retry=PostgresRetryPolicy(
+            max_attempts=2,
+            base_delay_seconds=0,
+            max_delay_seconds=0,
+            jitter_ratio=0,
+        ),
+    )
+
+    def force(sqlstate: str):
+        def operation(connection: Connection) -> None:
+            connection.execute(
+                text(
+                    "DO $$ BEGIN "
+                    "RAISE EXCEPTION '受控事务故障注入' USING ERRCODE = '"
+                    + sqlstate
+                    + "'; END $$"
+                )
+            )
+
+        return operation
+
+    with pytest.raises(TransientInfrastructureError) as transient:
+        repository._run_retryable_transaction(
+            "real-postgres-exhausted",
+            force("40P01"),
+        )
+    assert transient.value.attempts == 2
+    assert transient.value.sqlstate == "40P01"
+
+    with pytest.raises(Exception) as non_retryable:
+        repository._run_retryable_transaction(
+            "real-postgres-non-retryable",
+            force("23505"),
+        )
+    assert not isinstance(non_retryable.value, TransientInfrastructureError)
+
+
+def test_real_postgres_stale_recovery_preserves_attempt_and_excludes_ppt(
+    repository: CourseRepository,
+    database_engine: Engine,
+) -> None:
+    asr_task_type_id, _ = _create_asr_pipeline(
+        repository,
+        task_id="course-stale-asr",
+    )
+    asr = repository.claim_ready_node("asr_offline", "dead-worker")
+    assert asr is not None
+    repository.transition_node(asr.id, NodeStatus.RUNNING, "ASR 运行中")
+
+    ppt_task_type = repository.create_task_types(
+        task_id="course-stale-ppt",
+        writes=[TaskTypeWrite(task_type=TaskType.PPT)],
+    )[0]
+    ppt_nodes = repository.initialize_pipeline(
+        "course-stale-ppt",
+        TaskType.PPT,
+        pipeline_nodes(TaskType.PPT, Priority.NORMAL),
+    )
+    ppt_slice = next(node for node in ppt_nodes if node.node_code == "PPT_SLICE")
+    claimed_ppt = repository.claim_ready_node("ppt_slice", "dead-worker")
+    assert claimed_ppt is not None and claimed_ppt.id == ppt_slice.id
+    repository.transition_node(ppt_slice.id, NodeStatus.RUNNING, "PPT 后台处理中")
+
+    with database_engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE task_nodes SET claimed_at = now() - interval '10 minutes' "
+                "WHERE id IN (:asr_id, :ppt_id)"
+            ),
+            {"asr_id": asr.id, "ppt_id": ppt_slice.id},
+        )
+
+    claimed_before = datetime.now(UTC) - timedelta(minutes=5)
+    stale = repository.list_stale_claimed_nodes(claimed_before)
+    assert [node.id for node in stale] == [asr.id]
+    attempt_before = repository.get_node(asr.id).attempt
+
+    assert repository.recover_stale_claimed_node(
+        asr.id,
+        claimed_before=claimed_before,
+        reason="受控恢复",
+    )
+    recovered = repository.get_node(asr.id)
+    assert recovered.status is NodeStatus.WAITING_OPERATOR
+    assert recovered.attempt == attempt_before
+    assert recovered.claimed_by is None
+    assert recovered.claim_token is None
+    assert repository.get_node(ppt_slice.id).status is NodeStatus.RUNNING
+    assert repository.get_task_type(asr_task_type_id).task_id == "course-stale-asr"
+    assert repository.get_task_type(ppt_task_type.id).task_id == "course-stale-ppt"

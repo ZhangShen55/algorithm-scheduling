@@ -41,6 +41,11 @@ def test_metrics_endpoint_exposes_required_platform_dimensions(tmp_path: Path) -
         elapsed_seconds=0.25,
         success=False,
     )
+    metrics.record_postgres_transaction_event(
+        operation="claim_ready_node",
+        sqlstate="40P01",
+        outcome="recovered",
+    )
     metrics.update_disk_usage(tmp_path / "course", kind="course")
 
     with TestClient(app) as client:
@@ -61,6 +66,10 @@ def test_metrics_endpoint_exposes_required_platform_dimensions(tmp_path: Path) -
     )
     assert "algorithm_operator_request_latency_seconds" in body
     assert "algorithm_operator_request_errors_total" in body
+    assert (
+        'algorithm_postgres_transaction_events_total{operation="claim_ready_node",'
+        'outcome="recovered",sqlstate="40P01"} 1.0' in body
+    )
     assert 'kind="course"' in body
 
 

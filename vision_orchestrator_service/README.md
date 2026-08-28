@@ -47,6 +47,9 @@ offset。若数据库已完成但终态事件发布中断，重投命令只会�
 Kafka offset，按 `worker.poll_interval_seconds` 原地重试；该等待不会让 Consumer 退出，因此 `/ready`
 仍保持就绪。关闭服务会中止等待且不提交未完成消息。HTTP `400/401`、租约响应非法等非容量错误
 仍会让后台循环失败并由 `/ready` 暴露。VBas 的学生、教师和头部姿态能力共享同一实例容量池。
+`[lease_renewal]` 允许同一 lease_id 在 TTL 安全窗口内对瞬时读取、连接或受控 5xx 有限重试；
+首次 `ReadError` 恢复时原批次继续，最终确认丢失只影响当前批次，不停止其他课程。释放 404
+视为幂等成功，瞬时释放结果不确定时记录日志并由 TTL 回收。
 
 容器镜像安装 `ffmpeg/ffprobe`。本地启动前也必须保证这两个命令可执行，并确保
 PostgreSQL 迁移、Kafka 视觉主题和 Control Service 已就绪。VBas 可以后启动，但它注册且有容量前

@@ -11,6 +11,10 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
+from redis.exceptions import RedisError
+from sqlalchemy.exc import SQLAlchemyError
+
 from packages.platform_common.application import create_service_app
 from packages.platform_common.config import PlatformSettings
 from packages.platform_common.operator_audit_repository import OperatorInstanceEvent
@@ -20,6 +24,7 @@ from packages.platform_common.operator_operations import (
     build_operator_capacity_snapshot,
 )
 from packages.platform_common.operator_registry import (
+    ActiveCapacityLease,
     CapacityLease,
     CapacityLeaseContextConflictError,
     CapacityLeaseNotFoundError,
@@ -40,9 +45,6 @@ from packages.platform_common.repository import (
 )
 from packages.platform_contracts.responses import BusinessCode, BusinessResponse
 from packages.platform_contracts.status import Priority, TaskType, status_text
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
-from redis.exceptions import RedisError
-from sqlalchemy.exc import SQLAlchemyError
 
 from ..infrastructure.audited_operator_registry import canonical_operator_origin
 from ..infrastructure.runtime import ControlReadinessChecker, ControlRuntime
@@ -673,6 +675,24 @@ def create_control_app(
             ) from exc
         except REGISTRY_INFRASTRUCTURE_ERRORS as exc:
             raise _registry_unavailable() from exc
+
+    @app.get("/internal/operator-instances/lease/{lease_id}")
+    def inspect_internal_capacity_lease(
+        lease_id: str,
+        request: Request,
+    ) -> ActiveCapacityLease:
+        """供崩溃恢复器确认原节点租约；不续期，也不改变容量归属。"""
+
+        try:
+            registry = _operator_registry(request)
+            for instance in registry.list_instances():
+                active = registry.list_active_leases(instance.instance_id)
+                for lease in active.leases:
+                    if lease.lease_id == lease_id:
+                        return lease
+        except REGISTRY_INFRASTRUCTURE_ERRORS as exc:
+            raise _registry_unavailable() from exc
+        raise HTTPException(status_code=404, detail=f"容量租约不存在: {lease_id}")
 
     @app.get("/ops/course-jobs/{task_id}")
     def inspect_course_job(task_id: str, request: Request) -> dict[str, Any]:

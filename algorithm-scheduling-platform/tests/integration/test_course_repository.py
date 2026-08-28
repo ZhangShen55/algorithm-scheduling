@@ -621,6 +621,48 @@ def test_concurrent_ready_node_claims_do_not_overlap(repository: CourseRepositor
     assert all(node is not None and node.status is NodeStatus.QUEUED for node in claimed)
 
 
+@pytest.mark.parametrize("capability", ("asr_offline", "ppt_slice", "ocr"))
+def test_concurrent_claims_use_ready_and_waiting_nodes_without_overlap(
+    repository: CourseRepository,
+    capability: str,
+) -> None:
+    node_ids: set[int] = set()
+    for index in range(100):
+        task_type = repository.create_task_types(
+            task_id=f"claim-batch-{capability}-{index}",
+            writes=[TaskTypeWrite(task_type=TaskType.ASR)],
+        )[0]
+        node = repository.create_node(
+            course_task_type_id=task_type.id,
+            node_code=f"NODE_{index}",
+            status=(
+                NodeStatus.PENDING
+                if index % 2 == 0
+                else NodeStatus.WAITING_OPERATOR
+            ),
+            priority=Priority.URGENT if index < 10 else Priority.NORMAL,
+            reason="并发领取回归测试",
+            required_capability=capability,
+        )
+        node_ids.add(node.id)
+
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        claimed = list(
+            executor.map(
+                lambda index: repository.claim_ready_node(
+                    capability,
+                    f"worker-{index % 16}",
+                ),
+                range(100),
+            )
+        )
+
+    assert all(node is not None for node in claimed)
+    claimed_ids = {node.id for node in claimed if node is not None}
+    assert claimed_ids == node_ids
+    assert len(claimed_ids) == 100
+
+
 def test_course_query_returns_only_persisted_task_types(repository: CourseRepository) -> None:
     repository.create_task_types(
         task_id="course-query",

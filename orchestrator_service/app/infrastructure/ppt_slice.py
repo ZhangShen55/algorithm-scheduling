@@ -6,12 +6,17 @@ import logging
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from packages.platform_common.lease_resilience import (
+    LeaseRenewalPolicy,
+    renew_lease_with_retry,
+)
 from packages.platform_common.repository import NodeResultWrite
 from packages.platform_common.state_machine import InvalidNodeTransition
 from packages.platform_contracts.status import NodeStatus
@@ -623,6 +628,7 @@ class PptCapacityLeaseKeeper:
         ttl_seconds: int,
         renew_interval_seconds: float,
         on_renewal_failure: Callable[[Exception], Awaitable[None]] | None = None,
+        renewal_policy: LeaseRenewalPolicy | None = None,
     ) -> None:
         if ttl_seconds <= 0 or renew_interval_seconds <= 0:
             raise ValueError("PPT 容量租约参数必须大于 0")
@@ -633,6 +639,12 @@ class PptCapacityLeaseKeeper:
         self._ttl_seconds = ttl_seconds
         self._renew_interval_seconds = renew_interval_seconds
         self._on_renewal_failure = on_renewal_failure
+        self._renewal_policy = renewal_policy or LeaseRenewalPolicy(
+            safety_margin_seconds=min(5.0, ttl_seconds / 2),
+        )
+        self._confirmed_expires_at = datetime.now(UTC) + timedelta(
+            seconds=ttl_seconds
+        )
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._released = False
@@ -655,9 +667,21 @@ class PptCapacityLeaseKeeper:
                 return
             except TimeoutError:
                 try:
-                    await self._client.renew(
-                        self._lease_id,
-                        ttl_seconds=self._ttl_seconds,
+                    renewed = await renew_lease_with_retry(
+                        lease_id=self._lease_id,
+                        confirmed_expires_at=self._confirmed_expires_at,
+                        renew=lambda: self._client.renew(
+                            self._lease_id,
+                            ttl_seconds=self._ttl_seconds,
+                        ),
+                        policy=self._renewal_policy,
+                    )
+                    expires_at = getattr(renewed, "expires_at", None)
+                    self._confirmed_expires_at = (
+                        expires_at
+                        if isinstance(expires_at, datetime)
+                        else datetime.now(UTC)
+                        + timedelta(seconds=self._ttl_seconds)
                     )
                 except Exception as exc:  # noqa: BLE001 - capacity client is a protocol
                     self._renewal_error = exc

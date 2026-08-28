@@ -65,6 +65,12 @@ stdout；默认单文件上限 100 MiB、归档保留 7 日，字段由各自根
 - 不能因为存在类或仅能通过健康检查的入口，就将运行时任务标记为完成。
 - `orchestrator-service`、`vision-orchestrator-service` 和 `online-gateway-service` 不得直接读取 Redis 注册表；必须使用 `control-service` 提供的租约。
 - 已接受的异步 PPT 租约在终态持久化之前不得释放；运行期间必须持续续租。
+- Orchestrator 普通节点必须从状态 10/30 原子领取；同一 capability 每轮只允许一次容量等待
+  协调。`worker.node_concurrency` 是节点槽位，不是下载并发或 GPU 推理并发。
+- PostgreSQL 只对 `40P01`、`40001` 短事务有限重试。普通 ASR/OCR 过期领取只有在超时且原
+  租约不存在时才能恢复到状态 30；`PPT_SLICE` 必须排除并沿确定性任务和 manifest 对账恢复。
+- Orchestrator、Vision Orchestrator、Online Gateway 和 PPT keeper 对同一 lease_id 的瞬时
+  续租错误必须在 TTL 安全窗口内有限重试；释放 404 为幂等成功，瞬时释放失败不得逆转业务终态。
 - 常规清理期间不得删除 `/data/result/{task_id}`。
 
 ## 里程碑 2B 部署合同

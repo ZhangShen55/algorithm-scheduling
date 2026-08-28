@@ -682,6 +682,34 @@ def test_capacity_lease_can_be_renewed(tmp_path: Path) -> None:
     assert response.json()["instance_id"] == "vbas-gpu0"
 
 
+def test_internal_capacity_lease_inspection_is_read_only_and_returns_404(
+    tmp_path: Path,
+) -> None:
+    registry = FakeOperatorRegistry()
+    registry.register(
+        OperatorInstance(
+            instance_id="vbas-gpu0",
+            operator_code=OperatorCode.VBAS,
+            capabilities=["teacher_behavior"],
+            service_url="http://127.0.0.1:19001",
+            declared_capacity=1,
+        )
+    )
+    settings = PlatformSettings(
+        course_root=tmp_path / "course",
+        result_root=tmp_path / "result",
+    )
+    app = create_control_app(operator_registry=registry, settings=settings)
+
+    with TestClient(app) as client:
+        active = client.get("/internal/operator-instances/lease/lease-001")
+        missing = client.get("/internal/operator-instances/lease/missing")
+
+    assert active.status_code == 200
+    assert active.json()["lease_id"] == "lease-001"
+    assert missing.status_code == 404
+
+
 def test_unknown_capacity_lease_renewal_returns_http_404(tmp_path: Path) -> None:
     registry = FakeOperatorRegistry()
     settings = PlatformSettings(course_root=tmp_path / "course", result_root=tmp_path / "result")
@@ -727,6 +755,7 @@ def test_unknown_capacity_lease_renewal_returns_http_404(tmp_path: Path) -> None
             "/internal/operator-instances/lease",
             {"capability": "teacher_behavior", "ttl_seconds": 60},
         ),
+        ("GET", "/internal/operator-instances/lease/lease-001", None),
         (
             "POST",
             "/internal/operator-instances/lease/context",

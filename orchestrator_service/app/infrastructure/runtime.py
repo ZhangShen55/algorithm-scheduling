@@ -1,14 +1,26 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable
+import logging
+import os
+import signal
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import partial
 from typing import Any, Protocol
 from uuid import uuid4
 
 import httpx
+from aiokafka.errors import (  # type: ignore[import-untyped]
+    KafkaConnectionError,
+    KafkaTimeoutError,
+    LeaderNotAvailableError,
+    NodeNotReadyError,
+    RequestTimedOutError,
+    StaleMetadata,
+)
 from fastapi import FastAPI
 from sqlalchemy import Engine, create_engine
 
@@ -18,14 +30,20 @@ from packages.platform_common.kafka import (
     KafkaMessage,
     KafkaTopicManager,
 )
+from packages.platform_common.lease_resilience import LeaseRenewalPolicy
 from packages.platform_common.media import FFprobeMediaInspector, MediaDownloader
-from packages.platform_common.repository import CourseRepository
+from packages.platform_common.repository import (
+    CourseRepository,
+    PostgresRetryPolicy,
+    TransientInfrastructureError,
+)
 
 from ..application.dispatcher import LeaseAwareDispatcher
 from ..application.executor import NodeExecutor
 from ..application.lifecycle import TerminalWorkspaceCleaner
 from ..application.outbox import OutboxPublisher
 from ..application.pipeline import PipelineInitializer
+from ..application.recovery import StaleNodeRecovery
 from ..application.vision_events import (
     VisualCommandPublisher,
     VisualEventConsumerLoop,
@@ -46,6 +64,32 @@ from .ppt_slice import (
     PptSliceTerminalHandler,
 )
 from .ppt_text import OcrAdapter, PptTextPipeline
+
+logger = logging.getLogger(__name__)
+
+TRANSIENT_LOOP_ERRORS = (
+    TransientInfrastructureError,
+    httpx.NetworkError,
+    httpx.TimeoutException,
+    KafkaConnectionError,
+    KafkaTimeoutError,
+    LeaderNotAvailableError,
+    NodeNotReadyError,
+    RequestTimedOutError,
+    StaleMetadata,
+)
+
+
+def _is_transient_loop_error(exc: BaseException) -> bool:
+    if isinstance(exc, TRANSIENT_LOOP_ERRORS):
+        return True
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {
+        429,
+        500,
+        502,
+        503,
+        504,
+    }
 
 
 class CourseConsumer(Protocol):
@@ -123,6 +167,8 @@ class OrchestratorRuntime:
         self.stop_event = asyncio.Event()
         self.tasks: dict[str, asyncio.Task[None]] = {}
         self.loop_errors: dict[str, str] = {}
+        self.loop_states: dict[str, dict[str, object]] = {}
+        self.fatal_exit_requested = False
         self._started = False
         self._producer_started = False
         self._consumer_started = False
@@ -196,7 +242,15 @@ class OrchestratorRuntime:
         )
         return OrchestratorResources(
             engine=engine,
-            repository=CourseRepository(engine),
+            repository=CourseRepository(
+                engine,
+                postgres_retry=PostgresRetryPolicy(
+                    max_attempts=settings.postgres_retry.max_attempts,
+                    base_delay_seconds=settings.postgres_retry.base_delay_seconds,
+                    max_delay_seconds=settings.postgres_retry.max_delay_seconds,
+                    jitter_ratio=settings.postgres_retry.jitter_ratio,
+                ),
+            ),
             http_client=http_client,
             producer=producer,
             consumer=consumer,
@@ -210,7 +264,29 @@ class OrchestratorRuntime:
             return
         self.stop_event = asyncio.Event()
         self.loop_errors.clear()
+        self.loop_states = {
+            name: {
+                "state": "starting",
+                "transient_retries": 0,
+                "recoveries": 0,
+                "last_transient_error": None,
+            }
+            for name in self.REQUIRED_LOOPS
+        }
+        self.fatal_exit_requested = False
         self.resources = self._resource_factory(self.settings)
+        retry_observer = getattr(
+            app.state.platform_metrics,
+            "record_postgres_transaction_event",
+            None,
+        )
+        set_retry_observer = getattr(
+            self.resources.repository,
+            "set_postgres_retry_observer",
+            None,
+        )
+        if callable(set_retry_observer):
+            set_retry_observer(retry_observer)
         try:
             if self.settings.kafka.ensure_topics:
                 await self.resources.topic_manager.ensure_topics()
@@ -247,6 +323,14 @@ class OrchestratorRuntime:
         lease_client = ControlLeaseClient(
             self.resources.http_client,
             default_ttl_seconds=self.settings.control.default_lease_ttl_seconds,
+            renewal_policy=LeaseRenewalPolicy(
+                max_attempts=self.settings.lease_renewal.max_attempts,
+                base_delay_seconds=self.settings.lease_renewal.base_delay_seconds,
+                max_delay_seconds=self.settings.lease_renewal.max_delay_seconds,
+                safety_margin_seconds=(
+                    self.settings.lease_renewal.safety_margin_seconds
+                ),
+            ),
         )
         dispatcher = LeaseAwareDispatcher(repository, lease_client)
         workspace_cleaner = (
@@ -301,6 +385,14 @@ class OrchestratorRuntime:
             lease_renew_interval_seconds=self.settings.ppt.lease_renew_interval_seconds,
             reconcile_interval_seconds=self.settings.ppt.reconcile_interval_seconds,
             workspace_cleaner=workspace_cleaner,
+            renewal_policy=LeaseRenewalPolicy(
+                max_attempts=self.settings.lease_renewal.max_attempts,
+                base_delay_seconds=self.settings.lease_renewal.base_delay_seconds,
+                max_delay_seconds=self.settings.lease_renewal.max_delay_seconds,
+                safety_margin_seconds=(
+                    self.settings.lease_renewal.safety_margin_seconds
+                ),
+            ),
         )
         self._ppt_coordinator = ppt_coordinator
         await ppt_coordinator.recover()
@@ -326,11 +418,15 @@ class OrchestratorRuntime:
             ppt_terminal_callback_path=self.settings.ppt.terminal_callback_path,
             ppt_slice_threshold=self.settings.ppt.slice_threshold,
         )
+        worker_id = (
+            self.settings.worker.worker_id
+            or f"orchestrator-{uuid4().hex[:12]}"
+        )
         executor = NodeExecutor(
             repository,
             dispatcher,
             adapter,
-            worker_id=self.settings.worker.worker_id or f"orchestrator-{uuid4().hex[:12]}",
+            worker_id=worker_id,
             concurrency=self.settings.worker.node_concurrency,
             operator_hard_timeout_seconds=max(
                 self.settings.asr.request_timeout_seconds,
@@ -339,6 +435,12 @@ class OrchestratorRuntime:
             ),
             async_node_coordinator=ppt_coordinator,
             workspace_cleaner=workspace_cleaner,
+        )
+        stale_node_recovery = StaleNodeRecovery(
+            repository,
+            lease_client,
+            timeout_seconds=self.settings.worker.stale_node_recovery_seconds,
+            current_worker_id=worker_id,
         )
         visual_coordinator = VisualNodeCoordinator(
             repository,
@@ -362,41 +464,62 @@ class OrchestratorRuntime:
             ),
             poll_timeout_seconds=self.settings.kafka.poll_timeout_seconds,
         )
+        runners: dict[str, Callable[[], Awaitable[None]]] = {
+            "outbox_publisher": partial(outbox.run, self.stop_event),
+            "course_consumer": partial(consumer_loop.run, self.stop_event),
+            "node_executor": partial(
+                self._run_executor,
+                executor,
+                stale_node_recovery,
+            ),
+            "visual_dispatcher": partial(
+                self._run_visual_dispatcher,
+                visual_coordinator,
+            ),
+            "visual_event_consumer": partial(
+                visual_event_loop.run,
+                self.stop_event,
+            ),
+            "ppt_reconcile": partial(ppt_coordinator.run, self.stop_event),
+        }
         self.tasks = {
-            "outbox_publisher": asyncio.create_task(
-                outbox.run(self.stop_event),
-                name="orchestrator-outbox-publisher",
-            ),
-            "course_consumer": asyncio.create_task(
-                consumer_loop.run(self.stop_event),
-                name="orchestrator-course-consumer",
-            ),
-            "node_executor": asyncio.create_task(
-                self._run_executor(executor),
-                name="orchestrator-node-executor",
-            ),
-            "visual_dispatcher": asyncio.create_task(
-                self._run_visual_dispatcher(visual_coordinator),
-                name="orchestrator-visual-dispatcher",
-            ),
-            "visual_event_consumer": asyncio.create_task(
-                visual_event_loop.run(self.stop_event),
-                name="orchestrator-visual-event-consumer",
-            ),
-            "ppt_reconcile": asyncio.create_task(
-                ppt_coordinator.run(self.stop_event),
-                name="orchestrator-ppt-reconcile",
-            ),
+            name: asyncio.create_task(
+                self._supervise_loop(name, runner),
+                name=f"orchestrator-{name.replace('_', '-')}",
+            )
+            for name, runner in runners.items()
         }
         for name, task in self.tasks.items():
             task.add_done_callback(partial(self._record_loop_exit, name))
 
-    async def _run_executor(self, executor: NodeExecutor) -> None:
+    async def _run_executor(
+        self,
+        executor: NodeExecutor,
+        recovery: StaleNodeRecovery | None = None,
+    ) -> None:
+        consecutive_errors = 0
+        next_recovery_at = 0.0
         while not self.stop_event.is_set():
             try:
+                loop_time = asyncio.get_running_loop().time()
+                if recovery is not None and loop_time >= next_recovery_at:
+                    await recovery.recover_once()
+                    next_recovery_at = (
+                        loop_time
+                        + self.settings.worker.recovery_scan_interval_seconds
+                    )
                 executed = await executor.run_once()
-            except (httpx.NetworkError, httpx.TimeoutException):
+            except Exception as exc:
+                if not _is_transient_loop_error(exc):
+                    raise
+                consecutive_errors += 1
+                self._record_transient_loop_error("node_executor", exc)
                 executed = 0
+                await self._wait_for_retry(consecutive_errors)
+                continue
+            if consecutive_errors:
+                self._record_loop_recovery("node_executor")
+                consecutive_errors = 0
             if executed > 0:
                 continue
             try:
@@ -407,15 +530,79 @@ class OrchestratorRuntime:
             except TimeoutError:
                 continue
 
+    async def _supervise_loop(
+        self,
+        name: str,
+        runner: Callable[[], Awaitable[None]],
+    ) -> None:
+        consecutive_errors = 0
+        recovering = False
+        while not self.stop_event.is_set():
+            if recovering:
+                self._record_loop_recovery(name)
+                recovering = False
+            else:
+                self.loop_states.setdefault(name, {})["state"] = "running"
+            try:
+                await runner()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if not _is_transient_loop_error(exc):
+                    raise
+                consecutive_errors += 1
+                self._record_transient_loop_error(name, exc)
+                await self._wait_for_retry(consecutive_errors)
+                recovering = not self.stop_event.is_set()
+                continue
+            if self.stop_event.is_set():
+                return
+            raise RuntimeError(f"关键后台循环意外退出: {name}")
+
+    async def _wait_for_retry(self, consecutive_errors: int) -> None:
+        delay = min(
+            self.settings.worker.transient_error_max_delay_seconds,
+            self.settings.worker.transient_error_base_delay_seconds
+            * (2 ** max(0, consecutive_errors - 1)),
+        )
+        try:
+            await asyncio.wait_for(self.stop_event.wait(), timeout=delay)
+        except TimeoutError:
+            return
+
+    def _record_transient_loop_error(self, name: str, exc: BaseException) -> None:
+        state = self.loop_states.setdefault(name, {})
+        state["state"] = "degraded"
+        retry_count = state.get("transient_retries", 0)
+        state["transient_retries"] = (
+            retry_count + 1 if isinstance(retry_count, int) else 1
+        )
+        state["last_transient_error"] = type(exc).__name__
+        logger.warning(
+            "Orchestrator 关键循环遇到可恢复基础设施错误",
+            extra={
+                "loop_name": name,
+                "exception_type": type(exc).__name__,
+                "outcome": "retry",
+            },
+        )
+
+    def _record_loop_recovery(self, name: str) -> None:
+        state = self.loop_states.setdefault(name, {})
+        state["state"] = "running"
+        recovery_count = state.get("recoveries", 0)
+        state["recoveries"] = (
+            recovery_count + 1 if isinstance(recovery_count, int) else 1
+        )
+        state["last_transient_error"] = None
+        state["last_recovered_at"] = datetime.now(UTC).isoformat()
+
     async def _run_visual_dispatcher(
         self,
         coordinator: VisualNodeCoordinator,
     ) -> None:
         while not self.stop_event.is_set():
-            try:
-                executed = await coordinator.run_once()
-            except (httpx.NetworkError, httpx.TimeoutException, OSError, RuntimeError):
-                executed = 0
+            executed = await coordinator.run_once()
             if executed > 0:
                 continue
             try:
@@ -432,10 +619,28 @@ class OrchestratorRuntime:
         error = task.exception()
         if error is not None:
             self.loop_errors[name] = str(error)
+            self.loop_states.setdefault(name, {})["state"] = "fatal"
             self.stop_event.set()
+            self._request_fatal_exit(name, error)
         elif not self.stop_event.is_set():
             self.loop_errors[name] = "必需后台循环意外退出"
+            self.loop_states.setdefault(name, {})["state"] = "fatal"
             self.stop_event.set()
+            self._request_fatal_exit(name, RuntimeError("必需后台循环意外退出"))
+
+    def _request_fatal_exit(self, name: str, error: BaseException) -> None:
+        self.fatal_exit_requested = True
+        logger.critical(
+            "Orchestrator 关键循环发生不可恢复错误，申请退出主进程",
+            extra={
+                "loop_name": name,
+                "exception_type": type(error).__name__,
+                "outcome": "fatal_exit",
+            },
+        )
+        # 生产容器由 Docker restart 策略恢复；测试/开发环境只记录退出意图。
+        if self._started and self.settings.service.environment == "production":
+            os.kill(os.getpid(), signal.SIGTERM)
 
     async def stop(self, app: FastAPI) -> None:
         self.stop_event.set()
@@ -499,6 +704,25 @@ class OrchestratorRuntime:
             checks[name] = {
                 "ready": ready,
                 "detail": error or ("后台循环运行中" if ready else "后台循环未运行"),
+                "state": (
+                    "fatal"
+                    if error is not None
+                    else self.loop_states.get(name, {}).get(
+                        "state",
+                        "running" if ready else "stopped",
+                    )
+                ),
+                "last_transient_error": self.loop_states.get(name, {}).get(
+                    "last_transient_error"
+                ),
+                "transient_retries": self.loop_states.get(name, {}).get(
+                    "transient_retries",
+                    0,
+                ),
+                "recoveries": self.loop_states.get(name, {}).get("recoveries", 0),
+                "last_recovered_at": self.loop_states.get(name, {}).get(
+                    "last_recovered_at"
+                ),
             }
 
         dependency_checks = await asyncio.gather(

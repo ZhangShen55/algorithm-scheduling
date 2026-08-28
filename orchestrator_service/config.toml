@@ -42,6 +42,16 @@ pool_timeout_seconds = 30.0
 # 借出连接前检查连接是否有效。
 pool_pre_ping = true
 
+[postgres_retry]
+# 仅对 PostgreSQL 40P01/40001 短事务重试的总尝试次数，包含首次执行。
+max_attempts = 5
+# 首次事务重试前的基础退避秒数。
+base_delay_seconds = 0.05
+# 指数退避允许达到的最大秒数。
+max_delay_seconds = 1.0
+# 在退避上附加的随机抖动比例，用于降低并发事务再次碰撞概率。
+jitter_ratio = 0.2
+
 [kafka]
 # 主机运行使用 127.0.0.1:9092；进入 Docker network 后改为 kafka:29092。
 bootstrap_servers = ["127.0.0.1:9092"]
@@ -89,6 +99,14 @@ node_concurrency = 4
 claim_poll_interval_seconds = 1.0
 # 服务停止时等待正在执行节点收尾的最长秒数。
 shutdown_timeout_seconds = 60.0
+# 可恢复基础设施错误后的首次循环退避秒数。
+transient_error_base_delay_seconds = 0.2
+# 连续可恢复错误时循环退避允许达到的最大秒数。
+transient_error_max_delay_seconds = 5.0
+# 普通 ASR/OCR 节点领取超过该秒数且原租约已不存在时允许恢复为状态 30。
+stale_node_recovery_seconds = 120.0
+# node_executor 检查普通过期领取节点的周期秒数；PPT_SLICE 不走此恢复器。
+recovery_scan_interval_seconds = 30.0
 
 [control]
 # 申请算子容量、查询平台能力时访问的 control-service 根地址。
@@ -97,6 +115,16 @@ base_url = "http://127.0.0.1:18100"
 request_timeout_seconds = 10.0
 # 申请算子实例时默认的租约 TTL。
 default_lease_ttl_seconds = 60
+
+[lease_renewal]
+# 同一 lease_id 在 TTL 安全窗口内的续租总尝试次数。
+max_attempts = 3
+# 首次续租重试前的基础退避秒数。
+base_delay_seconds = 0.2
+# 续租指数退避允许达到的最大秒数。
+max_delay_seconds = 2.0
+# 最近确认到期时间前停止使用租约的安全余量秒数，必须小于 TTL。
+safety_margin_seconds = 5.0
 
 [storage]
 # 下载的 T/S/P 视频和中间文件根目录。

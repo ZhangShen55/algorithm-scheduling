@@ -96,3 +96,18 @@ def test_ppt_async_contract_has_renewal_and_reconciliation_settings() -> None:
     assert settings.ppt.ocr_transport_retry_delay_seconds == 0.2
     assert settings.ppt.submit_transport_max_attempts == 2
     assert settings.ppt.submit_transport_retry_delay_seconds == 0.2
+
+
+def test_orchestrator_rejects_lease_margin_outside_ppt_ttl() -> None:
+    from app.core.config import OrchestratorSettings
+
+    with pytest.raises(ValidationError, match="PPT 租约 TTL"):
+        OrchestratorSettings.model_validate(
+            {
+                "ppt": {
+                    "lease_ttl_seconds": 5,
+                    "lease_renew_interval_seconds": 1,
+                },
+                "lease_renewal": {"safety_margin_seconds": 5},
+            }
+        )

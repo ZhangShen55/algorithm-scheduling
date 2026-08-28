@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
-import tomllib
 from pydantic import ValidationError
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +62,7 @@ def test_config_has_only_the_required_top_level_sections() -> None:
         "postgres",
         "kafka",
         "control",
+        "lease_renewal",
         "worker",
         "storage",
         "scan",

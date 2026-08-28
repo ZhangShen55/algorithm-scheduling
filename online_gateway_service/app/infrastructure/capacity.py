@@ -5,9 +5,15 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 
 import httpx
 
+from packages.platform_common.lease_resilience import (
+    LeaseRenewalPolicy,
+    release_lease_with_retry,
+    renew_lease_with_retry,
+)
 from packages.platform_common.metrics import PlatformMetrics
 
 
@@ -56,10 +62,12 @@ class OnlineCapacityLeaseClient:
         *,
         control_service_url: str,
         metrics: PlatformMetrics | None = None,
+        renewal_policy: LeaseRenewalPolicy | None = None,
     ) -> None:
         self._http = http_client
         self._control_service_url = control_service_url.rstrip("/")
         self._metrics = metrics
+        self._renewal_policy = renewal_policy
 
     @asynccontextmanager
     async def acquire(
@@ -73,6 +81,9 @@ class OnlineCapacityLeaseClient:
         interval = renew_interval_seconds or max(min(ttl_seconds / 3, 20.0), 0.1)
         if interval >= ttl_seconds:
             raise ValueError("租约续租周期必须小于租约时长")
+        renewal_policy = self._renewal_policy or LeaseRenewalPolicy(
+            safety_margin_seconds=min(5.0, ttl_seconds / 2),
+        )
         payload: dict[str, object] = {
             "capability": capability,
             "ttl_seconds": ttl_seconds,
@@ -99,21 +110,36 @@ class OnlineCapacityLeaseClient:
         )
         owner_task = asyncio.current_task()
         renewal_error: Exception | None = None
+        current_lease = lease
 
         async def renew_forever() -> None:
-            nonlocal renewal_error
+            nonlocal renewal_error, current_lease
             try:
                 while True:
                     await asyncio.sleep(interval)
-                    renewal = await self._http.post(
-                        f"{self._control_service_url}/internal/operator-instances/lease/renew",
-                        json={"lease_id": lease.lease_id, "ttl_seconds": ttl_seconds},
+                    self._record_lease_event(
+                        capability=capability,
+                        outcome="renew_requested",
+                        instance_id=current_lease.instance_id,
                     )
-                    renewal.raise_for_status()
-                    self._parse_lease(renewal.json())
+                    current_lease = await renew_lease_with_retry(
+                        lease_id=current_lease.lease_id,
+                        confirmed_expires_at=current_lease.expires_at,
+                        renew=partial(
+                            self._renew_once,
+                            current_lease.lease_id,
+                            ttl_seconds,
+                        ),
+                        policy=renewal_policy,
+                    )
+                    self._record_lease_event(
+                        capability=capability,
+                        outcome="renewed",
+                        instance_id=current_lease.instance_id,
+                    )
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - 统一转换跨客户端续租错误
                 renewal_error = exc
                 if owner_task is not None:
                     owner_task.cancel()
@@ -124,36 +150,48 @@ class OnlineCapacityLeaseClient:
         )
         try:
             yield lease
-        except asyncio.CancelledError as exc:
+        except asyncio.CancelledError:
             if renewal_error is not None:
                 raise OnlineCapacityLeaseError(
                     f"在线算子容量续租失败: {lease.lease_id}"
                 ) from renewal_error
-            raise exc
+            raise
         finally:
             renewal_task.cancel()
             with suppress(asyncio.CancelledError):
                 await renewal_task
-            try:
-                response = await self._http.post(
+            released = await release_lease_with_retry(
+                lease_id=lease.lease_id,
+                release=lambda: self._http.post(
                     f"{self._control_service_url}/internal/operator-instances/release",
                     json={"lease_id": lease.lease_id},
-                )
-                response.raise_for_status()
-            except httpx.HTTPError as exc:
+                ),
+                policy=renewal_policy,
+            )
+            if not released:
                 self._record_lease_event(
                     capability=capability,
                     outcome="release_failed",
                     instance_id=lease.instance_id,
                 )
-                raise OnlineCapacityLeaseError(
-                    f"释放在线算子容量失败: {lease.lease_id}"
-                ) from exc
-            self._record_lease_event(
-                capability=capability,
-                outcome="released",
-                instance_id=lease.instance_id,
-            )
+            else:
+                self._record_lease_event(
+                    capability=capability,
+                    outcome="released",
+                    instance_id=lease.instance_id,
+                )
+
+    async def _renew_once(
+        self,
+        lease_id: str,
+        ttl_seconds: int,
+    ) -> CapacityLease:
+        renewal = await self._http.post(
+            f"{self._control_service_url}/internal/operator-instances/lease/renew",
+            json={"lease_id": lease_id, "ttl_seconds": ttl_seconds},
+        )
+        renewal.raise_for_status()
+        return self._parse_lease(renewal.json())
 
     def _record_lease_event(
         self,
@@ -172,7 +210,7 @@ class OnlineCapacityLeaseClient:
     @staticmethod
     def _parse_lease(body: object) -> CapacityLease:
         if not isinstance(body, dict):
-            raise ValueError("容量租约响应不是 JSON 对象")
+            raise TypeError("容量租约响应不是 JSON 对象")
         raw_context = body.get("work_context")
         acquired_at = body.get("acquired_at")
         return CapacityLease(

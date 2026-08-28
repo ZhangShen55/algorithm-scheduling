@@ -77,6 +77,12 @@ class PlatformMetrics:
             ("operator_code", "capability", "instance_id"),
             registry=self.registry,
         )
+        self._postgres_transaction_events = Counter(
+            "algorithm_postgres_transaction_events",
+            "Retry lifecycle for short PostgreSQL transactions.",
+            ("operation", "sqlstate", "outcome"),
+            registry=self.registry,
+        )
         self._disk_usage = Gauge(
             "algorithm_disk_usage_bytes",
             "Filesystem space by configured storage root.",
@@ -166,6 +172,19 @@ class PlatformMetrics:
         self._operator_latency.labels(**labels).observe(max(0.0, elapsed_seconds))
         if not success:
             self._operator_errors.labels(**labels).inc()
+
+    def record_postgres_transaction_event(
+        self,
+        *,
+        operation: str,
+        sqlstate: str,
+        outcome: str,
+    ) -> None:
+        self._postgres_transaction_events.labels(
+            operation=operation,
+            sqlstate=sqlstate,
+            outcome=outcome,
+        ).inc()
 
     def update_disk_usage(self, path: Path, *, kind: str) -> None:
         probe = path

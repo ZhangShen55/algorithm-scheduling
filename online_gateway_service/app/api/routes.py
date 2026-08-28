@@ -12,11 +12,17 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError, field_validator
 
 from packages.platform_common.config import PlatformSettings
+from packages.platform_common.lease_resilience import LeaseRenewalPolicy
 from packages.platform_common.metrics import PlatformMetrics
 from packages.platform_common.trace import get_trace_id, new_trace_id
 from packages.platform_contracts.responses import BusinessResponse
 
-from ..core.config import SERVICE_ROOT, ControlConfig, OnlineGatewaySettings, ServiceConfig
+from ..core.config import (
+    SERVICE_ROOT,
+    ControlConfig,
+    OnlineGatewaySettings,
+    ServiceConfig,
+)
 from ..core.service_app import create_gateway_base_app
 from ..domain import valid_base64_image, vbas_route
 from ..infrastructure.capacity import (
@@ -148,6 +154,16 @@ def create_online_gateway_app(
         http_client,
         control_service_url=platform_settings.control_service_url,
         metrics=cast(PlatformMetrics, app.state.platform_metrics),
+        renewal_policy=LeaseRenewalPolicy(
+            max_attempts=service_settings.leases.renewal_max_attempts,
+            base_delay_seconds=(
+                service_settings.leases.renewal_base_delay_seconds
+            ),
+            max_delay_seconds=service_settings.leases.renewal_max_delay_seconds,
+            safety_margin_seconds=(
+                service_settings.leases.renewal_safety_margin_seconds
+            ),
+        ),
     )
     app.state.face_person_client = FacePersonClient(
         http_client,

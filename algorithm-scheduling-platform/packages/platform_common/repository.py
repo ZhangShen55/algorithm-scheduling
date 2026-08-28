@@ -1,17 +1,26 @@
 from __future__ import annotations
 
 import json
+import logging
+import random
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, TypeVar
 from uuid import UUID, uuid4
 
 from sqlalchemy import Connection, Engine, RowMapping, text
+from sqlalchemy.exc import DBAPIError
 
 from packages.platform_common.state_machine import validate_node_transition
 from packages.platform_contracts.status import NodeStatus, Priority, TaskType
 
 JsonObject = dict[str, Any]
+TransactionResultT = TypeVar("TransactionResultT")
+PostgresRetryObserver = Callable[..., None]
+
+logger = logging.getLogger(__name__)
 
 
 class RepositoryNotFoundError(LookupError):
@@ -20,6 +29,39 @@ class RepositoryNotFoundError(LookupError):
 
 class RepositoryStateConflictError(ValueError):
     """Raised when a repository write conflicts with the current state."""
+
+
+@dataclass(frozen=True, slots=True)
+class PostgresRetryPolicy:
+    """仅约束可安全重放的短事务，不覆盖连接、认证或 SQL 编程错误。"""
+
+    max_attempts: int = 5
+    base_delay_seconds: float = 0.05
+    max_delay_seconds: float = 1.0
+    jitter_ratio: float = 0.2
+
+    def __post_init__(self) -> None:
+        if self.max_attempts < 1:
+            raise ValueError("PostgreSQL 事务重试次数必须大于 0")
+        if self.base_delay_seconds < 0 or self.max_delay_seconds < 0:
+            raise ValueError("PostgreSQL 事务重试延迟不能小于 0")
+        if self.base_delay_seconds > self.max_delay_seconds:
+            raise ValueError("PostgreSQL 基础重试延迟不能大于最大延迟")
+        if not 0 <= self.jitter_ratio <= 1:
+            raise ValueError("PostgreSQL 重试抖动比例必须在 0 到 1 之间")
+
+
+class TransientInfrastructureError(RuntimeError):
+    """明确可恢复的基础设施事务错误在有界重试耗尽后抛出。"""
+
+    def __init__(self, *, operation: str, sqlstate: str, attempts: int) -> None:
+        self.operation = operation
+        self.sqlstate = sqlstate
+        self.attempts = attempts
+        super().__init__(
+            f"PostgreSQL 瞬时事务错误重试耗尽: "
+            f"operation={operation}, sqlstate={sqlstate}, attempts={attempts}"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +163,9 @@ class NodeRecord:
     updated_at: datetime
     claimed_at: datetime | None = None
     started_at: datetime | None = None
+    claimed_by: str | None = None
+    claim_token: UUID | None = None
+    attempt: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,12 +226,176 @@ def _node_record(row: RowMapping) -> NodeRecord:
         updated_at=row["updated_at"],
         claimed_at=row["claimed_at"],
         started_at=row["started_at"],
+        claimed_by=row["claimed_by"],
+        claim_token=row["claim_token"],
+        attempt=int(row["attempt"]),
     )
 
 
 class CourseRepository:
-    def __init__(self, engine: Engine) -> None:
+    RETRYABLE_SQLSTATES = frozenset({"40P01", "40001"})
+
+    def __init__(
+        self,
+        engine: Engine,
+        *,
+        postgres_retry: PostgresRetryPolicy | None = None,
+        postgres_retry_observer: PostgresRetryObserver | None = None,
+    ) -> None:
         self._engine = engine
+        self._postgres_retry = postgres_retry or PostgresRetryPolicy()
+        self._postgres_retry_observer = postgres_retry_observer
+
+    def set_postgres_retry_observer(
+        self,
+        observer: PostgresRetryObserver | None,
+    ) -> None:
+        self._postgres_retry_observer = observer
+
+    def _observe_postgres_retry(
+        self,
+        *,
+        operation: str,
+        sqlstate: str,
+        outcome: str,
+    ) -> None:
+        if self._postgres_retry_observer is not None:
+            self._postgres_retry_observer(
+                operation=operation,
+                sqlstate=sqlstate,
+                outcome=outcome,
+            )
+
+    def _run_retryable_transaction(
+        self,
+        operation: str,
+        callback: Callable[[Connection], TransactionResultT],
+    ) -> TransactionResultT:
+        policy = self._postgres_retry
+        previous_sqlstate: str | None = None
+        for attempt in range(1, policy.max_attempts + 1):
+            try:
+                # 每次重试都新建事务，避免复用 PostgreSQL 已中止的事务上下文。
+                with self._engine.begin() as connection:
+                    result = callback(connection)
+                if previous_sqlstate is not None:
+                    self._observe_postgres_retry(
+                        operation=operation,
+                        sqlstate=previous_sqlstate,
+                        outcome="recovered",
+                    )
+                return result
+            except DBAPIError as exc:
+                sqlstate = str(getattr(exc.orig, "sqlstate", "") or "")
+                if sqlstate not in self.RETRYABLE_SQLSTATES:
+                    raise
+                previous_sqlstate = sqlstate
+                if attempt >= policy.max_attempts:
+                    logger.error(
+                        "PostgreSQL 瞬时事务重试耗尽",
+                        extra={
+                            "operation": operation,
+                            "sqlstate": sqlstate,
+                            "attempts": attempt,
+                            "outcome": "exhausted",
+                        },
+                    )
+                    self._observe_postgres_retry(
+                        operation=operation,
+                        sqlstate=sqlstate,
+                        outcome="exhausted",
+                    )
+                    raise TransientInfrastructureError(
+                        operation=operation,
+                        sqlstate=sqlstate,
+                        attempts=attempt,
+                    ) from exc
+                upper = min(
+                    policy.max_delay_seconds,
+                    policy.base_delay_seconds * (2 ** (attempt - 1)),
+                )
+                jitter = upper * policy.jitter_ratio * random.random()
+                logger.warning(
+                    "PostgreSQL 瞬时事务将在新事务中重试",
+                    extra={
+                        "operation": operation,
+                        "sqlstate": sqlstate,
+                        "attempts": attempt,
+                        "outcome": "retry",
+                    },
+                )
+                self._observe_postgres_retry(
+                    operation=operation,
+                    sqlstate=sqlstate,
+                    outcome="retry",
+                )
+                time.sleep(upper + jitter)
+        raise AssertionError("PostgreSQL 事务重试循环不应到达此处")
+
+    def _run_retryable_call(
+        self,
+        operation: str,
+        callback: Callable[[], TransactionResultT],
+    ) -> TransactionResultT:
+        """重试内部自行创建事务的操作，每次 callback 调用必须开启新事务。"""
+
+        policy = self._postgres_retry
+        previous_sqlstate: str | None = None
+        for attempt in range(1, policy.max_attempts + 1):
+            try:
+                result = callback()
+                if previous_sqlstate is not None:
+                    self._observe_postgres_retry(
+                        operation=operation,
+                        sqlstate=previous_sqlstate,
+                        outcome="recovered",
+                    )
+                return result
+            except DBAPIError as exc:
+                sqlstate = str(getattr(exc.orig, "sqlstate", "") or "")
+                if sqlstate not in self.RETRYABLE_SQLSTATES:
+                    raise
+                previous_sqlstate = sqlstate
+                if attempt >= policy.max_attempts:
+                    logger.error(
+                        "PostgreSQL 瞬时事务重试耗尽",
+                        extra={
+                            "operation": operation,
+                            "sqlstate": sqlstate,
+                            "attempts": attempt,
+                            "outcome": "exhausted",
+                        },
+                    )
+                    self._observe_postgres_retry(
+                        operation=operation,
+                        sqlstate=sqlstate,
+                        outcome="exhausted",
+                    )
+                    raise TransientInfrastructureError(
+                        operation=operation,
+                        sqlstate=sqlstate,
+                        attempts=attempt,
+                    ) from exc
+                upper = min(
+                    policy.max_delay_seconds,
+                    policy.base_delay_seconds * (2 ** (attempt - 1)),
+                )
+                logger.warning(
+                    "PostgreSQL 瞬时事务将在新事务中重试",
+                    extra={
+                        "operation": operation,
+                        "sqlstate": sqlstate,
+                        "attempts": attempt,
+                        "outcome": "retry",
+                    },
+                )
+                self._observe_postgres_retry(
+                    operation=operation,
+                    sqlstate=sqlstate,
+                    outcome="retry",
+                )
+                time.sleep(upper + upper * policy.jitter_ratio * random.random())
+        raise AssertionError("PostgreSQL 操作重试循环不应到达此处")
 
     def create_task_types(
         self,
@@ -428,6 +637,15 @@ class CourseRepository:
             return [str(capability) for capability in rows]
 
     def aggregate_task_type_state(self, course_task_type_id: int) -> TaskTypeRecord:
+        return self._run_retryable_call(
+            "aggregate_task_type_state",
+            lambda: self._aggregate_task_type_state_once(course_task_type_id),
+        )
+
+    def _aggregate_task_type_state_once(
+        self,
+        course_task_type_id: int,
+    ) -> TaskTypeRecord:
         with self._engine.begin() as connection:
             task_type_row = connection.execute(
                 text(
@@ -775,8 +993,8 @@ class CourseRepository:
 
     def claim_ready_node(self, capability: str, worker_id: str) -> NodeRecord | None:
         claim_token = uuid4()
-        with self._engine.begin() as connection:
-            node_id = connection.execute(
+        def claim(connection: Connection) -> int | None:
+            return connection.execute(
                 text(
                     """
                     WITH candidate AS (
@@ -784,7 +1002,7 @@ class CourseRepository:
                         FROM task_nodes AS node
                         JOIN course_task_types AS task_type
                           ON task_type.id = node.course_task_type_id
-                        WHERE node.status = 10
+                        WHERE node.status IN (10, 30)
                           AND node.required_capability = :capability
                           AND task_type.status IN (10, 20, 30, 40, 50)
                         ORDER BY
@@ -813,9 +1031,106 @@ class CourseRepository:
                     "claim_token": claim_token,
                 },
             ).scalar_one_or_none()
+
+        node_id = self._run_retryable_transaction("claim_ready_node", claim)
         if node_id is None:
             return None
         return self.get_node(node_id)
+
+    def list_stale_claimed_nodes(self, claimed_before: datetime) -> list[NodeRecord]:
+        with self._engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT node.id
+                    FROM task_nodes AS node
+                    JOIN course_task_types AS task_type
+                      ON task_type.id = node.course_task_type_id
+                    WHERE node.status IN (40, 50)
+                      AND node.node_code <> 'PPT_SLICE'
+                      AND node.claimed_at IS NOT NULL
+                      AND node.claimed_at < :claimed_before
+                      AND task_type.status IN (10, 20, 30, 40, 50)
+                    ORDER BY node.claimed_at, node.id
+                    """
+                ),
+                {"claimed_before": claimed_before},
+            ).scalars()
+            node_ids = [int(node_id) for node_id in rows]
+        return [self.get_node(node_id) for node_id in node_ids]
+
+    def recover_stale_claimed_node(
+        self,
+        node_id: int,
+        *,
+        claimed_before: datetime,
+        reason: str,
+    ) -> bool:
+        def recover(connection: Connection) -> bool:
+            updated = connection.execute(
+                text(
+                    """
+                    UPDATE task_nodes
+                    SET status = 30,
+                        reason = :reason,
+                        claimed_by = NULL,
+                        claim_token = NULL,
+                        claimed_at = NULL,
+                        started_at = NULL,
+                        ready_at = now(),
+                        updated_at = now()
+                    WHERE id = :node_id
+                      AND status IN (40, 50)
+                      AND node_code <> 'PPT_SLICE'
+                      AND claimed_at IS NOT NULL
+                      AND claimed_at < :claimed_before
+                    """
+                ),
+                {
+                    "node_id": node_id,
+                    "claimed_before": claimed_before,
+                    "reason": reason,
+                },
+            ).rowcount
+            return bool(updated)
+
+        return self._run_retryable_transaction("recover_stale_claimed_node", recover)
+
+    def coordinate_capability_waiting(self, capability: str) -> list[int]:
+        """每轮仅协调一次容量等待；事务提交后由调用方按返回 ID 聚合。"""
+
+        def coordinate(connection: Connection) -> list[int]:
+            # 事务级 advisory lock 同时覆盖多 Orchestrator 进程，而非仅限当前进程。
+            connection.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:capability, 0))"),
+                {"capability": capability},
+            )
+            rows = connection.execute(
+                text(
+                    """
+                    UPDATE task_nodes AS node
+                    SET status = 30,
+                        reason = :reason,
+                        updated_at = now()
+                    FROM course_task_types AS task_type
+                    WHERE task_type.id = node.course_task_type_id
+                      AND node.status = 10
+                      AND node.required_capability = :capability
+                      AND task_type.status IN (10, 20, 30, 40, 50)
+                    RETURNING node.course_task_type_id
+                    """
+                ),
+                {
+                    "capability": capability,
+                    "reason": f"等待算子能力可用: {capability}",
+                },
+            ).scalars()
+            return sorted({int(course_task_type_id) for course_task_type_id in rows})
+
+        return self._run_retryable_transaction(
+            "coordinate_capability_waiting",
+            coordinate,
+        )
 
     def claim_ready_visual_node(self, worker_id: str) -> NodeRecord | None:
         claim_token = uuid4()
@@ -1224,7 +1539,8 @@ class CourseRepository:
                     """
                     SELECT n.id, n.course_task_type_id, n.node_code, n.status, n.priority,
                            n.reason, n.required_capability, n.updated_at,
-                           n.claimed_at, n.started_at,
+                           n.claimed_at, n.started_at, n.claimed_by, n.claim_token,
+                           n.attempt,
                            r.result, r.artifact_path, r.artifact_count, r.progress,
                            r.effective_params AS result_effective_params
                     FROM task_nodes AS n
@@ -1245,7 +1561,8 @@ class CourseRepository:
                     """
                     SELECT n.id, n.course_task_type_id, n.node_code, n.status, n.priority,
                            n.reason, n.required_capability, n.updated_at,
-                           n.claimed_at, n.started_at,
+                           n.claimed_at, n.started_at, n.claimed_by, n.claim_token,
+                           n.attempt,
                            r.result, r.artifact_path, r.artifact_count, r.progress,
                            r.effective_params AS result_effective_params
                     FROM task_nodes AS n
@@ -1265,7 +1582,8 @@ class CourseRepository:
                     """
                     SELECT n.id, n.course_task_type_id, n.node_code, n.status, n.priority,
                            n.reason, n.required_capability, n.updated_at,
-                           n.claimed_at, n.started_at,
+                           n.claimed_at, n.started_at, n.claimed_by, n.claim_token,
+                           n.attempt,
                            r.result, r.artifact_path, r.artifact_count, r.progress,
                            r.effective_params AS result_effective_params
                     FROM task_nodes AS n
@@ -1285,7 +1603,8 @@ class CourseRepository:
                     """
                     SELECT n.id, n.course_task_type_id, n.node_code, n.status, n.priority,
                            n.reason, n.required_capability, n.updated_at,
-                           n.claimed_at, n.started_at,
+                           n.claimed_at, n.started_at, n.claimed_by, n.claim_token,
+                           n.attempt,
                            r.result, r.artifact_path, r.artifact_count, r.progress,
                            r.effective_params AS result_effective_params
                     FROM task_nodes AS n

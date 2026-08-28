@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -145,6 +146,7 @@ async def test_control_client_sends_and_parses_work_context() -> None:
 @pytest.mark.asyncio
 async def test_control_client_renews_long_http_operation_without_reacquiring() -> None:
     renewals = 0
+    expires_at = (datetime.now(UTC) + timedelta(seconds=60)).isoformat()
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal renewals
@@ -158,7 +160,7 @@ async def test_control_client_renews_long_http_operation_without_reacquiring() -
                 "capability": "asr_offline",
                 "service_url": "http://asr-gpu0:8083",
                 "acquired_at": "2026-08-19T12:00:00Z",
-                "expires_at": "2026-08-19T12:01:00Z",
+                "expires_at": expires_at,
                 "work_context": None,
             },
         )
@@ -187,6 +189,8 @@ async def test_control_client_renews_long_http_operation_without_reacquiring() -
 
 @pytest.mark.asyncio
 async def test_control_client_cancels_operation_when_renewal_fails() -> None:
+    expires_at = (datetime.now(UTC) + timedelta(seconds=60)).isoformat()
+
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/lease/renew"):
             return httpx.Response(503, json={"detail": "redis unavailable"})
@@ -197,7 +201,7 @@ async def test_control_client_cancels_operation_when_renewal_fails() -> None:
                 "instance_id": "ocr-gpu0",
                 "capability": "ocr",
                 "service_url": "http://ocr-gpu0:8866",
-                "expires_at": "2026-08-19T12:01:00Z",
+                "expires_at": expires_at,
             },
         )
 

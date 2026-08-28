@@ -55,6 +55,21 @@ class HttpConfig(BaseModel):
 class LeaseConfig(BaseModel):
     request_ttl_seconds: int = 60
     websocket_ttl_seconds: int = 3600
+    renewal_max_attempts: int = Field(default=3, ge=1, le=10)
+    renewal_base_delay_seconds: float = Field(default=0.2, ge=0, le=30)
+    renewal_max_delay_seconds: float = Field(default=2.0, ge=0, le=60)
+    renewal_safety_margin_seconds: float = Field(default=5.0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_renewal(self) -> Self:
+        if self.renewal_base_delay_seconds > self.renewal_max_delay_seconds:
+            raise ValueError("租约续租基础退避不能大于最大退避")
+        if self.renewal_safety_margin_seconds >= min(
+            self.request_ttl_seconds,
+            self.websocket_ttl_seconds,
+        ):
+            raise ValueError("租约续租安全余量必须小于所有租约 TTL")
+        return self
 
 
 class Base64Config(BaseModel):

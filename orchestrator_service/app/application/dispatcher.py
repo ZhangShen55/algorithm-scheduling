@@ -52,9 +52,21 @@ class LeaseDispatchRepository(Protocol):
 
     def aggregate_capability_task_types(self, capability: str) -> object: ...
 
+    def coordinate_capability_waiting(self, capability: str) -> list[int]: ...
+
+    def aggregate_task_type_state(self, course_task_type_id: int) -> TaskTypeRecord: ...
+
     def claim_ready_node(self, capability: str, worker_id: str) -> NodeRecord | None: ...
 
     def get_task_type(self, course_task_type_id: int) -> TaskTypeRecord: ...
+
+    def merge_node_progress(
+        self,
+        node_id: int,
+        progress_patch: dict[str, object],
+        *,
+        reason: str,
+    ) -> NodeRecord: ...
 
 
 class LeaseScope(StrEnum):
@@ -89,40 +101,92 @@ class LeaseAwareDispatcher:
         capability: str,
         worker_id: str,
     ) -> NodeReservation | None:
+        reservations = await self.reserve_many(capability, worker_id, limit=1)
+        return reservations[0] if reservations else None
+
+    async def reserve_many(
+        self,
+        capability: str,
+        worker_id: str,
+        *,
+        limit: int,
+    ) -> list[NodeReservation]:
+        if limit <= 0:
+            return []
         if capability in WORK_ITEM_CAPABILITIES:
-            await asyncio.to_thread(self._repository.resume_capability_nodes, capability)
-            await asyncio.to_thread(
-                self._repository.aggregate_capability_task_types,
+            claim_results = await asyncio.gather(
+                *(
+                    asyncio.to_thread(
+                        self._repository.claim_ready_node,
+                        capability,
+                        worker_id,
+                    )
+                    for _ in range(limit)
+                ),
+                return_exceptions=True,
+            )
+            reservations = [
+                NodeReservation(
+                    node=result,
+                    lease=None,
+                    lease_scope=LeaseScope.WORK_ITEM,
+                )
+                for result in claim_results
+                if isinstance(result, NodeRecord)
+            ]
+            errors = [
+                result
+                for result in claim_results
+                if isinstance(result, BaseException)
+            ]
+            if errors and not reservations:
+                raise errors[0]
+            return reservations
+
+        lease_results = await asyncio.gather(
+            *(
+                self._reserve_leased_slot(capability, worker_id)
+                for _ in range(limit)
+            ),
+            return_exceptions=True,
+        )
+        reservations = [
+            result
+            for result in lease_results
+            if isinstance(result, NodeReservation)
+        ]
+        capacity_unavailable = any(
+            isinstance(result, CapacityUnavailableError)
+            for result in lease_results
+        )
+        if capacity_unavailable:
+            task_type_ids = await asyncio.to_thread(
+                self._repository.coordinate_capability_waiting,
                 capability,
             )
-            node = await asyncio.to_thread(
-                self._repository.claim_ready_node,
-                capability,
-                worker_id,
-            )
-            if node is None:
-                return None
-            return NodeReservation(
-                node=node,
-                lease=None,
-                lease_scope=LeaseScope.WORK_ITEM,
-            )
-        try:
-            lease = await self._lease_client.acquire(capability)
-        except CapacityUnavailableError:
-            await asyncio.to_thread(self._repository.defer_capability_nodes, capability)
-            await asyncio.to_thread(
-                self._repository.aggregate_capability_task_types,
-                capability,
-            )
-            return None
+            for course_task_type_id in task_type_ids:
+                await asyncio.to_thread(
+                    self._repository.aggregate_task_type_state,
+                    course_task_type_id,
+                )
+        errors = [
+            result
+            for result in lease_results
+            if isinstance(result, BaseException)
+            and not isinstance(result, CapacityUnavailableError)
+        ]
+        if errors and not reservations:
+            raise errors[0]
+        return reservations
+
+    async def _reserve_leased_slot(
+        self,
+        capability: str,
+        worker_id: str,
+    ) -> NodeReservation | None:
+        lease = await self._lease_client.acquire(capability)
 
         try:
-            await asyncio.to_thread(self._repository.resume_capability_nodes, capability)
-            await asyncio.to_thread(
-                self._repository.aggregate_capability_task_types,
-                capability,
-            )
             node = await asyncio.to_thread(
                 self._repository.claim_ready_node,
                 capability,
@@ -149,6 +213,16 @@ class LeaseAwareDispatcher:
                     node_id=str(node.id),
                     trace_id=uuid4().hex,
                 ),
+            )
+            await asyncio.to_thread(
+                self._repository.merge_node_progress,
+                node.id,
+                {
+                    "lease_id": lease.lease_id,
+                    "instance_id": lease.instance_id,
+                    "lease_expires_at": lease.expires_at.isoformat(),
+                },
+                reason="节点已绑定算子容量租约，等待执行",
             )
         except BaseException:
             await self._lease_client.release(lease.lease_id)

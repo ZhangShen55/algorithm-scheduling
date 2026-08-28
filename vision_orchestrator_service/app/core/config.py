@@ -4,14 +4,15 @@ import os
 from pathlib import Path
 from typing import Annotated
 
-from packages.platform_common.config import LoggingConfig
-from pydantic import BaseModel, Field, StrictInt
+from pydantic import BaseModel, Field, StrictInt, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
     TomlConfigSettingsSource,
 )
+
+from packages.platform_common.config import LoggingConfig
 
 SERVICE_ROOT = Path(__file__).resolve().parents[2]
 
@@ -51,6 +52,19 @@ class KafkaConfig(BaseModel):
 class ControlConfig(BaseModel):
     base_url: str = "http://127.0.0.1:18100"
     timeout_seconds: float = 10.0
+
+
+class LeaseRenewalConfig(BaseModel):
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    base_delay_seconds: float = Field(default=0.2, ge=0, le=30)
+    max_delay_seconds: float = Field(default=2.0, ge=0, le=60)
+    safety_margin_seconds: float = Field(default=5.0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_delays(self) -> LeaseRenewalConfig:
+        if self.base_delay_seconds > self.max_delay_seconds:
+            raise ValueError("租约续租基础退避不能大于最大退避")
+        return self
 
 
 class WorkerConfig(BaseModel):
@@ -129,6 +143,7 @@ class VisionSettings(BaseSettings):
     postgres: PostgresConfig = PostgresConfig()
     kafka: KafkaConfig = KafkaConfig()
     control: ControlConfig = ControlConfig()
+    lease_renewal: LeaseRenewalConfig = LeaseRenewalConfig()
     worker: WorkerConfig = WorkerConfig()
     storage: StorageConfig = StorageConfig()
     scan: ScanConfig = ScanConfig()
@@ -139,6 +154,12 @@ class VisionSettings(BaseSettings):
     student_behavior: BehaviorConfig = BehaviorConfig()
     evidence: EvidenceConfig = EvidenceConfig()
     readiness: ReadinessConfig = ReadinessConfig()
+
+    @model_validator(mode="after")
+    def validate_lease_safety_window(self) -> VisionSettings:
+        if self.lease_renewal.safety_margin_seconds >= self.vbas.lease_ttl_seconds:
+            raise ValueError("租约续租安全余量必须小于 VBas 租约 TTL")
+        return self
 
     @classmethod
     def settings_customise_sources(

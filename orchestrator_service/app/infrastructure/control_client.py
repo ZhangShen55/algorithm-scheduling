@@ -1,23 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable
 from contextlib import suppress
 from datetime import UTC, datetime
+from functools import partial
 from typing import TypeVar
 
 import httpx
 
+from packages.platform_common.lease_resilience import (
+    LeaseRenewalPolicy,
+    renew_lease_with_retry,
+)
 from packages.platform_common.operator_registry import CapacityLease, WorkContext
 
-from ..domain.errors import CapacityUnavailableError
+from ..domain.errors import CapacityUnavailableError, LeaseRenewalError
+
+logger = logging.getLogger(__name__)
 
 
 class LeaseUnavailableError(CapacityUnavailableError):
-    pass
-
-
-class LeaseRenewalError(RuntimeError):
     pass
 
 
@@ -30,9 +34,13 @@ class ControlLeaseClient:
         http_client: httpx.AsyncClient,
         *,
         default_ttl_seconds: int,
+        renewal_policy: LeaseRenewalPolicy | None = None,
     ) -> None:
         self._http_client = http_client
         self._default_ttl_seconds = default_ttl_seconds
+        self._renewal_policy = renewal_policy or LeaseRenewalPolicy(
+            safety_margin_seconds=min(5.0, default_ttl_seconds / 2),
+        )
 
     async def acquire(
         self,
@@ -90,6 +98,18 @@ class ControlLeaseClient:
         response.raise_for_status()
         return self._parse_lease(response.json())
 
+    async def is_active(self, lease_id: str) -> bool:
+        response = await self._http_client.get(
+            f"/internal/operator-instances/lease/{lease_id}"
+        )
+        if response.status_code == 404:
+            return False
+        response.raise_for_status()
+        active = self._parse_lease(response.json())
+        if active.lease_id != lease_id:
+            raise ValueError("容量租约查询响应 lease_id 不一致")
+        return True
+
     async def run_with_renewal(
         self,
         lease: CapacityLease,
@@ -106,14 +126,26 @@ class ControlLeaseClient:
         if hard_timeout_seconds <= 0:
             raise ValueError("算子 HTTP 硬超时必须大于 0")
 
+        current_lease = lease
+
         async def renew_forever() -> None:
+            nonlocal current_lease
             while True:
                 await asyncio.sleep(interval)
                 try:
-                    await self.renew(lease.lease_id, ttl_seconds=ttl)
+                    current_lease = await renew_lease_with_retry(
+                        lease_id=current_lease.lease_id,
+                        confirmed_expires_at=current_lease.expires_at,
+                        renew=partial(
+                            self.renew,
+                            current_lease.lease_id,
+                            ttl_seconds=ttl,
+                        ),
+                        policy=self._renewal_policy,
+                    )
                 except Exception as exc:
                     raise LeaseRenewalError(
-                        f"算子容量租约续租失败: {lease.lease_id}"
+                        f"算子容量租约续租失败: {current_lease.lease_id}"
                     ) from exc
 
         operation_task = asyncio.ensure_future(operation)
@@ -151,18 +183,47 @@ class ControlLeaseClient:
                     await operation_task
 
     async def release(self, lease_id: str) -> None:
-        response = await self._http_client.post(
-            "/internal/operator-instances/release",
-            json={"lease_id": lease_id},
-        )
-        if response.status_code == 404:
-            return
-        response.raise_for_status()
+        for attempt in range(1, self._renewal_policy.max_attempts + 1):
+            try:
+                response = await self._http_client.post(
+                    "/internal/operator-instances/release",
+                    json={"lease_id": lease_id},
+                )
+                if response.status_code == 404:
+                    return
+                response.raise_for_status()
+                return
+            except Exception as exc:
+                transient_http = (
+                    isinstance(exc, httpx.HTTPStatusError)
+                    and exc.response.status_code in {500, 502, 503, 504}
+                )
+                if not isinstance(
+                    exc,
+                    (httpx.NetworkError, httpx.TimeoutException),
+                ) and not transient_http:
+                    raise
+                if attempt >= self._renewal_policy.max_attempts:
+                    logger.warning(
+                        "容量租约释放暂未确认，等待 TTL 回收",
+                        extra={
+                            "lease_id": lease_id,
+                            "attempts": attempt,
+                            "outcome": "release_failed",
+                        },
+                    )
+                    return
+                delay = min(
+                    self._renewal_policy.max_delay_seconds,
+                    self._renewal_policy.base_delay_seconds * (2 ** (attempt - 1)),
+                )
+                if delay > 0:
+                    await asyncio.sleep(delay)
 
     @staticmethod
     def _parse_lease(payload: object) -> CapacityLease:
         if not isinstance(payload, dict):
-            raise ValueError("容量租约响应不是 JSON 对象")
+            raise TypeError("容量租约响应不是 JSON 对象")
         raw_context = payload.get("work_context")
         work_context = (
             WorkContext(**raw_context) if isinstance(raw_context, dict) else None

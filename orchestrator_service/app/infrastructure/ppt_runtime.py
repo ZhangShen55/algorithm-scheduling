@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 import httpx
 
+from packages.platform_common.lease_resilience import LeaseRenewalPolicy
 from packages.platform_common.operator_registry import CapacityLease
 from packages.platform_common.repository import NodeRecord, TaskTypeRecord
 from packages.platform_contracts.status import NodeStatus
@@ -75,6 +76,7 @@ class PptRuntimeCoordinator:
         lease_renew_interval_seconds: float,
         reconcile_interval_seconds: float,
         workspace_cleaner: WorkspaceCleaner | None = None,
+        renewal_policy: LeaseRenewalPolicy | None = None,
     ) -> None:
         if reconcile_interval_seconds <= 0:
             raise ValueError("PPT 终态对账周期必须大于 0")
@@ -85,6 +87,9 @@ class PptRuntimeCoordinator:
         self._lease_renew_interval_seconds = lease_renew_interval_seconds
         self._reconcile_interval_seconds = reconcile_interval_seconds
         self._workspace_cleaner = workspace_cleaner
+        self._renewal_policy = renewal_policy or LeaseRenewalPolicy(
+            safety_margin_seconds=min(5.0, lease_ttl_seconds / 2),
+        )
         self._keepers: dict[int, PptCapacityLeaseKeeper] = {}
         self._terminal_nodes: set[int] = set()
         self._lock = asyncio.Lock()
@@ -256,6 +261,7 @@ class PptRuntimeCoordinator:
             ttl_seconds=self._lease_ttl_seconds,
             renew_interval_seconds=self._lease_renew_interval_seconds,
             on_renewal_failure=renewal_failed,
+            renewal_policy=self._renewal_policy,
         )
 
     async def _restore_keeper(self, node: NodeRecord) -> None:

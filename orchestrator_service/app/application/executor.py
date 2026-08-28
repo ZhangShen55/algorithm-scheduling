@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import Counter
 from typing import Protocol
 
 from packages.platform_common.repository import (
@@ -11,7 +12,7 @@ from packages.platform_common.repository import (
 )
 from packages.platform_contracts.status import NodeStatus
 
-from ..domain.errors import CapacityUnavailableError
+from ..domain.errors import CapacityUnavailableError, LeaseRenewalError
 from ..domain.ppt_work import PptSliceAsyncAccepted
 from ..infrastructure.contract_stub import NodeExecutionContext
 from .dispatcher import LeaseAwareDispatcher, NodeReservation
@@ -99,21 +100,51 @@ class NodeExecutor:
             for index in range(self._concurrency)
         )
         self._capability_cursor = (start + self._concurrency) % len(capabilities)
-        executed = await asyncio.gather(
-            *(self._run_capability(capability) for capability in scheduled)
+        slot_plan = Counter(scheduled)
+        batches = await asyncio.gather(
+            *(
+                self._dispatcher.reserve_many(
+                    capability,
+                    self._worker_id,
+                    limit=slot_count,
+                )
+                for capability, slot_count in slot_plan.items()
+            ),
+            return_exceptions=True,
         )
-        return sum(executed)
-
-    async def _run_capability(self, capability: str) -> int:
-        async with self._semaphore:
-            reservation = await self._dispatcher.reserve_next(
-                capability,
-                self._worker_id,
+        reservations = [
+            reservation
+            for batch in batches
+            if isinstance(batch, list)
+            for reservation in batch
+        ]
+        errors = [batch for batch in batches if isinstance(batch, BaseException)]
+        if errors and not reservations:
+            raise errors[0]
+        if errors:
+            logger.warning(
+                "部分能力批次领取失败，其他槽位继续执行",
+                extra={"failed_capability_batches": len(errors)},
             )
-            if reservation is None:
-                return 0
+        results = await asyncio.gather(
+            *(self._run_reservation(reservation) for reservation in reservations),
+            return_exceptions=True,
+        )
+        execution_errors = [
+            result for result in results if isinstance(result, BaseException)
+        ]
+        if execution_errors:
+            logger.error(
+                "部分节点槽位发生基础设施异常",
+                extra={"failed_slots": len(execution_errors)},
+            )
+            if len(execution_errors) == len(results):
+                raise execution_errors[0]
+        return len(reservations) - len(execution_errors)
+
+    async def _run_reservation(self, reservation: NodeReservation) -> None:
+        async with self._semaphore:
             await self._execute_reservation(reservation)
-            return 1
 
     async def _execute_reservation(self, reservation: NodeReservation) -> None:
         node = reservation.node
@@ -161,6 +192,13 @@ class NodeExecutor:
                     node.id,
                     NodeStatus.WAITING_OPERATOR,
                     str(exc),
+                )
+            except LeaseRenewalError as exc:
+                await asyncio.to_thread(
+                    self._repository.transition_node,
+                    node.id,
+                    NodeStatus.WAITING_OPERATOR,
+                    f"算子容量租约续租未确认，等待安全重排: {type(exc).__name__}",
                 )
             except Exception as exc:
                 error_detail = str(exc).strip() or type(exc).__name__

@@ -5,7 +5,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -45,6 +45,19 @@ class PostgresConfig(BaseModel):
     pool_pre_ping: bool = True
 
 
+class PostgresRetryConfig(BaseModel):
+    max_attempts: int = Field(default=5, ge=1, le=10)
+    base_delay_seconds: float = Field(default=0.05, ge=0, le=10)
+    max_delay_seconds: float = Field(default=1.0, ge=0, le=30)
+    jitter_ratio: float = Field(default=0.2, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def validate_delays(self) -> PostgresRetryConfig:
+        if self.base_delay_seconds > self.max_delay_seconds:
+            raise ValueError("PostgreSQL 基础重试延迟不能大于最大延迟")
+        return self
+
+
 class KafkaConfig(BaseModel):
     bootstrap_servers: list[str] = Field(default_factory=lambda: ["127.0.0.1:9092"])
     client_id: str = "orchestrator-service"
@@ -73,12 +86,35 @@ class WorkerConfig(BaseModel):
     node_concurrency: int = Field(default=4, ge=1)
     claim_poll_interval_seconds: float = Field(default=1.0, gt=0)
     shutdown_timeout_seconds: float = Field(default=60.0, gt=0)
+    transient_error_base_delay_seconds: float = Field(default=0.2, gt=0)
+    transient_error_max_delay_seconds: float = Field(default=5.0, gt=0)
+    stale_node_recovery_seconds: float = Field(default=120.0, gt=0)
+    recovery_scan_interval_seconds: float = Field(default=30.0, gt=0)
+
+    @model_validator(mode="after")
+    def validate_transient_delays(self) -> WorkerConfig:
+        if self.transient_error_base_delay_seconds > self.transient_error_max_delay_seconds:
+            raise ValueError("后台循环基础退避不能大于最大退避")
+        return self
 
 
 class ControlClientConfig(BaseModel):
     base_url: str = "http://127.0.0.1:18100"
     request_timeout_seconds: float = Field(default=10.0, gt=0)
     default_lease_ttl_seconds: int = Field(default=60, gt=0)
+
+
+class LeaseRenewalConfig(BaseModel):
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    base_delay_seconds: float = Field(default=0.2, ge=0, le=30)
+    max_delay_seconds: float = Field(default=2.0, ge=0, le=60)
+    safety_margin_seconds: float = Field(default=5.0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_delays(self) -> LeaseRenewalConfig:
+        if self.base_delay_seconds > self.max_delay_seconds:
+            raise ValueError("租约续租基础退避不能大于最大退避")
+        return self
 
 
 class StorageConfig(BaseModel):
@@ -142,15 +178,28 @@ class OrchestratorSettings(BaseSettings):
     service: ServiceConfig = Field(default_factory=ServiceConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     postgres: PostgresConfig = Field(default_factory=PostgresConfig)
+    postgres_retry: PostgresRetryConfig = Field(default_factory=PostgresRetryConfig)
     kafka: KafkaConfig = Field(default_factory=KafkaConfig)
     outbox: OutboxConfig = Field(default_factory=OutboxConfig)
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
     control: ControlClientConfig = Field(default_factory=ControlClientConfig)
+    lease_renewal: LeaseRenewalConfig = Field(default_factory=LeaseRenewalConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     media: MediaConfig = Field(default_factory=MediaConfig)
     ppt: PptConfig = Field(default_factory=PptConfig)
     asr: AsrConfig = Field(default_factory=AsrConfig)
     readiness: ReadinessConfig = Field(default_factory=ReadinessConfig)
+
+    @model_validator(mode="after")
+    def validate_lease_safety_window(self) -> OrchestratorSettings:
+        if (
+            self.lease_renewal.safety_margin_seconds
+            >= self.control.default_lease_ttl_seconds
+        ):
+            raise ValueError("租约续租安全余量必须小于默认租约 TTL")
+        if self.lease_renewal.safety_margin_seconds >= self.ppt.lease_ttl_seconds:
+            raise ValueError("租约续租安全余量必须小于 PPT 租约 TTL")
+        return self
 
     @classmethod
     def settings_customise_sources(

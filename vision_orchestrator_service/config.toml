@@ -72,6 +72,16 @@ base_url = "http://127.0.0.1:18100"
 # 控制服务请求超时秒数。
 timeout_seconds = 10.0
 
+[lease_renewal]
+# 同一 VBas lease_id 在安全窗口内的续租总尝试次数。
+max_attempts = 3
+# 首次续租重试前的基础退避秒数。
+base_delay_seconds = 0.2
+# 续租指数退避允许达到的最大秒数。
+max_delay_seconds = 2.0
+# 最近确认到期时间前停止使用租约的安全余量秒数。
+safety_margin_seconds = 5.0
+
 [worker]
 # 视觉任务处理并发数。
 concurrency = 2

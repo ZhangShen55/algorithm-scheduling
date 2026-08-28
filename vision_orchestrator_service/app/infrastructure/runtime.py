@@ -17,6 +17,7 @@ from packages.platform_common.kafka import (
     KafkaMessage,
     KafkaTopicManager,
 )
+from packages.platform_common.lease_resilience import LeaseRenewalPolicy
 from packages.platform_common.repository import CourseRepository
 from packages.platform_contracts.vision import VisualAnalysisCommand
 
@@ -255,6 +256,12 @@ class VisionOrchestratorRuntime:
         lease_client = CapacityLeaseHttpClient(
             resources.http_client,
             control_service_url=settings.control.base_url,
+            renewal_policy=LeaseRenewalPolicy(
+                max_attempts=settings.lease_renewal.max_attempts,
+                base_delay_seconds=settings.lease_renewal.base_delay_seconds,
+                max_delay_seconds=settings.lease_renewal.max_delay_seconds,
+                safety_margin_seconds=settings.lease_renewal.safety_margin_seconds,
+            ),
         )
         vbas = VbasBatchClient(
             resources.http_client,

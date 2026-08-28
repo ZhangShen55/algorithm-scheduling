@@ -37,6 +37,16 @@ docker build -f orchestrator_service/docker/Dockerfile -t orchestrator-service .
 取消后释放。容量暂时不足时节点进入等待状态，由后续调度重试，不会把内部 `503` 直接作为课程
 终态返回 A 服务。
 
+`worker.node_concurrency` 是普通节点调度槽位上限，不等于独立媒体下载并发，也不等于 GPU
+真实推理并发；最终同时运行数仍受算子声明容量约束。单一能力可使用全部槽位，多能力按轮转
+分配。节点从状态 10/30 原子领取，同一能力每轮只执行一次容量等待协调。
+
+`[postgres_retry]` 只对 `40P01`、`40001` 短事务进行有界重试；认证、迁移、SQL 编程和状态
+不变量错误不会被掩盖。`[lease_renewal]` 规定同一 lease_id 的续租尝试、退避和 TTL 安全余量；
+单次 `ReadError` 不再直接失败，最终无法确认时普通幂等节点回到状态 30。过期的普通 ASR/OCR
+领取由 `[worker]` 恢复参数检查原租约后重排，`PPT_SLICE` 始终排除并继续通过确定性
+`operator_task_id`、manifest、回调和对账恢复。本变更不调整先租约后下载/FFmpeg 的顺序。
+
 `PPT_OCR` 是工作项型节点：协调节点不占用外层算子租约，每个 `ppt_image_id` 独立申请 OCR
 租约，持久化单图结果后释放。幂等单图调用仅对瞬时 `NetworkError`/`RemoteProtocolError`
 执行 `[ppt]` 中配置的有限重试，默认总尝试 2 次、间隔 0.2 秒；OCR 业务错误、HTTP 超时和

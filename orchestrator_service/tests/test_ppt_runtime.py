@@ -17,6 +17,7 @@ from orchestrator_service.app.infrastructure.ppt_slice import (
     PptSliceTerminalCallback,
     PptTerminalHandleResult,
 )
+from packages.platform_common.lease_resilience import LeaseRenewalPolicy
 from packages.platform_common.operator_registry import CapacityLease
 from packages.platform_common.repository import NodeRecord, TaskTypeRecord
 from packages.platform_contracts.status import NodeStatus, Priority, TaskType
@@ -230,6 +231,12 @@ def _coordinator(
         lease_renew_interval_seconds=0.02,
         reconcile_interval_seconds=0.02,
         workspace_cleaner=cleaner,
+        renewal_policy=LeaseRenewalPolicy(
+            max_attempts=3,
+            base_delay_seconds=0,
+            max_delay_seconds=0,
+            safety_margin_seconds=0.2,
+        ),
     )
 
 

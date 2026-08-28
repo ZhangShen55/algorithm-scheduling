@@ -31,6 +31,10 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 1
 实例。容量不足不排队，统一以 HTTP `200`、业务码 `50301` 返回；算子调用或响应格式错误使用
 业务码 `50000`。
 
+`[leases]` 同时配置请求/WebSocket TTL 和续租重试、安全余量。瞬时网络读取失败会对原
+lease_id、原实例有限重试，不申请第二个实例；安全窗口耗尽或确认租约丢失只终止对应请求或
+实时 ASR 会话。释放 404 视为已释放，瞬时释放失败不逆转已经返回的业务终态。
+
 FaceRec 人物管理由 Online Gateway 代理以下接口：
 
 - `POST /api/online/face/persons`
