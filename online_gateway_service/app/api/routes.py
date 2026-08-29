@@ -225,8 +225,12 @@ def create_online_gateway_app(
             return BusinessResponse[JsonObject].failure(40001, "VBas 请求必须包含 ImageList")
         image_validity = await asyncio.gather(
             *(
-                _valid_online_image(item.get("StoragePath"), service_settings)
-                for item in image_list if isinstance(item, dict)
+                _valid_online_image(
+                    item.get("StoragePath") or item.get("Data"),
+                    service_settings,
+                )
+                for item in image_list
+                if isinstance(item, dict)
             )
         )
         if len(image_validity) != len(image_list) or not all(image_validity):

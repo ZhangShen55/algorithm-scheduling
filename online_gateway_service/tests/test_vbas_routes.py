@@ -34,6 +34,7 @@ def test_vbas_routes_forward_raw_response_and_online_header() -> None:
     app.state.online_lease_client = Lease()
     app.state.online_http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     payload = {"ImageList": [{"ImageId": "1", "StoragePath": VALID_PNG}], "AnalysisRule": {"AlgParams": {"PolygonList": []}}}
+    person_count_payload = {"ImageList": [{"ImageID": "1", "Data": VALID_PNG}], "AnalysisRule": {"AlgParams": {"PolygonList": []}}}
     try:
         with TestClient(app) as client:
             for path, expected in [
@@ -41,7 +42,10 @@ def test_vbas_routes_forward_raw_response_and_online_header() -> None:
                 ("/online/vbas/student", "/ImageDetect/student/v1.0.0"),
                 ("/online/vbas/person-count", "/AE/SyncTasks2"),
             ]:
-                response = client.post(path, json=payload)
+                response = client.post(
+                    path,
+                    json=person_count_payload if path.endswith("person-count") else payload,
+                )
                 assert response.status_code == 200
                 assert response.json() == {"TaskResult": [], "FreeCapacity": 7}
                 assert calls[-1][0] == expected
