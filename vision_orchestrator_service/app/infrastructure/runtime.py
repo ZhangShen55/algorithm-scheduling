@@ -262,6 +262,8 @@ class VisionOrchestratorRuntime:
                 max_delay_seconds=settings.lease_renewal.max_delay_seconds,
                 safety_margin_seconds=settings.lease_renewal.safety_margin_seconds,
             ),
+            acquire_wait_timeout_seconds=settings.lease_renewal.acquire_wait_timeout_seconds,
+            acquire_retry_interval_seconds=settings.lease_renewal.acquire_retry_interval_seconds,
         )
         vbas = VbasBatchClient(
             resources.http_client,

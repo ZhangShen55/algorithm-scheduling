@@ -279,13 +279,17 @@ def validate_operator_toml_contract(service_name: str, config_path: Path) -> Non
         tias = config.get("TIAS")
         if not isinstance(tias, Mapping):
             raise DeploymentContractError(f"{service_name} mounted TOML requires [TIAS]")
-        if tias.get("MaxConcurrentBatches") != 1024:
+        if tias.get("MaxConcurrentOfflineBatches") != 1:
             raise DeploymentContractError(
-                f"{service_name} TIAS.MaxConcurrentBatches must be 1024"
+                f"{service_name} TIAS.MaxConcurrentOfflineBatches must be 1"
             )
-        if tias.get("MaxQueueSize") != 0:
+        if tias.get("MaxConcurrentOnlineRequests") != 24:
             raise DeploymentContractError(
-                f"{service_name} TIAS.MaxQueueSize must be 0"
+                f"{service_name} TIAS.MaxConcurrentOnlineRequests must be 24"
+            )
+        if tias.get("MaxQueueOnlineSize") != 24:
+            raise DeploymentContractError(
+                f"{service_name} TIAS.MaxQueueOnlineSize must be 24"
             )
     if operator_name == "ppt-slice":
         task = config.get("task")

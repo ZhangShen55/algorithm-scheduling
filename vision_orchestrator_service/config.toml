@@ -81,6 +81,10 @@ base_delay_seconds = 0.2
 max_delay_seconds = 2.0
 # 最近确认到期时间前停止使用租约的安全余量秒数。
 safety_margin_seconds = 5.0
+# 离线视觉租约不足时最多等待的总秒数。
+acquire_wait_timeout_seconds = 300.0
+# 首次租约申请失败后的基础重试间隔，后续按退避增加并带随机抖动。
+acquire_retry_interval_seconds = 0.2
 
 [worker]
 # 视觉任务处理并发数。

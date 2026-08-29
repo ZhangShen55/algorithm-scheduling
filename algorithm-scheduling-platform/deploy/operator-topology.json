@@ -124,7 +124,7 @@
       "deploy_config_name": "vbas.gpu.toml",
       "config_target": "/workspace/config.toml",
       "declared_capacity": 1024,
-      "capabilities": ["student_behavior", "teacher_behavior"],
+      "capabilities": ["student_behavior", "teacher_behavior", "person_count"],
       "smoke_case_id": "INF-VBAS"
     }
   ],

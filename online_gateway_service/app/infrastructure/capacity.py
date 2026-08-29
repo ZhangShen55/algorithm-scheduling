@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import random
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
@@ -26,6 +28,7 @@ class OnlineWorkContext:
     node_id: str | None = None
     item_id: str | None = None
     trace_id: str | None = None
+    capacity_pool: str = "online"
 
     def as_dict(self) -> dict[str, str]:
         values = {
@@ -36,6 +39,7 @@ class OnlineWorkContext:
             "node_id": self.node_id,
             "item_id": self.item_id,
             "trace_id": self.trace_id,
+            "capacity_pool": self.capacity_pool,
         }
         return {key: value for key, value in values.items() if value is not None}
 
@@ -49,6 +53,7 @@ class CapacityLease:
     expires_at: datetime
     acquired_at: datetime | None = None
     work_context: OnlineWorkContext | None = None
+    capacity_pool: str = "online"
 
 
 class OnlineCapacityLeaseError(RuntimeError):
@@ -63,11 +68,15 @@ class OnlineCapacityLeaseClient:
         control_service_url: str,
         metrics: PlatformMetrics | None = None,
         renewal_policy: LeaseRenewalPolicy | None = None,
+        acquire_wait_timeout_seconds: float = 300.0,
+        acquire_retry_interval_seconds: float = 0.2,
     ) -> None:
         self._http = http_client
         self._control_service_url = control_service_url.rstrip("/")
         self._metrics = metrics
         self._renewal_policy = renewal_policy
+        self._acquire_wait_timeout_seconds = acquire_wait_timeout_seconds
+        self._acquire_retry_interval_seconds = acquire_retry_interval_seconds
 
     @asynccontextmanager
     async def acquire(
@@ -77,6 +86,7 @@ class OnlineCapacityLeaseClient:
         ttl_seconds: int = 60,
         work_context: OnlineWorkContext | None = None,
         renew_interval_seconds: float | None = None,
+        capacity_pool: str = "online",
     ) -> AsyncIterator[CapacityLease]:
         interval = renew_interval_seconds or max(min(ttl_seconds / 3, 20.0), 0.1)
         if interval >= ttl_seconds:
@@ -90,19 +100,42 @@ class OnlineCapacityLeaseClient:
         }
         if work_context is not None:
             payload["work_context"] = work_context.as_dict()
+        payload["capacity_pool"] = capacity_pool
         self._record_lease_event(capability=capability, outcome="requested")
-        try:
-            response = await self._http.post(
-                f"{self._control_service_url}/internal/operator-instances/lease",
-                json=payload,
-            )
-            response.raise_for_status()
-            lease = self._parse_lease(response.json())
-        except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
-            self._record_lease_event(capability=capability, outcome="rejected")
-            raise OnlineCapacityLeaseError(
-                f"获取在线算子容量失败: {capability}"
-            ) from exc
+        deadline = time.monotonic() + self._acquire_wait_timeout_seconds
+        delay = max(0.0, self._acquire_retry_interval_seconds)
+        last_error: Exception | None = None
+        while True:
+            try:
+                response = await self._http.post(
+                    f"{self._control_service_url}/internal/operator-instances/lease",
+                    json=payload,
+                )
+                if self._is_capacity_unavailable(response, capability=capability):
+                    last_error = OnlineCapacityLeaseError(
+                        f"获取在线算子容量暂不可用: {capability}"
+                    )
+                else:
+                    response.raise_for_status()
+                    lease = self._parse_lease(response.json())
+                    break
+            except httpx.HTTPStatusError as exc:
+                raise OnlineCapacityLeaseError(
+                    f"获取在线算子容量失败: {capability}"
+                ) from exc
+            except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+                last_error = exc
+                raise OnlineCapacityLeaseError(
+                    f"获取在线算子容量失败: {capability}"
+                ) from exc
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._record_lease_event(capability=capability, outcome="timeout")
+                raise OnlineCapacityLeaseError(
+                    f"等待在线算子容量超过 {self._acquire_wait_timeout_seconds:g} 秒: {capability}"
+                ) from last_error
+            await asyncio.sleep(min(remaining, delay + random.uniform(0, delay * 0.25)))
+            delay = min(max(delay * 2, 0.2), 2.0)
         self._record_lease_event(
             capability=capability,
             outcome="acquired",
@@ -208,6 +241,26 @@ class OnlineCapacityLeaseClient:
             )
 
     @staticmethod
+    def _is_capacity_unavailable(
+        response: httpx.Response,
+        *,
+        capability: str,
+    ) -> bool:
+        if response.status_code != 503:
+            return False
+        try:
+            body = response.json()
+        except ValueError:
+            return False
+        detail = body.get("detail") if isinstance(body, dict) else None
+        return detail in {
+            "暂无可用算子容量",
+            f"暂无可用算子容量: {capability}",
+            "暂无可用在线算子容量",
+            f"暂无可用在线算子容量: {capability}",
+        }
+
+    @staticmethod
     def _parse_lease(body: object) -> CapacityLease:
         if not isinstance(body, dict):
             raise TypeError("容量租约响应不是 JSON 对象")
@@ -231,4 +284,5 @@ class OnlineCapacityLeaseClient:
                 if isinstance(raw_context, dict)
                 else None
             ),
+            capacity_pool=str(body.get("capacity_pool") or "online"),
         )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Protocol
+from uuid import UUID
 
 from packages.platform_common.media import DownloadedMedia
 from packages.platform_common.repository import NodeRecord, NodeResultWrite
@@ -13,7 +14,11 @@ from .ppt_text import PptTextPipeline
 
 
 class NodeLookupRepository(Protocol):
-    def list_nodes(self, course_task_type_id: int) -> list[NodeRecord]: ...
+    def list_nodes(
+        self,
+        course_task_type_id: int,
+        run_id: object | None = None,
+    ) -> list[NodeRecord]: ...
 
 
 class MediaDownloadClient(Protocol):
@@ -234,6 +239,7 @@ class NodeExecutionRouter:
     def _node(self, context: NodeExecutionContext, node_code: str) -> NodeRecord:
         nodes = self._repository.list_nodes(
             self._course_task_type_id(context),
+            UUID(context.run_id) if context.run_id else None,
         )
         try:
             return next(node for node in nodes if node.node_code == node_code)

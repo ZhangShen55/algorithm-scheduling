@@ -46,6 +46,10 @@ Control Service 是算子实例注册和平台容量租约的唯一权威。平�
 `ppt_slice` 和 `vbas`。新的 `text_analysis` 注册请求必须被拒绝且不得创建 Redis 实例、心跳
 或租约键；PostgreSQL 中历史 `operator_code=text_analysis` 审计行仍须可查询。
 
+ASR 任务的 `asr_options` 会在提交时补齐为完整参数快照，按稳定指纹生成独立 `run_id`。
+相同参数的已完成或活动版本直接复用，参数变化创建新的执行版本；课程查询会返回当前版本
+以及 `runs` 历史摘要，旧版本结果不会被覆盖。
+
 ## 数据库迁移
 
 启动 `control-service` 前，必须先按文件名顺序将

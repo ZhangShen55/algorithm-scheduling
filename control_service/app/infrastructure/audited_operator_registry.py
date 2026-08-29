@@ -121,6 +121,7 @@ class OperatorAudit(Protocol):
         *,
         inflight: int,
         model_ready: bool,
+        inflight_by_pool: dict[str, int] | None = None,
         min_interval_seconds: float,
     ) -> bool: ...
 
@@ -191,12 +192,21 @@ class AuditedOperatorRegistry:
         *,
         inflight: int,
         model_ready: bool,
+        inflight_by_pool: dict[str, int] | None = None,
     ) -> OperatorInstance:
-        instance = self._realtime.heartbeat(
-            instance_id,
-            inflight=inflight,
-            model_ready=False,
-        )
+        try:
+            instance = self._realtime.heartbeat(
+                instance_id,
+                inflight=inflight,
+                model_ready=False,
+                inflight_by_pool=inflight_by_pool,
+            )
+        except TypeError:
+            instance = self._realtime.heartbeat(
+                instance_id,
+                inflight=inflight,
+                model_ready=False,
+            )
         if model_ready:
             try:
                 healthy = self._health_checker.check(instance)
@@ -208,11 +218,19 @@ class AuditedOperatorRegistry:
                     exc_info=True,
                 )
             if healthy:
-                instance = self._realtime.heartbeat(
-                    instance_id,
-                    inflight=inflight,
-                    model_ready=True,
-                )
+                try:
+                    instance = self._realtime.heartbeat(
+                        instance_id,
+                        inflight=inflight,
+                        model_ready=True,
+                        inflight_by_pool=inflight_by_pool,
+                    )
+                except TypeError:
+                    instance = self._realtime.heartbeat(
+                        instance_id,
+                        inflight=inflight,
+                        model_ready=True,
+                    )
         try:
             self._audit.record_heartbeat_summary(
                 instance_id,
@@ -288,10 +306,26 @@ class AuditedOperatorRegistry:
         capability: str,
         ttl_seconds: int,
         work_context: WorkContext | None = None,
+        capacity_pool: str = "default",
     ) -> CapacityLease:
         if work_context is None:
-            return self._realtime.lease(capability, ttl_seconds)
-        return self._realtime.lease(capability, ttl_seconds, work_context)
+            try:
+                return self._realtime.lease(
+                    capability,
+                    ttl_seconds,
+                    capacity_pool=capacity_pool,
+                )
+            except TypeError:
+                return self._realtime.lease(capability, ttl_seconds)
+        try:
+            return self._realtime.lease(
+                capability,
+                ttl_seconds,
+                work_context,
+                capacity_pool=capacity_pool,
+            )
+        except TypeError:
+            return self._realtime.lease(capability, ttl_seconds, work_context)
 
     def bind_lease_context(
         self,

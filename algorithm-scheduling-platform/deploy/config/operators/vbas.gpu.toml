@@ -44,10 +44,12 @@ BaseUrl = "http://127.0.0.1:8981"
 AiQualityBaseUrl = "http://127.0.0.1:9000"
 # 是否暴露旧 IAS 同步任务接口。
 TiasExposeLegacySyncTasks = false
-# 本地推理按 HTTP batch 计数；每个 batch 最多 8 图但只占一个运行槽位。
-MaxConcurrentBatches = 1024
-# 0 表示不在实例内排队，满载时直接返回过载响应，由平台重新选择。
-MaxQueueSize = 0
+# 离线视觉按 batch 计数；每个 batch 最多 8 图但只占一个离线运行槽位。
+MaxConcurrentOfflineBatches = 1
+# 在线视觉按 HTTP 请求计数；一个请求（建议一图）占一个在线运行槽位。
+MaxConcurrentOnlineRequests = 24
+# 在线运行槽位用尽后的实例内有界等待请求数；0 表示不在实例内等待。
+MaxQueueOnlineSize = 24
 # 注册和心跳配置。
 HeartbeatIntervalSeconds = 5
 HeartbeatTimeoutSeconds = 15

@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from packages.platform_common.repository import NodeRecord, NodeWrite
+from packages.platform_contracts.asr import asr_params_fingerprint
 from packages.platform_contracts.status import NodeStatus, Priority, TaskType
 
 
@@ -18,6 +19,7 @@ class PipelineRepository(Protocol):
         nodes: list[NodeWrite],
         *,
         submission_id: str,
+        run_id: UUID | None = None,
     ) -> list[NodeRecord]: ...
 
 
@@ -28,6 +30,9 @@ class CourseTaskCommand:
     task_id: str
     task_type: TaskType
     priority: Priority
+    run_id: UUID | None = None
+    params_fingerprint: str | None = None
+    effective_params: dict[str, Any] | None = None
 
     @classmethod
     def from_bytes(cls, value: bytes) -> CourseTaskCommand:
@@ -37,13 +42,31 @@ class CourseTaskCommand:
         payload = decoded.get("payload")
         if not isinstance(payload, dict):
             raise ValueError("课程任务事件缺少 payload")
-        return cls(
+        command = cls(
             event_id=UUID(str(decoded["event_id"])),
             submission_id=str(payload["submission_id"]),
             task_id=str(payload["task_id"]),
             task_type=TaskType(payload["task_type"]),
             priority=Priority(payload.get("priority", Priority.NORMAL.value)),
+            run_id=(UUID(str(payload["run_id"])) if payload.get("run_id") else None),
+            params_fingerprint=(
+                str(payload["params_fingerprint"])
+                if payload.get("params_fingerprint")
+                else None
+            ),
+            effective_params=(
+                payload["effective_params"]
+                if isinstance(payload.get("effective_params"), dict)
+                else None
+            ),
         )
+        if command.task_type is TaskType.ASR and command.run_id is not None:
+            if not isinstance(command.effective_params, dict):
+                raise ValueError("ASR 执行版本事件缺少完整 effective_params")
+            expected = asr_params_fingerprint(command.effective_params)
+            if command.params_fingerprint != expected:
+                raise ValueError("ASR 执行版本事件的 params_fingerprint 校验失败")
+        return command
 
 
 def pipeline_nodes(task_type: TaskType, priority: Priority) -> list[NodeWrite]:
@@ -106,4 +129,5 @@ class PipelineInitializer:
             command.task_type,
             pipeline_nodes(command.task_type, command.priority),
             submission_id=command.submission_id,
+            run_id=command.run_id,
         )

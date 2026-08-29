@@ -40,7 +40,7 @@ fixture 或外部可信模型 manifest。
 | `40001` | 请求字段或业务参数不合法 | 修正请求，不要原样无限重试 |
 | `40401` | `task_id` 不存在 | 按未提交处理或确认业务 ID |
 | `50000` | 平台或算子调用失败 | 记录 `message`，按业务策略稍后查询/重试 |
-| `50301` | 暂无可用算子容量 | 有界退避后重试；在线请求不会转成离线任务 |
+| `50301` | 等待算子容量超时或在线 Control 不可用 | 网关已按配置等待；A 可在总预算内重新提交 |
 
 网络错误、连接超时、反向代理错误仍可能使用非 200 HTTP 状态。A 必须同时判断 HTTP 状态和 JSON `code`，不能只判断其中一个。
 
@@ -106,8 +106,8 @@ Content-Type: application/json
 ```json
 {
   "language": "auto",
-  "showSpk": true,
-  "showEmotion": true,
+  "showSpk": false,
+  "showEmotion": false,
   "showRoleIdentify": false,
   "wordTimestamps": false,
   "hotWords": []
@@ -121,7 +121,8 @@ Content-Type: application/json
 - `segment_words` 每段始终存在。`wordTimestamps=false` 时为 `[]`；为 `true` 时返回真实词时间，个别无法对齐的段允许为 `[]`。
 - 算子未开启小语种或 Whisper 模型未就绪时，`fr` 返回 HTTP 200、`code=4003`；空值或其他未支持语言返回 HTTP 200、`code=4009`。平台将这些响应记为节点业务失败。
 
-`wordTimestamps` 保留但不建议开启。已完成 ASR 再以不同参数提交时，平台复用原结果和原 `effective_params`，不会自动重算或生成新版本。
+`wordTimestamps` 保留但不建议开启。已完成 ASR 再以不同参数提交时，平台保留原版本和结果，并为
+新参数创建独立 `run_id`；相同参数的已完成版本才会复用，不会静默覆盖历史结果。
 
 ### 3.4 学生行为示例
 
@@ -241,17 +242,16 @@ GET /api/course-jobs/{task_id}
 
 在线图片由 A 直接提供 Base64。平台不接收 RTSP、不拉流、不截图，也不把请求放入 Kafka。建议一图一请求；兼容多图 VBas 请求时，完整请求只选择一个实例，不跨实例拆分，算子返回的成功项和失败项原样保留。
 
-### 5.1 VBas 师生分析
+### 5.1 VBas 教师行为分析
 
 ```text
-POST /api/online/vbas/analyze
+POST /online/vbas/teacher
 ```
 
 ```json
 {
   "task_id": "online-001",
   "batch_id": "batch-001",
-  "stream_type": "student",
   "ImageList": [
     {
       "ImageId": "student-001",
@@ -261,7 +261,39 @@ POST /api/online/vbas/analyze
 }
 ```
 
-`stream_type` 可用 `student`/`s` 或 `teacher`/`t`。`ImageList` 至少一项，每项必须有非空 `ImageId` 和有效 Base64 `StoragePath`。
+教师路由直接转发 VBas `/ImageDetect/teacher/v1.0.0`，不再传 `stream_type` 分流字段。
+`ImageList` 至少一项，每项必须有非空 `ImageId` 和有效 Base64 `StoragePath`。
+
+### 5.1.1 VBas 学生行为分析
+
+```text
+POST /online/vbas/student
+```
+
+请求体沿用 VBas `/ImageDetect/student/v1.0.0`，不传 `stream_type`：
+
+```json
+{
+  "ImageList": [
+    {
+      "ImageId": "student-001",
+      "StoragePath": "data:image/jpeg;base64,/9j/4AAQ..."
+    }
+  ]
+}
+```
+
+### 5.1.2 VBas 纯人数检测
+
+```text
+POST /online/vbas/person-count
+```
+
+请求体与 VBas `/AE/SyncTasks2` 完全一致；`AnalysisRule.AlgParams.PolygonList` 中的区域坐标会
+原样转发，响应中的 `TaskResult`、`PersonInfo`、`FaceInfo` 等字段也原样保留。
+
+三个 VBas 路由均按一次 HTTP 请求申请一个 `online` 容量租约。建议 A 一图一请求；兼容多图时，
+整个请求只选择一个实例，不跨实例拆分。
 
 ### 5.2 人脸对比
 
@@ -303,7 +335,8 @@ WebSocket /api/online/asr/stream
 
 A/播放器建连后发送现有实时 ASR 协议规定的音频帧，平台在连接建立时选择一个 `asr_online` 实例，并在整个会话保持粘性。上游响应实时返回，不默认入课程结果库，也不替代课后离线 ASR。
 
-无容量时平台发送：
+在线租约暂不可用时，网关会按配置等待并重试，默认最多 300 秒；只有达到等待上限或 Control
+服务不可用时才返回：
 
 ```json
 {

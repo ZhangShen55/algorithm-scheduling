@@ -5,7 +5,7 @@ import logging
 import random
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, TypeVar
 from uuid import UUID, uuid4
@@ -15,8 +15,10 @@ from sqlalchemy.exc import DBAPIError
 
 from packages.platform_common.state_machine import validate_node_transition
 from packages.platform_contracts.status import NodeStatus, Priority, TaskType
+from packages.platform_contracts.asr import asr_params_fingerprint
 
 JsonObject = dict[str, Any]
+ZERO_RUN_ID = UUID("00000000-0000-0000-0000-000000000000")
 TransactionResultT = TypeVar("TransactionResultT")
 PostgresRetryObserver = Callable[..., None]
 
@@ -70,6 +72,7 @@ class TaskTypeWrite:
     priority: Priority = Priority.NORMAL
     request_payload: JsonObject = field(default_factory=dict)
     effective_params: JsonObject | None = None
+    params_fingerprint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +88,22 @@ class TaskTypeRecord:
     created: bool
     updated_at: datetime
     submission_id: str = ""
+    run_id: UUID | None = None
+    params_fingerprint: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AsrRunRecord:
+    run_id: UUID
+    course_task_type_id: int
+    params_fingerprint: str
+    effective_params: JsonObject
+    status: NodeStatus
+    reason: str
+    result: JsonObject | list[Any] | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +185,7 @@ class NodeRecord:
     claimed_by: str | None = None
     claim_token: UUID | None = None
     attempt: int = 0
+    run_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,9 +223,25 @@ def _task_type_record(row: RowMapping, *, created: bool) -> TaskTypeRecord:
         priority=Priority(row["priority"]),
         reason=row["reason"],
         request_payload=row["request_payload"],
-        effective_params=row["effective_params"],
+        effective_params=row.get("effective_params"),
         created=created,
         updated_at=row["updated_at"],
+        run_id=(UUID(str(row["run_id"])) if row.get("run_id") else None),
+    )
+
+
+def _asr_run_record(row: RowMapping) -> AsrRunRecord:
+    return AsrRunRecord(
+        run_id=UUID(str(row["run_id"])),
+        course_task_type_id=int(row["course_task_type_id"]),
+        params_fingerprint=str(row["params_fingerprint"]),
+        effective_params=row["effective_params"] or {},
+        status=NodeStatus(row["status"]),
+        reason=str(row["reason"]),
+        result=row["result"],
+        created_at=row["created_at"],
+        started_at=row["started_at"],
+        finished_at=row["finished_at"],
     )
 
 
@@ -229,6 +265,7 @@ def _node_record(row: RowMapping) -> NodeRecord:
         claimed_by=row["claimed_by"],
         claim_token=row["claim_token"],
         attempt=int(row["attempt"]),
+        run_id=(UUID(str(row["run_id"])) if row.get("run_id") else ZERO_RUN_ID),
     )
 
 
@@ -397,6 +434,76 @@ class CourseRepository:
                 time.sleep(upper + upper * policy.jitter_ratio * random.random())
         raise AssertionError("PostgreSQL 操作重试循环不应到达此处")
 
+    @staticmethod
+    def _default_asr_params() -> JsonObject:
+        return {
+            "language": "auto",
+            "showSpk": False,
+            "showEmotion": False,
+            "showRoleIdentify": False,
+            "wordTimestamps": False,
+            "hotWords": [],
+        }
+
+    @classmethod
+    def _normalized_asr_params(cls, value: JsonObject | None) -> JsonObject:
+        params = cls._default_asr_params()
+        if value:
+            params.update(value)
+        return params
+
+    @staticmethod
+    def _asr_run_status_is_active(status: NodeStatus | int) -> bool:
+        return NodeStatus(status) not in {
+            NodeStatus.FAILED,
+            NodeStatus.CANCELLED,
+        }
+
+    def _latest_asr_run(
+        self,
+        connection: Connection,
+        course_task_type_id: int,
+        *,
+        params_fingerprint: str | None = None,
+    ) -> AsrRunRecord | None:
+        filters = "course_task_type_id = :course_task_type_id"
+        params: dict[str, Any] = {"course_task_type_id": course_task_type_id}
+        if params_fingerprint is not None:
+            filters += " AND params_fingerprint = :params_fingerprint"
+            params["params_fingerprint"] = params_fingerprint
+        row = connection.execute(
+            text(
+                f"""
+                SELECT run_id, course_task_type_id, params_fingerprint,
+                       effective_params, status, reason, result,
+                       created_at, started_at, finished_at
+                FROM task_type_runs
+                WHERE {filters}
+                ORDER BY created_at DESC, run_id DESC
+                LIMIT 1
+                """
+            ),
+            params,
+        ).mappings().one_or_none()
+        return None if row is None else _asr_run_record(row)
+
+    @staticmethod
+    def _record_with_asr_run(
+        record: TaskTypeRecord,
+        run: AsrRunRecord | None,
+    ) -> TaskTypeRecord:
+        if run is None:
+            return record
+        return replace(
+            record,
+            run_id=run.run_id,
+            status=run.status,
+            reason=run.reason,
+            effective_params=run.effective_params,
+            updated_at=run.finished_at or run.started_at or run.created_at,
+            params_fingerprint=run.params_fingerprint,
+        )
+
     def create_task_types(
         self,
         *,
@@ -410,6 +517,11 @@ class CourseRepository:
         records: list[TaskTypeRecord] = []
         submission_id = str(uuid4())
         with self._engine.begin() as connection:
+            # 同一课程的并发提交必须串行检查 ASR 参数版本，避免同时创建两个活动版本。
+            connection.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:task_id, 0))"),
+                {"task_id": task_id},
+            )
             connection.execute(
                 text(
                     """
@@ -424,9 +536,15 @@ class CourseRepository:
             )
 
             for write in writes:
+                if write.task_type is TaskType.ASR:
+                    effective_params = self._normalized_asr_params(write.effective_params)
+                    fingerprint = asr_params_fingerprint(effective_params)
+                else:
+                    effective_params = write.effective_params
+                    fingerprint = write.params_fingerprint
                 row = connection.execute(
                     text(
-                        """
+                        f"""
                         INSERT INTO course_task_types (
                             submission_id, task_id, task_type, status, priority, reason,
                             request_payload, effective_params
@@ -449,12 +567,94 @@ class CourseRepository:
                         "priority": write.priority.value,
                         "reason": "任务已接收，等待处理",
                         "request_payload": _json(write.request_payload),
-                        "effective_params": _json(write.effective_params),
+                        "effective_params": _json(effective_params),
                     },
                 ).mappings().one_or_none()
 
-                created = row is not None
+                task_type_created = row is not None
+                run: AsrRunRecord | None = None
+                run_created = False
+                if write.task_type is TaskType.ASR:
+                    if row is None:
+                        row = connection.execute(
+                            text(
+                                """
+                                SELECT id, submission_id, task_id, task_type, status, priority,
+                                       reason, request_payload, effective_params, updated_at
+                                FROM course_task_types
+                                WHERE task_id = :task_id AND task_type = :task_type
+                                FOR UPDATE
+                                """
+                            ),
+                            {"task_id": task_id, "task_type": write.task_type.value},
+                        ).mappings().one()
+                    existing = self._latest_asr_run(
+                        connection,
+                        int(row["id"]),
+                        params_fingerprint=fingerprint,
+                    )
+                    needs_new_run = (
+                        existing is None
+                        or existing.status in {NodeStatus.FAILED, NodeStatus.CANCELLED}
+                        or (existing.status is NodeStatus.COMPLETED and existing.result is None)
+                    )
+                    if needs_new_run:
+                        run_id = uuid4()
+                        run = _asr_run_record(
+                            connection.execute(
+                                text(
+                                    """
+                                    INSERT INTO task_type_runs (
+                                        run_id, course_task_type_id, params_fingerprint,
+                                        effective_params, status, reason
+                                    )
+                                    VALUES (
+                                        :run_id, :course_task_type_id, :params_fingerprint,
+                                        CAST(:effective_params AS jsonb), 10,
+                                        '等待离线语音转写'
+                                    )
+                                    RETURNING run_id, course_task_type_id, params_fingerprint,
+                                              effective_params, status, reason, result,
+                                              created_at, started_at, finished_at
+                                    """
+                                ),
+                                {
+                                    "run_id": run_id,
+                                    "course_task_type_id": int(row["id"]),
+                                    "params_fingerprint": fingerprint,
+                                    "effective_params": _json(effective_params),
+                                },
+                            ).mappings().one()
+                        )
+                        run_created = True
+                    else:
+                        run = existing
+                    created = run_created
+                    connection.execute(
+                        text(
+                            """
+                            UPDATE course_task_types
+                            SET status = :status,
+                                reason = :reason,
+                                started_at = CASE WHEN :status = 50
+                                    THEN COALESCE(started_at, now()) ELSE started_at END,
+                                finished_at = CASE WHEN :status IN (60, 70, 80)
+                                    THEN COALESCE(finished_at, now()) ELSE NULL END,
+                                updated_at = now()
+                            WHERE id = :course_task_type_id
+                            """
+                        ),
+                        {
+                            "course_task_type_id": int(row["id"]),
+                            "status": run.status.value,
+                            "reason": run.reason,
+                        },
+                    )
+                else:
+                    created = task_type_created
+
                 if created:
+                    event_submission_id = str(row["submission_id"])
                     connection.execute(
                         text(
                             """
@@ -475,7 +675,16 @@ class CourseRepository:
                                     "task_id": task_id,
                                     "task_type": write.task_type.value,
                                     "priority": write.priority.value,
-                                    "submission_id": submission_id,
+                                    "submission_id": event_submission_id,
+                                    **(
+                                        {
+                                            "run_id": str(run.run_id),
+                                            "params_fingerprint": fingerprint,
+                                            "effective_params": effective_params,
+                                        }
+                                        if run is not None
+                                        else {}
+                                    ),
                                 }
                             ),
                         },
@@ -492,7 +701,10 @@ class CourseRepository:
                         ),
                         {"task_id": task_id, "task_type": write.task_type.value},
                     ).mappings().one()
-                records.append(_task_type_record(row, created=created))
+                record = _task_type_record(row, created=created)
+                if write.task_type is TaskType.ASR:
+                    record = self._record_with_asr_run(record, run)
+                records.append(record)
 
         return records
 
@@ -599,7 +811,16 @@ class CourseRepository:
                 ),
                 {"task_id": task_id},
             ).mappings()
-            return [_task_type_record(row, created=False) for row in rows]
+            records = []
+            for row in rows:
+                record = _task_type_record(row, created=False)
+                if record.task_type is TaskType.ASR:
+                    record = self._record_with_asr_run(
+                        record,
+                        self._latest_asr_run(connection, record.id),
+                    )
+                records.append(record)
+            return records
 
     def get_task_type(self, course_task_type_id: int) -> TaskTypeRecord:
         with self._engine.connect() as connection:
@@ -616,7 +837,49 @@ class CourseRepository:
             ).mappings().one_or_none()
         if row is None:
             raise RepositoryNotFoundError(f"任务类型不存在: {course_task_type_id}")
-        return _task_type_record(row, created=False)
+        record = _task_type_record(row, created=False)
+        if record.task_type is TaskType.ASR:
+            with self._engine.connect() as connection:
+                record = self._record_with_asr_run(
+                    record,
+                    self._latest_asr_run(connection, record.id),
+                )
+        return record
+
+    def list_asr_runs(self, course_task_type_id: int) -> list[AsrRunRecord]:
+        with self._engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT run_id, course_task_type_id, params_fingerprint,
+                           effective_params, status, reason, result,
+                           created_at, started_at, finished_at
+                    FROM task_type_runs
+                    WHERE course_task_type_id = :course_task_type_id
+                    ORDER BY created_at DESC, run_id DESC
+                    """
+                ),
+                {"course_task_type_id": course_task_type_id},
+            ).mappings()
+            return [_asr_run_record(row) for row in rows]
+
+    def get_asr_run(self, run_id: UUID) -> AsrRunRecord:
+        with self._engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT run_id, course_task_type_id, params_fingerprint,
+                           effective_params, status, reason, result,
+                           created_at, started_at, finished_at
+                    FROM task_type_runs
+                    WHERE run_id = :run_id
+                    """
+                ),
+                {"run_id": run_id},
+            ).mappings().one_or_none()
+        if row is None:
+            raise RepositoryNotFoundError(f"ASR 执行版本不存在: {run_id}")
+        return _asr_run_record(row)
 
     def list_dispatch_capabilities(self) -> list[str]:
         with self._engine.connect() as connection:
@@ -661,25 +924,35 @@ class CourseRepository:
             ).mappings().one_or_none()
             if task_type_row is None:
                 raise RepositoryNotFoundError(f"任务类型不存在: {course_task_type_id}")
-            if NodeStatus(task_type_row["status"]) in {
-                NodeStatus.COMPLETED,
-                NodeStatus.FAILED,
-                NodeStatus.CANCELLED,
-            }:
+            asr_run = None
+            run_filter: str | None = None
+            if task_type_row["task_type"] == TaskType.ASR.value:
+                asr_run = self._latest_asr_run(connection, course_task_type_id)
+                if asr_run is not None:
+                    run_filter = " AND run_id = :run_id"
+            if (
+                NodeStatus(task_type_row["status"])
+                in {NodeStatus.COMPLETED, NodeStatus.FAILED, NodeStatus.CANCELLED}
+                and asr_run is None
+            ):
                 return _task_type_record(task_type_row, created=False)
 
             nodes = list(
                 connection.execute(
                     text(
-                        """
+                        f"""
                         SELECT node_code, status, reason, required_capability
                         FROM task_nodes
                         WHERE course_task_type_id = :course_task_type_id
+                        {run_filter or ''}
                         ORDER BY created_at, id
                         FOR UPDATE
                         """
                     ),
-                    {"course_task_type_id": course_task_type_id},
+                    {
+                        "course_task_type_id": course_task_type_id,
+                        **({"run_id": asr_run.run_id} if asr_run is not None else {}),
+                    },
                 ).mappings()
             )
             status, reason = self._derive_task_type_state(
@@ -715,7 +988,18 @@ class CourseRepository:
                     "reason": reason,
                 },
             ).mappings().one()
-        return _task_type_record(row, created=False)
+        record = _task_type_record(row, created=False)
+        if asr_run is not None:
+            record = replace(
+                record,
+                run_id=asr_run.run_id,
+                effective_params=asr_run.effective_params,
+                params_fingerprint=asr_run.params_fingerprint,
+                updated_at=asr_run.finished_at
+                or asr_run.started_at
+                or asr_run.created_at,
+            )
+        return record
 
     def aggregate_capability_task_types(self, capability: str) -> list[TaskTypeRecord]:
         with self._engine.connect() as connection:
@@ -797,6 +1081,10 @@ class CourseRepository:
         reason: str,
     ) -> TaskTypeRecord:
         with self._engine.begin() as connection:
+            task_type_value = connection.execute(
+                text("SELECT task_type FROM course_task_types WHERE id = :id"),
+                {"id": course_task_type_id},
+            ).scalar_one_or_none()
             row = connection.execute(
                 text(
                     """
@@ -823,9 +1111,31 @@ class CourseRepository:
                     "reason": reason,
                 },
             ).mappings().one_or_none()
-        if row is None:
-            raise RepositoryNotFoundError(f"任务类型不存在: {course_task_type_id}")
-        return _task_type_record(row, created=False)
+            if row is None:
+                raise RepositoryNotFoundError(f"任务类型不存在: {course_task_type_id}")
+            if task_type_value == TaskType.ASR.value:
+                latest = self._latest_asr_run(connection, course_task_type_id)
+                if latest is not None:
+                    connection.execute(
+                        text(
+                            """
+                            UPDATE task_type_runs
+                            SET status = :status,
+                                reason = :reason,
+                                started_at = CASE WHEN :status = 50
+                                    THEN COALESCE(started_at, now()) ELSE started_at END,
+                                finished_at = CASE WHEN :status IN (60, 70, 80)
+                                    THEN COALESCE(finished_at, now()) ELSE finished_at END
+                            WHERE run_id = :run_id
+                            """
+                        ),
+                        {
+                            "run_id": latest.run_id,
+                            "status": status.value,
+                            "reason": reason,
+                        },
+                    )
+        return self.get_task_type(course_task_type_id)
 
     def create_node(
         self,
@@ -836,17 +1146,30 @@ class CourseRepository:
         priority: Priority,
         reason: str,
         required_capability: str | None = None,
+        run_id: UUID | None = None,
     ) -> NodeRecord:
         with self._engine.begin() as connection:
+            if run_id is None:
+                task_type = connection.execute(
+                    text(
+                        "SELECT task_type FROM course_task_types WHERE id = :id"
+                    ),
+                    {"id": course_task_type_id},
+                ).scalar_one_or_none()
+                if task_type == TaskType.ASR.value:
+                    latest = self._latest_asr_run(connection, course_task_type_id)
+                    run_id = latest.run_id if latest is not None else ZERO_RUN_ID
+                else:
+                    run_id = ZERO_RUN_ID
             node_id = connection.execute(
                 text(
                     """
                     INSERT INTO task_nodes (
-                        course_task_type_id, node_code, status, priority, reason,
+                        course_task_type_id, run_id, node_code, status, priority, reason,
                         required_capability, ready_at
                     )
                     VALUES (
-                        :course_task_type_id, :node_code, :status, :priority, :reason,
+                        :course_task_type_id, :run_id, :node_code, :status, :priority, :reason,
                         :required_capability,
                         CASE WHEN :status = 10 THEN now() ELSE NULL END
                     )
@@ -855,6 +1178,7 @@ class CourseRepository:
                 ),
                 {
                     "course_task_type_id": course_task_type_id,
+                    "run_id": run_id,
                     "node_code": node_code,
                     "status": status.value,
                     "priority": priority.value,
@@ -871,12 +1195,13 @@ class CourseRepository:
         nodes: list[NodeWrite],
         *,
         submission_id: str | None = None,
+        run_id: UUID | None = None,
     ) -> list[NodeRecord]:
         with self._engine.begin() as connection:
             task_type_row = connection.execute(
                 text(
                     """
-                    SELECT id, submission_id
+                    SELECT id, submission_id, task_type
                     FROM course_task_types
                     WHERE task_id = :task_id AND task_type = :task_type
                     FOR UPDATE
@@ -896,25 +1221,44 @@ class CourseRepository:
                     f"{task_id}/{task_type.value}"
                 )
             course_task_type_id = int(task_type_row["id"])
+            if run_id is None:
+                if task_type is TaskType.ASR:
+                    latest = self._latest_asr_run(connection, course_task_type_id)
+                    run_id = latest.run_id if latest is not None else ZERO_RUN_ID
+                else:
+                    run_id = ZERO_RUN_ID
+            elif task_type is TaskType.ASR:
+                run = connection.execute(
+                    text(
+                        """
+                        SELECT 1 FROM task_type_runs
+                        WHERE run_id = :run_id AND course_task_type_id = :course_task_type_id
+                        """
+                    ),
+                    {"run_id": run_id, "course_task_type_id": course_task_type_id},
+                ).scalar_one_or_none()
+                if run is None:
+                    raise RepositoryNotFoundError(f"ASR 执行版本不存在: {run_id}")
 
             for node in nodes:
                 connection.execute(
                     text(
                         """
                         INSERT INTO task_nodes (
-                            course_task_type_id, node_code, status, priority, reason,
+                            course_task_type_id, run_id, node_code, status, priority, reason,
                             required_capability, prerequisite_count, ready_at
                         )
                         VALUES (
-                            :course_task_type_id, :node_code, :status, :priority, :reason,
+                            :course_task_type_id, :run_id, :node_code, :status, :priority, :reason,
                             :required_capability, :prerequisite_count,
                             CASE WHEN :status = 10 THEN now() ELSE NULL END
                         )
-                        ON CONFLICT (course_task_type_id, node_code) DO NOTHING
+                        ON CONFLICT (course_task_type_id, run_id, node_code) DO NOTHING
                         """
                     ),
                     {
                         "course_task_type_id": course_task_type_id,
+                        "run_id": run_id,
                         "node_code": node.node_code,
                         "status": node.status.value,
                         "priority": node.priority.value,
@@ -929,9 +1273,10 @@ class CourseRepository:
                     SELECT id, node_code
                     FROM task_nodes
                     WHERE course_task_type_id = :course_task_type_id
+                      AND run_id = :run_id
                     """
                 ),
-                {"course_task_type_id": course_task_type_id},
+                {"course_task_type_id": course_task_type_id, "run_id": run_id},
             ).mappings()
             node_ids = {row["node_code"]: row["id"] for row in node_rows}
             for node in nodes:
@@ -961,12 +1306,14 @@ class CourseRepository:
     def transition_node(self, node_id: int, status: NodeStatus, reason: str) -> NodeRecord:
         with self._engine.begin() as connection:
             current_value = connection.execute(
-                text("SELECT status FROM task_nodes WHERE id = :node_id FOR UPDATE"),
+                text(
+                    "SELECT status, run_id FROM task_nodes WHERE id = :node_id FOR UPDATE"
+                ),
                 {"node_id": node_id},
-            ).scalar_one_or_none()
+            ).mappings().one_or_none()
             if current_value is None:
                 raise RepositoryNotFoundError(f"节点不存在: {node_id}")
-            validate_node_transition(NodeStatus(current_value), status)
+            validate_node_transition(NodeStatus(current_value["status"]), status)
             connection.execute(
                 text(
                     """
@@ -987,6 +1334,27 @@ class CourseRepository:
                 ),
                 {"node_id": node_id, "status": status.value, "reason": reason},
             )
+            run_id = current_value.get("run_id")
+            if run_id is not None and run_id != ZERO_RUN_ID:
+                connection.execute(
+                    text(
+                        """
+                        UPDATE task_type_runs
+                        SET status = :status,
+                            reason = :reason,
+                            started_at = CASE
+                                WHEN :status = 50 THEN COALESCE(started_at, now())
+                                ELSE started_at
+                            END,
+                            finished_at = CASE
+                                WHEN :status IN (60, 70, 80) THEN COALESCE(finished_at, now())
+                                ELSE finished_at
+                            END
+                        WHERE run_id = :run_id
+                        """
+                    ),
+                    {"run_id": run_id, "status": status.value, "reason": reason},
+                )
             if status is NodeStatus.COMPLETED:
                 self._release_dependents(connection, node_id)
         return self.get_node(node_id)
@@ -1396,12 +1764,16 @@ class CourseRepository:
     ) -> NodeRecord:
         with self._engine.begin() as connection:
             current_value = connection.execute(
-                text("SELECT status FROM task_nodes WHERE id = :node_id FOR UPDATE"),
+                text(
+                    "SELECT status, run_id FROM task_nodes WHERE id = :node_id FOR UPDATE"
+                ),
                 {"node_id": node_id},
-            ).scalar_one_or_none()
+            ).mappings().one_or_none()
             if current_value is None:
                 raise RepositoryNotFoundError(f"节点不存在: {node_id}")
-            validate_node_transition(NodeStatus(current_value), NodeStatus.COMPLETED)
+            validate_node_transition(
+                NodeStatus(current_value["status"]), NodeStatus.COMPLETED
+            )
 
             connection.execute(
                 text(
@@ -1442,6 +1814,26 @@ class CourseRepository:
                 ),
                 {"node_id": node_id, "reason": reason},
             )
+            run_id = current_value.get("run_id")
+            if run_id is not None and run_id != ZERO_RUN_ID:
+                connection.execute(
+                    text(
+                        """
+                        UPDATE task_type_runs
+                        SET status = 60,
+                            reason = :reason,
+                            result = CAST(:result AS jsonb),
+                            started_at = COALESCE(started_at, now()),
+                            finished_at = now()
+                        WHERE run_id = :run_id
+                        """
+                    ),
+                    {
+                        "run_id": run_id,
+                        "reason": reason,
+                        "result": _json(result.result),
+                    },
+                )
             self._release_dependents(connection, node_id)
         return self.get_node(node_id)
 
@@ -1538,7 +1930,7 @@ class CourseRepository:
             row = connection.execute(
                 text(
                     """
-                    SELECT n.id, n.course_task_type_id, n.node_code, n.status, n.priority,
+                    SELECT n.id, n.course_task_type_id, n.run_id, n.node_code, n.status, n.priority,
                            n.reason, n.required_capability, n.updated_at,
                            n.claimed_at, n.started_at, n.claimed_by, n.claim_token,
                            n.attempt,
@@ -1555,12 +1947,21 @@ class CourseRepository:
             raise RepositoryNotFoundError(f"节点不存在: {node_id}")
         return _node_record(row)
 
-    def list_nodes(self, course_task_type_id: int) -> list[NodeRecord]:
+    def list_nodes(
+        self,
+        course_task_type_id: int,
+        run_id: UUID | None = None,
+    ) -> list[NodeRecord]:
         with self._engine.connect() as connection:
+            run_filter = ""
+            params: dict[str, Any] = {"course_task_type_id": course_task_type_id}
+            if run_id is not None:
+                run_filter = " AND n.run_id = :run_id"
+                params["run_id"] = run_id
             rows = connection.execute(
                 text(
-                    """
-                    SELECT n.id, n.course_task_type_id, n.node_code, n.status, n.priority,
+                    f"""
+                    SELECT n.id, n.course_task_type_id, n.run_id, n.node_code, n.status, n.priority,
                            n.reason, n.required_capability, n.updated_at,
                            n.claimed_at, n.started_at, n.claimed_by, n.claim_token,
                            n.attempt,
@@ -1569,10 +1970,11 @@ class CourseRepository:
                     FROM task_nodes AS n
                     LEFT JOIN node_results AS r ON r.task_node_id = n.id
                     WHERE n.course_task_type_id = :course_task_type_id
+                    {run_filter}
                     ORDER BY n.created_at, n.id
                     """
                 ),
-                {"course_task_type_id": course_task_type_id},
+                params,
             ).mappings()
             return [_node_record(row) for row in rows]
 
@@ -1581,7 +1983,7 @@ class CourseRepository:
             rows = connection.execute(
                 text(
                     """
-                    SELECT n.id, n.course_task_type_id, n.node_code, n.status, n.priority,
+                    SELECT n.id, n.course_task_type_id, n.run_id, n.node_code, n.status, n.priority,
                            n.reason, n.required_capability, n.updated_at,
                            n.claimed_at, n.started_at, n.claimed_by, n.claim_token,
                            n.attempt,
@@ -1602,7 +2004,7 @@ class CourseRepository:
             rows = connection.execute(
                 text(
                     """
-                    SELECT n.id, n.course_task_type_id, n.node_code, n.status, n.priority,
+                    SELECT n.id, n.course_task_type_id, n.run_id, n.node_code, n.status, n.priority,
                            n.reason, n.required_capability, n.updated_at,
                            n.claimed_at, n.started_at, n.claimed_by, n.claim_token,
                            n.attempt,

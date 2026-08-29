@@ -53,7 +53,9 @@ redis.call('HSET', KEYS[1],
     'lifecycle', registration_lifecycle,
     'inflight', ARGV[12],
     'model_ready', ARGV[13],
-    'last_heartbeat_at', ARGV[14])
+    'last_heartbeat_at', ARGV[14],
+    'capacity_pools', ARGV[15],
+    'inflight_by_pool', ARGV[16])
 redis.call('SADD', KEYS[3], ARGV[2])
 for _, capability in ipairs(cjson.decode(ARGV[5])) do
     redis.call('SADD', ARGV[1] .. capability, ARGV[2])
@@ -70,8 +72,9 @@ end
 redis.call('HSET', KEYS[1],
     'inflight', ARGV[1],
     'model_ready', ARGV[2],
-    'last_heartbeat_at', ARGV[3])
-redis.call('SET', KEYS[2], '1', 'EX', ARGV[4])
+    'last_heartbeat_at', ARGV[3],
+    'inflight_by_pool', ARGV[4])
+redis.call('SET', KEYS[2], '1', 'EX', ARGV[5])
 return 1
 """
 
@@ -117,6 +120,7 @@ local allowed_operator_codes = {}
 for _, operator_code in ipairs(cjson.decode(ARGV[9])) do
     allowed_operator_codes[operator_code] = true
 end
+local requested_pool = ARGV[10]
 table.sort(instance_ids)
 local lowest_load_candidates = {}
 local lowest_effective_inflight = nil
@@ -142,15 +146,28 @@ for _, instance_id in ipairs(instance_ids) do
                 redis.call('DEL', existing_lease_key)
             end
         end
-        local capacity = tonumber(redis.call('HGET', instance_key, 'declared_capacity') or '0')
-        local active_leases = redis.call('ZCARD', leases_key)
-        local reported_inflight = tonumber(redis.call('HGET', instance_key, 'inflight') or '0')
+        local declared_capacity = tonumber(redis.call('HGET', instance_key, 'declared_capacity') or '0')
+        local declared_capacity_valid = declared_capacity
+            and declared_capacity > 0
+            and declared_capacity == math.floor(declared_capacity)
+        local capacities = cjson.decode(redis.call('HGET', instance_key, 'capacity_pools') or '{}')
+        local capacity = tonumber(capacities[requested_pool] or capacities['default'] or declared_capacity or '0')
+        local active_leases = 0
+        for _, existing_lease_id in ipairs(redis.call('ZRANGE', leases_key, 0, -1)) do
+            local existing_pool = redis.call('HGET', ARGV[6] .. existing_lease_id, 'capacity_pool') or 'default'
+            if existing_pool == requested_pool then
+                active_leases = active_leases + 1
+            end
+        end
+        local inflight_by_pool = cjson.decode(redis.call('HGET', instance_key, 'inflight_by_pool') or '{}')
+        local reported_inflight = tonumber(inflight_by_pool[requested_pool] or (requested_pool == 'default' and redis.call('HGET', instance_key, 'inflight') or '0'))
         if not reported_inflight or reported_inflight < 0
             or reported_inflight ~= math.floor(reported_inflight) then
             reported_inflight = 0
         end
         local effective_inflight = math.max(active_leases, reported_inflight)
-        if capacity and capacity > 0 and capacity == math.floor(capacity)
+        if declared_capacity_valid
+            and capacity and capacity > 0 and capacity == math.floor(capacity)
             and effective_inflight < capacity then
             local candidate = {
                 instance_id = instance_id,
@@ -197,6 +214,7 @@ redis.call('HSET', lease_key,
     'acquired_at', now_ms,
     'expires_at', expires_at,
     'work_context', ARGV[8],
+    'capacity_pool', ARGV[10],
     'redis_run_id', redis_run_id)
 redis.call('PEXPIRE', lease_key, ARGV[1])
 return {
@@ -204,7 +222,8 @@ return {
     selected.service_url,
     now_ms,
     expires_at,
-    ARGV[8]
+    ARGV[8],
+    ARGV[10]
 }
 """
 
@@ -214,6 +233,8 @@ local instance_id = redis.call('HGET', KEYS[1], 'instance_id')
 if not instance_id then
     return 0
 end
+local capability = redis.call('HGET', KEYS[1], 'capability') or ''
+local capacity_pool = redis.call('HGET', KEYS[1], 'capacity_pool') or 'default'
 local server_info = redis.call('INFO', 'server')
 local redis_run_id = string.match(server_info, 'run_id:([%w]+)')
 if not redis_run_id then
@@ -226,6 +247,11 @@ if redis.call('HGET', KEYS[1], 'redis_run_id') ~= redis_run_id then
 end
 redis.call('ZREM', ARGV[1] .. instance_id, ARGV[2])
 redis.call('DEL', KEYS[1])
+redis.call('PUBLISH', ARGV[3], cjson.encode({
+    instance_id = instance_id,
+    capability = capability,
+    capacity_pool = capacity_pool
+}))
 return 1
 """
 
@@ -259,6 +285,7 @@ if redis.call('HGET', KEYS[1], 'redis_run_id') ~= redis_run_id then
     return {}
 end
 local capability = redis.call('HGET', KEYS[1], 'capability')
+local capacity_pool = redis.call('HGET', KEYS[1], 'capacity_pool') or 'default'
 local service_url = redis.call('HGET', KEYS[1], 'service_url')
 local acquired_at = redis.call('HGET', KEYS[1], 'acquired_at')
 local work_context = redis.call('HGET', KEYS[1], 'work_context') or ''
@@ -266,7 +293,7 @@ local expires_at = now_ms + tonumber(ARGV[1])
 redis.call('ZADD', leases_key, expires_at, ARGV[3])
 redis.call('HSET', KEYS[1], 'expires_at', expires_at)
 redis.call('PEXPIRE', KEYS[1], ARGV[1])
-return {instance_id, capability, service_url, acquired_at, expires_at, work_context}
+return {instance_id, capability, service_url, acquired_at, expires_at, work_context, capacity_pool}
 """
 
 
@@ -370,7 +397,8 @@ for _, lease_id in ipairs(lease_ids) do
             service_url = redis.call('HGET', lease_key, 'service_url'),
             acquired_at = tonumber(redis.call('HGET', lease_key, 'acquired_at')),
             expires_at = tonumber(redis.call('HGET', lease_key, 'expires_at')),
-            work_context = redis.call('HGET', lease_key, 'work_context') or ''
+            work_context = redis.call('HGET', lease_key, 'work_context') or '',
+            capacity_pool = redis.call('HGET', lease_key, 'capacity_pool') or 'default'
         }))
     end
 end
@@ -433,6 +461,8 @@ class RedisOperatorRegistry:
             str(instance.inflight),
             "1" if instance.model_ready else "0",
             heartbeat_at.isoformat(),
+            json.dumps(instance.capacity_pools, separators=(",", ":")),
+            json.dumps(instance.inflight_by_pool, separators=(",", ":")),
         )
         return self._get_instance(instance.instance_id)
 
@@ -442,7 +472,13 @@ class RedisOperatorRegistry:
         *,
         inflight: int,
         model_ready: bool,
+        inflight_by_pool: dict[str, int] | None = None,
     ) -> OperatorInstance:
+        if type(inflight) is not int or inflight < 0:
+            raise ValueError("算子在途数必须是非负整数")
+        for pool, value in (inflight_by_pool or {}).items():
+            if not isinstance(pool, str) or not pool.strip() or type(value) is not int or value < 0:
+                raise ValueError("容量池在途数必须是非负整数")
         instance_key = self._instance_key(instance_id)
         heartbeat_at = datetime.now(UTC)
         updated = self._client.eval(
@@ -453,6 +489,7 @@ class RedisOperatorRegistry:
             str(inflight),
             "1" if model_ready else "0",
             heartbeat_at.isoformat(),
+            json.dumps(inflight_by_pool or {}, separators=(",", ":")),
             str(self._heartbeat_ttl_seconds),
         )
         if not updated:
@@ -507,6 +544,7 @@ class RedisOperatorRegistry:
         capability: str,
         ttl_seconds: int,
         work_context: WorkContext | None = None,
+        capacity_pool: str = "default",
     ) -> CapacityLease:
         if ttl_seconds <= 0:
             raise ValueError("租约 TTL 必须大于 0")
@@ -532,6 +570,7 @@ class RedisOperatorRegistry:
                     else ""
                 ),
                 json.dumps([operator_code.value for operator_code in OperatorCode]),
+                capacity_pool,
             ),
         )
         if not result:
@@ -544,6 +583,7 @@ class RedisOperatorRegistry:
             acquired_at_ms=int(result[2]),
             expires_at_ms=int(result[3]),
             work_context_json=str(result[4]),
+            capacity_pool=str(result[5]) if len(result) > 5 else capacity_pool,
         )
 
     def bind_lease_context(
@@ -577,6 +617,7 @@ class RedisOperatorRegistry:
             acquired_at_ms=int(result[4]),
             expires_at_ms=int(result[5]),
             work_context_json=str(result[6]),
+            capacity_pool=work_context.capacity_pool,
         )
 
     def release(self, lease_id: str) -> None:
@@ -586,6 +627,7 @@ class RedisOperatorRegistry:
             f"{self._prefix}lease:{lease_id}",
             f"{self._prefix}leases:",
             lease_id,
+            f"{self._prefix}capacity-released",
         )
         if not released:
             raise CapacityLeaseNotFoundError(lease_id)
@@ -640,6 +682,7 @@ class RedisOperatorRegistry:
                         else LeaseContextStatus.UNBOUND
                     ),
                     work_context=work_context,
+                    capacity_pool=str(raw.get("capacity_pool") or "default"),
                 )
             )
         active_count = len(leases)
@@ -677,6 +720,7 @@ class RedisOperatorRegistry:
             acquired_at_ms=int(result[3]),
             expires_at_ms=int(result[4]),
             work_context_json=str(result[5]),
+            capacity_pool=str(result[6]) if len(result) > 6 else "default",
         )
 
     @staticmethod
@@ -697,6 +741,7 @@ class RedisOperatorRegistry:
         acquired_at_ms: int,
         expires_at_ms: int,
         work_context_json: str,
+        capacity_pool: str = "default",
     ) -> CapacityLease:
         return CapacityLease(
             lease_id=lease_id,
@@ -706,6 +751,7 @@ class RedisOperatorRegistry:
             acquired_at=datetime.fromtimestamp(acquired_at_ms / 1000, tz=UTC),
             expires_at=datetime.fromtimestamp(expires_at_ms / 1000, tz=UTC),
             work_context=cls._work_context_from_json(work_context_json),
+            capacity_pool=capacity_pool,
         )
 
     def _get_instance(self, instance_id: str) -> OperatorInstance:
@@ -732,4 +778,6 @@ class RedisOperatorRegistry:
             inflight=int(raw["inflight"]),
             model_ready=raw["model_ready"] == "1",
             last_heartbeat_at=datetime.fromisoformat(raw["last_heartbeat_at"]),
+            capacity_pools=json.loads(raw.get("capacity_pools") or "{}"),
+            inflight_by_pool=json.loads(raw.get("inflight_by_pool") or "{}"),
         )

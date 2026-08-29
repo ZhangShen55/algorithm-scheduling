@@ -14,7 +14,7 @@ from vision_orchestrator_service.app.infrastructure.capacity import (
 
 
 @pytest.mark.asyncio
-async def test_lease_http_503_is_classified_as_capacity_unavailable() -> None:
+async def test_lease_http_503_waits_then_returns_capacity_timeout() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             503,
@@ -23,9 +23,14 @@ async def test_lease_http_503_is_classified_as_capacity_unavailable() -> None:
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        client = CapacityLeaseHttpClient(http, control_service_url="http://control")
+        client = CapacityLeaseHttpClient(
+            http,
+            control_service_url="http://control",
+            acquire_wait_timeout_seconds=0.02,
+            acquire_retry_interval_seconds=0.001,
+        )
 
-        with pytest.raises(CapacityUnavailableError, match="容量暂不可用"):
+        with pytest.raises(CapacityLeaseClientError, match="超过"):
             async with client.acquire("teacher_behavior"):
                 raise AssertionError("503 must not yield a lease")
 

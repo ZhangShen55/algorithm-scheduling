@@ -312,8 +312,8 @@ def test_asr_options_merge_partial_override_over_documented_defaults(tmp_path: P
     assert response.json()["code"] == 0
     assert repository.calls[0]["writes"][0].effective_params == {
         "language": "auto",
-        "showSpk": True,
-        "showEmotion": True,
+        "showSpk": False,
+        "showEmotion": False,
         "showRoleIdentify": True,
         "wordTimestamps": False,
         "hotWords": ["板书", "函数"],
@@ -338,8 +338,8 @@ def test_asr_options_use_documented_defaults_when_omitted(tmp_path: Path) -> Non
     assert response.json()["code"] == 0
     assert repository.calls[0]["writes"][0].effective_params == {
         "language": "auto",
-        "showSpk": True,
-        "showEmotion": True,
+        "showSpk": False,
+        "showEmotion": False,
         "showRoleIdentify": False,
         "wordTimestamps": False,
         "hotWords": [],

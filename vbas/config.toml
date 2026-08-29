@@ -10,7 +10,7 @@ GPU_ID = "cpu"
 registration_enabled = false
 control_service_url = ""  # 启用注册时填写 Control Service 地址
 heartbeat_interval_seconds = 5  # 注册心跳间隔秒数，必须为有限正数
-# 学生、教师和头部姿态能力共享本实例总容量
+# 注册中心默认容量；在线/离线容量池在 TIAS 中单独声明
 max_concurrent_requests = 1024
 
 [runtime]
@@ -41,10 +41,12 @@ BaseUrl = "http://127.0.0.1:8981"
 AiQualityBaseUrl = "http://127.0.0.1:9000"
 # 是否暴露旧 IAS 同步任务接口。
 TiasExposeLegacySyncTasks = false
-# 本地推理按 HTTP batch 计数；每个 batch 最多 8 图但只占一个运行槽位。
-MaxConcurrentBatches = 1024
-# 0 表示不在实例内排队，满载时直接返回过载响应，由平台重新选择。
-MaxQueueSize = 0
+# 离线请求按 HTTP batch 计数；每个 batch 最多 8 图但只占一个运行槽位。
+MaxConcurrentOfflineBatches = 1
+# 在线请求按 HTTP 请求计数；容量满后进入本实例 FIFO 队列。
+MaxConcurrentOnlineRequests = 24
+# 在线等待队列上限，超过后由平台选择其他实例或继续等待。
+MaxQueueOnlineSize = 24
 # 注册和心跳配置。
 HeartbeatIntervalSeconds = 5
 HeartbeatTimeoutSeconds = 15

@@ -4,6 +4,9 @@ from enum import StrEnum
 from typing import Protocol
 
 WORK_CONTEXT_IDENTIFIER_MAX_LENGTH = 200
+DEFAULT_CAPACITY_POOL = "default"
+ONLINE_CAPACITY_POOL = "online"
+OFFLINE_CAPACITY_POOL = "offline"
 
 
 def validate_positive_int(value: object, *, field_name: str) -> int:
@@ -73,6 +76,7 @@ class WorkContext:
     node_id: str | None = None
     item_id: str | None = None
     trace_id: str | None = None
+    capacity_pool: str = DEFAULT_CAPACITY_POOL
 
     def __post_init__(self) -> None:
         for field_name in ("source_service", "work_type", "work_id"):
@@ -84,7 +88,7 @@ class WorkContext:
                     field_name=field_name,
                 ),
             )
-        for field_name in ("task_id", "node_id", "item_id", "trace_id"):
+        for field_name in ("task_id", "node_id", "item_id", "trace_id", "capacity_pool"):
             value = getattr(self, field_name)
             if value is not None:
                 object.__setattr__(
@@ -102,6 +106,7 @@ class WorkContext:
             "node_id": self.node_id,
             "item_id": self.item_id,
             "trace_id": self.trace_id,
+            "capacity_pool": self.capacity_pool,
         }
         return {key: value for key, value in values.items() if value is not None}
 
@@ -120,9 +125,24 @@ class OperatorInstance:
     inflight: int = 0
     model_ready: bool = True
     last_heartbeat_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    capacity_pools: dict[str, int] = field(default_factory=dict)
+    inflight_by_pool: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         validate_positive_int(self.declared_capacity, field_name="算子声明容量")
+        if not self.capacity_pools:
+            object.__setattr__(
+                self,
+                "capacity_pools",
+                {DEFAULT_CAPACITY_POOL: self.declared_capacity},
+            )
+        for pool, capacity in self.capacity_pools.items():
+            _validate_work_identifier(pool, field_name="容量池")
+            validate_positive_int(capacity, field_name=f"容量池 {pool} 声明容量")
+        for pool, inflight in self.inflight_by_pool.items():
+            _validate_work_identifier(pool, field_name="容量池")
+            if type(inflight) is not int or inflight < 0:
+                raise ValueError(f"容量池 {pool} 在途数必须是非负整数")
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +154,7 @@ class CapacityLease:
     expires_at: datetime
     acquired_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     work_context: WorkContext | None = None
+    capacity_pool: str = DEFAULT_CAPACITY_POOL
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +167,7 @@ class ActiveCapacityLease:
     expires_at: datetime
     context_status: LeaseContextStatus
     work_context: WorkContext | None = None
+    capacity_pool: str = DEFAULT_CAPACITY_POOL
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +188,7 @@ class OperatorRegistry(Protocol):
         *,
         inflight: int,
         model_ready: bool,
+        inflight_by_pool: dict[str, int] | None = None,
     ) -> OperatorInstance: ...
 
     def unregister(self, instance_id: str) -> None: ...
@@ -183,6 +206,7 @@ class OperatorRegistry(Protocol):
         capability: str,
         ttl_seconds: int,
         work_context: WorkContext | None = None,
+        capacity_pool: str = DEFAULT_CAPACITY_POOL,
     ) -> CapacityLease: ...
 
     def bind_lease_context(
@@ -212,8 +236,10 @@ class UnavailableOperatorRegistry:
         *,
         inflight: int,
         model_ready: bool,
+        inflight_by_pool: dict[str, int] | None = None,
     ) -> OperatorInstance:
         self._unavailable()
+        del inflight_by_pool
         raise OperatorInstanceNotFoundError(instance_id)
 
     def unregister(self, instance_id: str) -> None:
@@ -236,8 +262,10 @@ class UnavailableOperatorRegistry:
         capability: str,
         ttl_seconds: int,
         work_context: WorkContext | None = None,
+        capacity_pool: str = DEFAULT_CAPACITY_POOL,
     ) -> CapacityLease:
         del work_context
+        del capacity_pool
         self._unavailable()
         raise CapacityUnavailableError(capability)
 

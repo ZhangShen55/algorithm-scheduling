@@ -4,11 +4,13 @@ import asyncio
 import logging
 from collections import Counter
 from typing import Protocol
+from uuid import UUID
 
 from packages.platform_common.repository import (
     NodeRecord,
     NodeResultWrite,
     TaskTypeRecord,
+    AsrRunRecord,
 )
 from packages.platform_contracts.status import NodeStatus
 
@@ -42,6 +44,8 @@ class ExecutionRepository(Protocol):
     ) -> NodeRecord: ...
 
     def aggregate_task_type_state(self, course_task_type_id: int) -> TaskTypeRecord: ...
+
+    def get_asr_run(self, run_id: UUID) -> AsrRunRecord: ...
 
 
 class NodeExecutionAdapter(Protocol):
@@ -196,6 +200,15 @@ class NodeExecutor:
                 node.course_task_type_id,
             )
             task_id = task_type.task_id
+            effective_params = task_type.effective_params
+            if (
+                node.node_code == "ASR_TRANSCRIPTION"
+                and node.run_id is not None
+                and node.run_id.int != 0
+            ):
+                effective_params = (
+                    await asyncio.to_thread(self._repository.get_asr_run, node.run_id)
+                ).effective_params
             await asyncio.to_thread(
                 self._repository.transition_node,
                 node.id,
@@ -210,7 +223,8 @@ class NodeExecutor:
                 task_type=task_type.task_type.value,
                 node_code=node.node_code,
                 request_payload=task_type.request_payload,
-                effective_params=task_type.effective_params,
+                effective_params=effective_params,
+                run_id=(str(node.run_id) if node.run_id is not None else None),
             )
             try:
                 service_url = (

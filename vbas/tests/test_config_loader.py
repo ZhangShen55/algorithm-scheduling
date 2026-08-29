@@ -121,8 +121,9 @@ CleanupAfterLoad = true
         self.assertEqual(config["Teacher_Behavior_Thresd"]["PostureConflictDefault"], "stand")
         self.assertTrue(config["Teacher_Behavior_Thresd"]["ForcePostureWhenMissing"])
         self.assertEqual(config["platform"]["max_concurrent_requests"], 1024)
-        self.assertEqual(config["TIAS"]["MaxConcurrentBatches"], 1024)
-        self.assertEqual(config["TIAS"]["MaxQueueSize"], 0)
+        self.assertEqual(config["TIAS"]["MaxConcurrentOfflineBatches"], 1)
+        self.assertEqual(config["TIAS"]["MaxConcurrentOnlineRequests"], 24)
+        self.assertEqual(config["TIAS"]["MaxQueueOnlineSize"], 24)
 
     def test_loads_toml_example_file(self):
         config_path = Path(__file__).resolve().parents[1] / "config.toml.example"
@@ -132,8 +133,9 @@ CleanupAfterLoad = true
         self.assertIn("ModelProtection", config)
         self.assertFalse(config["ModelProtection"]["Enabled"])
         self.assertEqual(config["platform"]["max_concurrent_requests"], 1024)
-        self.assertEqual(config["TIAS"]["MaxConcurrentBatches"], 1024)
-        self.assertEqual(config["TIAS"]["MaxQueueSize"], 0)
+        self.assertEqual(config["TIAS"]["MaxConcurrentOfflineBatches"], 1)
+        self.assertEqual(config["TIAS"]["MaxConcurrentOnlineRequests"], 24)
+        self.assertEqual(config["TIAS"]["MaxQueueOnlineSize"], 24)
 
 
 if __name__ == "__main__":

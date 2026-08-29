@@ -19,6 +19,7 @@ class NodeExecutionContext:
     submission_id: str | None = None
     node_id: int | None = None
     course_task_type_id: int | None = None
+    run_id: str | None = None
 
 
 class ContractStubResponse(BaseModel):
@@ -45,6 +46,8 @@ class ContractStubAdapter:
         request.pop("course_task_type_id", None)
         if request["submission_id"] is None:
             request.pop("submission_id")
+        if request["run_id"] is None:
+            request.pop("run_id")
         response = await self._http_client.post(
             f"{service_url.rstrip('/')}/execute",
             json=request,

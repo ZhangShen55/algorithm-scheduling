@@ -3,6 +3,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from .api.stu_tea_behavior import build_behavior_router
 from .api.worker_ops import build_worker_ops_router
+from .api.tasks import build_sync_tasks2_router
 from .core.settings import operator_deployment, settings
 from .core.logging import setup_logging
 from .services.worker_state import BatchAdmissionController
@@ -22,8 +23,9 @@ app = FastAPI(
 worker_controller = BatchAdmissionController(
     instance_id=str(getattr(settings, "InstanceId", "tias-8981")),
     base_url=str(getattr(settings, "BaseUrl", "http://127.0.0.1:8981")),
-    max_concurrent_batches=int(getattr(settings, "MaxConcurrentBatches", 1024)),
-    max_queue_size=int(getattr(settings, "MaxQueueSize", 0)),
+    max_concurrent_offline_batches=int(getattr(settings, "MaxConcurrentOfflineBatches", 1)),
+    max_concurrent_online_requests=int(getattr(settings, "MaxConcurrentOnlineRequests", 24)),
+    max_queue_online_size=int(getattr(settings, "MaxQueueOnlineSize", 24)),
 )
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
@@ -32,11 +34,12 @@ asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 async def startup_event():
     status = worker_controller.snapshot()
     logger.info(
-        "TIAS 启动 instance_id=%s base_url=%s max_concurrent_batches=%s max_queue_size=%s",
+        "VBAS 启动 instance_id=%s base_url=%s offline=%s online=%s online_queue=%s",
         status["instance_id"],
         status["base_url"],
-        status["max_concurrent_batches"],
-        status["max_queue_size"],
+        status["max_concurrent_offline_batches"],
+        status["max_concurrent_online_requests"],
+        status["max_queue_online_size"],
     )
 
 
@@ -57,6 +60,7 @@ async def validation_exception_handler(request, exc: RequestValidationError):
 
 app.include_router(build_behavior_router(worker_controller))
 app.include_router(build_worker_ops_router(worker_controller))
+app.include_router(build_sync_tasks2_router(worker_controller))
 
 if bool(getattr(settings, "TiasExposeLegacySyncTasks", False)):
     from .api.tasks import router as tasks_router
@@ -66,12 +70,22 @@ if bool(getattr(settings, "TiasExposeLegacySyncTasks", False)):
 install_operator_runtime(
     app,
     operator_code="vbas",
-    capabilities=["student_behavior", "teacher_behavior"],
+    capabilities=["student_behavior", "teacher_behavior", "person_count"],
     default_port=8981,
     registration_enabled=operator_deployment.platform.registration_enabled,
     control_service_url=operator_deployment.platform.control_service_url,
     heartbeat_interval_seconds=operator_deployment.platform.heartbeat_interval_seconds,
     max_concurrent_requests=operator_deployment.platform.max_concurrent_requests,
-    inflight_provider=lambda: int(worker_controller.snapshot()["running_batches"]),
+    capacity_pools={
+        "offline": int(getattr(settings, "MaxConcurrentOfflineBatches", 1)),
+        "online": int(getattr(settings, "MaxConcurrentOnlineRequests", 24)),
+    },
+    inflight_provider=lambda: int(worker_controller.snapshot()["running_offline_batches"])
+    + int(worker_controller.snapshot()["running_online_requests"]),
+    inflight_by_pool_provider=lambda: {
+        "offline": int(worker_controller.snapshot()["running_offline_batches"]),
+        "online": int(worker_controller.snapshot()["running_online_requests"])
+        + int(worker_controller.snapshot()["queued_online_requests"]),
+    },
 )
 

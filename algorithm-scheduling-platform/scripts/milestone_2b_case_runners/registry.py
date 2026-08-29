@@ -16,10 +16,6 @@ from typing import Any, cast
 
 import httpx
 import psycopg
-from redis import Redis
-from redis.exceptions import RedisError
-from sqlalchemy.exc import SQLAlchemyError
-
 from deploy.scripts.verify_operator_registration import validate_instances
 from packages.operator_registry_client.client import (
     OperatorRegistryClient,
@@ -42,6 +38,10 @@ from packages.platform_common.operator_registry import (
 )
 from packages.platform_common.redis_operator_registry import RedisOperatorRegistry
 from packages.platform_contracts.status import NodeStatus
+from redis import Redis
+from redis.exceptions import RedisError
+from sqlalchemy.exc import SQLAlchemyError
+
 from scripts.milestone_2b_case_catalog import CaseDefinition
 
 from .base import CaseContext, CaseOutcome
@@ -863,6 +863,16 @@ class _RecordingDispatchRepository:
 
     def aggregate_capability_task_types(self, capability: str) -> object:
         del capability
+        self.aggregated = True
+        return None
+
+    def coordinate_capability_waiting(self, capability: str) -> list[int]:
+        del capability
+        self.node_status = NodeStatus.WAITING_OPERATOR.value
+        return [1]
+
+    def aggregate_task_type_state(self, course_task_type_id: int) -> object:
+        assert course_task_type_id == 1
         self.aggregated = True
         return None
 

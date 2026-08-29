@@ -28,6 +28,8 @@ class OperatorCapacitySnapshot:
     schedulable_used: int
     attribution_difference: int
     capacity_mismatch: bool
+    capacity_pools: dict[str, int]
+    inflight_by_pool: dict[str, int]
 
 
 def build_operator_capacity_snapshot(
@@ -49,6 +51,8 @@ def build_operator_capacity_snapshot(
                 schedulable_used=schedulable_used,
                 attribution_difference=instance.inflight - active_lease_count,
                 capacity_mismatch=instance.inflight != active_lease_count,
+                capacity_pools=dict(instance.capacity_pools),
+                inflight_by_pool=dict(instance.inflight_by_pool),
             )
         )
     return snapshots

@@ -62,7 +62,9 @@ PPT Slice 是异步长任务，从算子受理到 manifest 终态持久化持续
 未知错误不重试。PPT 算子把相同在途请求作为幂等重复返回，避免响应丢失后启动第二个后台任务。
 
 ASR 只调用离线转写算子并保存完整 v1.1.8 结果和 `effective_params`，转写完成后 ASR 任务
-直接进入终态。Orchestrator 不注册、租赁或调用 Text Analysis。
+直接进入终态。每个参数快照有独立 `run_id` 和 SHA-256 `params_fingerprint`；Outbox、DAG
+节点、算子调用和结果回写都携带该版本，重复提交相同参数复用已完成版本，参数变化保留历史
+结果并创建新版本。Orchestrator 不注册、租赁或调用 Text Analysis。
 
 Outbox Publisher、Kafka Consumer 和节点执行循环已经接入应用生命周期；`/ops/readiness`
 同时报告这些后台组件的状态。健康接口只说明进程存活，不能替代 readiness、真实基础设施和

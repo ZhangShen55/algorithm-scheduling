@@ -59,6 +59,8 @@ class LeaseRenewalConfig(BaseModel):
     base_delay_seconds: float = Field(default=0.2, ge=0, le=30)
     max_delay_seconds: float = Field(default=2.0, ge=0, le=60)
     safety_margin_seconds: float = Field(default=5.0, ge=0)
+    acquire_wait_timeout_seconds: float = Field(default=300.0, gt=0)
+    acquire_retry_interval_seconds: float = Field(default=0.2, gt=0)
 
     @model_validator(mode="after")
     def validate_delays(self) -> LeaseRenewalConfig:

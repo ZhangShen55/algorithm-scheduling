@@ -14,6 +14,7 @@ from packages.operator_registry_client.validation import validate_positive_int
 class OperatorRuntimeStatus:
     inflight: int
     model_ready: bool
+    inflight_by_pool: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,10 +29,13 @@ class OperatorRegistryClientConfig:
     model_version: str | None = None
     api_version: str | None = None
     labels: dict[str, str] = field(default_factory=dict)
+    capacity_pools: dict[str, int] = field(default_factory=dict)
     heartbeat_interval_seconds: float = 5.0
 
     def __post_init__(self) -> None:
         validate_positive_int(self.declared_capacity, field_name="算子声明容量")
+        for pool, capacity in self.capacity_pools.items():
+            validate_positive_int(capacity, field_name=f"容量池 {pool} 声明容量")
         if (
             type(self.heartbeat_interval_seconds) not in {int, float}
             or isinstance(self.heartbeat_interval_seconds, bool)
@@ -73,6 +77,7 @@ class OperatorRegistryClient:
                 "api_version": self._config.api_version,
                 "declared_capacity": self._config.declared_capacity,
                 "labels": self._config.labels,
+                "capacity_pools": self._config.capacity_pools,
             },
         )
         response.raise_for_status()
@@ -86,6 +91,7 @@ class OperatorRegistryClient:
                 "instance_id": self._config.instance_id,
                 "inflight": runtime.inflight,
                 "model_ready": runtime.model_ready,
+                "inflight_by_pool": runtime.inflight_by_pool,
             },
         )
         response.raise_for_status()

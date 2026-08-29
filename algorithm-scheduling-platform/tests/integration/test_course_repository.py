@@ -544,19 +544,21 @@ def test_completed_asr_reuses_large_result_and_original_effective_params(
             )
         ).scalar_one()
 
-    assert duplicate["data"]["tasks"][0]["created"] is False
-    assert duplicate["data"]["tasks"][0]["status"] == 60
-    assert outbox_count == 1
+    # 参数发生变化时创建新的执行版本，原始结果仍然保留在历史 runs 中。
+    assert duplicate["data"]["tasks"][0]["created"] is True
+    assert duplicate["data"]["tasks"][0]["status"] == 10
+    assert outbox_count == 2
     asr_task = next(
         item for item in queried["data"]["tasks"] if item["task_type"] == "ASR"
     )
-    assert asr_task["effective_params"] == original_params
-    queried_asr = next(
-        item for item in asr_task["nodes"] if item["node_code"] == "ASR_TRANSCRIPTION"
+    assert asr_task["effective_params"]["showRoleIdentify"] is True
+    assert len(asr_task["runs"]) == 2
+    assert any(
+        run["effective_params"] == original_params
+        and run["status"] == NodeStatus.COMPLETED.value
+        and len(run["result"]["segments"]) == 2_000
+        for run in asr_task["runs"]
     )
-    assert len(queried_asr["result"]["segments"]) == 2_000
-    assert queried_asr["result"]["segments"][-1] == large_segments[-1]
-    assert queried_asr["effective_params"] == original_params
 
 
 def test_failed_result_write_rolls_back_completion(repository: CourseRepository) -> None:

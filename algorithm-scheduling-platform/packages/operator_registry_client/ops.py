@@ -12,6 +12,9 @@ class OperatorOpsStatus(BaseModel):
     model_ready: bool
     inflight: int = Field(ge=0)
     declared_capacity: Annotated[StrictInt, Field(gt=0)]
+    # 容量池通过注册/心跳协议上报；通用旧运维状态接口保持原字段合同。
+    capacity_pools: dict[str, int] = Field(default_factory=dict, exclude=True)
+    inflight_by_pool: dict[str, int] = Field(default_factory=dict, exclude=True)
 
 
 class OperatorOpsMetadata(BaseModel):

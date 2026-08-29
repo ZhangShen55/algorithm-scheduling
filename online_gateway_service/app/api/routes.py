@@ -24,7 +24,7 @@ from ..core.config import (
     ServiceConfig,
 )
 from ..core.service_app import create_gateway_base_app
-from ..domain import valid_base64_image, vbas_route
+from ..domain import valid_base64_image
 from ..infrastructure.capacity import (
     CapacityLease,
     OnlineCapacityLeaseClient,
@@ -41,7 +41,9 @@ from ..infrastructure.websocket_proxy import (
 
 JsonObject = dict[str, Any]
 IMAGE_ROUTE_PATHS = {
-    "/api/online/vbas/analyze",
+    "/online/vbas/teacher",
+    "/online/vbas/student",
+    "/online/vbas/person-count",
     "/api/online/face/recognize",
     "/api/online/image-quality/detect",
     "/api/online/ocr/recognize",
@@ -164,6 +166,8 @@ def create_online_gateway_app(
                 service_settings.leases.renewal_safety_margin_seconds
             ),
         ),
+        acquire_wait_timeout_seconds=service_settings.leases.acquire_wait_timeout_seconds,
+        acquire_retry_interval_seconds=service_settings.leases.acquire_retry_interval_seconds,
     )
     app.state.face_person_client = FacePersonClient(
         http_client,
@@ -208,29 +212,28 @@ def create_online_gateway_app(
                 return JSONResponse(status_code=200, content=failure.model_dump())
         return await call_next(request)
 
-    @app.post("/api/online/vbas/analyze")
-    async def analyze_vbas(
+    async def forward_vbas(
         request_body: JsonObject,
         request: Request,
-    ) -> BusinessResponse[JsonObject]:
-        route = vbas_route(request_body)
-        if route is None:
-            return BusinessResponse[JsonObject].failure(
-                40001,
-                "VBas 在线请求必须包含有效的 stream_type 和 Base64 图片",
-            )
+        *,
+        capability: str,
+        endpoint: str,
+        operation: str,
+    ) -> JsonObject:
+        image_list = request_body.get("ImageList")
+        if not isinstance(image_list, list) or not image_list:
+            return BusinessResponse[JsonObject].failure(40001, "VBas 请求必须包含 ImageList")
         image_validity = await asyncio.gather(
             *(
                 _valid_online_image(item.get("StoragePath"), service_settings)
-                for item in request_body["ImageList"]
+                for item in image_list if isinstance(item, dict)
             )
         )
-        if not all(image_validity):
+        if len(image_validity) != len(image_list) or not all(image_validity):
             return BusinessResponse[JsonObject].failure(
                 40001,
                 "VBas 在线图片超过配置上限",
             )
-        capability, endpoint = route
         lease_client = cast(OnlineLeaseClient, request.app.state.online_lease_client)
         operator_http = cast(httpx.AsyncClient, request.app.state.online_http_client)
         metrics = cast(PlatformMetrics, request.app.state.platform_metrics)
@@ -239,9 +242,10 @@ def create_online_gateway_app(
                 capability,
                 ttl_seconds=service_settings.leases.request_ttl_seconds,
                 work_context=_online_work_context(
-                    "online_vbas",
+                    operation,
                     trace_id=get_trace_id(),
                 ),
+                capacity_pool="online",
             ) as lease:
                 started = time.perf_counter()
                 success = False
@@ -250,6 +254,7 @@ def create_online_gateway_app(
                         operator_http.post(
                             f"{lease.service_url.rstrip('/')}{endpoint}",
                             json=request_body,
+                            headers={"X-Algorithm-Work-Type": "online"},
                         ),
                         timeout=service_settings.http.hard_timeout_seconds,
                     )
@@ -267,19 +272,22 @@ def create_online_gateway_app(
                         success=success,
                     )
         except OnlineCapacityLeaseError:
-            return BusinessResponse[JsonObject].failure(
-                50301,
-                "暂无可用 VBas 算子容量",
-            )
+            return BusinessResponse[JsonObject].failure(50301, "等待 VBas 在线容量超时")
         except (TimeoutError, httpx.HTTPError, ValueError):
-            return BusinessResponse[JsonObject].failure(
-                50000,
-                "VBas 在线分析调用失败",
-            )
-        return BusinessResponse[JsonObject].success(
-            body,
-            message="VBas 在线分析完成",
-        )
+            return BusinessResponse[JsonObject].failure(50000, "VBas 在线分析调用失败")
+        return body
+
+    @app.post("/online/vbas/teacher", response_model=None)
+    async def analyze_teacher_vbas(request_body: JsonObject, request: Request) -> JsonObject:
+        return await forward_vbas(request_body, request, capability="teacher_behavior", endpoint="/ImageDetect/teacher/v1.0.0", operation="online_vbas_teacher")
+
+    @app.post("/online/vbas/student", response_model=None)
+    async def analyze_student_vbas(request_body: JsonObject, request: Request) -> JsonObject:
+        return await forward_vbas(request_body, request, capability="student_behavior", endpoint="/ImageDetect/student/v1.0.0", operation="online_vbas_student")
+
+    @app.post("/online/vbas/person-count", response_model=None)
+    async def analyze_person_count_vbas(request_body: JsonObject, request: Request) -> JsonObject:
+        return await forward_vbas(request_body, request, capability="person_count", endpoint="/AE/SyncTasks2", operation="online_vbas_person_count")
 
     @app.post("/api/online/face/recognize")
     async def recognize_face(

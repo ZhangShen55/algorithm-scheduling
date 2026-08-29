@@ -30,6 +30,8 @@ class OperatorRuntime:
         declared_capacity: int,
         model_ready_provider: ModelReadyProvider,
         inflight_provider: InflightProvider | None = None,
+        capacity_pools: dict[str, int] | None = None,
+        inflight_by_pool_provider: Callable[[], dict[str, int]] | None = None,
     ) -> None:
         self._declared_capacity = validate_positive_int(
             declared_capacity,
@@ -39,6 +41,8 @@ class OperatorRuntime:
         self._inflight_provider = inflight_provider
         self._lifecycle = OperatorLifecycle.ONLINE
         self._inflight = 0
+        self._capacity_pools = dict(capacity_pools or {"default": declared_capacity})
+        self._inflight_by_pool_provider = inflight_by_pool_provider
 
     @property
     def accepting_work(self) -> bool:
@@ -60,6 +64,12 @@ class OperatorRuntime:
             model_ready=self._model_ready_provider(),
             inflight=inflight,
             declared_capacity=self._declared_capacity,
+            capacity_pools=self._capacity_pools,
+            inflight_by_pool=(
+                self._inflight_by_pool_provider()
+                if self._inflight_by_pool_provider is not None
+                else {"default": inflight}
+            ),
         )
 
     def heartbeat_status(self) -> OperatorRuntimeStatus:
@@ -67,6 +77,7 @@ class OperatorRuntime:
         return OperatorRuntimeStatus(
             inflight=status.inflight,
             model_ready=status.model_ready,
+            inflight_by_pool=status.inflight_by_pool,
         )
 
 
@@ -115,6 +126,8 @@ def install_operator_runtime(
     control_service_url: str,
     heartbeat_interval_seconds: float,
     max_concurrent_requests: int,
+    capacity_pools: dict[str, int] | None = None,
+    inflight_by_pool_provider: Callable[[], dict[str, int]] | None = None,
     model_ready_provider: ModelReadyProvider = lambda: True,
     inflight_provider: InflightProvider | None = None,
     before_registry_shutdown: BeforeRegistryShutdown | None = None,
@@ -129,6 +142,8 @@ def install_operator_runtime(
     )
     runtime = OperatorRuntime(
         declared_capacity=configured_capacity,
+        capacity_pools=capacity_pools,
+        inflight_by_pool_provider=inflight_by_pool_provider,
         model_ready_provider=model_ready_provider,
         inflight_provider=inflight_provider,
     )
@@ -167,6 +182,7 @@ def install_operator_runtime(
                 capabilities=capabilities,
                 service_url=service_url,
                 declared_capacity=configured_capacity,
+                capacity_pools=runtime.status().capacity_pools,
                 management_token=management_token,
                 model_version=model_version,
                 api_version=api_version,

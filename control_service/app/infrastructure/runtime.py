@@ -56,6 +56,7 @@ CONTROL_SCHEMA_COLUMNS = {
     "task_nodes": (
         "id",
         "course_task_type_id",
+        "run_id",
         "node_code",
         "status",
         "priority",
@@ -96,6 +97,18 @@ CONTROL_SCHEMA_COLUMNS = {
         "result_version",
         "created_at",
         "updated_at",
+    ),
+    "task_type_runs": (
+        "run_id",
+        "course_task_type_id",
+        "params_fingerprint",
+        "effective_params",
+        "status",
+        "reason",
+        "result",
+        "created_at",
+        "started_at",
+        "finished_at",
     ),
     "visual_fallback_values": (
         "id",

@@ -38,12 +38,14 @@ from packages.platform_common.operator_registry import (
     WorkContext,
 )
 from packages.platform_common.repository import (
+    AsrRunRecord,
     NodeRecord,
     OperationsQueueSnapshot,
     TaskTypeRecord,
     TaskTypeWrite,
 )
 from packages.platform_contracts.responses import BusinessCode, BusinessResponse
+from packages.platform_contracts.asr import asr_params_fingerprint
 from packages.platform_contracts.status import Priority, TaskType, status_text
 
 from ..infrastructure.audited_operator_registry import canonical_operator_origin
@@ -63,9 +65,15 @@ class CourseTaskRepository(Protocol):
 
     def list_task_types(self, task_id: str) -> list[TaskTypeRecord]: ...
 
-    def list_nodes(self, course_task_type_id: int) -> list[NodeRecord]: ...
+    def list_nodes(
+        self,
+        course_task_type_id: int,
+        run_id: Any | None = None,
+    ) -> list[NodeRecord]: ...
 
     def operations_queue_snapshot(self) -> OperationsQueueSnapshot: ...
+
+    def list_asr_runs(self, course_task_type_id: int) -> list[AsrRunRecord]: ...
 
 
 class CourseJobSubmission(BaseModel):
@@ -87,8 +95,8 @@ class AsrOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     language: str = "auto"
-    showSpk: bool = True
-    showEmotion: bool = True
+    showSpk: bool = False
+    showEmotion: bool = False
     showRoleIdentify: bool = False
     wordTimestamps: bool = False
     hotWords: list[str] = Field(default_factory=list)
@@ -103,12 +111,14 @@ class OperatorRegistrationRequest(BaseModel):
     api_version: str | None = None
     declared_capacity: Annotated[StrictInt, Field(gt=0)]
     labels: dict[str, str] = Field(default_factory=dict)
+    capacity_pools: dict[str, StrictInt] = Field(default_factory=dict)
 
 
 class OperatorHeartbeatRequest(BaseModel):
     instance_id: str = Field(min_length=1)
     inflight: int = Field(ge=0)
     model_ready: bool
+    inflight_by_pool: dict[str, int] = Field(default_factory=dict)
 
 
 class OperatorUnregisterRequest(BaseModel):
@@ -130,6 +140,7 @@ class WorkContextRequest(BaseModel):
     node_id: str | None = Field(default=None, min_length=1, max_length=200)
     item_id: str | None = Field(default=None, min_length=1, max_length=200)
     trace_id: str | None = Field(default=None, min_length=1, max_length=200)
+    capacity_pool: str = Field(default="default", min_length=1, max_length=200)
 
     def to_domain(self) -> WorkContext:
         return WorkContext(**self.model_dump(exclude_none=True))
@@ -139,6 +150,7 @@ class CapacityLeaseRequest(BaseModel):
     capability: str = Field(min_length=1)
     ttl_seconds: int = Field(default=60, gt=0, le=3600)
     work_context: WorkContextRequest | None = None
+    capacity_pool: str = Field(default="default", min_length=1, max_length=200)
 
 
 class CapacityLeaseContextRequest(BaseModel):
@@ -281,6 +293,11 @@ def _task_write(submission: CourseJobSubmission, task_type: TaskType) -> TaskTyp
         priority=submission.priority,
         request_payload=payload,
         effective_params=effective_params,
+        params_fingerprint=(
+            asr_params_fingerprint(effective_params)
+            if task_type is TaskType.ASR and effective_params is not None
+            else None
+        ),
     )
 
 
@@ -293,6 +310,9 @@ def _task_response(record: TaskTypeRecord) -> dict[str, Any]:
         "priority": record.priority.value,
         "created": record.created,
         "updated_at": record.updated_at,
+        "run_id": str(record.run_id) if record.run_id is not None else None,
+        "params_fingerprint": record.params_fingerprint,
+        "effective_params": record.effective_params,
     }
 
 
@@ -309,6 +329,7 @@ def _node_response(record: NodeRecord) -> dict[str, Any]:
         "claimed_at": record.claimed_at,
         "started_at": record.started_at,
         "updated_at": record.updated_at,
+        "run_id": str(record.run_id) if record.run_id is not None else None,
     }
     if record.artifact_path is not None:
         response["path"] = record.artifact_path
@@ -322,10 +343,27 @@ def _node_response(record: NodeRecord) -> dict[str, Any]:
 def _queried_task_response(
     record: TaskTypeRecord,
     nodes: list[NodeRecord],
+    runs: list[AsrRunRecord] | None = None,
 ) -> dict[str, Any]:
     response = _task_response(record)
     response["effective_params"] = record.effective_params
     response["nodes"] = [_node_response(node) for node in nodes]
+    if runs is not None:
+        response["runs"] = [
+            {
+                "run_id": str(run.run_id),
+                "params_fingerprint": run.params_fingerprint,
+                "effective_params": run.effective_params,
+                "status": run.status.value,
+                "status_text": status_text(run.status),
+                "reason": run.reason,
+                "result": run.result,
+                "created_at": run.created_at,
+                "started_at": run.started_at,
+                "finished_at": run.finished_at,
+            }
+            for run in runs
+        ]
     return response
 
 
@@ -468,10 +506,19 @@ def create_control_app(
                 tasks.append(_unrequested_task_response(task_type))
             else:
                 try:
-                    nodes = repository.list_nodes(record.id)
+                    nodes = (
+                        repository.list_nodes(record.id)
+                        if record.run_id is None
+                        else repository.list_nodes(record.id, record.run_id)
+                    )
+                    runs = (
+                        repository.list_asr_runs(record.id)
+                        if record.task_type is TaskType.ASR
+                        else None
+                    )
                 except (RuntimeError, SQLAlchemyError):
                     return _task_database_error()
-                tasks.append(_queried_task_response(record, nodes))
+                tasks.append(_queried_task_response(record, nodes, runs))
         return BusinessResponse[dict[str, Any]].success(
             {"task_id": task_id, "tasks": tasks},
             message="课程任务查询成功",
@@ -499,6 +546,7 @@ def create_control_app(
                     api_version=payload.api_version,
                     declared_capacity=payload.declared_capacity,
                     labels=payload.labels,
+                    capacity_pools=payload.capacity_pools,
                 )
             )
         except REGISTRY_INFRASTRUCTURE_ERRORS as exc:
@@ -515,6 +563,7 @@ def create_control_app(
                 payload.instance_id,
                 inflight=payload.inflight,
                 model_ready=payload.model_ready,
+                inflight_by_pool=payload.inflight_by_pool,
             )
         except OperatorInstanceNotFoundError as exc:
             raise HTTPException(
@@ -584,12 +633,17 @@ def create_control_app(
         try:
             registry = _operator_registry(request)
             if payload.work_context is None:
-                lease = registry.lease(payload.capability, payload.ttl_seconds)
+                lease = registry.lease(
+                    payload.capability,
+                    payload.ttl_seconds,
+                    capacity_pool=payload.capacity_pool,
+                )
             else:
                 lease = registry.lease(
                     payload.capability,
                     payload.ttl_seconds,
                     payload.work_context.to_domain(),
+                    capacity_pool=payload.capacity_pool,
                 )
             context = lease.work_context
             logger.info(
@@ -712,13 +766,22 @@ def create_control_app(
                 tasks.append(_unrequested_task_response(task_type))
             else:
                 try:
-                    nodes = repository.list_nodes(record.id)
+                    nodes = (
+                        repository.list_nodes(record.id)
+                        if record.run_id is None
+                        else repository.list_nodes(record.id, record.run_id)
+                    )
+                    runs = (
+                        repository.list_asr_runs(record.id)
+                        if record.task_type is TaskType.ASR
+                        else None
+                    )
                 except (RuntimeError, SQLAlchemyError) as exc:
                     raise HTTPException(
                         status_code=503,
                         detail="任务数据库暂不可用",
                     ) from exc
-                tasks.append(_queried_task_response(record, nodes))
+                tasks.append(_queried_task_response(record, nodes, runs))
         return {"task_id": task_id, "tasks": tasks}
 
     @app.get("/ops/operator-instances")

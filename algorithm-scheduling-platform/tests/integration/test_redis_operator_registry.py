@@ -97,6 +97,30 @@ def test_registration_requires_first_heartbeat_before_routing(
     assert redis_registry.lease("teacher_behavior", 30).instance_id == "vbas-gpu0"
 
 
+def test_release_publishes_capacity_pool_notification(
+    redis_registry: RedisOperatorRegistry,
+) -> None:
+    instance = OperatorInstance(
+        instance_id="vbas-gpu0",
+        operator_code=OperatorCode.VBAS,
+        capabilities=["student_behavior"],
+        service_url="http://127.0.0.1:19001",
+        declared_capacity=1,
+        capacity_pools={"offline": 1, "online": 2},
+    )
+    _register_ready(redis_registry, instance)
+    lease = redis_registry.lease("student_behavior", 30, capacity_pool="online")
+    subscriber = redis_registry._client.pubsub()
+    subscriber.subscribe(f"{redis_registry._prefix}capacity-released")
+    subscriber.get_message(timeout=1)
+    redis_registry.release(lease.lease_id)
+    message = subscriber.get_message(timeout=1)
+    subscriber.close()
+    assert message is not None
+    assert message["type"] == "message"
+    assert '"capacity_pool":"online"' in str(message["data"])
+
+
 def test_retired_text_analysis_registration_writes_no_redis_state(tmp_path) -> None:
     client = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
     key_prefix = _unique_key_prefix()

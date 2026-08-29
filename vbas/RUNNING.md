@@ -43,8 +43,9 @@ curl -sS http://127.0.0.1:8981/ImageDetect/teacher/v1.0.0 \
 
 ## 并发与排空
 
-- `[TIAS].MaxConcurrentBatches = 1024`：单实例同时准入的 HTTP batch 数；一个最多 8 图的 batch 只计一个槽位。
-- `[TIAS].MaxQueueSize = 0`：满载时不在本算子排队，直接让上层重新选择实例。
+- `[TIAS].MaxConcurrentOfflineBatches = 1`：单实例同时执行的离线 batch 数；一个最多 8 图的 batch 只计一个槽位。
+- `[TIAS].MaxConcurrentOnlineRequests = 24`：单实例同时执行的在线 HTTP 请求数；一图一请求时每请求计一个槽位。
+- `[TIAS].MaxQueueOnlineSize = 24`：在线运行槽位用尽后的实例内 FIFO 等待上限；队列满载才返回过载响应。
 - `GET /AE/WorkerStatus`：查看运行批次和队列。
 - `PUT /AE/Drain`：停止接受新批次，便于下线实例。
 

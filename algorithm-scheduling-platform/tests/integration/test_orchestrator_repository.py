@@ -85,7 +85,14 @@ def test_worker_reads_task_context_and_dynamic_dispatch_capabilities(
     task_type = repository.get_task_type(task_type_id)
 
     assert task_type.request_payload == {"teacher_video_path": "http://media/teacher.mp4"}
-    assert task_type.effective_params == {"showSpk": True, "showEmotion": True}
+    assert task_type.effective_params == {
+        "language": "auto",
+        "showSpk": True,
+        "showEmotion": True,
+        "showRoleIdentify": False,
+        "wordTimestamps": False,
+        "hotWords": [],
+    }
     assert repository.list_dispatch_capabilities() == ["asr_offline"]
 
     repository.defer_capability_nodes("asr_offline")

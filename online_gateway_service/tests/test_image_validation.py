@@ -14,11 +14,8 @@ class LeaseClientMustNotBeUsed:
 
 
 def _payload(path: str, encoded: str) -> dict[str, object]:
-    if path == "/api/online/vbas/analyze":
-        return {
-            "stream_type": "student",
-            "ImageList": [{"ImageId": "image-1", "StoragePath": encoded}],
-        }
+    if path.startswith("/online/vbas/"):
+        return {"ImageList": [{"ImageId": "image-1", "StoragePath": encoded}]}
     if path == "/api/online/face/recognize":
         return {"photo": encoded}
     return {"image": encoded}
@@ -27,7 +24,9 @@ def _payload(path: str, encoded: str) -> dict[str, object]:
 @pytest.mark.parametrize(
     "path",
     (
-        "/api/online/vbas/analyze",
+        "/online/vbas/teacher",
+        "/online/vbas/student",
+        "/online/vbas/person-count",
         "/api/online/face/recognize",
         "/api/online/image-quality/detect",
         "/api/online/ocr/recognize",

@@ -4,6 +4,16 @@ import types
 from pathlib import Path
 
 
+def _route_paths(routes):
+    for route in routes:
+        if hasattr(route, "path"):
+            yield route.path
+        elif hasattr(route, "routes"):
+            yield from _route_paths(route.routes)
+        elif hasattr(route, "original_router"):
+            yield from _route_paths(route.original_router.routes)
+
+
 def _install_lightweight_tias_settings():
     sys.modules["app.core.settings"] = types.SimpleNamespace(
         LOGGING_CONFIG={},
@@ -22,8 +32,9 @@ def _install_lightweight_tias_settings():
             InstanceId="tias-test",
             BaseUrl="http://127.0.0.1:8981",
             AiQualityBaseUrl="",
-            MaxConcurrentBatches=1024,
-            MaxQueueSize=0,
+            MaxConcurrentOfflineBatches=1,
+            MaxConcurrentOnlineRequests=24,
+            MaxQueueOnlineSize=24,
             HeartbeatIntervalSeconds=5,
             HeartbeatTimeoutSeconds=15,
             RegisterRetryIntervalSeconds=1,
@@ -64,7 +75,7 @@ def test_tias_default_api_surface_excludes_removed_routes(monkeypatch):
     )
 
     module = importlib.import_module("app.main")
-    paths = {route.path for route in module.app.routes}
+    paths = set(_route_paths(module.app.routes))
 
     assert "/ImageDetect/student/v1.0.0" in paths
     assert "/AE/WorkerStatus" in paths
@@ -77,7 +88,7 @@ def test_tias_default_api_surface_excludes_removed_routes(monkeypatch):
     assert "/AE/Version" not in paths
     assert "/AE/LogLevel" not in paths
     assert "/AE/SyncTasks" not in paths
-    assert "/AE/SyncTasks2" not in paths
+    assert "/AE/SyncTasks2" in paths
     assert module.app.state.operator_runtime.status().declared_capacity == 1024
     assert module.app.state.operator_runtime.status().inflight == 0
 

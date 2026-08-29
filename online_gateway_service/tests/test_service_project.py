@@ -39,7 +39,9 @@ def test_canonical_entrypoint_exposes_online_routes() -> None:
     assert set(app.openapi()["paths"]) >= {
         "/health",
         "/ready",
-        "/api/online/vbas/analyze",
+            "/online/vbas/teacher",
+            "/online/vbas/student",
+            "/online/vbas/person-count",
         "/api/online/face/recognize",
         "/api/online/face/persons",
         "/api/online/face/persons/batch",
