@@ -14,6 +14,7 @@ from ..schemas.stu_tea_behavior import (
 )
 from ..core.settings import yolo_teacher_behavior_model, settings
 from ..schemas.geometry import Point
+from .inference_execution import log_cuda_memory
 import logging
 
 logger = logging.getLogger(__name__)
@@ -697,6 +698,7 @@ async def analyze_teacher_behavior_by_model(request: TeacherBehaviorRequest) -> 
                 img_size,
                 request.Teacher_Behavior_Thresd
             )
+            log_cuda_memory(logger, "teacher_behavior")
             result_list = build_teacher_result_list(behavior_results, TEACHER_BEHAVIOR_OBJECT_TYPES)
             for stat_key in total_stats:
                 total_stats[stat_key] += len(behavior_results[stat_key])

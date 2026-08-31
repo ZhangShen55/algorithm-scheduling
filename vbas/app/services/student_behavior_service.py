@@ -15,6 +15,7 @@ from ..schemas.stu_tea_behavior import (
 )
 from ..core.settings import yolo_person_model, yolo_face_model, yolo_student_model, settings
 from ..schemas.geometry import Point
+from .inference_execution import log_cuda_memory
 import logging
 
 
@@ -407,6 +408,7 @@ async def analyze_student_behavior(
                     img_size,
                     request.Student_Thresd,
                 )
+            log_cuda_memory(logger, "student_behavior")
             detection_time = time.time() - detection_start
             logger.info(f"[学生行为分析] 三种检测总耗时: {detection_time * 1000:.1f}ms")
 

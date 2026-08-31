@@ -43,6 +43,7 @@ OpenSpec 严格校验通过。4 条警告均为 FastAPI `on_event` 弃用提示�
 - `StudentModelsSequential` 对正式分析入口的分支选择；
 - Polygon 顺序/并行执行以及输出顺序；
 - Person、Face、Student、Teacher 四个 `UseHalf` 的独立映射；
+- GPU 推理完成后的 PyTorch allocated/reserved 及进程生命周期峰值日志；
 - 文件路径兼容实现和 Base64 正式实现的人数、人脸精度映射；
 - 原接口路径和平台注册元数据不变。
 

@@ -1,10 +1,35 @@
 import asyncio
+import types
 import unittest
 
-from app.services.inference_execution import execute_indexed
+from app.services.inference_execution import cuda_memory_snapshot, execute_indexed
 
 
 class InferenceExecutionTest(unittest.IsolatedAsyncioTestCase):
+    def test_cuda_memory_snapshot_reads_allocator_metrics(self):
+        fake_cuda = types.SimpleNamespace(
+            is_available=lambda: True,
+            memory_allocated=lambda: 10,
+            memory_reserved=lambda: 20,
+            max_memory_allocated=lambda: 30,
+            max_memory_reserved=lambda: 40,
+        )
+
+        self.assertEqual(
+            cuda_memory_snapshot(types.SimpleNamespace(cuda=fake_cuda)),
+            {
+                "allocated_bytes": 10,
+                "reserved_bytes": 20,
+                "max_allocated_bytes": 30,
+                "max_reserved_bytes": 40,
+            },
+        )
+
+    def test_cuda_memory_snapshot_skips_cpu_runtime(self):
+        fake_cuda = types.SimpleNamespace(is_available=lambda: False)
+
+        self.assertIsNone(cuda_memory_snapshot(types.SimpleNamespace(cuda=fake_cuda)))
+
     async def test_sequential_mode_completes_each_item_before_next(self):
         events = []
 

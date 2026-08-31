@@ -9,7 +9,7 @@ from ..schemas.error_codes import AppErrCode
 from ..schemas.demographics import PersonInfo,FaceInfo
 from ..schemas.response import Response as GenericResponse
 from ..core.settings import yolo_person_model, yolo_face_model, settings, Total_HaveProcess_Tasks
-from .inference_execution import execute_indexed
+from .inference_execution import execute_indexed, log_cuda_memory
 from typing import Tuple,List
 from ..schemas.geometry import Point
 import logging
@@ -256,6 +256,7 @@ async def sync_tasks(task_info: TaskInfo) -> SyncTasksResponse:
             ),
             sequential=settings.Inference.SyncTasks2PolygonsSequential,
         )
+        log_cuda_memory(logger, "person_count_file")
         if task_info.AnalysisRule.AlgParams.ResultImageDeclare == 1:
             draw_and_save_image(img, region_results, dst_local_path)
             logger.info(f"ResultImageDeclare={task_info.AnalysisRule.AlgParams.ResultImageDeclare}")
