@@ -12,7 +12,7 @@ from ..schemas.stu_tea_behavior import (
     ResultItem,
     ObjectPosition
 )
-from ..core.settings import yolo_teacher_behavior_model, settings, use_half
+from ..core.settings import yolo_teacher_behavior_model, settings
 from ..schemas.geometry import Point
 import logging
 
@@ -572,7 +572,7 @@ def process_teacher_behavior_model_detection_with_details(
         img,
         imgsz=get_teacher_behavior_image_size(),
         conf=get_teacher_behavior_predict_conf(threshold_overrides),
-        half=use_half,
+        half=settings.Inference.TeacherUseHalf,
         verbose=verbose
     )
     if not results or len(results) == 0:

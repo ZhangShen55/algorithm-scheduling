@@ -38,6 +38,14 @@ def _install_lightweight_tias_settings():
             HeartbeatIntervalSeconds=5,
             HeartbeatTimeoutSeconds=15,
             RegisterRetryIntervalSeconds=1,
+            Inference=types.SimpleNamespace(
+                StudentModelsSequential=True,
+                SyncTasks2PolygonsSequential=True,
+                PersonUseHalf=False,
+                FaceUseHalf=False,
+                StudentUseHalf=False,
+                TeacherUseHalf=False,
+            ),
             TIAS={
                 "TiasExposeLegacySyncTasks": False,
             },
@@ -46,7 +54,6 @@ def _install_lightweight_tias_settings():
         ADP_VER="test",
         ALG_VER="test",
         Total_HaveProcess_Tasks={"val": 0},
-        use_half=False,
         yolo_person_model=object(),
         yolo_face_model=object(),
         yolo_student_model=object(),
@@ -61,14 +68,14 @@ def test_tias_default_api_surface_excludes_removed_routes(monkeypatch):
 
     _install_lightweight_tias_settings()
 
-    async def analyze_student_behavior_parallel(request):
+    async def analyze_student_behavior(request):
         return "student"
 
     async def analyze_teacher_behavior_by_model(request):
         return "teacher"
 
     sys.modules["app.services.student_behavior_service"] = types.SimpleNamespace(
-        analyze_student_behavior_parallel=analyze_student_behavior_parallel,
+        analyze_student_behavior=analyze_student_behavior,
     )
     sys.modules["app.services.teacher_behavior_service"] = types.SimpleNamespace(
         analyze_teacher_behavior_by_model=analyze_teacher_behavior_by_model,

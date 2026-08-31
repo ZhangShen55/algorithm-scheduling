@@ -13,7 +13,7 @@ from ..schemas.stu_tea_behavior import (
     ResultItem,
     ObjectPosition
 )
-from ..core.settings import yolo_person_model, yolo_face_model, yolo_student_model, settings,use_half
+from ..core.settings import yolo_person_model, yolo_face_model, yolo_student_model, settings
 from ..schemas.geometry import Point
 import logging
 
@@ -141,7 +141,7 @@ def process_person_detection(img: np.ndarray, offset: Tuple[int, int], img_size:
         img,
         conf=0.1,
         imgsz=get_capped_inference_size(img_size),
-        half=use_half,
+        half=settings.Inference.PersonUseHalf,
         verbose=verbose,
     )[0]
     dets = pred.boxes.data.tolist()
@@ -183,7 +183,7 @@ def process_face_detection(img: np.ndarray, offset: Tuple[int, int], img_size: T
         img,
         conf=0.1,
         imgsz=get_capped_inference_size(img_size),
-        half=use_half,
+        half=settings.Inference.FaceUseHalf,
         verbose=verbose,
     )[0]
     dets = pred.boxes.data.tolist()
@@ -228,7 +228,7 @@ def process_student_behavior(
         img,
         conf=get_student_behavior_predict_conf(threshold_overrides),
         imgsz=predict_imgsz,
-        half=use_half,
+        half=settings.Inference.StudentUseHalf,
         verbose=verbose
     )[0]
     dets = pred.boxes.data.tolist()
@@ -285,12 +285,44 @@ async def process_student_detections_parallel(
     return person_positions, face_positions, behavior_results
 
 
+async def process_student_detections_sequential(
+        img: np.ndarray,
+        offset: Tuple[int, int],
+        img_size: Tuple[int, int],
+        threshold_overrides: Optional[Any] = None):
+    """依次等待三个模型，同时允许其他 HTTP 请求使用各自的工作线程。"""
+    person_positions = await asyncio.to_thread(
+        process_person_detection,
+        img,
+        offset,
+        img_size,
+    )
+    face_positions = await asyncio.to_thread(
+        process_face_detection,
+        img,
+        offset,
+        img_size,
+    )
+    behavior_results = await asyncio.to_thread(
+        process_student_behavior,
+        img,
+        offset,
+        img_size,
+        threshold_overrides,
+        STUDENT_IMAGE_SIZE,
+    )
+    return person_positions, face_positions, behavior_results
+
+
 async def analyze_student_behavior(
         request: StudentBehaviorRequest,
-        parallel_models: bool = False) -> Stu_Tea_BehaviorResponse:
+        parallel_models: Optional[bool] = None) -> Stu_Tea_BehaviorResponse:
     """
     学生行为分析主函数
     """
+    if parallel_models is None:
+        parallel_models = not settings.Inference.StudentModelsSequential
+
     start_time = time.time()
     timestamp = int(time.time())
     logger.info(f"[学生行为分析] 开始处理 {len(request.ImageList)} 张图片")
@@ -369,9 +401,7 @@ async def analyze_student_behavior(
                     request.Student_Thresd,
                 )
             else:
-                person_positions = process_person_detection(processed_img, offset, img_size)
-                face_positions = process_face_detection(processed_img, offset, img_size)
-                behavior_results = process_student_behavior(
+                person_positions, face_positions, behavior_results = await process_student_detections_sequential(
                     processed_img,
                     offset,
                     img_size,

@@ -21,7 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.core.settings import settings, use_half, yolo_student_model  # noqa: E402
+from app.core.settings import settings, yolo_student_model  # noqa: E402
 
 
 CLASS_NAMES = {
@@ -232,7 +232,7 @@ def run_eval(args: argparse.Namespace) -> None:
             image,
             conf=args.raw_conf,
             imgsz=(height, width),
-            half=use_half,
+            half=settings.Inference.StudentUseHalf,
             verbose=False,
         )[0]
 

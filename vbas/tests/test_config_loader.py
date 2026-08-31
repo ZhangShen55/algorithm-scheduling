@@ -124,6 +124,17 @@ CleanupAfterLoad = true
         self.assertEqual(config["TIAS"]["MaxConcurrentOfflineBatches"], 1)
         self.assertEqual(config["TIAS"]["MaxConcurrentOnlineRequests"], 24)
         self.assertEqual(config["TIAS"]["MaxQueueOnlineSize"], 24)
+        self.assertEqual(
+            config["Inference"],
+            {
+                "StudentModelsSequential": True,
+                "SyncTasks2PolygonsSequential": True,
+                "PersonUseHalf": False,
+                "FaceUseHalf": False,
+                "StudentUseHalf": False,
+                "TeacherUseHalf": False,
+            },
+        )
 
     def test_loads_toml_example_file(self):
         config_path = Path(__file__).resolve().parents[1] / "config.toml.example"
@@ -136,6 +147,12 @@ CleanupAfterLoad = true
         self.assertEqual(config["TIAS"]["MaxConcurrentOfflineBatches"], 1)
         self.assertEqual(config["TIAS"]["MaxConcurrentOnlineRequests"], 24)
         self.assertEqual(config["TIAS"]["MaxQueueOnlineSize"], 24)
+        self.assertTrue(config["Inference"]["StudentModelsSequential"])
+        self.assertTrue(config["Inference"]["SyncTasks2PolygonsSequential"])
+        self.assertFalse(config["Inference"]["PersonUseHalf"])
+        self.assertFalse(config["Inference"]["FaceUseHalf"])
+        self.assertFalse(config["Inference"]["StudentUseHalf"])
+        self.assertFalse(config["Inference"]["TeacherUseHalf"])
 
 
 if __name__ == "__main__":

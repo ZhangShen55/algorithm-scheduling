@@ -1,5 +1,4 @@
 # app/services/task_service.py
-import asyncio
 import os
 import cv2
 import numpy as np
@@ -9,7 +8,8 @@ from ..schemas.image import Image
 from ..schemas.error_codes import AppErrCode
 from ..schemas.demographics import PersonInfo,FaceInfo
 from ..schemas.response import Response as GenericResponse
-from ..core.settings import yolo_person_model, yolo_face_model, settings, use_half, Total_HaveProcess_Tasks
+from ..core.settings import yolo_person_model, yolo_face_model, settings, Total_HaveProcess_Tasks
+from .inference_execution import execute_indexed
 from typing import Tuple,List
 from ..schemas.geometry import Point
 import logging
@@ -131,7 +131,7 @@ async def process_polygon(idx, poly, img, target_height, target_width, TaskID):
 
     logger.info(f"predict [target_height-{target_height}] [target_width-{target_width}] ")
 
-    pred = yolo_person_model.predict(subimg, conf=0.1, imgsz=(target_height, target_width),half=use_half,agnostic_nms=True,verbose=verbose)[0]
+    pred = yolo_person_model.predict(subimg, conf=0.1, imgsz=(target_height, target_width),half=settings.Inference.PersonUseHalf,agnostic_nms=True,verbose=verbose)[0]
     log_duration(f"[Polygon-{idx}] Person model.predict", person_model_start)
     postproc_start = time.time()
     dets = pred.boxes.data.tolist()
@@ -161,7 +161,7 @@ async def process_polygon(idx, poly, img, target_height, target_width, TaskID):
     # —— 2) todo Face 检测 & 聚合到 FaceInfo ——
     face_start = time.time()
     face_model_start = time.time()
-    pred_face = yolo_face_model.predict(subimg, conf=0.1, imgsz=(target_height, target_width),half=use_half, verbose=verbose)[0]
+    pred_face = yolo_face_model.predict(subimg, conf=0.1, imgsz=(target_height, target_width),half=settings.Inference.FaceUseHalf, verbose=verbose)[0]
     log_duration(f"[Polygon-{idx}] Face model.predict", face_model_start)
 
     face_postproc_start = time.time()
@@ -248,9 +248,14 @@ async def sync_tasks(task_info: TaskInfo) -> SyncTasksResponse:
         base_local, _ = os.path.splitext(local_path)
         dst_local_path = base_local + "_dst" + ext
 
-        tasks = [process_polygon(idx, poly, img, target_height, target_width, task_info.TaskID)
-                 for idx, poly in enumerate(task_info.AnalysisRule.AlgParams.PolygonList or [])]
-        region_results: list[PolygonResult] = list(await asyncio.gather(*tasks))
+        polygon_list = task_info.AnalysisRule.AlgParams.PolygonList or []
+        region_results: list[PolygonResult] = await execute_indexed(
+            polygon_list,
+            lambda idx, poly: process_polygon(
+                idx, poly, img, target_height, target_width, task_info.TaskID
+            ),
+            sequential=settings.Inference.SyncTasks2PolygonsSequential,
+        )
         if task_info.AnalysisRule.AlgParams.ResultImageDeclare == 1:
             draw_and_save_image(img, region_results, dst_local_path)
             logger.info(f"ResultImageDeclare={task_info.AnalysisRule.AlgParams.ResultImageDeclare}")

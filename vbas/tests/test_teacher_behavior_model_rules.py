@@ -24,11 +24,11 @@ class TeacherBehaviorModelRuleTest(unittest.TestCase):
                 "PostureConflictDefault": "stand",
                 "ForcePostureWhenMissing": True,
             },
+            Inference=types.SimpleNamespace(TeacherUseHalf=False),
         )
         sys.modules["app.core.settings"] = types.SimpleNamespace(
             yolo_teacher_behavior_model=types.SimpleNamespace(),
             settings=settings_stub,
-            use_half=False,
         )
         cls.service = importlib.import_module("app.services.teacher_behavior_service")
 
@@ -248,6 +248,33 @@ class TeacherBehaviorModelRuleTest(unittest.TestCase):
             self.assertEqual(self.service.get_teacher_behavior_predict_conf(), 0.1)
         finally:
             self.service.settings.Teacher_Behavior_Thresd["teach"] = 0.25
+
+    def test_teacher_model_uses_its_own_half_setting(self):
+        captured = {}
+
+        class FakeModel:
+            names = {}
+
+            def predict(self, *args, **kwargs):
+                captured["half"] = kwargs["half"]
+                return []
+
+        original_model = self.service.yolo_teacher_behavior_model
+        self.service.yolo_teacher_behavior_model = FakeModel()
+        self.service.settings.Inference.TeacherUseHalf = True
+        try:
+            results, details = self.service.process_teacher_behavior_model_detection_with_details(
+                self.service.np.zeros((64, 64, 3), dtype=self.service.np.uint8),
+                (0, 0),
+                (64, 64),
+            )
+        finally:
+            self.service.settings.Inference.TeacherUseHalf = False
+            self.service.yolo_teacher_behavior_model = original_model
+
+        self.assertTrue(captured["half"])
+        self.assertEqual(results, self.service.empty_teacher_behavior_results())
+        self.assertEqual(details, [])
 
     def test_request_threshold_overrides_configured_label_thresholds(self):
         request_thresholds = {"sit": 0.7, "teach": 0.4}

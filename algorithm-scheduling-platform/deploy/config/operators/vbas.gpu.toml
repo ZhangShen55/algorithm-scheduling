@@ -20,6 +20,17 @@ max_concurrent_requests = 1024
 # 三卡部署必须检测到容器内 CUDA 设备。
 require_gpu = true
 
+[Inference]
+# 单个学生请求内是否按人数、人脸、学生行为的顺序执行模型。
+StudentModelsSequential = true
+# /AE/SyncTasks2 单个请求内是否按输入顺序逐个处理 Polygon。
+SyncTasks2PolygonsSequential = true
+# 四个模型独立的 FP16 开关；当前生产默认保持 FP32。
+PersonUseHalf = false
+FaceUseHalf = false
+StudentUseHalf = false
+TeacherUseHalf = false
+
 [logging]
 # 日志级别。
 level = "INFO"

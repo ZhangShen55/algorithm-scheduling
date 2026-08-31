@@ -35,11 +35,11 @@ class TeacherBehaviorServiceTest(unittest.IsolatedAsyncioTestCase):
             Teacher_Head_Pose={
                 "Enabled": True,
             },
+            Inference=types.SimpleNamespace(TeacherUseHalf=False),
         )
         sys.modules["app.core.settings"] = types.SimpleNamespace(
             yolo_teacher_behavior_model=types.SimpleNamespace(),
             settings=settings_stub,
-            use_half=False,
         )
         sys.modules["app.services.capacity_service"] = types.SimpleNamespace(
             increment_connection=lambda: None,

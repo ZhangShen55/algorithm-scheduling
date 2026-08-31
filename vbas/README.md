@@ -53,6 +53,29 @@ Compose 继续管理实例 ID、服务 URL、注册 Token、物理 GPU/可见设
 `MaxConcurrentOnlineRequests` 和 `MaxQueueOnlineSize` 按在线 HTTP 请求计数。在线请求达到运行上限
 后可进入实例内有界 FIFO 队列，队列满载才返回过载响应；离线容量不进入该队列。
 
+### 请求内推理配置
+
+`[Inference]` 控制单个请求内部的模型执行顺序和逐模型精度：
+
+```toml
+[Inference]
+StudentModelsSequential = true
+SyncTasks2PolygonsSequential = true
+PersonUseHalf = false
+FaceUseHalf = false
+StudentUseHalf = false
+TeacherUseHalf = false
+```
+
+`StudentModelsSequential=true` 时，一张学生图片依次执行人数、人脸和学生行为模型；
+`SyncTasks2PolygonsSequential=true` 时，一个 `/AE/SyncTasks2` 请求按输入顺序逐个处理 Polygon。
+两个字段设为 `false` 时保留原有请求内并行兼容路径。四个 `UseHalf` 仅控制各自模型，默认均为
+`false`，保持 FP32。
+
+这些字段只控制单个请求内部，不限制不同 HTTP 请求之间的并发，也不改变 `[TIAS]` 在线/离线
+准入容量。配置在进程启动时读取，修改后必须重启对应 VBas 容器才能生效。若高并发请求之间
+仍造成显存异常增长，需要通过独立变更评估进程级 GPU 推理并发控制。
+
 必要模型放在 `models/`：
 
 - `person_count.pt`

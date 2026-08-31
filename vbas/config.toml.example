@@ -24,6 +24,17 @@ max_concurrent_requests = 1024
 # 本地示例允许 CPU；GPU 部署配置显式设为 true。
 require_gpu = false
 
+[Inference]
+# 单个学生请求内是否按人数、人脸、学生行为的顺序执行模型。
+StudentModelsSequential = true
+# /AE/SyncTasks2 单个请求内是否按输入顺序逐个处理 Polygon。
+SyncTasks2PolygonsSequential = true
+# 四个模型独立的 FP16 开关；默认 false 保持当前 FP32 精度行为。
+PersonUseHalf = false
+FaceUseHalf = false
+StudentUseHalf = false
+TeacherUseHalf = false
+
 [TIAS]
 # TIAS 实例身份和对外访问地址。
 InstanceId = "tias-8981"

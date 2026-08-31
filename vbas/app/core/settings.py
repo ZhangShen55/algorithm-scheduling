@@ -10,6 +10,7 @@ from ultralytics import YOLO
 from packages.operator_registry_client import load_operator_deployment_settings
 
 from .config_loader import load_config, resolve_config_path
+from .inference_config import InferenceSettings
 from .model_protection import ModelPathResolver, ModelProtectionConfig
 from .runtime_device import resolve_runtime_device
 
@@ -17,6 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = str(resolve_config_path())
 _cfg = load_config(CONFIG_PATH)
 LOGGING_CONFIG = dict(_cfg.get("logging", {}))
+
 
 class Settings(BaseSettings):
     IMAGE_ROOT: str = "/mnt/ias-images"
@@ -67,6 +69,7 @@ class Settings(BaseSettings):
     HeartbeatIntervalSeconds: int = 5
     HeartbeatTimeoutSeconds: int = 15
     RegisterRetryIntervalSeconds: int = 5
+    Inference: InferenceSettings = Field(default_factory=InferenceSettings)
     ModelProtection: Dict[str, Any] = Field(default_factory=lambda: {
         "Enabled": False,
         "EncryptedModelRoot": "models-encrypted",
@@ -104,8 +107,6 @@ device = resolve_runtime_device(
     torch_module=torch,
     require_gpu=operator_deployment.runtime.require_gpu,
 )
-# use_half = device.type == "cuda"  # 仅在 CUDA 场景启用 FP16
-use_half = False  # 优先精准度，所以开启 fp32。20251205
 
 APP_VER = "V4.1_20251222"
 ADP_VER = "V4.1_20251222"

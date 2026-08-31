@@ -7,7 +7,7 @@ from ..schemas.stu_tea_behavior import (
     TeacherBehaviorRequest,
     TeacherBehaviorResponse,
 )
-from ..services.student_behavior_service import analyze_student_behavior_parallel
+from ..services.student_behavior_service import analyze_student_behavior
 from ..services.teacher_behavior_service import analyze_teacher_behavior_by_model
 from ..services.worker_state import BatchAdmissionController, BatchRejectedError
 import logging
@@ -25,7 +25,7 @@ def build_behavior_router(controller: Optional[BatchAdmissionController] = None)
         try:
             if controller is None:
                 logger.info("收到学生推理批次 task_id=%s batch_id=%s frames=%s", task_id, batch_id, len(request.ImageList))
-                return await analyze_student_behavior_parallel(request)
+                return await analyze_student_behavior(request)
             async with controller.admit(str(task_id), str(batch_id), "student", len(request.ImageList), work_type=http_request.headers.get("X-Algorithm-Work-Type", "offline")):
                 status = controller.snapshot()
                 logger.info(
@@ -36,7 +36,7 @@ def build_behavior_router(controller: Optional[BatchAdmissionController] = None)
                     status["running_batches"],
                     status["queued_batches"],
                 )
-                return await analyze_student_behavior_parallel(request)
+                return await analyze_student_behavior(request)
         except BatchRejectedError as exc:
             status = controller.snapshot() if controller is not None else {}
             logger.warning(

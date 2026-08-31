@@ -20,7 +20,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.core.settings import use_half, yolo_student_model  # noqa: E402
+from app.core.settings import settings, yolo_student_model  # noqa: E402
 from app.services.student_behavior_service import (  # noqa: E402
     STUDENT_BEHAVIOR_CLASSES,
     get_student_behavior_label_threshold,
@@ -89,7 +89,7 @@ def predict(image: np.ndarray, imgsz: int) -> Tuple[List[dict], float]:
         image,
         imgsz=imgsz,
         conf=get_student_behavior_predict_conf(),
-        half=use_half,
+        half=settings.Inference.StudentUseHalf,
         verbose=False,
     )[0]
     elapsed_ms = (time.perf_counter() - start) * 1000
