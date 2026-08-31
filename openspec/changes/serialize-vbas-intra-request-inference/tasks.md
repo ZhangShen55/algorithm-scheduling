@@ -38,32 +38,32 @@
 ## 6. Git 与远端构建准备
 
 - [x] 6.1 复核工作区，只纳管本变更代码、测试、配置、文档和 OpenSpec/Harness 文件，不混入既有用户改动
-- [ ] 6.2 使用中文规范提交并推送同一目标 Git SHA，记录完整 SHA、分支和远端状态
-- [ ] 6.3 在 `192.168.29.11` 记录三个旧 VBas 容器完整 ID、旧镜像完整 ID、GPU 绑定、配置摘要、健康和注册状态
-- [ ] 6.4 确认三个旧 VBas 实例无运行中批次或租约，并保留其他六类算子、四个平台服务和中间件不变
-- [ ] 6.5 检查目标机 Docker 构建缓存、磁盘、基础镜像、模型和发布源码 SHA，禁止为本次构建执行 buildx prune 或其他缓存清理
+- [x] 6.2 使用中文规范提交并推送同一目标 Git SHA，记录完整 SHA、分支和远端状态
+- [x] 6.3 在 `192.168.29.11` 记录三个旧 VBas 容器完整 ID、旧镜像完整 ID、GPU 绑定、配置摘要、健康和注册状态
+- [x] 6.4 确认三个旧 VBas 实例无运行中批次或租约，并保留其他六类算子、四个平台服务和中间件不变
+- [x] 6.5 检查目标机 Docker 构建缓存、磁盘、基础镜像、模型和发布源码 SHA，禁止为本次构建执行 buildx prune 或其他缓存清理
 
 ## 7. 新镜像构建与受控替换
 
-- [ ] 7.1 使用现有 Docker layer/build cache 构建带当前日期标签的新 VBas x86_64 镜像，并写入目标 Git SHA/revision
-- [ ] 7.2 在停止旧容器前检查新镜像完整 ID、架构、revision、入口、模型文件和六个配置字段
-- [ ] 7.3 逐个重建 GPU0、GPU1、GPU2 的 VBas 容器，每次替换后确认对应 GPU 绑定、单 worker 和 Docker health，再继续下一个实例
-- [ ] 7.4 确认三个新实例均向 Control Service 注册并持续心跳，能力仍为 `student_behavior`、`teacher_behavior` 和 `person_count`
-- [ ] 7.5 进入每个容器核对 `[Inference]` 六个有效值，确认没有 `GpuInferenceConcurrency`，且现有在线/离线容量值未被改变
+- [x] 7.1 使用现有 Docker layer/build cache 构建带当前日期标签的新 VBas x86_64 镜像，并写入目标 Git SHA/revision
+- [x] 7.2 在停止旧容器前检查新镜像完整 ID、架构、revision、入口、模型文件和六个配置字段
+- [x] 7.3 逐个重建 GPU0、GPU1、GPU2 的 VBas 容器，每次替换后确认对应 GPU 绑定、单 worker 和 Docker health，再继续下一个实例
+- [x] 7.4 确认三个新实例均向 Control Service 注册并持续心跳，能力仍为 `student_behavior`、`teacher_behavior` 和 `person_count`
+- [x] 7.5 进入每个容器核对 `[Inference]` 六个有效值，确认没有 `GpuInferenceConcurrency`，且现有在线/离线容量值未被改变
 
 ## 8. 三卡真实 GPU 验证
 
-- [ ] 8.1 每轮测试前重启对应 VBas 容器，逐模型预热并记录每张 GPU 的 VBas 进程显存及 PyTorch allocated/reserved 基线
-- [ ] 8.2 使用固定图片在三个实例分别执行学生和教师真实推理，记录结果摘要、成功率、P50/P95 和显存峰值/驻留值
-- [ ] 8.3 使用 `frame_000068.jpg` 执行 `/AE/SyncTasks2` 单 Polygon 与多 Polygon 真实推理，验证顺序、响应兼容和显存变化
-- [ ] 8.4 执行离线师生行为、在线人数和两者混合的固定并发回归，确认三实例均获得真实工作且平台路由不回归
-- [ ] 8.5 等待请求、租约和队列归零后记录驻留显存，与变更前约 15 GiB 历史高水位区分，任何 OOM 或显存异常增长均如实判失败
-- [ ] 8.6 对 `PersonUseHalf`、`FaceUseHalf`、`StudentUseHalf`、`TeacherUseHalf` 逐个做 NVIDIA 有效性和固定图片结果对比，默认发布配置保持全部为 false
+- [x] 8.1 每轮测试前重启对应 VBas 容器，逐模型预热并记录每张 GPU 的 VBas 进程显存及 PyTorch allocated/reserved 基线
+- [x] 8.2 使用固定图片在三个实例分别执行学生和教师真实推理，记录结果摘要、成功率、P50/P95 和显存峰值/驻留值
+- [x] 8.3 使用 `frame_000068.jpg` 执行 `/AE/SyncTasks2` 单 Polygon 与多 Polygon 真实推理，验证顺序、响应兼容和显存变化
+- [x] 8.4 执行离线师生行为、在线人数和两者混合的固定并发回归，确认三实例均获得真实工作且平台路由不回归
+- [x] 8.5 等待请求、租约和队列归零后记录驻留显存，与变更前约 15 GiB 历史高水位区分，任何 OOM 或显存异常增长均如实判失败
+- [x] 8.6 对 `PersonUseHalf`、`FaceUseHalf`、`StudentUseHalf`、`TeacherUseHalf` 逐个做 NVIDIA 有效性和固定图片结果对比，默认发布配置保持全部为 false
 
 ## 9. 验收、回滚与清理
 
-- [ ] 9.1 汇总本地测试、三容器健康、三实例注册、GPU/PID 绑定、真实推理、接口合同、耗时和显存证据并写入中文 Harness
-- [ ] 9.2 若任一门禁失败，停止新负载，保留旧镜像并使用账本中的旧镜像完整 ID回滚三个 VBas 实例，不执行旧资产清理
-- [ ] 9.3 仅在全部门禁通过后，按完整 ID移除被替换的旧 VBas 容器残留和旧 VBas 镜像，保留新镜像、其他服务资产和 Docker 构建缓存
-- [ ] 9.4 清理后再次验证三个新 VBas 容器 healthy、三实例注册、GPU 绑定和学生/教师/人数 Smoke，并记录最终镜像与容器完整 ID
-- [ ] 9.5 更新 OpenSpec 任务状态、最终测试结论和剩余风险；跨 HTTP 请求显存仍异常时另建 `GpuInferenceConcurrency` 变更，不在本变更临时追加
+- [x] 9.1 汇总本地测试、三容器健康、三实例注册、GPU/PID 绑定、真实推理、接口合同、耗时和显存证据并写入中文 Harness
+- [x] 9.2 若任一门禁失败，停止新负载，保留旧镜像并使用账本中的旧镜像完整 ID回滚三个 VBas 实例，不执行旧资产清理（本次门禁全部通过，未触发回滚）
+- [x] 9.3 仅在全部门禁通过后，按完整 ID移除被替换的旧 VBas 容器残留和旧 VBas 镜像，保留新镜像、其他服务资产和 Docker 构建缓存
+- [x] 9.4 清理后再次验证三个新 VBas 容器 healthy、三实例注册、GPU 绑定和学生/教师/人数 Smoke，并记录最终镜像与容器完整 ID
+- [x] 9.5 更新 OpenSpec 任务状态、最终测试结论和剩余风险；跨 HTTP 请求显存仍异常时另建 `GpuInferenceConcurrency` 变更，不在本变更临时追加

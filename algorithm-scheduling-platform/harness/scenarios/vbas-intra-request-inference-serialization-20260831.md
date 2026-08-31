@@ -33,7 +33,7 @@ conda run -n jy-tias python -m pip check
 openspec validate serialize-vbas-intra-request-inference --strict
 ```
 
-结果：VBas 全量测试 `90 passed, 4 warnings`，编译通过，`pip check` 返回无损坏依赖，
+结果：VBas 全量测试 `92 passed, 4 warnings`，编译通过，`pip check` 返回无损坏依赖，
 OpenSpec 严格校验通过。4 条警告均为 FastAPI `on_event` 弃用提示，与本变更行为无关。
 
 自动化测试覆盖：
@@ -66,9 +66,111 @@ OpenSpec 严格校验通过。4 条警告均为 FastAPI `on_event` 弃用提示�
 
 ## 远端三卡发布与验证
 
-目标机：`192.168.29.11`。本节将在同一 Git SHA 构建、逐实例替换及三卡真实 GPU 验证后
-补充完整容器/镜像 ID、注册、GPU 绑定、P50/P95、显存峰值/驻留值和清理结果。在全部门禁
-通过前保留旧 VBas 镜像，不将本变更标记为发布完成。
+目标机：`192.168.29.11`，架构 `amd64`。最终候选 Git SHA 为
+`61b5fdc73f254e6416fc985cec4a7ebee799ae7b`，镜像为
+`algorithm-vbas:v1.0_260831`，完整镜像 ID 为
+`sha256:c3261f111088249c387e5cc2ed47ac781c136fbac5dd139aae8339cfe1062c68`。
+镜像 revision 与候选 SHA 一致，容器内编译及 `pip check` 通过，四个模型文件齐全。
+
+构建复用了既有 BuildKit layer cache，未使用 `--no-cache`，未执行 builder、buildx 或 system
+prune。构建前缓存约 87.22 GiB，完成与精确清理后缓存约 90.02 GiB，证明缓存被保留。
+
+### 替换前账本
+
+替换前镜像为 `algorithm-vbas:v1.0_260829`，完整 ID
+`sha256:96b69779de8db972d4e011720c95e970ce1afb70778c00c60a100b4d30833f7f`。
+三个旧容器完整 ID分别为：
+
+- GPU0：`ae662185c200cc031a6fec5eb482b99e947d451c77647fe867d486db13cba3bf`；
+- GPU1：`67958d201da5f31be57605fc910fa2c2f5bbac1e432dcaa0ec4db12e4f5fcf30`；
+- GPU2：`172486527cc137fc1c86acddbc8a09b03c19b227e7d1a78835b3bb84bd4a7057`。
+
+替换前全部 healthy，分别绑定 GPU 0、1、2；Control 快照显示三实例均 `ONLINE`、
+`model_ready=true`、`reported_inflight=0`、`active_lease_count=0`。有效容量为平台 1024、
+离线 1、在线 24、在线队列 24。
+
+### 受控替换结果
+
+三个实例按 GPU0、GPU1、GPU2 顺序逐个重建，每个实例通过 healthy、单 worker、GPU 绑定、
+注册和配置检查后才继续下一个。最终资产如下：
+
+| 实例 | 完整容器 ID | GPU | 状态 |
+| --- | --- | ---: | --- |
+| `vbas-gpu0` | `80da3c31d10209514ba5b2a5d8fb8592af6b18b3cccc5961be9c9e9fce68cbe7` | 0 | healthy / ONLINE |
+| `vbas-gpu1` | `f84e8644b2dfe6f7e96ad034f6d06fe79dcd8e4884dcb53403a516e06664d323` | 1 | healthy / ONLINE |
+| `vbas-gpu2` | `eaeff507ade6b70d6e5dc05edfd193a59ace0e8340e364926d848b2d7413d4f5` | 2 | healthy / ONLINE |
+
+每个容器只有一个 `vbas -m uvicorn app.main:app ... --workers 1` 进程。容器内六项
+`[Inference]` 均与发布配置一致，两个顺序开关为 `true`，四个精度开关为 `false`；未出现
+`GpuInferenceConcurrency`，既有容量没有变化。三个实例继续注册
+`student_behavior`、`teacher_behavior` 和 `person_count`。
+
+### 预热与显存基线
+
+重启后三实例依次执行学生、教师和人数预热，全部 HTTP 200：
+
+| GPU | VBas PID | 进程驻留显存 | allocated | reserved | max allocated | max reserved |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 3124889 | 3192 MiB | 768.62 MiB | 2716 MiB | 1959.41 MiB | 2716 MiB |
+| 1 | 3128310 | 3192 MiB | 768.62 MiB | 2716 MiB | 1959.41 MiB | 2716 MiB |
+| 2 | 3131960 | 3804 MiB | 768.62 MiB | 3434 MiB | 2217.50 MiB | 3434 MiB |
+
+GPU2 为 RTX 3090，GPU0/1 为 RTX 4090 D，因此 allocator reserved 和进程驻留值存在差异。
+后续重复推理、混合并发及 72 路网关请求结束后，上述 VBas 进程驻留值和 allocator 峰值均
+未继续增长，三个新容器日志中 OOM、CUDA OOM 和 Traceback 计数均为 0。该结果显著低于
+变更前约 15 GiB 历史高水位，但不代表跨 HTTP 请求并发已被全局限制。
+
+### 三实例固定图片结果与延迟
+
+每个实例对学生、教师、单 Polygon 和双 Polygon 分别执行 5 次真实推理，60/60 成功：
+
+| GPU | 操作 | P50 | P95 | 固定结果摘要 |
+| ---: | --- | ---: | ---: | --- |
+| 0 | 学生 | 0.1366 s | 0.1480 s | 人数 30、人脸 7、行为计数稳定 |
+| 0 | 教师 | 0.0291 s | 0.0326 s | 主体 1、坐 1、板书 1 |
+| 0 | 单 Polygon | 0.1003 s | 0.1023 s | `full` 人数 30 |
+| 0 | 双 Polygon | 0.1196 s | 0.1547 s | `left/right` 人数 14/16 |
+| 1 | 学生 | 0.1316 s | 0.1782 s | 人数 30、人脸 7、行为计数稳定 |
+| 1 | 教师 | 0.0322 s | 0.0339 s | 主体 1、坐 1、板书 1 |
+| 1 | 单 Polygon | 0.1001 s | 0.1021 s | `full` 人数 30 |
+| 1 | 双 Polygon | 0.1242 s | 0.1563 s | `left/right` 人数 14/16 |
+| 2 | 学生 | 0.2189 s | 0.2667 s | 人数 30、人脸 7、行为计数稳定 |
+| 2 | 教师 | 0.0291 s | 0.0314 s | 主体 1、坐 1、板书 1 |
+| 2 | 单 Polygon | 0.1562 s | 0.1571 s | `full` 人数 30 |
+| 2 | 双 Polygon | 0.1820 s | 0.2170 s | `left/right` 人数 14/16 |
+
+所有双 Polygon 响应都保持输入顺序 `left`、`right`。单次预热延迟不计入上述分位数。
+
+### 混合并发与网关路由
+
+- 三实例同时执行一条离线学生或教师请求和一条在线人数请求，共 6 轮、36 个请求，
+  `36/36` 成功，三实例各完成 12 个；P50 0.1480 秒，P95 0.3655 秒。
+- 通过 Online Gateway `/online/vbas/person-count` 同时提交 72 个单图请求，`72/72` 成功，
+  P50 1.8391 秒，P95 3.3286 秒，最大 3.8761 秒。
+- 三实例成功计数增量分别为 GPU0=25、GPU1=24、GPU2=23，证明平台注册与动态路由没有
+  回归；测试后 `reported_inflight`、在线/离线池和 `active_lease_count` 全部归零。
+
+### 逐模型 FP16 有效性
+
+使用 GPU0 临时容器分别只开启 `PersonUseHalf`、`FaceUseHalf`、`StudentUseHalf` 和
+`TeacherUseHalf`。每轮核对只有目标字段为 `true`，随后执行学生、教师、单/双 Polygon：
+
+- 四轮共 16 个请求全部 HTTP 200；
+- 人数仍为 30，双 Polygon 仍为 14/16；
+- 学生结果计数仍为 `[30, 7, 1, 0, 1, 0, 1]`；
+- 教师结果计数仍为 `[1, 0, 1, 1, 0]`；
+- 临时容器验证后均已移除，生产三实例四个 `UseHalf` 最终保持 `false`。
+
+### 旧资产清理与清理后 Smoke
+
+全部门禁通过后，按完整 ID精确删除 `v1.0_260829`、`v1.0_260827`、`v1.0_260826`、
+`v1.0_260825` 四个旧 VBas 镜像和中间候选镜像
+`sha256:6db515fb37d94f1a8d36133a4bece4517c2f60c00be754524ebf8f6234db5bed`。
+未删除其他算子镜像、平台镜像或构建缓存。
+
+清理后，三个最终容器再次分别执行学生、教师、单/双 Polygon，共 12 个请求全部成功；
+三个容器仍 healthy，Control 中仍为 ONLINE、model ready、租约归零，GPU 绑定和完整容器 ID
+未变化。远端发布门禁通过。
 
 ## 剩余风险
 
