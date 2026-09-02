@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from packages.platform_common.config import PlatformSettings
@@ -40,6 +41,15 @@ def create_service_app(
                 yield
 
     app = FastAPI(title=resolved.service_name, lifespan=lifespan)
+    # This internal read-only platform is also consumed by the browser console.
+    # Credentials are deliberately disabled; deployment can later narrow origins.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.state.settings = resolved
     app.state.platform_metrics = metrics
 

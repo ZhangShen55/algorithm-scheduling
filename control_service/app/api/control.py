@@ -1,20 +1,19 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from secrets import compare_digest
-from typing import Annotated, Any, Protocol, cast
+from typing import Annotated, Any, Literal, Protocol, cast
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException, Request, status
+import httpx
+from fastapi import FastAPI, HTTPException, Query, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
-from redis.exceptions import RedisError
-from sqlalchemy.exc import SQLAlchemyError
-
 from packages.platform_common.application import create_service_app
 from packages.platform_common.config import PlatformSettings
 from packages.platform_common.operator_audit_repository import OperatorInstanceEvent
@@ -39,14 +38,23 @@ from packages.platform_common.operator_registry import (
 )
 from packages.platform_common.repository import (
     AsrRunRecord,
+    CourseJobSummary,
     NodeRecord,
     OperationsQueueSnapshot,
     TaskTypeRecord,
     TaskTypeWrite,
 )
-from packages.platform_contracts.responses import BusinessCode, BusinessResponse
 from packages.platform_contracts.asr import asr_params_fingerprint
-from packages.platform_contracts.status import Priority, TaskType, status_text
+from packages.platform_contracts.responses import BusinessCode, BusinessResponse
+from packages.platform_contracts.status import (
+    NodeStatus,
+    Priority,
+    TaskType,
+    status_text,
+)
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
+from redis.exceptions import RedisError
+from sqlalchemy.exc import SQLAlchemyError
 
 from ..infrastructure.audited_operator_registry import canonical_operator_origin
 from ..infrastructure.runtime import ControlReadinessChecker, ControlRuntime
@@ -64,6 +72,15 @@ class CourseTaskRepository(Protocol):
     ) -> list[TaskTypeRecord]: ...
 
     def list_task_types(self, task_id: str) -> list[TaskTypeRecord]: ...
+
+    def list_course_jobs(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        sort_by: str,
+        descending: bool,
+    ) -> tuple[list[CourseJobSummary], int]: ...
 
     def list_nodes(
         self,
@@ -172,6 +189,30 @@ class SubmissionValidationError(ValueError):
 
 
 REGISTRY_INFRASTRUCTURE_ERRORS = (RuntimeError, RedisError, SQLAlchemyError)
+
+
+def _kafka_metric_values(text: str) -> tuple[int, int, int]:
+    published = 0
+    publish_failed = 0
+    consumer_lag = 0
+    metric_pattern = re.compile(r"^([\w:]+)(?:\{([^}]*)\})?\s+([-+\d.eE]+)$")
+    for line in text.splitlines():
+        match = metric_pattern.match(line)
+        if match is None:
+            continue
+        metric, raw_labels, raw_value = match.groups()
+        try:
+            value = int(float(raw_value))
+        except ValueError:
+            continue
+        labels = dict(re.findall(r'(\w+)="((?:\\.|[^"])*)"', raw_labels or ""))
+        if metric == "algorithm_outbox_publish_total" and labels.get("outcome") in {"published", "success"}:
+            published += value
+        elif metric == "algorithm_outbox_publish_total" and labels.get("outcome") in {"failed", "error"}:
+            publish_failed += value
+        elif metric == "algorithm_kafka_consumer_lag":
+            consumer_lag += value
+    return published, publish_failed, consumer_lag
 
 
 def _task_database_error() -> BusinessResponse[dict[str, Any]]:
@@ -377,6 +418,44 @@ def _unrequested_task_response(task_type: TaskType) -> dict[str, Any]:
         "effective_params": None,
         "nodes": [],
         "updated_at": None,
+    }
+
+
+def _course_job_status(summary: CourseJobSummary) -> NodeStatus:
+    statuses = [item.status for item in summary.task_types]
+    if not statuses:
+        return NodeStatus.UNREQUESTED
+    if NodeStatus.FAILED in statuses:
+        return NodeStatus.FAILED
+    if NodeStatus.CANCELLED in statuses:
+        return NodeStatus.CANCELLED
+    active = [item for item in statuses if item not in {NodeStatus.COMPLETED}]
+    if active:
+        if NodeStatus.RUNNING in active:
+            return NodeStatus.RUNNING
+        return max(active)
+    return NodeStatus.COMPLETED
+
+
+def _course_job_summary_response(summary: CourseJobSummary) -> dict[str, Any]:
+    status = _course_job_status(summary)
+    return {
+        "task_id": summary.task_id,
+        "created_at": summary.created_at,
+        "updated_at": summary.updated_at,
+        "status": status.value,
+        "status_text": status_text(status),
+        "task_count": len(summary.task_types),
+        "tasks": [
+            {
+                "task_type": item.task_type.value,
+                "status": item.status.value,
+                "status_text": status_text(item.status),
+                "priority": item.priority.value,
+                "updated_at": item.updated_at,
+            }
+            for item in summary.task_types
+        ],
     }
 
 
@@ -748,6 +827,37 @@ def create_control_app(
             raise _registry_unavailable() from exc
         raise HTTPException(status_code=404, detail=f"容量租约不存在: {lease_id}")
 
+    @app.get("/ops/course-jobs")
+    def inspect_course_jobs(
+        request: Request,
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=10, ge=1, le=100),
+        sort_by: Literal["updated_at", "created_at", "task_id"] = Query(
+            default="updated_at"
+        ),
+        order: Literal["asc", "desc"] = Query(default="desc"),
+    ) -> dict[str, Any]:
+        repository = _course_repository(request)
+        try:
+            records, total = repository.list_course_jobs(
+                offset=(page - 1) * page_size,
+                limit=page_size,
+                sort_by=sort_by,
+                descending=order == "desc",
+            )
+        except (RuntimeError, SQLAlchemyError) as exc:
+            raise HTTPException(status_code=503, detail="任务数据库暂不可用") from exc
+        total_pages = (total + page_size - 1) // page_size if total else 0
+        return {
+            "items": [_course_job_summary_response(record) for record in records],
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": total_pages,
+            "sort_by": sort_by,
+            "order": order,
+        }
+
     @app.get("/ops/course-jobs/{task_id}")
     def inspect_course_job(task_id: str, request: Request) -> dict[str, Any]:
         repository = _course_repository(request)
@@ -856,6 +966,37 @@ def create_control_app(
             return _operator_events(request, instance_id, limit=limit)
         except SQLAlchemyError as exc:
             raise HTTPException(status_code=503, detail="算子审计数据库暂不可用") from exc
+
+    @app.get("/ops/kafka")
+    def inspect_kafka(request: Request) -> dict[str, Any]:
+        """聚合 Outbox 和内部 orchestrator 的 Kafka 只读运行指标。"""
+        repository = _course_repository(request)
+        try:
+            queue_snapshot = repository.operations_queue_snapshot()
+        except (RuntimeError, SQLAlchemyError) as exc:
+            raise HTTPException(status_code=503, detail="任务数据库暂不可用") from exc
+        published = publish_failed = consumer_lag = 0
+        publisher_status = "unavailable"
+        try:
+            response = httpx.get(
+                resolved.orchestrator_metrics_url,
+                timeout=2.0,
+                headers={"Accept": "text/plain"},
+            )
+            response.raise_for_status()
+            published, publish_failed, consumer_lag = _kafka_metric_values(response.text)
+            publisher_status = "ok"
+        except (httpx.HTTPError, OSError) as exc:
+            logger.warning("读取 orchestrator Kafka 指标失败: %s", exc)
+        return {
+            "status": "ok" if publisher_status == "ok" else "degraded",
+            "outbox_pending": queue_snapshot.outbox_pending,
+            "published": published,
+            "publish_failed": publish_failed,
+            "consumer_lag": consumer_lag,
+            "publisher_status": publisher_status,
+            "sampled_at": datetime.now(timezone.utc).isoformat(),
+        }
 
     @app.get("/ops/queues")
     def inspect_queues(request: Request) -> dict[str, Any]:

@@ -226,9 +226,8 @@ def test_partial_lifespan_start_failure_disposes_created_engine(
     monkeypatch.setattr(runtime.Redis, "from_url", staticmethod(fail_redis_start))
     app = create_app(_settings())
 
-    with pytest.raises(RuntimeError, match="forced redis startup failure"):
-        with TestClient(app):
-            pass
+    with pytest.raises(RuntimeError, match="forced redis startup failure"), TestClient(app):
+        pass
 
     assert [call[0] for call in calls] == ["postgresql"]
     assert engine.disposed is True
@@ -264,10 +263,12 @@ def test_blocking_repository_and_redis_routes_are_sync_endpoints(
         "/internal/operator-instances/release",
         "/internal/operator-instances/lease/renew",
         "/ops/course-jobs/{task_id}",
+        "/ops/course-jobs",
         "/ops/operator-instances",
         "/ops/operator-instances/{instance_id}/drain",
         "/ops/operator-instances/{instance_id}/events",
         "/ops/queues",
+        "/ops/kafka",
         "/ops/storage",
         "/ops/readiness",
     )

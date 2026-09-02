@@ -5,6 +5,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Literal
 
+from packages.platform_common.config import LoggingConfig
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import (
     BaseSettings,
@@ -12,8 +13,6 @@ from pydantic_settings import (
     SettingsConfigDict,
     TomlConfigSettingsSource,
 )
-
-from packages.platform_common.config import LoggingConfig
 
 SERVICE_ROOT = Path(__file__).resolve().parents[2]
 _config_path_override: ContextVar[Path | None] = ContextVar(
@@ -85,6 +84,10 @@ class ReadinessConfig(BaseModel):
     dependency_timeout_seconds: float = Field(default=3.0, ge=2.0)
 
 
+class OrchestratorConfig(BaseModel):
+    metrics_url: str = "http://127.0.0.1:18101/metrics"
+
+
 class ControlSettings(BaseSettings):
     """Control settings loaded as defaults < TOML < environment < explicit values."""
 
@@ -102,6 +105,7 @@ class ControlSettings(BaseSettings):
     operator_registry: OperatorRegistryConfig = Field(default_factory=OperatorRegistryConfig)
     features: FeatureConfig = Field(default_factory=FeatureConfig)
     readiness: ReadinessConfig = Field(default_factory=ReadinessConfig)
+    orchestrator: OrchestratorConfig = Field(default_factory=OrchestratorConfig)
 
     @classmethod
     def settings_customise_sources(

@@ -25,6 +25,7 @@ services:
       CONTROL_POSTGRES__DSN: postgresql+psycopg://algorithm:algorithm@postgres:5432/algorithm
       CONTROL_REDIS__URL: redis://redis:6379/0
       CONTROL_OPERATOR_REGISTRY__MANAGEMENT_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
+      CONTROL_ORCHESTRATOR__METRICS_URL: http://orchestrator-service:18101/metrics
     volumes:
       - ../../control_service/config.toml:/config/config.toml:ro
       - ${COURSE_ROOT:-/data/course}:/data/course

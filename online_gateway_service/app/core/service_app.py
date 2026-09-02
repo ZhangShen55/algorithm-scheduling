@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-
 from packages.platform_common.config import PlatformSettings
 from packages.platform_common.logging import configure_logging
 from packages.platform_common.metrics import PlatformMetrics
@@ -17,6 +17,13 @@ def create_gateway_base_app(settings: PlatformSettings) -> FastAPI:
     )
     metrics = PlatformMetrics()
     app = FastAPI(title=settings.service_name)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.state.settings = settings
     app.state.platform_metrics = metrics
 

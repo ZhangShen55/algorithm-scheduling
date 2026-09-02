@@ -3,12 +3,12 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
+import tomllib
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -61,6 +61,42 @@ def test_default_lifespan_does_not_require_storage_directories() -> None:
             "service": "online-gateway-service",
             "status": "ok",
         }
+
+
+def test_metrics_contract_and_cors_preflight_are_available() -> None:
+    from app.api.routes import create_online_gateway_app
+
+    app = create_online_gateway_app()
+    metrics = app.state.platform_metrics
+    metrics.observe_operator_request(
+        operator_code="ocr",
+        capability="ocr",
+        instance_id="ocr-gpu0",
+        elapsed_seconds=0.025,
+        success=False,
+    )
+    metrics.record_capacity_lease_event(
+        capability="ocr",
+        outcome="rejected",
+        instance_id="ocr-gpu0",
+    )
+
+    with TestClient(app) as client:
+        preflight = client.options(
+            "/metrics",
+            headers={
+                "Origin": "http://192.168.29.11:5174",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        response = client.get("/metrics")
+
+    assert preflight.status_code == 200
+    assert preflight.headers["access-control-allow-origin"] == "*"
+    assert response.status_code == 200
+    assert "algorithm_operator_request_latency_seconds_count" in response.text
+    assert "algorithm_operator_request_errors_total" in response.text
+    assert "algorithm_capacity_lease_events_total" in response.text
 
 
 def test_app_main_imports_from_service_working_directory() -> None:

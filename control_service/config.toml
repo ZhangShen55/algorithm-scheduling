@@ -97,3 +97,7 @@ enabled_task_types = ["PPT", "ASR", "TEACHER_BEHAVIOR", "STUDENT_BEHAVIOR"]
 [readiness]
 # readiness 每项依赖的总超时预算，PostgreSQL 会在连接和语句间分配；最少 2 秒。
 dependency_timeout_seconds = 3.0
+
+[orchestrator]
+# 只读 Kafka 发布与消费者积压指标来源；控制台通过 Control Service 聚合读取。
+metrics_url = "http://127.0.0.1:18101/metrics"

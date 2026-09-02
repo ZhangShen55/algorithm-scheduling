@@ -94,6 +94,22 @@ class TaskTypeRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class CourseTaskSummary:
+    task_type: TaskType
+    status: NodeStatus
+    priority: Priority
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class CourseJobSummary:
+    task_id: str
+    created_at: datetime
+    updated_at: datetime
+    task_types: tuple[CourseTaskSummary, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class AsrRunRecord:
     run_id: UUID
     course_task_type_id: int
@@ -560,7 +576,7 @@ class CourseRepository:
                     fingerprint = write.params_fingerprint
                 row = connection.execute(
                     text(
-                        f"""
+                        """
                         INSERT INTO course_task_types (
                             submission_id, task_id, task_type, status, priority, reason,
                             request_payload, effective_params
@@ -727,6 +743,94 @@ class CourseRepository:
     def count_courses(self) -> int:
         with self._engine.connect() as connection:
             return int(connection.execute(text("SELECT count(*) FROM course_jobs")).scalar_one())
+
+    def list_course_jobs(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        sort_by: str = "updated_at",
+        descending: bool = True,
+    ) -> tuple[list[CourseJobSummary], int]:
+        sort_columns = {
+            "updated_at": "updated_at",
+            "created_at": "created_at",
+            "task_id": "task_id",
+        }
+        if sort_by not in sort_columns:
+            raise ValueError(f"不支持的课程任务排序字段: {sort_by}")
+        direction = "DESC" if descending else "ASC"
+        sort_column = sort_columns[sort_by]
+        with self._engine.connect() as connection:
+            total = int(
+                connection.execute(text("SELECT count(*) FROM course_jobs")).scalar_one()
+            )
+            rows = connection.execute(
+                text(
+                    f"""
+                    WITH job_activity AS (
+                        SELECT cj.id,
+                               cj.task_id,
+                               cj.created_at,
+                               GREATEST(
+                                   cj.updated_at,
+                                   COALESCE(MAX(task_type.updated_at), cj.created_at)
+                               ) AS updated_at
+                        FROM course_jobs AS cj
+                        LEFT JOIN course_task_types AS task_type
+                          ON task_type.task_id = cj.task_id
+                        GROUP BY cj.id, cj.task_id, cj.created_at, cj.updated_at
+                    ), page_jobs AS (
+                        SELECT id, task_id, created_at, updated_at,
+                               ROW_NUMBER() OVER (
+                                   ORDER BY {sort_column} {direction}, id {direction}
+                               ) AS job_order
+                        FROM job_activity
+                        ORDER BY {sort_column} {direction}, id {direction}
+                        LIMIT :limit OFFSET :offset
+                    )
+                    SELECT page_jobs.job_order,
+                           page_jobs.task_id,
+                           page_jobs.created_at,
+                           page_jobs.updated_at,
+                           task_type.id AS task_type_id,
+                           task_type.task_type,
+                           task_type.status,
+                           task_type.priority,
+                           task_type.updated_at AS task_type_updated_at
+                    FROM page_jobs
+                    LEFT JOIN course_task_types AS task_type
+                      ON task_type.task_id = page_jobs.task_id
+                    ORDER BY page_jobs.job_order, task_type.id
+                    """
+                ),
+                {"limit": limit, "offset": offset},
+            ).mappings()
+            grouped: dict[str, CourseJobSummary] = {}
+            for row in rows:
+                current = grouped.get(row["task_id"])
+                if current is None:
+                    current = CourseJobSummary(
+                        task_id=row["task_id"],
+                        created_at=row["created_at"],
+                        updated_at=row["updated_at"],
+                        task_types=(),
+                    )
+                if row["task_type_id"] is not None:
+                    current = replace(
+                        current,
+                        task_types=current.task_types
+                        + (
+                            CourseTaskSummary(
+                                task_type=TaskType(row["task_type"]),
+                                status=NodeStatus(row["status"]),
+                                priority=Priority(row["priority"]),
+                                updated_at=row["task_type_updated_at"],
+                            ),
+                        ),
+                    )
+                grouped[row["task_id"]] = current
+            return list(grouped.values()), total
 
     def operations_queue_snapshot(self) -> OperationsQueueSnapshot:
         with self._engine.connect() as connection:

@@ -15,6 +15,7 @@ def to_platform_settings(settings: ControlSettings) -> PlatformSettings:
         project_root=SERVICE_ROOT,
         postgres_dsn=settings.postgres.dsn,
         redis_url=settings.redis.url,
+        orchestrator_metrics_url=settings.orchestrator.metrics_url,
         operator_registry_token=settings.operator_registry.management_token,
         trusted_operator_service_urls=settings.operator_registry.trusted_service_urls,
     )

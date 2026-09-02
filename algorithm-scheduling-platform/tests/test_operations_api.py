@@ -2,18 +2,22 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
 from control_service.app.api.control import create_control_app
 from fastapi.testclient import TestClient
 
 from packages.platform_common.config import PlatformSettings
 from packages.platform_common.operator_registry import (
     CapacityLease,
+    OperatorActiveLeases,
     OperatorCode,
     OperatorInstance,
     OperatorInstanceNotFoundError,
     OperatorLifecycle,
 )
 from packages.platform_common.repository import (
+    CourseJobSummary,
+    CourseTaskSummary,
     NodeRecord,
     OperationsQueueSnapshot,
     QueueCount,
@@ -69,6 +73,31 @@ class OperationsRepository:
     def list_task_types(self, task_id: str) -> list[TaskTypeRecord]:
         return [self.task] if task_id == self.task.task_id else []
 
+    def list_course_jobs(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        sort_by: str,
+        descending: bool,
+    ) -> tuple[list[CourseJobSummary], int]:
+        assert (offset, limit, sort_by, descending) == (0, 10, "updated_at", True)
+        return [
+            CourseJobSummary(
+                task_id=self.task.task_id,
+                created_at=self.task.updated_at,
+                updated_at=self.task.updated_at,
+                task_types=(
+                    CourseTaskSummary(
+                        task_type=self.task.task_type,
+                        status=self.task.status,
+                        priority=self.task.priority,
+                        updated_at=self.task.updated_at,
+                    ),
+                ),
+            )
+        ][offset : offset + limit], 1
+
     def list_nodes(self, course_task_type_id: int) -> list[NodeRecord]:
         return [self.node] if course_task_type_id == self.task.id else []
 
@@ -120,6 +149,17 @@ class OperationsRegistry:
     def active_lease_count(self, instance_id: str) -> int:
         assert instance_id == self.instance.instance_id
         return 0
+
+    def list_active_leases(self, instance_id: str) -> OperatorActiveLeases:
+        if instance_id != self.instance.instance_id:
+            raise OperatorInstanceNotFoundError(instance_id)
+        return OperatorActiveLeases(
+            instance_id=instance_id,
+            active_lease_count=0,
+            reported_inflight=self.instance.inflight,
+            attribution_difference=self.instance.inflight,
+            leases=(),
+        )
 
     def set_lifecycle(
         self,
@@ -173,6 +213,102 @@ def test_operations_course_inspection_uses_real_not_found_status(tmp_path: Path)
     assert "未找到课程任务" in missing.json()["detail"]
 
 
+def test_operations_course_job_list_uses_latest_default_pagination(tmp_path: Path) -> None:
+    with _client(tmp_path) as client:
+        response = client.get("/ops/course-jobs")
+
+    assert response.status_code == 200
+    assert response.json()["page"] == 1
+    assert response.json()["page_size"] == 10
+    assert response.json()["sort_by"] == "updated_at"
+    assert response.json()["order"] == "desc"
+    assert response.json()["items"][0]["task_id"] == "course-ops"
+
+
+def test_operations_cors_preflight_is_available(tmp_path: Path) -> None:
+    with _client(tmp_path) as client:
+        response = client.options(
+            "/ops/operator-instances",
+            headers={
+                "Origin": "http://192.168.29.11:5174",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "*"
+
+
+def test_operations_active_leases_is_read_only_and_returns_empty_snapshot(
+    tmp_path: Path,
+) -> None:
+    with _client(tmp_path) as client:
+        response = client.get("/ops/operator-instances/ocr-gpu0/active-leases")
+        missing = client.get("/ops/operator-instances/missing/active-leases")
+
+    assert response.status_code == 200
+    assert response.json()["leases"] == []
+    assert missing.status_code == 404
+
+
+def test_operations_kafka_aggregates_or_degrades_without_breaking_outbox(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    from control_service.app.api import control
+
+    class MetricsResponse:
+        text = (
+            'algorithm_outbox_publish_total{outcome="published"} 12\n'
+            'algorithm_outbox_publish_total{outcome="failed"} 2\n'
+            'algorithm_kafka_consumer_lag{topic="course",consumer_group="worker",partition="0"} 3\n'
+        )
+
+        def raise_for_status(self) -> None:
+            return None
+
+    monkeypatch.setattr(control.httpx, "get", lambda *args, **kwargs: MetricsResponse())
+    settings = PlatformSettings(
+        course_root=tmp_path / "course",
+        result_root=tmp_path / "result",
+        operator_registry_token=REGISTRY_TOKEN,
+        orchestrator_metrics_url="http://orchestrator.test/metrics",
+    )
+    with TestClient(
+        create_control_app(
+            repository=OperationsRepository(),
+            operator_registry=OperationsRegistry(),
+            settings=settings,
+        )
+    ) as client:
+        response = client.get("/ops/kafka")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    assert response.json()["outbox_pending"] == 2
+    assert response.json()["published"] == 12
+    assert response.json()["publish_failed"] == 2
+    assert response.json()["consumer_lag"] == 3
+
+    def fail_metrics(*args: Any, **kwargs: Any) -> None:
+        raise httpx.ConnectError("down")
+
+    monkeypatch.setattr(control.httpx, "get", fail_metrics)
+    with TestClient(
+        create_control_app(
+            repository=OperationsRepository(),
+            operator_registry=OperationsRegistry(),
+            settings=settings,
+        )
+    ) as client:
+        degraded = client.get("/ops/kafka")
+
+    assert degraded.status_code == 200
+    assert degraded.json()["status"] == "degraded"
+    assert degraded.json()["publisher_status"] == "unavailable"
+    assert degraded.json()["outbox_pending"] == 2
+
+
 def test_operations_lists_and_drains_operator_instance(tmp_path: Path) -> None:
     with _client(tmp_path) as client:
         listed = client.get("/ops/operator-instances")
@@ -216,6 +352,8 @@ def test_operations_operator_snapshot_exposes_capacity_mismatch(tmp_path: Path) 
             "schedulable_used": 2,
             "attribution_difference": 2,
             "capacity_mismatch": True,
+            "capacity_pools": {"default": 2},
+            "inflight_by_pool": {},
         }
     ]
 
