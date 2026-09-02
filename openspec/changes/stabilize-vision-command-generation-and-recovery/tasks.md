@@ -49,23 +49,23 @@
 - [x] 7.1 运行 `platform_contracts`、Repository、Orchestrator 视觉协调器、Vision Consumer 和四服务相关测试。
 - [x] 7.2 使用真实 PostgreSQL 与 Kafka 验证当前命令、陈旧命令、重新领取竞态、Consumer 重启重投和 Orchestrator 启动重发。
 - [x] 7.3 验证新 Consumer 安全确认旧格式命令，且新协调器能为仍在运行并具有完整 claim 的节点发布新格式命令。
-- [ ] 7.4 分别执行 `orchestrator_service` 与 `vision_orchestrator_service` 的 `compileall`、`app.main:app` 导入、启动、health 和 readiness 检查。
+- [x] 7.4 分别执行 `orchestrator_service` 与 `vision_orchestrator_service` 的 `compileall`、`app.main:app` 导入、启动、health 和 readiness 检查。
 
 ## 8. 远端同步部署与回归
 
 - [x] 8.1 在 `192.168.29.11` 暂停视觉任务领取，保存数据库运行节点、Kafka lag、旧容器、旧镜像 ID/revision 和 readiness 基线。
-- [ ] 8.2 从同一目标 Git SHA 的干净 release checkout 构建 Orchestrator 与 Vision 新镜像并保留构建缓存，校验两镜像的公共契约版本、revision、源码 manifest 和实际文件哈希。
-- [ ] 8.3 同步替换 Orchestrator 与 Vision 容器；新容器通过 health、readiness 和源码一致性门禁后，删除被替换的旧容器和旧镜像并记录删除清单。
-- [ ] 8.4 使用受控视觉任务定向复现原故障，覆盖超过普通恢复阈值、旧 `attempt`/`claim_token` 命令、终态迟到和 Consumer 重启重投。
-- [ ] 8.5 验证定向复现期间节点 claim 身份不被普通恢复器修改、陈旧命令不调用 VBas、后续消息继续处理、`/ready` 持续 ready 且 lag 收敛；扫描并确认不存在 `10 -> 70` 和相关 Consumer unhealthy。
-- [ ] 8.6 若 8.5 任一条件失败，停止后续压力测试并在 Harness 保存数据库、Kafka offset/lag、容器日志和 readiness 现场证据。
-- [ ] 8.7 仅在 8.5 全部通过后，同时执行 16 路全量任务与在线人数识别 300 并发、30000 总请求，持续运行直至所有任务和请求得到可判定结果。
-- [ ] 8.8 采集 16 路全量任务各泳道的提交/开始/完成/总耗时，以及在线请求总数、成功/失败数、总耗时、吞吐量、延迟分位值、三个 VBas 的 GPU/显存、容器重启、节点状态/代次、Consumer lag 和 readiness 时间线。
-- [ ] 8.9 确认混合压力期间及结束后不存在 `10 -> 70`、周期性 `attempt` 增长、陈旧结果覆盖、Vision Consumer unhealthy、状态冲突重启或 lag 无法收敛，并给出明确通过/不通过结论。
+- [x] 8.2 从同一目标 Git SHA 的干净 release checkout 构建 Orchestrator 与 Vision 新镜像并保留构建缓存，校验两镜像的公共契约版本、revision、源码 manifest 和实际文件哈希。
+- [x] 8.3 同步替换 Orchestrator 与 Vision 容器；新容器通过 health、readiness 和源码一致性门禁后，删除被替换的旧容器和旧镜像并记录删除清单。
+- [x] 8.4 使用受控视觉任务定向复现原故障，覆盖超过普通恢复阈值、旧 `attempt`/`claim_token` 命令、终态迟到和 Consumer 重启重投。
+- [x] 8.5 验证定向复现期间节点 claim 身份不被普通恢复器修改、陈旧命令不调用 VBas、后续消息继续处理、`/ready` 持续 ready 且 lag 收敛；扫描并确认不存在 `10 -> 70` 和相关 Consumer unhealthy。
+- [x] 8.6 若 8.5 任一条件失败，停止后续压力测试并在 Harness 保存数据库、Kafka offset/lag、容器日志和 readiness 现场证据。
+- [x] 8.7 仅在 8.5 全部通过后，同时执行 16 路全量任务与在线人数识别 300 并发、30000 总请求，持续运行直至所有任务和请求得到可判定结果。
+- [x] 8.8 采集 16 路全量任务各泳道的提交/开始/完成/总耗时，以及在线请求总数、成功/失败数、总耗时、吞吐量、延迟分位值、三个 VBas 的 GPU/显存、容器重启、节点状态/代次、Consumer lag 和 readiness 时间线。
+- [x] 8.9 确认混合压力期间及结束后不存在 `10 -> 70`、周期性 `attempt` 增长、陈旧结果覆盖、Vision Consumer unhealthy、状态冲突重启或 lag 无法收敛，并给出明确通过/不通过结论。
 
 ## 9. 文档、证据与变更复审
 
 - [x] 9.1 更新部署手册和故障处理说明，记录内部命令同步升级、视觉专用恢复、源码 manifest 门禁和回滚步骤。
-- [ ] 9.2 在 Harness 记录本地测试、真实依赖竞态、远端镜像证明与旧版本删除清单、定向复现、混合回归原始证据和最终判定，不覆盖历史失败证据。
-- [ ] 9.3 逐条复审 proposal、design、delta specs 与实现、测试和部署证据的一致性，并运行 `openspec validate`。
-- [ ] 9.4 仅在所有门禁通过后将 OpenSpec 任务标记完成，规范提交并推送代码；未通过项保留失败原因和后续动作。
+- [x] 9.2 在 Harness 记录本地测试、真实依赖竞态、远端镜像证明与旧版本删除清单、定向复现、混合回归原始证据和最终判定，不覆盖历史失败证据。
+- [x] 9.3 逐条复审 proposal、design、delta specs 与实现、测试和部署证据的一致性，并运行 `openspec validate`。
+- [x] 9.4 仅在所有门禁通过后将 OpenSpec 任务标记完成，规范提交并推送代码；未通过项保留失败原因和后续动作。
