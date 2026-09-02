@@ -9,6 +9,7 @@ from uuid import UUID
 import pytest
 from fastapi import FastAPI
 from packages.platform_common.kafka import KafkaMessage
+from packages.platform_common.repository import RepositoryStateConflictError
 from packages.platform_contracts.status import NodeStatus, TaskType
 from packages.platform_contracts.vision import (
     VisualAnalysisCommand,
@@ -513,6 +514,320 @@ async def test_processor_does_not_turn_progress_infrastructure_failure_into_task
 
     assert repository.node.status is NodeStatus.RUNNING
     assert repository.transitions == []
+
+
+@pytest.mark.parametrize(
+    "terminal_status",
+    (NodeStatus.COMPLETED, NodeStatus.FAILED, NodeStatus.CANCELLED),
+)
+@pytest.mark.asyncio
+async def test_processor_commits_late_progress_after_terminal_race(
+    tmp_path,
+    terminal_status: NodeStatus,
+) -> None:
+    command = _command(
+        tmp_path,
+        TaskType.STUDENT_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    )
+
+    class Repository:
+        def __init__(self) -> None:
+            self.reads = 0
+            self.complete_calls = 0
+
+        def get_node(self, node_id: int) -> object:
+            assert node_id == command.node_id
+            self.reads += 1
+            status = NodeStatus.RUNNING if self.reads == 1 else terminal_status
+            return SimpleNamespace(
+                id=node_id,
+                status=status,
+                course_task_type_id=7,
+            )
+
+        def update_node_progress(self, node_id, progress, *, reason):
+            del node_id, progress, reason
+            raise RepositoryStateConflictError("只有处理中节点可以更新进度")
+
+        def complete_node(self, node_id, result, *, reason):
+            del node_id, result, reason
+            self.complete_calls += 1
+            raise AssertionError("终态竞态不应继续写入完成结果")
+
+    class Analyzer:
+        async def analyze(self, command, progress):
+            await progress(30, "扫描中", "视觉扫描")
+            return {"unexpected": command.node_id}
+
+    class Producer:
+        def __init__(self) -> None:
+            self.sent: list[bytes] = []
+
+        async def send_and_wait(self, topic, value, key):
+            del topic, key
+            self.sent.append(value)
+
+    repository = Repository()
+    producer = Producer()
+    consumer = Consumer([_message(command.to_bytes())])
+    processor = VisualCommandProcessor(
+        Analyzer(), repository, producer, event_topic="visual.events"
+    )
+    loop = VisualCommandConsumerLoop(consumer, processor, poll_timeout_seconds=0.1)
+
+    assert await loop.run_once() == 1
+    assert consumer.committed == [0]
+    assert repository.complete_calls == 0
+    assert producer.sent == []
+
+
+@pytest.mark.asyncio
+async def test_processor_keeps_non_terminal_progress_conflict_fatal(tmp_path) -> None:
+    command = _command(
+        tmp_path,
+        TaskType.TEACHER_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    )
+
+    class Repository:
+        def get_node(self, node_id: int) -> object:
+            return SimpleNamespace(
+                id=node_id,
+                status=NodeStatus.RUNNING,
+                course_task_type_id=7,
+            )
+
+        def update_node_progress(self, node_id, progress, *, reason):
+            del node_id, progress, reason
+            raise RepositoryStateConflictError("只有处理中节点可以更新进度")
+
+    class Analyzer:
+        async def analyze(self, command, progress):
+            del command
+            await progress(30, "扫描中", "视觉扫描")
+            return {}
+
+    processor = VisualCommandProcessor(
+        Analyzer(), Repository(), object(), event_topic="visual.events"
+    )
+    consumer = Consumer([_message(command.to_bytes())])
+    loop = VisualCommandConsumerLoop(consumer, processor, poll_timeout_seconds=0.1)
+
+    with pytest.raises(RuntimeError, match="视觉进度基础设施处理失败"):
+        await loop.run_once()
+    assert consumer.committed == []
+
+
+@pytest.mark.asyncio
+async def test_processor_commits_when_completion_loses_terminal_race(tmp_path) -> None:
+    command = _command(
+        tmp_path,
+        TaskType.TEACHER_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    )
+
+    class Repository:
+        def __init__(self) -> None:
+            self.reads = 0
+            self.aggregate_calls = 0
+
+        def get_node(self, node_id: int) -> object:
+            assert node_id == command.node_id
+            self.reads += 1
+            status = NodeStatus.RUNNING if self.reads == 1 else NodeStatus.COMPLETED
+            return SimpleNamespace(id=node_id, status=status, course_task_type_id=7)
+
+        def complete_node(self, node_id, result, *, reason):
+            del node_id, result, reason
+            raise RepositoryStateConflictError("节点已经完成")
+
+        def aggregate_task_type_state(self, course_task_type_id: int) -> object:
+            self.aggregate_calls += 1
+            return SimpleNamespace(id=course_task_type_id)
+
+    class Analyzer:
+        async def analyze(self, command, progress):
+            del command, progress
+            return {"analyzed": True}
+
+    class Producer:
+        async def send_and_wait(self, topic, value, key):
+            del topic, value, key
+
+    repository = Repository()
+    consumer = Consumer([_message(command.to_bytes())])
+    processor = VisualCommandProcessor(
+        Analyzer(), repository, Producer(), event_topic="visual.events"
+    )
+    loop = VisualCommandConsumerLoop(consumer, processor, poll_timeout_seconds=0.1)
+
+    assert await loop.run_once() == 1
+    assert consumer.committed == [0]
+    assert repository.aggregate_calls == 0
+
+
+@pytest.mark.parametrize(
+    "observed_status",
+    (NodeStatus.FAILED, NodeStatus.CANCELLED, NodeStatus.RUNNING),
+)
+@pytest.mark.asyncio
+async def test_processor_completion_conflict_only_ignores_terminal_state(
+    tmp_path,
+    observed_status: NodeStatus,
+) -> None:
+    command = _command(
+        tmp_path,
+        TaskType.TEACHER_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    )
+
+    class Repository:
+        def __init__(self) -> None:
+            self.reads = 0
+
+        def get_node(self, node_id: int) -> object:
+            assert node_id == command.node_id
+            self.reads += 1
+            status = NodeStatus.RUNNING if self.reads == 1 else observed_status
+            return SimpleNamespace(id=node_id, status=status, course_task_type_id=7)
+
+        def complete_node(self, node_id, result, *, reason):
+            del node_id, result, reason
+            raise RepositoryStateConflictError("节点状态已被其他事务修改")
+
+    class Analyzer:
+        async def analyze(self, command, progress):
+            del command, progress
+            return {"analyzed": True}
+
+    processor = VisualCommandProcessor(
+        Analyzer(), Repository(), object(), event_topic="visual.events"
+    )
+    consumer = Consumer([_message(command.to_bytes())])
+    loop = VisualCommandConsumerLoop(consumer, processor, poll_timeout_seconds=0.1)
+
+    if observed_status is NodeStatus.RUNNING:
+        with pytest.raises(RepositoryStateConflictError):
+            await loop.run_once()
+        assert consumer.committed == []
+    else:
+        assert await loop.run_once() == 1
+        assert consumer.committed == [0]
+
+
+@pytest.mark.asyncio
+async def test_processor_does_not_hide_missing_node_after_progress_conflict(tmp_path) -> None:
+    command = _command(
+        tmp_path,
+        TaskType.TEACHER_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    )
+
+    class Repository:
+        def __init__(self) -> None:
+            self.reads = 0
+
+        def get_node(self, node_id: int) -> object:
+            assert node_id == command.node_id
+            self.reads += 1
+            if self.reads > 1:
+                raise KeyError("节点不存在")
+            return SimpleNamespace(
+                id=node_id,
+                status=NodeStatus.RUNNING,
+                course_task_type_id=7,
+            )
+
+        def update_node_progress(self, node_id, progress, *, reason):
+            del node_id, progress, reason
+            raise RepositoryStateConflictError("节点状态已被其他事务修改")
+
+    class Analyzer:
+        async def analyze(self, command, progress):
+            del command
+            await progress(30, "扫描中", "视觉扫描")
+            return {}
+
+    processor = VisualCommandProcessor(
+        Analyzer(), Repository(), object(), event_topic="visual.events"
+    )
+    consumer = Consumer([_message(command.to_bytes())])
+    loop = VisualCommandConsumerLoop(consumer, processor, poll_timeout_seconds=0.1)
+
+    with pytest.raises(RuntimeError, match="视觉进度状态确认失败"):
+        await loop.run_once()
+    assert consumer.committed == []
+
+
+@pytest.mark.asyncio
+async def test_consumer_continues_after_terminal_progress_race(tmp_path) -> None:
+    first = _command(
+        tmp_path,
+        TaskType.TEACHER_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    )
+    second = replace(
+        first,
+        command_id=UUID("00000000-0000-0000-0000-000000000202"),
+        node_id=32,
+    )
+
+    class Repository:
+        def __init__(self) -> None:
+            self.reads: dict[int, int] = {}
+            self.completed: list[int] = []
+
+        def get_node(self, node_id: int) -> object:
+            reads = self.reads.get(node_id, 0) + 1
+            self.reads[node_id] = reads
+            status = (
+                NodeStatus.RUNNING
+                if node_id == first.node_id and reads == 1
+                else NodeStatus.COMPLETED
+                if node_id == first.node_id
+                else NodeStatus.RUNNING
+            )
+            return SimpleNamespace(id=node_id, status=status, course_task_type_id=7)
+
+        def update_node_progress(self, node_id, progress, *, reason):
+            del progress, reason
+            if node_id == first.node_id:
+                raise RepositoryStateConflictError("节点已经完成")
+            return self.get_node(node_id)
+
+        def complete_node(self, node_id, result, *, reason):
+            del result, reason
+            self.completed.append(node_id)
+            return self.get_node(node_id)
+
+        def aggregate_task_type_state(self, course_task_type_id: int) -> object:
+            return SimpleNamespace(id=course_task_type_id)
+
+    class Analyzer:
+        async def analyze(self, command, progress):
+            if command.node_id == first.node_id:
+                await progress(20, "扫描中", "视觉扫描")
+            return {"node_id": command.node_id}
+
+    class Producer:
+        def __init__(self) -> None:
+            self.sent: list[bytes] = []
+
+        async def send_and_wait(self, topic, value, key):
+            del topic, key
+            self.sent.append(value)
+
+    repository = Repository()
+    consumer = Consumer([_message(first.to_bytes(), 10), _message(second.to_bytes(), 11)])
+    processor = VisualCommandProcessor(
+        Analyzer(), repository, Producer(), event_topic="visual.events"
+    )
+    loop = VisualCommandConsumerLoop(consumer, processor, poll_timeout_seconds=0.1)
+
+    assert await loop.run_once() == 2
+    assert consumer.committed == [10, 11]
+    assert repository.completed == [second.node_id]
 
 
 @pytest.mark.asyncio

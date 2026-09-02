@@ -1,5 +1,22 @@
 # Change Ledger
 
+## 2026-09-02 - Vision Consumer 终态竞态远端镜像替换
+
+- 在 `192.168.29.11` 仅重建并替换 `vision-orchestrator-service`，未触碰七个算子及其他三个平台服务。
+- 构建使用既有 Docker BuildKit 缓存，未使用 `--no-cache`、`docker buildx prune` 或宽泛清理。
+- 新容器 `9efead38eddcd5bbfff16d0e34179fb3c3c22b600cdf07c7c11ff8aeb77e747e`、新镜像 `sha256:3a14bf29765f8402efd0e4d7bb79508072ee1055813ff1bcfaa8614b3982346a` 已通过健康检查；远端 `/ready` 的视觉 Consumer、PostgreSQL、Kafka、control-service 均 ready。
+- 替换前旧容器完整 ID `c6876b2eee649351454554df8bf2d1f0d408a775c1ad6ef59482cd7af1b923ed`、旧镜像 `sha256:8fc408da75eacaf07ba3530f4476a2968de305d41ba695cb349185d0b0de92a0` 已在新容器健康后精确替换/删除。
+- 远端证据保存在 `deploy/reports/vision-consumer-race-20260902/`；尚未执行真实竞态注入或完整业务负载回归。
+- 风险回归补充：本地相关竞态用例独立重复 100 次（累计 800 次断言）全部通过；远端三个 Kafka Consumer Group lag 均为 0，Vision 容器重启次数为 0，最近 30 分钟无状态冲突/fatal/Consumer 退出日志。未向生产数据库注入竞态，不将该结果扩大为完整业务压测通过。
+
+## 2026-09-02 - `fix-vision-consumer-terminal-state-race` 视觉 Consumer 终态竞态修复
+
+- 复现了视觉命令 Consumer 的确定性竞态：节点初读为 `RUNNING`，另一事务先推进到终态，迟到进度更新触发 `RepositoryStateConflictError`；旧实现将其包装为致命错误，offset 不提交并导致 Consumer 退出、就绪状态下降。
+- 修复 `vision_orchestrator_service/app/application/events.py`：进度和完成阶段均在状态冲突后重新读取节点；仅确认 `COMPLETED`、`FAILED` 或 `CANCELLED` 时幂等结束，不覆盖终态、不发布覆盖性进度事件；非终态冲突、节点不存在、数据库或 Kafka 故障仍失败。
+- 新增 `vision_orchestrator_service/tests/test_runtime.py` 回归：三种终态迟到进度、非终态冲突、完成阶段竞态、竞态后续消息和连续 offset 提交。
+- 本地验证：视觉 Consumer `28 passed`；Orchestrator 视觉回归 `16 passed`；视觉服务完整测试（显式服务导入路径）`60 passed`；Ruff、`compileall`、`app.main:app` 导入通过。
+- 详细证据见 `harness/scenarios/vision-consumer-terminal-state-race-20260902.md`；远端镜像构建、容器替换和就绪检查另见同文件的远端替换章节。
+
 ## 2026-08-23 - `run-milestone-2b-extreme-load-campaign` 初始基线
 
 - 变更开始于分支 `codex/milestone-2b-three-gpu-deployment`、SHA
