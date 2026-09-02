@@ -2540,3 +2540,19 @@
 - Evidence state: 已新增 `scenarios/live-load-operator-routing.md`、部署/设计说明和本地验证入口。
   本条不宣称 20 路离线、1000 路在线、混合负载、其他算子 16 路调查、新镜像发布或旧镜像
   清理已经通过；这些结论只按后续 write-once 远端证据更新。
+
+## 2026-09-02 - `ae4f2e6` Vision Consumer 终态竞态修复同 revision 发布校正
+
+- 修复提交 `ae4f2e6d3a0f2f8af6b0b8e1cb450ed54b0c99b0` 已按中文提交规范推送到
+  `codex/milestone-2b-three-gpu-deployment`；第一次远端替换的旧 revision 记录保留，不覆盖历史证据。
+- 远端使用既有 BuildKit 缓存完成第二次 Vision 镜像构建，镜像为
+  `sha256:e60f3b329f892933fd3f164c34955205907bbc8977fb4427fce3fc886dca8126`，
+  OCI revision 精确匹配 `ae4f2e6`；未使用 `--no-cache`、`docker buildx prune` 或宽泛清理。
+- `vision-orchestrator-service` 新容器完整 ID 为
+  `eb687df1a70f9a29597a1ef1a3d895c0a77d7e7d27c226fa216daecd23acc796`，状态
+  `running/healthy`、重启次数 0，`/ready` HTTP 200 且视觉 Consumer、PostgreSQL、Kafka、
+  control-service 均 ready。
+- Compose 替换后仅保留新容器；上一版容器和旧镜像
+  `sha256:3a14bf29765f8402efd0e4d7bb79508072ee1055813ff1bcfaa8614b3982346a` 已精确核验不存在。
+- 本次 Harness 只补充发布校正证据；本地定向/完整测试、800 次竞态断言和远端 Kafka lag/日志
+  检查沿用 `vision-consumer-terminal-state-race-20260902.md`，没有扩大为新的业务压测结论。

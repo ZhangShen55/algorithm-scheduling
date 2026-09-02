@@ -47,6 +47,17 @@ algorithm-scheduling-platform/.venv/bin/python -c \
 - 远端 `GET http://127.0.0.1:18102/ready` 返回 `status=ready`，`visual_command_consumer`、PostgreSQL、Kafka、control-service 检查均为 ready；control、orchestrator、vision、online 四个平台容器均为 healthy。
 - 旧镜像核验结果为不存在（`docker image inspect` 返回 1）。
 
+### 2026-09-02 同 revision 校正发布
+
+第一次替换完成后发现运行容器的 Compose image label 仍指向旧提交 `8d490cb`。该事实保留为历史证据；在不重建其他服务和算子、不清理 BuildKit 缓存的前提下，使用已完成的缓存构建重新创建 Vision 容器，并将构建参数固定为完整提交 `ae4f2e6d3a0f2f8af6b0b8e1cb450ed54b0c99b0`。
+
+- 新容器完整 ID：`eb687df1a70f9a29597a1ef1a3d895c0a77d7e7d27c226fa216daecd23acc796`。
+- 新镜像完整 ID：`sha256:e60f3b329f892933fd3f164c34955205907bbc8977fb4427fce3fc886dca8126`。
+- `org.opencontainers.image.revision`：`ae4f2e6d3a0f2f8af6b0b8e1cb450ed54b0c99b0`。
+- `GET http://127.0.0.1:18102/ready` 返回 HTTP 200，状态为 `ready`；`visual_command_consumer`、PostgreSQL、Kafka、control-service 均为 ready，容器为 `running/healthy`，重启次数为 0。
+- 重建后 `docker ps -a` 仅保留上述新容器；上一版容器已由 Compose 精确替换，旧镜像 `sha256:3a14bf29765f8402efd0e4d7bb79508072ee1055813ff1bcfaa8614b3982346a` 已不再存在。
+- 本次仅验证发布身份和就绪状态，不重复宣称业务竞态压测；此前本地 800 次断言与远端 lag/日志检查仍按上文记录。
+
 ## 修复后风险回归
 
 - 本地将终态竞态、完成阶段竞态、非终态冲突和后续消息继续消费相关用例独立启动执行 100 次；每次 `8 passed`，累计 800 次断言通过。
