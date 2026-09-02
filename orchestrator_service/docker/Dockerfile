@@ -60,7 +60,15 @@ RUN --mount=type=bind,from=builder,source=/wheelhouse,target=/tmp/wheelhouse \
         algorithm-scheduling-platform
 
 COPY orchestrator_service/app /app/app
+COPY algorithm-scheduling-platform/packages /app/packages
 COPY orchestrator_service/config.toml /app/config.toml
+COPY algorithm-scheduling-platform/deploy/scripts/source_manifest.py /usr/local/bin/source-manifest
+RUN python /usr/local/bin/source-manifest generate \
+        --revision "${EXPECTED_GIT_SHA}" \
+        --source /app/app=app \
+        --source /app/packages=packages \
+        --output /app/.source-manifest.json \
+        > /app/.source-manifest.sha256
 
 EXPOSE 18101
 

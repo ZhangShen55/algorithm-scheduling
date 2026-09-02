@@ -4,10 +4,10 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
-
-from orchestrator_service.app.application.recovery import StaleNodeRecovery
 from packages.platform_common.repository import NodeRecord
 from packages.platform_contracts.status import NodeStatus, Priority
+
+from orchestrator_service.app.application.recovery import StaleNodeRecovery
 
 
 def _node(
@@ -115,6 +115,25 @@ async def test_current_worker_node_is_not_recovered_without_outer_lease() -> Non
         LeaseClient(set()),
         timeout_seconds=60,
         current_worker_id="worker-current",
+    )
+
+    assert await recovery.recover_once() == 0
+    assert repository.recovered == []
+    assert repository.aggregated == []
+
+
+@pytest.mark.asyncio
+async def test_visual_nodes_are_never_recovered_by_generic_recovery() -> None:
+    repository = RecoveryRepository(
+        [
+            _node(3, node_code="TEACHER_BEHAVIOR_ANALYSIS"),
+            _node(4, node_code="STUDENT_BEHAVIOR_ANALYSIS"),
+        ]
+    )
+    recovery = StaleNodeRecovery(
+        repository,
+        LeaseClient(set()),
+        timeout_seconds=60,
     )
 
     assert await recovery.recover_once() == 0

@@ -135,6 +135,8 @@ def _command(
         submission_id="submission-visual",
         local_video_path=str(video_path.resolve()),
         priority=Priority.NORMAL,
+        dispatch_attempt=1,
+        claim_token=UUID("00000000-0000-0000-0000-000000000031"),
         strategy=strategy,
         student_count=38 if task_type is TaskType.STUDENT_BEHAVIOR else None,
         front_points=([{"X": 0, "Y": 0}] if task_type is TaskType.STUDENT_BEHAVIOR else None),

@@ -12,6 +12,10 @@ from packages.platform_contracts.status import Priority, TaskType
 JsonObject = dict[str, Any]
 
 
+class LegacyVisualCommandError(ValueError):
+    """部署前遗留命令缺少执行代次，不能安全进入推理。"""
+
+
 class VisualEventType(StrEnum):
     PROGRESS = "VISUAL_ANALYSIS_PROGRESS"
     COMPLETED = "VISUAL_ANALYSIS_COMPLETED"
@@ -26,6 +30,8 @@ class VisualAnalysisCommand:
     submission_id: str
     local_video_path: str
     priority: Priority
+    dispatch_attempt: int
+    claim_token: UUID
     strategy: JsonObject = field(default_factory=dict)
     student_count: int | None = None
     front_points: list[JsonObject] | None = None
@@ -41,6 +47,8 @@ class VisualAnalysisCommand:
             raise ValueError("视觉命令 task_id 和 submission_id 不能为空")
         if self.node_id <= 0:
             raise ValueError("视觉命令 node_id 必须大于 0")
+        if self.dispatch_attempt <= 0:
+            raise ValueError("视觉命令 dispatch_attempt 必须大于 0")
         if not Path(self.local_video_path).is_absolute():
             raise ValueError("local_video_path 必须是绝对本地路径")
         if self.task_type is TaskType.STUDENT_BEHAVIOR and self.student_count is None:
@@ -54,6 +62,8 @@ class VisualAnalysisCommand:
             "submission_id": self.submission_id,
             "local_video_path": self.local_video_path,
             "priority": self.priority.value,
+            "dispatch_attempt": self.dispatch_attempt,
+            "claim_token": str(self.claim_token),
             "strategy": self.strategy,
         }
         if self.student_count is not None:
@@ -91,6 +101,10 @@ class VisualAnalysisCommand:
             raise ValueError(
                 f"视觉 Kafka 命令不得携带媒体字段: {', '.join(included_forbidden)}"
             )
+        generation_fields = {"dispatch_attempt", "claim_token"}
+        present_generation_fields = generation_fields.intersection(payload)
+        if present_generation_fields != generation_fields:
+            raise LegacyVisualCommandError("旧格式视觉命令缺少执行代次")
         try:
             return cls(
                 command_id=UUID(str(envelope["event_id"])),
@@ -100,6 +114,8 @@ class VisualAnalysisCommand:
                 submission_id=str(payload["submission_id"]),
                 local_video_path=str(payload["local_video_path"]),
                 priority=Priority(payload.get("priority", Priority.NORMAL.value)),
+                dispatch_attempt=int(payload["dispatch_attempt"]),
+                claim_token=UUID(str(payload["claim_token"])),
                 strategy=_json_object(payload.get("strategy", {}), "strategy"),
                 student_count=_optional_int(payload.get("student_count")),
                 front_points=_optional_regions(payload.get("front_points"), "front_points"),

@@ -9,8 +9,6 @@ from typing import Any, Protocol
 
 import httpx
 from fastapi import FastAPI
-from sqlalchemy import Engine, create_engine
-
 from packages.platform_common.kafka import (
     AioKafkaConsumerAdapter,
     AioKafkaProducerAdapter,
@@ -19,7 +17,11 @@ from packages.platform_common.kafka import (
 )
 from packages.platform_common.lease_resilience import LeaseRenewalPolicy
 from packages.platform_common.repository import CourseRepository
-from packages.platform_contracts.vision import VisualAnalysisCommand
+from packages.platform_contracts.vision import (
+    LegacyVisualCommandError,
+    VisualAnalysisCommand,
+)
+from sqlalchemy import Engine, create_engine
 
 from ..application.analyzer import CourseVisualAnalyzer
 from ..application.events import VisualCommandProcessor
@@ -111,6 +113,10 @@ class VisualCommandConsumerLoop:
         for message in messages:
             try:
                 VisualAnalysisCommand.from_bytes(message.value)
+            except LegacyVisualCommandError:
+                # 旧命令无法证明属于当前领取代次；确认后由 Orchestrator 启动恢复重发。
+                completed.add(message_key(message))
+                continue
             except ValueError:
                 # 非法信封重试也不会恢复，标记完成后仍按分区连续水位提交。
                 completed.add(message_key(message))

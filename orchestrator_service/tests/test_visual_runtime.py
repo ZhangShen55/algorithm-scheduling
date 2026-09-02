@@ -8,13 +8,6 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
-
-from orchestrator_service.app.application.vision_events import (
-    VisualCommandPublisher,
-    VisualEventConsumerLoop,
-    VisualEventProcessor,
-    VisualNodeCoordinator,
-)
 from packages.platform_common.kafka import KafkaMessage
 from packages.platform_common.repository import (
     NodeRecord,
@@ -26,6 +19,13 @@ from packages.platform_contracts.vision import (
     VisualAnalysisCommand,
     VisualAnalysisEvent,
     VisualEventType,
+)
+
+from orchestrator_service.app.application.vision_events import (
+    VisualCommandPublisher,
+    VisualEventConsumerLoop,
+    VisualEventProcessor,
+    VisualNodeCoordinator,
 )
 
 
@@ -44,6 +44,9 @@ def _node(status: NodeStatus = NodeStatus.PENDING) -> NodeRecord:
         progress={},
         effective_params=None,
         updated_at=datetime.now(UTC),
+        claimed_by="worker-visual",
+        claim_token=UUID("00000000-0000-0000-0000-000000000031"),
+        attempt=1,
     )
 
 
@@ -264,6 +267,8 @@ async def test_visual_node_claim_prepares_shared_submission_and_publishes(tmp_pa
     command = VisualAnalysisCommand.from_bytes(producer.sent[0][1])
     assert command.local_video_path == str(downloader.path)
     assert command.submission_id == "submission-shared-001"
+    assert command.dispatch_attempt == 1
+    assert command.claim_token == UUID("00000000-0000-0000-0000-000000000031")
     assert producer.sent[0][2] == b"course-001:TEACHER_BEHAVIOR"
 
 
@@ -326,6 +331,62 @@ async def test_visual_recovery_republishes_same_stable_command_without_reclaim(
 
 
 @pytest.mark.asyncio
+async def test_visual_new_claim_generation_changes_command_identity(tmp_path: Path) -> None:
+    first_node = _node(NodeStatus.RUNNING)
+    second_node = replace(
+        first_node,
+        attempt=2,
+        claim_token=UUID("00000000-0000-0000-0000-000000000032"),
+    )
+    repository = Repository(running=[first_node])
+    producer = Producer()
+    coordinator = VisualNodeCoordinator(
+        repository,
+        Downloader(tmp_path),
+        VisualCommandPublisher(producer, topic="visual"),
+        worker_id="worker-visual",
+    )
+
+    assert await coordinator.recover() == 1
+    repository.running = [second_node]
+    assert await coordinator.recover() == 1
+    first = VisualAnalysisCommand.from_bytes(producer.sent[0][1])
+    second = VisualAnalysisCommand.from_bytes(producer.sent[1][1])
+
+    assert first.command_id != second.command_id
+    assert (first.dispatch_attempt, second.dispatch_attempt) == (1, 2)
+    assert first.claim_token != second.claim_token
+
+
+@pytest.mark.asyncio
+async def test_visual_recovery_rejects_missing_claim_identity(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    repository = Repository(
+        running=[
+            replace(
+                _node(NodeStatus.RUNNING),
+                attempt=0,
+                claim_token=None,
+            )
+        ]
+    )
+    producer = Producer()
+    coordinator = VisualNodeCoordinator(
+        repository,
+        Downloader(tmp_path),
+        VisualCommandPublisher(producer, topic="visual"),
+        worker_id="worker-visual",
+    )
+
+    assert await coordinator.recover() == 0
+    assert producer.sent == []
+    assert repository.transitions == []
+    assert "缺少领取身份" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_visual_recovery_terminalizes_unrecoverable_media(tmp_path: Path) -> None:
     repository = Repository(running=[_node(NodeStatus.RUNNING)])
     coordinator = VisualNodeCoordinator(
@@ -368,6 +429,8 @@ def _event(event_type: VisualEventType, *, progress: int = 100) -> bytes:
         submission_id="submission-shared-001",
         local_video_path="/data/course/course-001/teacher.mp4",
         priority=Priority.URGENT,
+        dispatch_attempt=1,
+        claim_token=UUID("00000000-0000-0000-0000-000000000031"),
     )
     return VisualAnalysisEvent.create(
         command,

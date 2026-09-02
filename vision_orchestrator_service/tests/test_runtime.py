@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -9,7 +10,11 @@ from uuid import UUID
 import pytest
 from fastapi import FastAPI
 from packages.platform_common.kafka import KafkaMessage
-from packages.platform_common.repository import RepositoryStateConflictError
+from packages.platform_common.repository import (
+    RepositoryStateConflictError,
+    VisualCommandDisposition,
+    VisualCommandResult,
+)
 from packages.platform_contracts.status import NodeStatus, TaskType
 from packages.platform_contracts.vision import (
     VisualAnalysisCommand,
@@ -17,7 +22,9 @@ from packages.platform_contracts.vision import (
     VisualEventType,
 )
 
-from vision_orchestrator_service.app.application.events import VisualCommandProcessor
+from vision_orchestrator_service.app.application.events import (
+    VisualCommandProcessor as ProductionVisualCommandProcessor,
+)
 from vision_orchestrator_service.app.core.config import VisionSettings
 from vision_orchestrator_service.app.infrastructure.capacity import (
     CapacityUnavailableError,
@@ -44,6 +51,136 @@ class Consumer:
 
     async def commit(self, message: KafkaMessage) -> None:
         self.committed.append(message.offset)
+
+
+class LegacyRepositoryCasAdapter:
+    """让旧测试桩显式映射到新的代次 CAS 合同。"""
+
+    def __init__(self, repository: object) -> None:
+        self.repository = repository
+
+    @staticmethod
+    def _result(
+        node_id: int,
+        disposition: VisualCommandDisposition,
+        node: object,
+    ) -> VisualCommandResult:
+        return VisualCommandResult(
+            disposition=disposition,
+            node_id=node_id,
+            course_task_type_id=int(getattr(node, "course_task_type_id", 7)),
+            status=NodeStatus(getattr(node, "status", NodeStatus.RUNNING)),
+        )
+
+    def _node(self, node_id: int) -> object:
+        getter = getattr(self.repository, "get_node", None)
+        if callable(getter):
+            return getter(node_id)
+        return SimpleNamespace(
+            id=node_id,
+            status=NodeStatus.RUNNING,
+            course_task_type_id=7,
+        )
+
+    def inspect_visual_command(self, node_id: int, **identity) -> VisualCommandResult:
+        del identity
+        node = self._node(node_id)
+        status = NodeStatus(getattr(node, "status", NodeStatus.RUNNING))
+        disposition = (
+            VisualCommandDisposition.TERMINAL
+            if status in {NodeStatus.COMPLETED, NodeStatus.FAILED, NodeStatus.CANCELLED}
+            else VisualCommandDisposition.STALE
+            if status is not NodeStatus.RUNNING
+            else VisualCommandDisposition.CURRENT
+        )
+        return self._result(node_id, disposition, node)
+
+    def update_visual_progress_if_current(
+        self,
+        node_id: int,
+        progress: dict[str, object],
+        *,
+        reason: str,
+        **identity,
+    ) -> VisualCommandResult:
+        del identity
+        try:
+            node = self.repository.update_node_progress(
+                node_id,
+                progress,
+                reason=reason,
+            )
+        except RepositoryStateConflictError:
+            current = self._node(node_id)
+            status = NodeStatus(getattr(current, "status", NodeStatus.RUNNING))
+            if status in {NodeStatus.COMPLETED, NodeStatus.FAILED, NodeStatus.CANCELLED}:
+                return self._result(
+                    node_id,
+                    VisualCommandDisposition.TERMINAL,
+                    current,
+                )
+            raise
+        return self._result(node_id, VisualCommandDisposition.APPLIED, node)
+
+    def complete_visual_node_if_current(
+        self,
+        node_id: int,
+        result: object,
+        *,
+        reason: str,
+        **identity,
+    ) -> VisualCommandResult:
+        del identity
+        try:
+            node = self.repository.complete_node(node_id, result, reason=reason)
+        except RepositoryStateConflictError:
+            current = self._node(node_id)
+            status = NodeStatus(getattr(current, "status", NodeStatus.RUNNING))
+            if status in {NodeStatus.COMPLETED, NodeStatus.FAILED, NodeStatus.CANCELLED}:
+                return self._result(
+                    node_id,
+                    VisualCommandDisposition.TERMINAL,
+                    current,
+                )
+            raise
+        aggregate = getattr(self.repository, "aggregate_task_type_state", None)
+        if callable(aggregate):
+            aggregate(int(getattr(node, "course_task_type_id", 7)))
+        return self._result(node_id, VisualCommandDisposition.APPLIED, node)
+
+    def fail_visual_node_if_current(
+        self,
+        node_id: int,
+        *,
+        reason: str,
+        **identity,
+    ) -> VisualCommandResult:
+        del identity
+        node = self.repository.transition_node(node_id, NodeStatus.FAILED, reason)
+        aggregate = getattr(self.repository, "aggregate_task_type_state", None)
+        if callable(aggregate):
+            aggregate(int(getattr(node, "course_task_type_id", 7)))
+        return self._result(node_id, VisualCommandDisposition.APPLIED, node)
+
+
+def VisualCommandProcessor(
+    analyzer: object,
+    repository: object,
+    producer: object,
+    *,
+    event_topic: str,
+) -> ProductionVisualCommandProcessor:
+    adapted = (
+        repository
+        if hasattr(repository, "inspect_visual_command")
+        else LegacyRepositoryCasAdapter(repository)
+    )
+    return ProductionVisualCommandProcessor(
+        analyzer,
+        adapted,
+        producer,
+        event_topic=event_topic,
+    )
 
 
 def _message(value: bytes, offset: int = 0) -> KafkaMessage:
@@ -98,6 +235,175 @@ async def test_consumer_commits_only_after_success_and_skips_invalid_envelope(
     assert await loop.run_once() == 1
     assert consumer.committed == [0, 1]
     assert processor.values == [valid]
+
+
+@pytest.mark.asyncio
+async def test_consumer_commits_legacy_command_then_processes_current_command(
+    tmp_path,
+) -> None:
+    current = _command(
+        tmp_path,
+        task_type=TaskType.TEACHER_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    ).to_bytes()
+    legacy = json.loads(current)
+    del legacy["payload"]["dispatch_attempt"]
+    del legacy["payload"]["claim_token"]
+
+    class Processor:
+        def __init__(self) -> None:
+            self.values: list[bytes] = []
+
+        async def handle(self, value: bytes) -> None:
+            self.values.append(value)
+
+    consumer = Consumer(
+        [_message(json.dumps(legacy).encode(), 10), _message(current, 11)]
+    )
+    processor = Processor()
+    loop = VisualCommandConsumerLoop(consumer, processor, poll_timeout_seconds=0.1)
+
+    assert await loop.run_once() == 1
+    assert consumer.committed == [10, 11]
+    assert processor.values == [current]
+
+
+@pytest.mark.asyncio
+async def test_stale_failure_generation_does_not_attempt_pending_to_failed(
+    tmp_path,
+) -> None:
+    command = _command(
+        tmp_path,
+        TaskType.TEACHER_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    )
+
+    class Repository:
+        def __init__(self) -> None:
+            self.fail_calls = 0
+
+        def inspect_visual_command(self, node_id: int, **identity) -> VisualCommandResult:
+            del identity
+            return VisualCommandResult(
+                VisualCommandDisposition.CURRENT,
+                node_id,
+                7,
+                NodeStatus.RUNNING,
+            )
+
+        def fail_visual_node_if_current(
+            self,
+            node_id: int,
+            *,
+            reason: str,
+            **identity,
+        ) -> VisualCommandResult:
+            del reason, identity
+            self.fail_calls += 1
+            return VisualCommandResult(
+                VisualCommandDisposition.STALE,
+                node_id,
+                7,
+                NodeStatus.PENDING,
+            )
+
+    class Analyzer:
+        async def analyze(self, command, progress):
+            del command, progress
+            raise VideoFrameError("受控视频帧失败")
+
+    repository = Repository()
+    consumer = Consumer([_message(command.to_bytes())])
+    processor = ProductionVisualCommandProcessor(
+        Analyzer(), repository, object(), event_topic="visual.events"
+    )
+    loop = VisualCommandConsumerLoop(consumer, processor, poll_timeout_seconds=0.1)
+
+    assert await loop.run_once() == 1
+    assert repository.fail_calls == 1
+    assert consumer.committed == [0]
+
+
+@pytest.mark.asyncio
+async def test_stale_command_does_not_cancel_later_current_command(tmp_path) -> None:
+    stale = _command(
+        tmp_path,
+        TaskType.TEACHER_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    )
+    current = replace(
+        stale,
+        command_id=UUID("00000000-0000-0000-0000-000000000202"),
+        node_id=32,
+        claim_token=UUID("00000000-0000-0000-0000-000000000032"),
+    )
+
+    class Repository:
+        def __init__(self) -> None:
+            self.completed: list[int] = []
+
+        def inspect_visual_command(self, node_id: int, **identity) -> VisualCommandResult:
+            del identity
+            disposition = (
+                VisualCommandDisposition.STALE
+                if node_id == stale.node_id
+                else VisualCommandDisposition.CURRENT
+            )
+            status = NodeStatus.PENDING if node_id == stale.node_id else NodeStatus.RUNNING
+            return VisualCommandResult(disposition, node_id, 7, status)
+
+        def complete_visual_node_if_current(
+            self,
+            node_id: int,
+            result: object,
+            *,
+            reason: str,
+            **identity,
+        ) -> VisualCommandResult:
+            del result, reason, identity
+            self.completed.append(node_id)
+            return VisualCommandResult(
+                VisualCommandDisposition.APPLIED,
+                node_id,
+                7,
+                NodeStatus.COMPLETED,
+            )
+
+    class Analyzer:
+        def __init__(self) -> None:
+            self.analyzed: list[int] = []
+
+        async def analyze(self, command, progress):
+            del progress
+            self.analyzed.append(command.node_id)
+            return {"node_id": command.node_id}
+
+    class Producer:
+        async def send_and_wait(self, topic, value, key):
+            del topic, value, key
+
+    repository = Repository()
+    analyzer = Analyzer()
+    consumer = Consumer(
+        [_message(stale.to_bytes(), 10), _message(current.to_bytes(), 11)]
+    )
+    processor = ProductionVisualCommandProcessor(
+        analyzer,
+        repository,
+        Producer(),
+        event_topic="visual.events",
+    )
+    loop = VisualCommandConsumerLoop(
+        consumer,
+        processor,
+        poll_timeout_seconds=0.1,
+        concurrency=2,
+    )
+
+    assert await loop.run_once() == 2
+    assert consumer.committed == [10, 11]
+    assert analyzer.analyzed == [current.node_id]
+    assert repository.completed == [current.node_id]
 
 
 @pytest.mark.asyncio
@@ -755,7 +1061,7 @@ async def test_processor_does_not_hide_missing_node_after_progress_conflict(tmp_
     consumer = Consumer([_message(command.to_bytes())])
     loop = VisualCommandConsumerLoop(consumer, processor, poll_timeout_seconds=0.1)
 
-    with pytest.raises(RuntimeError, match="视觉进度状态确认失败"):
+    with pytest.raises(RuntimeError, match="视觉进度基础设施处理失败"):
         await loop.run_once()
     assert consumer.committed == []
 

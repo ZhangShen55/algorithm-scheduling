@@ -4,7 +4,8 @@ from typing import Any, Protocol
 
 from packages.platform_common.repository import (
     NodeResultWrite,
-    RepositoryStateConflictError,
+    VisualCommandDisposition,
+    VisualCommandResult,
 )
 from packages.platform_contracts.status import NodeStatus
 from packages.platform_contracts.vision import (
@@ -39,24 +40,8 @@ class _ProgressDeliveryError(RuntimeError):
     pass
 
 
-class _TerminalNodeRace(RuntimeError):
-    """分析期间节点已由其他事务终结，当前命令无需继续执行。"""
-
-
-_TERMINAL_NODE_STATUSES = frozenset(
-    {
-        NodeStatus.COMPLETED,
-        NodeStatus.FAILED,
-        NodeStatus.CANCELLED,
-    }
-)
-
-
-def _is_terminal_status(value: object) -> bool:
-    try:
-        return NodeStatus(value) in _TERMINAL_NODE_STATUSES
-    except (TypeError, ValueError):
-        return False
+class _VisualCommandSuperseded(RuntimeError):
+    """分析期间命令已陈旧或节点已终结，当前执行不得继续写入。"""
 
 
 class VisualAnalyzer(Protocol):
@@ -68,32 +53,50 @@ class VisualAnalyzer(Protocol):
 
 
 class VisualResultRepository(Protocol):
-    def transition_node(
+    def inspect_visual_command(
         self,
         node_id: int,
-        status: NodeStatus,
-        reason: str,
-    ) -> object: ...
+        *,
+        task_id: str,
+        submission_id: str,
+        dispatch_attempt: int,
+        claim_token: object,
+    ) -> VisualCommandResult: ...
 
-    def update_node_progress(
+    def update_visual_progress_if_current(
         self,
         node_id: int,
         progress: dict[str, Any],
         *,
         reason: str,
-    ) -> object: ...
+        task_id: str,
+        submission_id: str,
+        dispatch_attempt: int,
+        claim_token: object,
+    ) -> VisualCommandResult: ...
 
-    def complete_node(
+    def complete_visual_node_if_current(
         self,
         node_id: int,
         result: NodeResultWrite,
         *,
         reason: str,
-    ) -> object: ...
+        task_id: str,
+        submission_id: str,
+        dispatch_attempt: int,
+        claim_token: object,
+    ) -> VisualCommandResult: ...
 
-    def get_node(self, node_id: int) -> object: ...
-
-    def aggregate_task_type_state(self, course_task_type_id: int) -> object: ...
+    def fail_visual_node_if_current(
+        self,
+        node_id: int,
+        *,
+        reason: str,
+        task_id: str,
+        submission_id: str,
+        dispatch_attempt: int,
+        claim_token: object,
+    ) -> VisualCommandResult: ...
 
 
 class AsyncKafkaProducer(Protocol):
@@ -116,13 +119,22 @@ class VisualCommandProcessor:
 
     async def handle(self, value: bytes) -> None:
         command = VisualAnalysisCommand.from_bytes(value)
-        get_node = getattr(self._repository, "get_node", None)
-        existing = (
-            await asyncio.to_thread(get_node, command.node_id)
-            if callable(get_node)
-            else None
+        identity = {
+            "task_id": command.task_id,
+            "submission_id": command.submission_id,
+            "dispatch_attempt": command.dispatch_attempt,
+            "claim_token": command.claim_token,
+        }
+        admission = await asyncio.to_thread(
+            self._repository.inspect_visual_command,
+            command.node_id,
+            **identity,
         )
-        if getattr(existing, "status", None) is NodeStatus.COMPLETED:
+        if admission.disposition is VisualCommandDisposition.STALE:
+            return
+        if admission.disposition is VisualCommandDisposition.TERMINAL:
+            if admission.status is not NodeStatus.COMPLETED:
+                return
             await self._publish(
                 VisualAnalysisEvent.create(
                     command,
@@ -133,21 +145,29 @@ class VisualCommandProcessor:
                 )
             )
             return
-        if getattr(existing, "status", None) in {
-            NodeStatus.FAILED,
-            NodeStatus.CANCELLED,
-        }:
-            await self._aggregate(existing)
-            return
+        if admission.disposition is not VisualCommandDisposition.CURRENT:
+            raise RuntimeError(
+                f"未知视觉命令准入结果: {admission.disposition}"
+            )
 
         async def report(progress: int, stage: str, reason: str) -> None:
             try:
-                await asyncio.to_thread(
-                    self._repository.update_node_progress,
+                updated = await asyncio.to_thread(
+                    self._repository.update_visual_progress_if_current,
                     command.node_id,
                     {"percent": progress, "stage": stage},
                     reason=reason,
+                    **identity,
                 )
+                if updated.disposition in {
+                    VisualCommandDisposition.STALE,
+                    VisualCommandDisposition.TERMINAL,
+                }:
+                    raise _VisualCommandSuperseded
+                if updated.disposition is not VisualCommandDisposition.APPLIED:
+                    raise _ProgressDeliveryError(
+                        f"未知视觉进度写入结果: {updated.disposition}"
+                    )
                 await self._publish(
                     VisualAnalysisEvent.create(
                         command,
@@ -159,23 +179,8 @@ class VisualCommandProcessor:
                 )
             except asyncio.CancelledError:
                 raise
-            except RepositoryStateConflictError as exc:
-                if callable(get_node):
-                    try:
-                        current = await asyncio.to_thread(
-                            get_node,
-                            command.node_id,
-                        )
-                    except Exception as read_exc:
-                        raise _ProgressDeliveryError(
-                            f"视觉进度状态确认失败: {read_exc}"
-                        ) from read_exc
-                    if _is_terminal_status(getattr(current, "status", None)):
-                        raise _TerminalNodeRace from exc
-                # 只有确认节点已经进入终态时才幂等，其他冲突必须可见。
-                raise _ProgressDeliveryError(
-                    f"视觉进度基础设施处理失败: {exc}"
-                ) from exc
+            except _VisualCommandSuperseded:
+                raise
             except Exception as exc:
                 # 进度存储或事件发布失败属于基础设施故障，不能伪装成单任务分析失败。
                 raise _ProgressDeliveryError(
@@ -184,19 +189,25 @@ class VisualCommandProcessor:
 
         try:
             analyzed = await self._analyzer.analyze(command, report)
-        except _TerminalNodeRace:
-            # 其他事务已经决定节点终态，迟到的分析结果不能覆盖该决定。
+        except _VisualCommandSuperseded:
             return
         except CapacityUnavailableError:
             raise
         except _TERMINAL_ANALYSIS_ERRORS as exc:
             failed = await asyncio.to_thread(
-                self._repository.transition_node,
+                self._repository.fail_visual_node_if_current,
                 command.node_id,
-                NodeStatus.FAILED,
-                f"视觉分析失败: {exc}",
+                reason=f"视觉分析失败: {exc}",
+                **identity,
             )
-            await self._aggregate(failed, fallback=existing)
+            if failed.disposition not in {
+                VisualCommandDisposition.APPLIED,
+                VisualCommandDisposition.STALE,
+                VisualCommandDisposition.TERMINAL,
+            }:
+                raise RuntimeError(
+                    f"未知视觉失败写入结果: {failed.disposition}"
+                )
             return
         if isinstance(analyzed, NodeResultWrite):
             result = NodeResultWrite(
@@ -211,21 +222,22 @@ class VisualCommandProcessor:
                 result=analyzed,
                 progress={"percent": 100, "stage": "完成"},
             )
-        try:
-            await asyncio.to_thread(
-                self._repository.complete_node,
-                command.node_id,
-                result,
-                reason="视觉分析完成",
+        completed = await asyncio.to_thread(
+            self._repository.complete_visual_node_if_current,
+            command.node_id,
+            result,
+            reason="视觉分析完成",
+            **identity,
+        )
+        if completed.disposition in {
+            VisualCommandDisposition.STALE,
+            VisualCommandDisposition.TERMINAL,
+        }:
+            return
+        if completed.disposition is not VisualCommandDisposition.APPLIED:
+            raise RuntimeError(
+                f"未知视觉完成写入结果: {completed.disposition}"
             )
-        except RepositoryStateConflictError:
-            if callable(get_node):
-                current = await asyncio.to_thread(get_node, command.node_id)
-                if _is_terminal_status(getattr(current, "status", None)):
-                    # 结果已由并发事务落库，当前处理器不重复写入或发布事件。
-                    return
-            raise
-        await self._aggregate(existing)
         await self._publish(
             VisualAnalysisEvent.create(
                 command,
@@ -243,13 +255,3 @@ class VisualCommandProcessor:
             event.to_bytes(),
             key,
         )
-
-    async def _aggregate(self, node: object, *, fallback: object = None) -> None:
-        aggregate = getattr(self._repository, "aggregate_task_type_state", None)
-        if not callable(aggregate):
-            return
-        course_task_type_id = getattr(node, "course_task_type_id", None)
-        if course_task_type_id is None:
-            course_task_type_id = getattr(fallback, "course_task_type_id", None)
-        if isinstance(course_task_type_id, int):
-            await asyncio.to_thread(aggregate, course_task_type_id)

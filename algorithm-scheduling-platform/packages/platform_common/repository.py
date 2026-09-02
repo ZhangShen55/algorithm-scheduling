@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+from enum import StrEnum
 from typing import Any, TypeVar
 from uuid import UUID, uuid4
 
@@ -14,8 +15,8 @@ from sqlalchemy import Connection, Engine, RowMapping, text
 from sqlalchemy.exc import DBAPIError
 
 from packages.platform_common.state_machine import validate_node_transition
-from packages.platform_contracts.status import NodeStatus, Priority, TaskType
 from packages.platform_contracts.asr import asr_params_fingerprint
+from packages.platform_contracts.status import NodeStatus, Priority, TaskType
 
 JsonObject = dict[str, Any]
 ZERO_RUN_ID = UUID("00000000-0000-0000-0000-000000000000")
@@ -186,6 +187,21 @@ class NodeRecord:
     claim_token: UUID | None = None
     attempt: int = 0
     run_id: UUID | None = None
+
+
+class VisualCommandDisposition(StrEnum):
+    CURRENT = "CURRENT"
+    STALE = "STALE"
+    TERMINAL = "TERMINAL"
+    APPLIED = "APPLIED"
+
+
+@dataclass(frozen=True, slots=True)
+class VisualCommandResult:
+    disposition: VisualCommandDisposition
+    node_id: int
+    course_task_type_id: int
+    status: NodeStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -1416,6 +1432,10 @@ class CourseRepository:
                       ON task_type.id = node.course_task_type_id
                     WHERE node.status IN (40, 50)
                       AND node.node_code <> 'PPT_SLICE'
+                      AND node.node_code NOT IN (
+                          'TEACHER_BEHAVIOR_ANALYSIS',
+                          'STUDENT_BEHAVIOR_ANALYSIS'
+                      )
                       AND node.claimed_at IS NOT NULL
                       AND node.claimed_at < :claimed_before
                       AND task_type.status IN (10, 20, 30, 40, 50)
@@ -1450,6 +1470,10 @@ class CourseRepository:
                     WHERE id = :node_id
                       AND status IN (40, 50)
                       AND node_code <> 'PPT_SLICE'
+                      AND node_code NOT IN (
+                          'TEACHER_BEHAVIOR_ANALYSIS',
+                          'STUDENT_BEHAVIOR_ANALYSIS'
+                      )
                       AND claimed_at IS NOT NULL
                       AND claimed_at < :claimed_before
                     """
@@ -2023,6 +2047,365 @@ class CourseRepository:
                 )
             ).mappings()
             return [_node_record(row) for row in rows]
+
+    def inspect_visual_command(
+        self,
+        node_id: int,
+        *,
+        task_id: str,
+        submission_id: str,
+        dispatch_attempt: int,
+        claim_token: UUID,
+    ) -> VisualCommandResult:
+        with self._engine.connect() as connection:
+            row = self._visual_command_row(connection, node_id, lock=False)
+        return self._classify_visual_command(
+            row,
+            task_id=task_id,
+            submission_id=submission_id,
+            dispatch_attempt=dispatch_attempt,
+            claim_token=claim_token,
+        )
+
+    def update_visual_progress_if_current(
+        self,
+        node_id: int,
+        progress: JsonObject,
+        *,
+        reason: str,
+        task_id: str,
+        submission_id: str,
+        dispatch_attempt: int,
+        claim_token: UUID,
+    ) -> VisualCommandResult:
+        def update(connection: Connection) -> VisualCommandResult:
+            row = self._visual_command_row(connection, node_id, lock=True)
+            classified = self._classify_visual_command(
+                row,
+                task_id=task_id,
+                submission_id=submission_id,
+                dispatch_attempt=dispatch_attempt,
+                claim_token=claim_token,
+            )
+            if classified.disposition is not VisualCommandDisposition.CURRENT:
+                return classified
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO node_results (task_node_id, progress)
+                    VALUES (:node_id, CAST(:progress AS jsonb))
+                    ON CONFLICT (task_node_id) DO UPDATE
+                    SET progress = EXCLUDED.progress,
+                        updated_at = now()
+                    """
+                ),
+                {"node_id": node_id, "progress": _json(progress)},
+            )
+            connection.execute(
+                text(
+                    """
+                    UPDATE task_nodes
+                    SET reason = :reason,
+                        updated_at = now()
+                    WHERE id = :node_id
+                      AND status = 50
+                      AND attempt = :dispatch_attempt
+                      AND claim_token = :claim_token
+                    """
+                ),
+                {
+                    "node_id": node_id,
+                    "reason": reason,
+                    "dispatch_attempt": dispatch_attempt,
+                    "claim_token": claim_token,
+                },
+            )
+            return replace(
+                classified,
+                disposition=VisualCommandDisposition.APPLIED,
+            )
+
+        return self._run_retryable_transaction("update_visual_progress", update)
+
+    def complete_visual_node_if_current(
+        self,
+        node_id: int,
+        result: NodeResultWrite,
+        *,
+        reason: str,
+        task_id: str,
+        submission_id: str,
+        dispatch_attempt: int,
+        claim_token: UUID,
+    ) -> VisualCommandResult:
+        def complete(connection: Connection) -> VisualCommandResult:
+            row = self._visual_command_row(connection, node_id, lock=True)
+            classified = self._classify_visual_command(
+                row,
+                task_id=task_id,
+                submission_id=submission_id,
+                dispatch_attempt=dispatch_attempt,
+                claim_token=claim_token,
+            )
+            if classified.disposition is not VisualCommandDisposition.CURRENT:
+                return classified
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO node_results (
+                        task_node_id, result, artifact_path, artifact_count,
+                        progress, effective_params
+                    )
+                    VALUES (
+                        :node_id, CAST(:result AS jsonb), :artifact_path, :artifact_count,
+                        CAST(:progress AS jsonb), CAST(:effective_params AS jsonb)
+                    )
+                    ON CONFLICT (task_node_id) DO UPDATE
+                    SET result = EXCLUDED.result,
+                        artifact_path = EXCLUDED.artifact_path,
+                        artifact_count = EXCLUDED.artifact_count,
+                        progress = EXCLUDED.progress,
+                        effective_params = EXCLUDED.effective_params,
+                        updated_at = now()
+                    """
+                ),
+                {
+                    "node_id": node_id,
+                    "result": _json(result.result),
+                    "artifact_path": result.artifact_path,
+                    "artifact_count": result.artifact_count,
+                    "progress": _json(result.progress),
+                    "effective_params": _json(result.effective_params),
+                },
+            )
+            connection.execute(
+                text(
+                    """
+                    UPDATE task_nodes
+                    SET status = 60,
+                        reason = :reason,
+                        finished_at = now(),
+                        updated_at = now()
+                    WHERE id = :node_id
+                      AND status = 50
+                      AND attempt = :dispatch_attempt
+                      AND claim_token = :claim_token
+                    """
+                ),
+                {
+                    "node_id": node_id,
+                    "reason": reason,
+                    "dispatch_attempt": dispatch_attempt,
+                    "claim_token": claim_token,
+                },
+            )
+            self._release_dependents(connection, node_id)
+            self._aggregate_visual_task_type_state(
+                connection,
+                classified.course_task_type_id,
+            )
+            return replace(
+                classified,
+                disposition=VisualCommandDisposition.APPLIED,
+                status=NodeStatus.COMPLETED,
+            )
+
+        return self._run_retryable_transaction("complete_visual_node", complete)
+
+    def fail_visual_node_if_current(
+        self,
+        node_id: int,
+        *,
+        reason: str,
+        task_id: str,
+        submission_id: str,
+        dispatch_attempt: int,
+        claim_token: UUID,
+    ) -> VisualCommandResult:
+        def fail(connection: Connection) -> VisualCommandResult:
+            row = self._visual_command_row(connection, node_id, lock=True)
+            classified = self._classify_visual_command(
+                row,
+                task_id=task_id,
+                submission_id=submission_id,
+                dispatch_attempt=dispatch_attempt,
+                claim_token=claim_token,
+            )
+            if classified.disposition is not VisualCommandDisposition.CURRENT:
+                return classified
+            connection.execute(
+                text(
+                    """
+                    UPDATE task_nodes
+                    SET status = 70,
+                        reason = :reason,
+                        finished_at = now(),
+                        updated_at = now()
+                    WHERE id = :node_id
+                      AND status = 50
+                      AND attempt = :dispatch_attempt
+                      AND claim_token = :claim_token
+                    """
+                ),
+                {
+                    "node_id": node_id,
+                    "reason": reason,
+                    "dispatch_attempt": dispatch_attempt,
+                    "claim_token": claim_token,
+                },
+            )
+            self._aggregate_visual_task_type_state(
+                connection,
+                classified.course_task_type_id,
+            )
+            return replace(
+                classified,
+                disposition=VisualCommandDisposition.APPLIED,
+                status=NodeStatus.FAILED,
+            )
+
+        return self._run_retryable_transaction("fail_visual_node", fail)
+
+    @staticmethod
+    def _visual_command_row(
+        connection: Connection,
+        node_id: int,
+        *,
+        lock: bool,
+    ) -> RowMapping:
+        if lock:
+            course_task_type_id = connection.execute(
+                text("SELECT course_task_type_id FROM task_nodes WHERE id = :node_id"),
+                {"node_id": node_id},
+            ).scalar_one_or_none()
+            if course_task_type_id is None:
+                raise RepositoryNotFoundError(f"节点不存在: {node_id}")
+            locked = connection.execute(
+                text("SELECT id FROM course_task_types WHERE id = :id FOR UPDATE"),
+                {"id": course_task_type_id},
+            ).scalar_one_or_none()
+            if locked is None:
+                raise RepositoryNotFoundError(f"节点任务类型不存在: {node_id}")
+        suffix = " FOR UPDATE OF node" if lock else ""
+        row = connection.execute(
+            text(
+                """
+                SELECT node.id, node.course_task_type_id, node.status,
+                       node.attempt, node.claim_token,
+                       task_type.task_id, task_type.submission_id
+                FROM task_nodes AS node
+                JOIN course_task_types AS task_type
+                  ON task_type.id = node.course_task_type_id
+                WHERE node.id = :node_id
+                """
+                + suffix
+            ),
+            {"node_id": node_id},
+        ).mappings().one_or_none()
+        if row is None:
+            raise RepositoryNotFoundError(f"节点不存在: {node_id}")
+        return row
+
+    @staticmethod
+    def _classify_visual_command(
+        row: RowMapping,
+        *,
+        task_id: str,
+        submission_id: str,
+        dispatch_attempt: int,
+        claim_token: UUID,
+    ) -> VisualCommandResult:
+        status = NodeStatus(row["status"])
+        identity_matches = (
+            row["task_id"] == task_id
+            and str(row["submission_id"]) == submission_id
+            and int(row["attempt"]) == dispatch_attempt
+            and row["claim_token"] == claim_token
+        )
+        if not identity_matches:
+            disposition = VisualCommandDisposition.STALE
+        elif status in {
+            NodeStatus.COMPLETED,
+            NodeStatus.FAILED,
+            NodeStatus.CANCELLED,
+        }:
+            disposition = VisualCommandDisposition.TERMINAL
+        elif status is NodeStatus.RUNNING:
+            disposition = VisualCommandDisposition.CURRENT
+        else:
+            disposition = VisualCommandDisposition.STALE
+        return VisualCommandResult(
+            disposition=disposition,
+            node_id=int(row["id"]),
+            course_task_type_id=int(row["course_task_type_id"]),
+            status=status,
+        )
+
+    @classmethod
+    def _aggregate_visual_task_type_state(
+        cls,
+        connection: Connection,
+        course_task_type_id: int,
+    ) -> None:
+        task_type = connection.execute(
+            text(
+                """
+                SELECT task_type
+                FROM course_task_types
+                WHERE id = :course_task_type_id
+                """
+            ),
+            {"course_task_type_id": course_task_type_id},
+        ).scalar_one_or_none()
+        if task_type is None:
+            raise RepositoryNotFoundError(f"任务类型不存在: {course_task_type_id}")
+        parsed_task_type = TaskType(task_type)
+        if parsed_task_type not in {
+            TaskType.TEACHER_BEHAVIOR,
+            TaskType.STUDENT_BEHAVIOR,
+        }:
+            raise RepositoryStateConflictError(
+                f"节点不属于视觉任务类型: {course_task_type_id}"
+            )
+        nodes = list(
+            connection.execute(
+                text(
+                    """
+                    SELECT node_code, status, reason, required_capability
+                    FROM task_nodes
+                    WHERE course_task_type_id = :course_task_type_id
+                    ORDER BY created_at, id
+                    FOR UPDATE
+                    """
+                ),
+                {"course_task_type_id": course_task_type_id},
+            ).mappings()
+        )
+        status, reason = cls._derive_task_type_state(parsed_task_type, nodes)
+        connection.execute(
+            text(
+                """
+                UPDATE course_task_types
+                SET status = :status,
+                    reason = :reason,
+                    started_at = CASE
+                        WHEN :status = 50 THEN COALESCE(started_at, now())
+                        ELSE started_at
+                    END,
+                    finished_at = CASE
+                        WHEN :status IN (60, 70, 80) THEN COALESCE(finished_at, now())
+                        ELSE finished_at
+                    END,
+                    updated_at = now()
+                WHERE id = :course_task_type_id
+                """
+            ),
+            {
+                "course_task_type_id": course_task_type_id,
+                "status": status.value,
+                "reason": reason,
+            },
+        )
 
     def create_node_work_items(
         self,

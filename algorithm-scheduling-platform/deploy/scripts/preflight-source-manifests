@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+platform_root="$(cd "$(dirname "$0")/../.." && pwd)"
+workspace_root="$(cd "${platform_root}/.." && pwd)"
+deploy_root="${platform_root}/deploy"
+manifest_tool="${deploy_root}/scripts/source_manifest.py"
+preflight_checks="${deploy_root}/scripts/preflight_checks.py"
+python_bin="${platform_root}/.venv/bin/python"
+[[ -x "$python_bin" ]] || python_bin="python3"
+
+fail() {
+  printf 'source-manifest-preflight: FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+[[ $# -eq 2 && "$1" == "--git-sha" ]] || fail "usage: preflight-source-manifests --git-sha SHA"
+git_sha="$2"
+[[ "$git_sha" =~ ^[0-9a-fA-F]{40}$ ]] || fail "Git SHA must be a full 40-character revision"
+git_sha="$(printf '%s' "$git_sha" | tr '[:upper:]' '[:lower:]')"
+[[ "$(git -C "$workspace_root" rev-parse HEAD)" == "$git_sha" ]] || fail "checkout revision does not match target Git SHA"
+
+temporary_root="$(mktemp -d)"
+cleanup() {
+  rm -rf -- "$temporary_root"
+}
+trap cleanup EXIT
+
+verify_service() {
+  local compose_service="$1"
+  local source_directory="$2"
+  local service_root="${temporary_root}/${compose_service}"
+  local runtime_root="${service_root}/runtime"
+  local expected_manifest="${service_root}/expected.json"
+  local embedded_manifest="${service_root}/embedded.json"
+  local embedded_digest="${service_root}/embedded.sha256"
+  local container_id
+  local container_inspection
+  local image_id
+  local image_inspection
+
+  mkdir -p "$runtime_root"
+  "$python_bin" "$manifest_tool" generate \
+    --revision "$git_sha" \
+    --source "${workspace_root}/${source_directory}/app=app" \
+    --source "${platform_root}/packages=packages" \
+    --output "$expected_manifest" >/dev/null
+
+  container_id="$(docker compose --project-directory "$deploy_root" \
+    -f "${deploy_root}/docker-compose.platform.yml" ps --no-trunc --status running -q \
+    "$compose_service")"
+  [[ "$container_id" =~ ^[0-9a-f]{64}$ ]] || fail "${compose_service} must have one running full container ID"
+  container_inspection="$(docker inspect "$container_id")"
+  image_id="$("$python_bin" "$preflight_checks" container-images \
+    --service "$compose_service" <(printf '%s' "$container_inspection"))"
+  [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "${compose_service} has no immutable image ID"
+  image_inspection="$(docker image inspect "$image_id")"
+  "$python_bin" "$preflight_checks" image-revisions \
+    --git-sha "$git_sha" --image-id "$image_id" \
+    <(printf '%s' "$image_inspection")
+  docker cp "${container_id}:/app/app" "${runtime_root}/app" >/dev/null
+  docker cp "${container_id}:/app/packages" "${runtime_root}/packages" >/dev/null
+  docker cp "${container_id}:/app/.source-manifest.json" "$embedded_manifest" >/dev/null
+  docker cp "${container_id}:/app/.source-manifest.sha256" "$embedded_digest" >/dev/null
+
+  "$python_bin" "$manifest_tool" verify \
+    --revision "$git_sha" \
+    --source "${runtime_root}/app=app" \
+    --source "${runtime_root}/packages=packages" \
+    --manifest "$embedded_manifest" \
+    --digest "$embedded_digest" \
+    --expected-manifest "$expected_manifest"
+  printf 'source-manifest-preflight: OK: %s\n' "$compose_service"
+}
+
+verify_service orchestrator-service orchestrator_service
+verify_service vision-orchestrator-service vision_orchestrator_service
+printf 'source-manifest-preflight: PASS\n'

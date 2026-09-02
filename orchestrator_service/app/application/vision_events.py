@@ -21,6 +21,11 @@ from packages.platform_contracts.vision import (
 from .lifecycle import WorkspaceCleaner
 
 JsonObject = dict[str, Any]
+LOGGER = logging.getLogger(__name__)
+
+
+class VisualClaimIdentityError(RuntimeError):
+    """视觉运行节点缺少可验证的领取身份，禁止推断或伪造。"""
 logger = logging.getLogger(__name__)
 
 
@@ -163,6 +168,17 @@ class VisualNodeCoordinator:
         for node in nodes:
             try:
                 command = await self._command(node)
+            except VisualClaimIdentityError as exc:
+                LOGGER.error(
+                    "视觉运行节点缺少领取身份，拒绝恢复发布",
+                    extra={
+                        "event": "visual_recovery_claim_identity_missing",
+                        "node_id": node.id,
+                        "attempt": node.attempt,
+                        "reason": str(exc),
+                    },
+                )
+                continue
             except asyncio.CancelledError:
                 await self._transition_for_retry(
                     node,
@@ -213,6 +229,11 @@ class VisualNodeCoordinator:
         await _cleanup_workspace(self._workspace_cleaner, task.task_id)
 
     async def _command(self, node: NodeRecord) -> VisualAnalysisCommand:
+        if node.attempt <= 0 or node.claim_token is None:
+            raise VisualClaimIdentityError(
+                f"node_id={node.id}, attempt={node.attempt}, claim_token_missing="
+                f"{node.claim_token is None}"
+            )
         task = await asyncio.to_thread(
             self._repository.get_task_type,
             node.course_task_type_id,
@@ -252,7 +273,8 @@ class VisualNodeCoordinator:
         return VisualAnalysisCommand(
             command_id=uuid5(
                 NAMESPACE_URL,
-                f"algorithm-visual:{task.submission_id}:{node.id}",
+                "algorithm-visual:"
+                f"{task.submission_id}:{node.id}:{node.attempt}:{node.claim_token}",
             ),
             task_id=task.task_id,
             task_type=task.task_type,
@@ -260,6 +282,8 @@ class VisualNodeCoordinator:
             submission_id=task.submission_id,
             local_video_path=str(local_path),
             priority=task.priority,
+            dispatch_attempt=node.attempt,
+            claim_token=node.claim_token,
             strategy=strategy,
             student_count=student_count,
             front_points=front_points,

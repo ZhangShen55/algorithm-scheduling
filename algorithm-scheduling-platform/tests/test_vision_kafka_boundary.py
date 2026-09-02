@@ -10,9 +10,14 @@ from orchestrator_service.app.application.vision_events import VisualCommandPubl
 from vision_orchestrator_service.app.application.events import VisualCommandProcessor
 from vision_orchestrator_service.app.infrastructure.capacity import CapacityLeaseHttpClient
 
-from packages.platform_common.repository import NodeResultWrite
-from packages.platform_contracts.status import Priority, TaskType
+from packages.platform_common.repository import (
+    NodeResultWrite,
+    VisualCommandDisposition,
+    VisualCommandResult,
+)
+from packages.platform_contracts.status import NodeStatus, Priority, TaskType
 from packages.platform_contracts.vision import (
+    LegacyVisualCommandError,
     VisualAnalysisCommand,
     VisualAnalysisEvent,
     VisualEventType,
@@ -37,6 +42,8 @@ def teacher_command() -> VisualAnalysisCommand:
         submission_id="submission-001",
         local_video_path="/data/course/course-vision-001/teacher.mp4",
         priority=Priority.URGENT,
+        dispatch_attempt=1,
+        claim_token=UUID("00000000-0000-0000-0000-000000000031"),
         strategy={"coarse_interval_seconds": 30},
     )
 
@@ -71,6 +78,49 @@ async def test_vision_service_consumes_command_and_publishes_progress_and_comple
     class ResultRepository:
         progress_updates: list[tuple[int, dict[str, object], str]] = []
         completed: NodeResultWrite | None = None
+
+        def inspect_visual_command(self, node_id: int, **identity) -> VisualCommandResult:
+            del identity
+            return VisualCommandResult(
+                VisualCommandDisposition.CURRENT,
+                node_id,
+                7,
+                NodeStatus.RUNNING,
+            )
+
+        def update_visual_progress_if_current(
+            self,
+            node_id: int,
+            progress: dict[str, object],
+            *,
+            reason: str,
+            **identity,
+        ) -> VisualCommandResult:
+            del identity
+            self.update_node_progress(node_id, progress, reason=reason)
+            return VisualCommandResult(
+                VisualCommandDisposition.APPLIED,
+                node_id,
+                7,
+                NodeStatus.RUNNING,
+            )
+
+        def complete_visual_node_if_current(
+            self,
+            node_id: int,
+            result: NodeResultWrite,
+            *,
+            reason: str,
+            **identity,
+        ) -> VisualCommandResult:
+            del identity
+            self.complete_node(node_id, result, reason=reason)
+            return VisualCommandResult(
+                VisualCommandDisposition.APPLIED,
+                node_id,
+                7,
+                NodeStatus.COMPLETED,
+            )
 
         def update_node_progress(
             self,
@@ -147,6 +197,19 @@ def test_visual_command_requires_selected_stream_local_path() -> None:
     payload["payload"]["local_video_path"] = "http://media/teacher.mp4"
 
     with pytest.raises(ValueError, match="local_video_path 必须是绝对本地路径"):
+        VisualAnalysisCommand.from_bytes(json.dumps(payload).encode())
+
+
+def test_visual_command_requires_generation_identity_and_classifies_legacy() -> None:
+    payload = json.loads(teacher_command().to_bytes())
+    assert payload["payload"]["dispatch_attempt"] == 1
+    assert payload["payload"]["claim_token"] == (
+        "00000000-0000-0000-0000-000000000031"
+    )
+    del payload["payload"]["dispatch_attempt"]
+    del payload["payload"]["claim_token"]
+
+    with pytest.raises(LegacyVisualCommandError, match="旧格式视觉命令"):
         VisualAnalysisCommand.from_bytes(json.dumps(payload).encode())
 
 

@@ -6,6 +6,10 @@ from typing import Protocol
 
 from packages.platform_common.repository import NodeRecord
 
+_VISUAL_NODE_CODES = frozenset(
+    {"TEACHER_BEHAVIOR_ANALYSIS", "STUDENT_BEHAVIOR_ANALYSIS"}
+)
+
 
 class RecoveryRepository(Protocol):
     def list_stale_claimed_nodes(self, claimed_before: datetime) -> list[NodeRecord]: ...
@@ -51,6 +55,8 @@ class StaleNodeRecovery:
         )
         recovered = 0
         for node in nodes:
+            if node.node_code in _VISUAL_NODE_CODES:
+                continue
             # OCR 外层节点不占算子租约，仅凭超时不能判定当前进程已失效。
             if (
                 self._current_worker_id is not None

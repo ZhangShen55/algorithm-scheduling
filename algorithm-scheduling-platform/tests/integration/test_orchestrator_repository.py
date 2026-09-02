@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 import pytest
 from orchestrator_service.app.application.pipeline import pipeline_nodes
@@ -16,6 +17,7 @@ from orchestrator_service.app.infrastructure.ppt_slice import (
     PptSliceTerminalHandler,
 )
 from sqlalchemy import Connection, Engine, text
+from sqlalchemy.exc import IntegrityError
 
 from packages.platform_common.repository import (
     CourseRepository,
@@ -23,6 +25,7 @@ from packages.platform_common.repository import (
     PostgresRetryPolicy,
     TaskTypeWrite,
     TransientInfrastructureError,
+    VisualCommandDisposition,
 )
 from packages.platform_contracts.status import NodeStatus, Priority, TaskType
 
@@ -414,7 +417,7 @@ def test_real_postgres_retry_exhaustion_and_non_retryable_error_are_distinct(
     assert not isinstance(non_retryable.value, TransientInfrastructureError)
 
 
-def test_real_postgres_stale_recovery_preserves_attempt_and_excludes_ppt(
+def test_real_postgres_stale_recovery_excludes_ppt_and_visual_nodes(
     repository: CourseRepository,
     database_engine: Engine,
 ) -> None:
@@ -440,13 +443,32 @@ def test_real_postgres_stale_recovery_preserves_attempt_and_excludes_ppt(
     assert claimed_ppt is not None and claimed_ppt.id == ppt_slice.id
     repository.transition_node(ppt_slice.id, NodeStatus.RUNNING, "PPT 后台处理中")
 
+    visual_nodes = []
+    for task_id, task_type in (
+        ("course-stale-teacher", TaskType.TEACHER_BEHAVIOR),
+        ("course-stale-student", TaskType.STUDENT_BEHAVIOR),
+    ):
+        repository.create_task_types(
+            task_id=task_id,
+            writes=[TaskTypeWrite(task_type=task_type)],
+        )
+        repository.initialize_pipeline(
+            task_id,
+            task_type,
+            pipeline_nodes(task_type, Priority.NORMAL),
+        )
+        visual = repository.claim_ready_visual_node("dead-visual-worker")
+        assert visual is not None
+        repository.transition_node(visual.id, NodeStatus.RUNNING, "视觉分析运行中")
+        visual_nodes.append(visual)
+
     with database_engine.begin() as connection:
         connection.execute(
             text(
                 "UPDATE task_nodes SET claimed_at = now() - interval '10 minutes' "
-                "WHERE id IN (:asr_id, :ppt_id)"
+                "WHERE id = ANY(CAST(:node_ids AS bigint[]))"
             ),
-            {"asr_id": asr.id, "ppt_id": ppt_slice.id},
+            {"node_ids": [asr.id, ppt_slice.id, *(node.id for node in visual_nodes)]},
         )
 
     claimed_before = datetime.now(UTC) - timedelta(minutes=5)
@@ -465,5 +487,202 @@ def test_real_postgres_stale_recovery_preserves_attempt_and_excludes_ppt(
     assert recovered.claimed_by is None
     assert recovered.claim_token is None
     assert repository.get_node(ppt_slice.id).status is NodeStatus.RUNNING
+    for visual in visual_nodes:
+        before = repository.get_node(visual.id)
+        assert not repository.recover_stale_claimed_node(
+            visual.id,
+            claimed_before=claimed_before,
+            reason="不得恢复视觉节点",
+        )
+        after = repository.get_node(visual.id)
+        assert after.status is NodeStatus.RUNNING
+        assert after.attempt == before.attempt
+        assert after.claim_token == before.claim_token
+        assert after.claimed_by == before.claimed_by
+
+    _, _ = _create_asr_pipeline(repository, task_id="course-stale-race")
+    raced = repository.claim_ready_node("asr_offline", "old-worker")
+    assert raced is not None
+    repository.transition_node(raced.id, NodeStatus.RUNNING, "等待并发刷新")
+    with database_engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE task_nodes SET claimed_at = now() - interval '10 minutes' "
+                "WHERE id = :node_id"
+            ),
+            {"node_id": raced.id},
+        )
+    assert raced.id in {
+        node.id for node in repository.list_stale_claimed_nodes(claimed_before)
+    }
+    refreshed_token = uuid4()
+    with database_engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE task_nodes SET claimed_at = now(), claimed_by = 'new-worker', "
+                "claim_token = :claim_token WHERE id = :node_id"
+            ),
+            {"node_id": raced.id, "claim_token": refreshed_token},
+        )
+    assert not repository.recover_stale_claimed_node(
+        raced.id,
+        claimed_before=claimed_before,
+        reason="不得覆盖并发刷新",
+    )
+    raced_after = repository.get_node(raced.id)
+    assert raced_after.status is NodeStatus.RUNNING
+    assert raced_after.claimed_by == "new-worker"
+    assert raced_after.claim_token == refreshed_token
     assert repository.get_task_type(asr_task_type_id).task_id == "course-stale-asr"
     assert repository.get_task_type(ppt_task_type.id).task_id == "course-stale-ppt"
+
+
+def test_real_postgres_visual_generation_cas_is_atomic(
+    repository: CourseRepository,
+) -> None:
+    def running_visual(task_id: str, task_type: TaskType):
+        task = repository.create_task_types(
+            task_id=task_id,
+            writes=[TaskTypeWrite(task_type=task_type)],
+        )[0]
+        repository.initialize_pipeline(
+            task_id,
+            task_type,
+            pipeline_nodes(task_type, Priority.NORMAL),
+        )
+        node = repository.claim_ready_visual_node("visual-cas-worker")
+        assert node is not None
+        repository.transition_node(node.id, NodeStatus.RUNNING, "视觉 CAS 测试运行中")
+        return task, repository.get_node(node.id)
+
+    task, node = running_visual("course-visual-cas-complete", TaskType.TEACHER_BEHAVIOR)
+    assert node.claim_token is not None
+    identity = {
+        "task_id": task.task_id,
+        "submission_id": task.submission_id,
+        "dispatch_attempt": node.attempt,
+        "claim_token": node.claim_token,
+    }
+    inspected = repository.inspect_visual_command(node.id, **identity)
+    assert inspected.disposition is VisualCommandDisposition.CURRENT
+
+    progress = repository.update_visual_progress_if_current(
+        node.id,
+        {"percent": 30, "stage": "粗粒度扫描"},
+        reason="视觉扫描中",
+        **identity,
+    )
+    assert progress.disposition is VisualCommandDisposition.APPLIED
+    assert repository.get_node(node.id).progress["percent"] == 30
+
+    stale = repository.update_visual_progress_if_current(
+        node.id,
+        {"percent": 99},
+        reason="旧代次不得覆盖",
+        **{**identity, "dispatch_attempt": node.attempt + 1},
+    )
+    assert stale.disposition is VisualCommandDisposition.STALE
+    assert repository.get_node(node.id).progress["percent"] == 30
+
+    completed = repository.complete_visual_node_if_current(
+        node.id,
+        NodeResultWrite(result={"intervals": []}),
+        reason="视觉分析完成",
+        **identity,
+    )
+    assert completed.disposition is VisualCommandDisposition.APPLIED
+    assert repository.get_node(node.id).status is NodeStatus.COMPLETED
+    assert repository.get_node(node.id).result == {"intervals": []}
+    assert repository.get_task_type(task.id).status is NodeStatus.COMPLETED
+    duplicate = repository.complete_visual_node_if_current(
+        node.id,
+        NodeResultWrite(result={"unexpected": True}),
+        reason="重复完成不得覆盖",
+        **identity,
+    )
+    assert duplicate.disposition is VisualCommandDisposition.TERMINAL
+    assert repository.get_node(node.id).result == {"intervals": []}
+
+    failed_task, failed_node = running_visual(
+        "course-visual-cas-fail",
+        TaskType.STUDENT_BEHAVIOR,
+    )
+    assert failed_node.claim_token is not None
+    failed = repository.fail_visual_node_if_current(
+        failed_node.id,
+        reason="受控视觉业务失败",
+        task_id=failed_task.task_id,
+        submission_id=failed_task.submission_id,
+        dispatch_attempt=failed_node.attempt,
+        claim_token=failed_node.claim_token,
+    )
+    assert failed.disposition is VisualCommandDisposition.APPLIED
+    assert repository.get_node(failed_node.id).status is NodeStatus.FAILED
+    assert repository.get_task_type(failed_task.id).status is NodeStatus.FAILED
+
+    rollback_task, rollback_node = running_visual(
+        "course-visual-cas-rollback",
+        TaskType.TEACHER_BEHAVIOR,
+    )
+    assert rollback_node.claim_token is not None
+    with pytest.raises(IntegrityError):
+        repository.complete_visual_node_if_current(
+            rollback_node.id,
+            NodeResultWrite(artifact_path="relative/path"),
+            reason="该事务必须回滚",
+            task_id=rollback_task.task_id,
+            submission_id=rollback_task.submission_id,
+            dispatch_attempt=rollback_node.attempt,
+            claim_token=rollback_node.claim_token,
+        )
+    rolled_back = repository.get_node(rollback_node.id)
+    assert rolled_back.status is NodeStatus.RUNNING
+    assert rolled_back.artifact_path is None
+
+    with pytest.raises(Exception, match="节点不存在"):
+        repository.inspect_visual_command(999999, **identity)
+
+    concurrent_task, concurrent_node = running_visual(
+        "course-visual-cas-concurrent",
+        TaskType.STUDENT_BEHAVIOR,
+    )
+    assert concurrent_node.claim_token is not None
+    concurrent_identity = {
+        "task_id": concurrent_task.task_id,
+        "submission_id": concurrent_task.submission_id,
+        "dispatch_attempt": concurrent_node.attempt,
+        "claim_token": concurrent_node.claim_token,
+    }
+    barrier = Barrier(2)
+
+    def complete_concurrently():
+        barrier.wait()
+        return repository.complete_visual_node_if_current(
+            concurrent_node.id,
+            NodeResultWrite(result={"winner": "complete"}),
+            reason="并发完成",
+            **concurrent_identity,
+        )
+
+    def fail_concurrently():
+        barrier.wait()
+        return repository.fail_visual_node_if_current(
+            concurrent_node.id,
+            reason="并发失败",
+            **concurrent_identity,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = [
+            executor.submit(complete_concurrently),
+            executor.submit(fail_concurrently),
+        ]
+        dispositions = {future.result().disposition for future in outcomes}
+    assert dispositions == {
+        VisualCommandDisposition.APPLIED,
+        VisualCommandDisposition.TERMINAL,
+    }
+    assert repository.get_node(concurrent_node.id).status in {
+        NodeStatus.COMPLETED,
+        NodeStatus.FAILED,
+    }
