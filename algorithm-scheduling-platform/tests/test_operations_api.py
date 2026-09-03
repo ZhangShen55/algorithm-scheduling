@@ -4,6 +4,7 @@ from typing import Any
 from uuid import UUID
 
 import httpx
+from control_service.app.api import control as control_api
 from control_service.app.api.control import create_control_app
 from fastapi.testclient import TestClient
 
@@ -567,7 +568,7 @@ def test_operations_storage_reports_configured_paths_and_directory_bytes(
     (result_root / "result.bin").write_bytes(b"1234567")
 
     with _client(tmp_path) as client:
-        response = client.get("/ops/storage")
+        response = client.get("/ops/storage?include_directory_bytes=true")
 
     assert response.status_code == 200
     roots = {item["kind"]: item for item in response.json()["roots"]}
@@ -576,3 +577,19 @@ def test_operations_storage_reports_configured_paths_and_directory_bytes(
     assert roots["result"]["directory_bytes"] == 7
     assert roots["course"]["filesystem"]["total"] > 0
     assert roots["course"]["filesystem"]["free"] > 0
+
+
+def test_operations_storage_skips_directory_walk_by_default(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    def fail_if_walked(root: Path) -> int:
+        raise AssertionError(f"不应递归扫描目录: {root}")
+
+    monkeypatch.setattr(control_api, "_directory_bytes", fail_if_walked)
+
+    with _client(tmp_path) as client:
+        response = client.get("/ops/storage")
+
+    assert response.status_code == 200
+    assert all(root["directory_bytes"] is None for root in response.json()["roots"])

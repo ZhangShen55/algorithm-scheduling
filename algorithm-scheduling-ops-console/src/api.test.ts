@@ -1,4 +1,4 @@
-import { deploymentTemplateConfig, fetchTaskList, fetchTaskSummary, loadConsoleConfig, saveConsoleConfig } from './api'
+import { deploymentTemplateConfig, fetchConsoleData, fetchTaskList, fetchTaskSummary, loadConsoleConfig, saveConsoleConfig } from './api'
 
 const config = {
   controlBaseUrl: 'http://control.test:18100',
@@ -43,4 +43,30 @@ test('任务筛选生成重复 task_type、任务项状态和自定义分页参�
 test('返回 HTML 且地址指向 5174 时给出后端端口提示', async () => {
   vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('<!doctype html>', { status: 200, headers: { 'content-type': 'text/html' } }))
   await expect(fetchTaskSummary('course-1', { ...config, controlBaseUrl: 'http://192.168.29.11:5174' })).rejects.toThrow('前端端口 5174')
+})
+
+test('存储或网关指标失败时保留其他成功观测数据', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (request: RequestInfo | URL) => {
+    const url = new URL(String(request))
+    if (url.pathname === '/ops/storage') return new Response('storage busy', { status: 503 })
+    if (url.hostname === 'gateway.test') return new Response('gateway busy', { status: 503 })
+    const payloads: Record<string, unknown> = {
+      '/ops/operator-instances': [],
+      '/ops/operator-instances/snapshot': [],
+      '/ops/queues': { queues: [], outbox_pending: 0 },
+      '/ops/readiness': { status: 'ready', checks: {} },
+      '/ops/kafka': { status: 'ok', publisher_status: 'ok', outbox_pending: 0, published: 1, publish_failed: 0, consumer_lag: 0, sampled_at: '2026-09-03T00:00:00Z' },
+      '/gpu': { status: 'ok', sampled_at: 1, devices: [{ index: 0, name: 'GPU', utilization_percent: 10, memory_used_bytes: 1, memory_total_bytes: 2 }] },
+    }
+    if (url.pathname === '/metrics') return new Response('algorithm_outbox_pending 0', { status: 200 })
+    return new Response(JSON.stringify(payloads[url.pathname]), { status: 200 })
+  })
+
+  const data = await fetchConsoleData(config)
+
+  expect(data.source).toBe('live')
+  expect(data.storage.roots).toEqual([])
+  expect(data.gateway.requestTotal).toBe(0)
+  expect(data.gpu.devices).toHaveLength(1)
+  expect(fetchMock.mock.calls.some(([request]) => String(request).includes('/ops/storage?include_directory_bytes=false'))).toBe(true)
 })

@@ -62,6 +62,11 @@ ASR 任务的 `asr_options` 会在提交时补齐为完整参数快照，按稳�
 - `GET /ops/course-jobs/{task_id}/events`：课程 Outbox 时间线；
 - `GET /ops/kafka/events` 与 `GET /ops/kafka/events/{event_id}`：Outbox 列表和按需 payload。
 
+`GET /ops/storage` 默认只读取文件系统总量、已用量和可用量，适合控制台自动刷新；
+`directory_bytes` 此时为 `null`。仅在低负载人工排查时使用
+`GET /ops/storage?include_directory_bytes=true` 递归统计课程和结果目录的精确字节数，避免任务压测
+期间反复遍历大量媒体与结果文件。
+
 节点摘要返回 `ready_at/claimed_at/started_at/finished_at`，并派生排队、启动、算子处理和节点总耗时。缺失端点时耗时为 `null`，不得用 `updated_at` 推断。Outbox 的 `PUBLISHED` 仅表示 Kafka Broker 已确认；接口不返回 `claim_token`，也不伪造 Topic、Partition 或 Offset。以上接口不改变 A 服务 `/api/course-jobs`、Outbox 写入和 Kafka envelope。
 
 ## 数据库迁移

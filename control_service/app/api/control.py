@@ -726,12 +726,17 @@ def _directory_bytes(root: Path) -> int:
     return total
 
 
-def _storage_root_response(root: Path, kind: str) -> dict[str, Any]:
+def _storage_root_response(
+    root: Path,
+    kind: str,
+    *,
+    include_directory_bytes: bool,
+) -> dict[str, Any]:
     usage = shutil.disk_usage(root)
     return {
         "kind": kind,
         "path": str(root),
-        "directory_bytes": _directory_bytes(root),
+        "directory_bytes": _directory_bytes(root) if include_directory_bytes else None,
         "filesystem": {
             "total": usage.total,
             "used": usage.used,
@@ -1462,11 +1467,22 @@ def create_control_app(
         return {"queues": queues, "outbox_pending": snapshot.outbox_pending}
 
     @app.get("/ops/storage")
-    def inspect_storage(request: Request) -> dict[str, Any]:
+    def inspect_storage(
+        request: Request,
+        include_directory_bytes: bool = Query(default=False),
+    ) -> dict[str, Any]:
         try:
             roots = [
-                _storage_root_response(resolved.course_root, "course"),
-                _storage_root_response(resolved.result_root, "result"),
+                _storage_root_response(
+                    resolved.course_root,
+                    "course",
+                    include_directory_bytes=include_directory_bytes,
+                ),
+                _storage_root_response(
+                    resolved.result_root,
+                    "result",
+                    include_directory_bytes=include_directory_bytes,
+                ),
             ]
         except OSError as exc:
             raise HTTPException(status_code=503, detail="存储目录暂不可用") from exc

@@ -74,8 +74,11 @@ export function defaultConsoleConfig(): ConsoleConfig { return { ...DEPLOYMENT_C
 
 type HttpError = Error & { status: number; payload?: unknown }
 
-async function getJson<T>(base: string, path: string): Promise<T> {
-  const response = await fetch(`${base}${path}`, { headers: { Accept: 'application/json' } })
+async function getJson<T>(base: string, path: string, timeoutMs?: number): Promise<T> {
+  const response = await fetch(`${base}${path}`, {
+    headers: { Accept: 'application/json' },
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
+  })
   const text = await response.text()
   let payload: unknown
   try {
@@ -92,8 +95,11 @@ async function getJson<T>(base: string, path: string): Promise<T> {
   return payload as T
 }
 
-async function getText(base: string, path: string): Promise<string> {
-  const response = await fetch(`${base}${path}`, { headers: { Accept: 'text/plain' } })
+async function getText(base: string, path: string, timeoutMs?: number): Promise<string> {
+  const response = await fetch(`${base}${path}`, {
+    headers: { Accept: 'text/plain' },
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
+  })
   if (!response.ok) throw new Error(`${path} ${response.status}`)
   return response.text()
 }
@@ -224,13 +230,15 @@ export async function fetchConsoleData(config = loadConsoleConfig()): Promise<Co
     getJson<OperatorInstance[]>(controlBase, '/ops/operator-instances'),
     getJson<CapacitySnapshot[]>(controlBase, '/ops/operator-instances/snapshot'),
     getJson<QueueSnapshot>(controlBase, '/ops/queues'),
-    getJson<ConsoleData['storage']>(controlBase, '/ops/storage').then(normalizeStorage),
+    getJson<ConsoleData['storage']>(controlBase, '/ops/storage?include_directory_bytes=false', 3000)
+      .then(normalizeStorage)
+      .catch(() => ({ roots: [] })),
     getJson<ConsoleData['readiness']>(controlBase, '/ops/readiness').catch((error: HttpError) => {
       if (error.payload && typeof error.payload === 'object') return error.payload as ConsoleData['readiness']
       return { status: 'unknown', error: String(error) }
     }),
     getText(controlBase, '/metrics').catch(() => ''),
-    getText(gatewayBase, '/metrics'),
+    getText(gatewayBase, '/metrics', 3000).catch(() => ''),
     getJson<GpuMetrics>(gpuBase, '/gpu').catch((error) => ({ status: 'unavailable', sampled_at: Date.now() / 1000, devices: [], error: String(error) }) as GpuMetrics),
     fetchKafkaMetrics(config).catch(() => null),
   ])
