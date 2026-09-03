@@ -57,16 +57,16 @@
 - [x] 6.5 增加 Kafka 发布记录前端测试，覆盖 Broker 确认措辞、失败待重试、payload 按需加载、局部降级和禁止显示 Topic/Partition/Offset
 - [x] 6.6 运行 Control Service 编译、应用导入、项目测试和健康/就绪检查，并运行平台相关非集成及 PostgreSQL 集成测试
 - [x] 6.7 运行 `npm ci`、类型检查、前端测试和生产构建，使用桌面与移动视口检查筛选栏、详情折叠、长列表和 JSON 视图无重叠或溢出
-- [ ] 6.8 对 A 服务 `/api/course-jobs`、旧运维详情、Outbox Publisher/Kafka envelope、online-gateway-service 和七类算子合同执行兼容回归
+- [x] 6.8 对 A 服务 `/api/course-jobs`、旧运维详情、Outbox Publisher/Kafka envelope、online-gateway-service 和七类算子合同执行兼容回归
 
 ## 7. 文档、发布与 Harness
 
 - [x] 7.1 更新 Control Service 和控制台 README、前后端对接清单及多服务器部署说明，记录筛选参数、详情分层、耗时口径、连接模板和 Outbox 观测边界
-- [ ] 7.2 使用 `test_all_0903_15` 验证 PPT 18 页、疑似视频区间、OCR、ASR、教师行为和学生行为摘要及按需详情，不把样本特定数值硬编码到页面
-- [ ] 7.3 发布前记录 `192.168.29.11` 当前 Control Service 和运维控制台的容器完整 ID、镜像完整 ID/digest、Compose 身份、Git revision、端口、健康状态和重启次数，并建立不可删除保护集
-- [ ] 7.4 使用包含版本时间和 Git 短 SHA 的新标签，按“先 Control Service、后控制台”构建并替换目标机镜像与容器；不重建或重启本次未修改的平台服务、算子、GPU exporter 和基础设施
-- [ ] 7.5 执行远端 revision、健康、readiness、A 服务兼容和业务 Smoke，覆盖组合筛选、模糊查询、自定义分页、四类详情、节点耗时、课程 Outbox 时间线和三个独立连接测试
-- [ ] 7.6 全部门禁通过后生成旧资产清理 dry-run，确认候选不属于当前发布且无任何容器引用，再按完整 ID删除被替代的旧容器和旧镜像；禁止全局 prune、模糊匹配、强制删除及清理 BuildKit 缓存
-- [ ] 7.7 清理后复核当前镜像 revision、容器健康、重启次数、接口 Smoke、数据卷和保护集均完整，并记录删除清单及 `docker system df` 前后空间；任一门禁失败则保留旧镜像并按完整 ID回滚
-- [ ] 7.8 在 `algorithm-scheduling-platform/harness/scenarios/` 增加本变更场景记录，附可复现命令、脱敏响应摘要、自动化结果、新旧资产身份、清理证据、真实数据、兼容边界、回滚方式及未覆盖项
-- [ ] 7.9 运行 OpenSpec 严格校验和 `git diff --check`，精确暂存本变更文件并保留工作区其他已有脏改动；使用中文 Conventional Commit 提交信息提交并推送当前 `codex/` 分支，复核远端 SHA
+- [x] 7.2 使用 `test_all_0903_15` 验证 PPT 18 页、疑似视频区间、OCR、ASR、教师行为和学生行为摘要及按需详情，不把样本特定数值硬编码到页面
+- [x] 7.3 发布前记录 `192.168.29.11` 当前 Control Service 和运维控制台的容器完整 ID、镜像完整 ID/digest、Compose 身份、Git revision、端口、健康状态和重启次数，并建立不可删除保护集
+- [x] 7.4 使用包含版本时间和 Git 短 SHA 的新标签，按“先 Control Service、后控制台”构建并替换目标机镜像与容器；不重建或重启本次未修改的平台服务、算子、GPU exporter 和基础设施
+- [x] 7.5 执行远端 revision、健康、readiness、A 服务兼容和业务 Smoke，覆盖组合筛选、模糊查询、自定义分页、四类详情、节点耗时、课程 Outbox 时间线和三个独立连接测试
+- [x] 7.6 全部门禁通过后生成旧资产清理 dry-run，确认候选不属于当前发布且无任何容器引用，再按完整 ID删除被替代的旧容器和旧镜像；禁止全局 prune、模糊匹配、强制删除及清理 BuildKit 缓存
+- [x] 7.7 清理后复核当前镜像 revision、容器健康、重启次数、接口 Smoke、数据卷和保护集均完整，并记录删除清单及 `docker system df` 前后空间；任一门禁失败则保留旧镜像并按完整 ID回滚
+- [x] 7.8 在 `algorithm-scheduling-platform/harness/scenarios/` 增加本变更场景记录，附可复现命令、脱敏响应摘要、自动化结果、新旧资产身份、清理证据、真实数据、兼容边界、回滚方式及未覆盖项
+- [x] 7.9 运行 OpenSpec 严格校验和 `git diff --check`，精确暂存本变更文件并保留工作区其他已有脏改动；使用中文 Conventional Commit 提交信息提交并推送当前 `codex/` 分支，复核远端 SHA
