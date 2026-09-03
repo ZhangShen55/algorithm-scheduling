@@ -2568,3 +2568,20 @@
 - 证据见 `scenarios/vision-vbas-batch-dispatch-stabilization-20260903.md`。固定 SHA
   `0c6186cbb374db07f3a3b1a1b0be749de75a80b9` 已在 `192.168.29.11` 完成 Vision 镜像替换、
   health/readiness 和旧容器/旧镜像精确清理；真实课程回归仍未执行。
+
+## 2026-09-03 - `f3329c6` 课程媒体终态清理与视觉失败事件发布
+
+- Orchestrator 按实际消费者终态释放 PPT、教师、学生媒体和 ASR 临时音频；全部请求泳道终态后
+  清理课程工作区，并以默认 60 秒周期对账补偿进程中断遗留目录，始终保留 `/data/result`。
+- Vision 新增 `VISUAL_ANALYSIS_FAILED` 终态事件；失败已入库但事件发布失败时不确认 Kafka
+  命令，重放只补发事件而不重复推理。
+- 本地 Orchestrator `98 passed`、Vision `66 passed`，聚焦媒体/事件 `76 passed`；目标提交
+  `f3329c61b775235421d93dae7dc1d44518e5b180` 已推送。
+- `192.168.29.11` 只利用既有 BuildKit 缓存构建并替换 Orchestrator/Vision。两个新容器均
+  `healthy`、重启次数 0、revision 和源码 manifest 匹配；Control 容器与镜像 ID 前后不变，
+  本次未构建或替换 Control。
+- 周期对账真实删除约 `975 MiB` 的历史终态课程残留，`/data/course/_harness` 与约 `7.1 GiB`
+  的 `/data/result` 保留。两个旧容器、两张无引用旧镜像和本次临时 release 源码目录已精确删除，
+  BuildKit 缓存约 `93.81 GB` 保留。
+- 完整证据见 `scenarios/course-media-lifecycle-cleanup-20260903.md`。本次未执行新的完整课程推理，
+  不据此新增算法精度或混合压力结论。
