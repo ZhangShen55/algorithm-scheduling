@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import asyncio
-from collections import Counter
 import json
+from collections import Counter
 from uuid import uuid4
 
 import httpx
 import pytest
+from packages.platform_common.lease_resilience import LeaseRenewalPolicy
 
 from online_gateway_service.app.infrastructure.capacity import (
+    ControlServiceUnavailableError,
     OnlineCapacityLeaseClient,
     OnlineCapacityLeaseError,
+    OnlineCapacityWaitTimeoutError,
 )
-from packages.platform_common.lease_resilience import LeaseRenewalPolicy
 
 
 @pytest.mark.asyncio
@@ -90,6 +92,8 @@ async def test_capacity_wait_retries_after_temporary_unavailability() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal attempts
+        if request.url.path.endswith("/release"):
+            return httpx.Response(200, request=request, json={"released": True})
         attempts += 1
         if attempts < 3:
             return httpx.Response(503, request=request, json={"detail": "暂无可用算子容量"})
@@ -214,3 +218,178 @@ async def test_512_online_requests_fill_three_instances_and_wait_for_release() -
     assert set(selected_instances) == set(instance_ids)
     assert all(value <= per_instance_limit for value in max_active.values())
     assert not leases
+
+
+@pytest.mark.asyncio
+async def test_online_capacity_recovers_from_transient_control_failure() -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        if request.url.path.endswith("/release"):
+            return httpx.Response(200, request=request, json={"released": True})
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ConnectError("Control 连接失败", request=request)
+        if attempts == 2:
+            return httpx.Response(503, request=request, json={"detail": "注册中心恢复中"})
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "lease_id": "lease-recovered",
+                "instance_id": "vbas-gpu1",
+                "capability": "person_count",
+                "capacity_pool": "online",
+                "service_url": "http://vbas-gpu1:8981",
+                "expires_at": "2099-01-01T00:00:00Z",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OnlineCapacityLeaseClient(
+            http,
+            control_service_url="http://control",
+            acquire_wait_timeout_seconds=1,
+            acquire_retry_interval_seconds=0.001,
+        )
+        async with client.acquire("person_count") as lease:
+            assert lease.instance_id == "vbas-gpu1"
+
+    assert attempts == 3
+
+
+@pytest.mark.asyncio
+async def test_online_capacity_uses_caller_deadline() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503,
+            request=request,
+            json={"detail": "暂无可用算子容量: person_count"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OnlineCapacityLeaseClient(
+            http,
+            control_service_url="http://control",
+            acquire_wait_timeout_seconds=30,
+            acquire_retry_interval_seconds=0.001,
+        )
+        deadline = asyncio.get_running_loop().time() + 0.02
+        with pytest.raises(OnlineCapacityWaitTimeoutError):
+            async with client.acquire("person_count", deadline=deadline):
+                raise AssertionError("外部总预算耗尽前不得取得租约")
+
+
+@pytest.mark.asyncio
+async def test_online_capacity_distinguishes_control_outage_from_capacity_wait() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("Control 不可达", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OnlineCapacityLeaseClient(
+            http,
+            control_service_url="http://control",
+            acquire_wait_timeout_seconds=0.02,
+            acquire_retry_interval_seconds=0.001,
+        )
+        with pytest.raises(ControlServiceUnavailableError):
+            async with client.acquire("person_count"):
+                raise AssertionError("Control 不可达时不得取得租约")
+
+
+@pytest.mark.asyncio
+async def test_online_capacity_control_call_cannot_exceed_caller_deadline() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(1)
+        return httpx.Response(200, request=request, json={})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OnlineCapacityLeaseClient(
+            http,
+            control_service_url="http://control",
+            acquire_wait_timeout_seconds=30,
+            acquire_retry_interval_seconds=0.001,
+        )
+        started_at = asyncio.get_running_loop().time()
+        with pytest.raises(ControlServiceUnavailableError):
+            async with client.acquire(
+                "person_count",
+                deadline=started_at + 0.02,
+            ):
+                raise AssertionError("超时的 Control 调用不得取得租约")
+
+    assert asyncio.get_running_loop().time() - started_at < 0.1
+
+
+@pytest.mark.asyncio
+async def test_online_release_failure_does_not_replace_business_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/release"):
+            raise httpx.ConnectError("释放连接失败", request=request)
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "lease_id": "lease-release-failure",
+                "instance_id": "vbas-gpu0",
+                "capability": "person_count",
+                "capacity_pool": "online",
+                "service_url": "http://vbas-gpu0:8981",
+                "expires_at": "2099-01-01T00:00:00Z",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OnlineCapacityLeaseClient(
+            http,
+            control_service_url="http://control",
+            renewal_policy=LeaseRenewalPolicy(
+                max_attempts=1,
+                base_delay_seconds=0,
+                max_delay_seconds=0,
+                safety_margin_seconds=1,
+            ),
+        )
+        with pytest.raises(ValueError, match="业务根因"):
+            async with client.acquire("person_count"):
+                raise ValueError("业务根因")
+
+
+@pytest.mark.asyncio
+async def test_cancelled_capacity_wait_stops_control_call_without_release() -> None:
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+    release_calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal release_calls
+        if request.url.path.endswith("/release"):
+            release_calls += 1
+        entered.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return httpx.Response(503, request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OnlineCapacityLeaseClient(
+            http,
+            control_service_url="http://control",
+            acquire_wait_timeout_seconds=300,
+        )
+
+        async def wait_for_capacity() -> None:
+            async with client.acquire("person_count"):
+                raise AssertionError("取消前不应取得租约")
+
+        task = asyncio.create_task(wait_for_capacity())
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.wait_for(cancelled.wait(), timeout=1)
+
+    assert release_calls == 0

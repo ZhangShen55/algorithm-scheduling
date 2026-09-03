@@ -27,6 +27,7 @@ from vision_orchestrator_service.app.application.events import (
 )
 from vision_orchestrator_service.app.core.config import VisionSettings
 from vision_orchestrator_service.app.infrastructure.capacity import (
+    CapacityLeaseClientError,
     CapacityUnavailableError,
 )
 from vision_orchestrator_service.app.infrastructure.media import VideoFrameError
@@ -624,6 +625,7 @@ async def test_consumer_loop_stays_alive_while_waiting_for_capacity(tmp_path) ->
     "analysis_error",
     (
         VideoFrameError("ffmpeg 无法解码课程视频"),
+        CapacityLeaseClientError("Control 容量租约服务在等待预算内未恢复"),
         ValueError("视觉视频文件不存在"),
         TypeError("视觉扫描策略字段类型不合法"),
         KeyError("VBas 单帧结果缺少字段"),

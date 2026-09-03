@@ -33,7 +33,14 @@ def test_platform_logging_uses_file_and_stdout_with_trace_context(tmp_path, caps
             "work_type": "vbas_student_batch",
             "work_id": "course-001-student-0001",
             "batch_id": "course-001-student-0001",
+            "capacity_pool": "offline",
+            "stage": "lease_acquire",
+            "exception_type": "control_transient_failure",
+            "elapsed_seconds": 1.25,
+            "remaining_seconds": 298.75,
             "request_body": "不要记录",
+            "base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+            "response": {"algorithm_result": "不要记录"},
         },
     )
     _flush_root()
@@ -53,7 +60,14 @@ def test_platform_logging_uses_file_and_stdout_with_trace_context(tmp_path, caps
     assert file_line["work_type"] == "vbas_student_batch"
     assert file_line["work_id"] == "course-001-student-0001"
     assert file_line["batch_id"] == "course-001-student-0001"
+    assert file_line["capacity_pool"] == "offline"
+    assert file_line["stage"] == "lease_acquire"
+    assert file_line["exception_type"] == "control_transient_failure"
+    assert file_line["elapsed_seconds"] == 1.25
+    assert file_line["remaining_seconds"] == 298.75
     assert "request_body" not in file_line
+    assert "base64" not in file_line
+    assert "response" not in file_line
 
 
 def test_platform_node_audit_keeps_only_contract_fields(tmp_path) -> None:

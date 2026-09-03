@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, Protocol, cast
@@ -12,7 +13,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError, field_validator
 
 from packages.platform_common.config import PlatformSettings
-from packages.platform_common.lease_resilience import LeaseRenewalPolicy
+from packages.platform_common.lease_resilience import (
+    LeaseRenewalPolicy,
+    remaining_deadline_seconds,
+    wait_for_retry,
+)
 from packages.platform_common.metrics import PlatformMetrics
 from packages.platform_common.trace import get_trace_id, new_trace_id
 from packages.platform_contracts.responses import BusinessResponse
@@ -27,8 +32,11 @@ from ..core.service_app import create_gateway_base_app
 from ..domain import valid_base64_image
 from ..infrastructure.capacity import (
     CapacityLease,
+    ControlLeaseProtocolError,
+    ControlServiceUnavailableError,
     OnlineCapacityLeaseClient,
     OnlineCapacityLeaseError,
+    OnlineCapacityWaitTimeoutError,
     OnlineWorkContext,
 )
 from ..infrastructure.persons import FacePersonClient, FacePersonClientError
@@ -40,6 +48,7 @@ from ..infrastructure.websocket_proxy import (
 )
 
 JsonObject = dict[str, Any]
+logger = logging.getLogger(__name__)
 IMAGE_ROUTE_PATHS = {
     "/online/vbas/teacher",
     "/online/vbas/student",
@@ -80,7 +89,28 @@ class OnlineLeaseClient(Protocol):
         ttl_seconds: int = 60,
         work_context: OnlineWorkContext | None = None,
         renew_interval_seconds: float | None = None,
+        capacity_pool: str = "online",
+        deadline: float | None = None,
     ) -> AbstractAsyncContextManager[CapacityLease]: ...
+
+
+class _VbasRetryableCallError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        instance_id: str,
+        timeout: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.instance_id = instance_id
+        self.timeout = timeout
+
+
+class _VbasDeterministicCallError(RuntimeError):
+    def __init__(self, message: str, *, business_code: int) -> None:
+        super().__init__(message)
+        self.business_code = business_code
 
 
 def _online_work_context(work_type: str, *, trace_id: str | None) -> OnlineWorkContext:
@@ -219,20 +249,32 @@ def create_online_gateway_app(
         capability: str,
         endpoint: str,
         operation: str,
-    ) -> JsonObject:
+    ) -> JsonObject | BusinessResponse[JsonObject]:
+        started_at = time.monotonic()
+        deadline = started_at + service_settings.http.hard_timeout_seconds
         image_list = request_body.get("ImageList")
         if not isinstance(image_list, list) or not image_list:
             return BusinessResponse[JsonObject].failure(40001, "VBas 请求必须包含 ImageList")
-        image_validity = await asyncio.gather(
-            *(
-                _valid_online_image(
-                    item.get("StoragePath") or item.get("Data"),
-                    service_settings,
+        try:
+            image_validity = await asyncio.wait_for(
+                asyncio.gather(
+                    *(
+                        _valid_online_image(
+                            item.get("StoragePath") or item.get("Data"),
+                            service_settings,
+                        )
+                        for item in image_list
+                        if isinstance(item, dict)
+                    )
                 )
-                for item in image_list
-                if isinstance(item, dict)
+                ,
+                timeout=remaining_deadline_seconds(deadline),
             )
-        )
+        except TimeoutError:
+            return BusinessResponse[JsonObject].failure(
+                50401,
+                "VBas 在线分析总处理超时",
+            )
         if len(image_validity) != len(image_list) or not all(image_validity):
             return BusinessResponse[JsonObject].failure(
                 40001,
@@ -241,57 +283,242 @@ def create_online_gateway_app(
         lease_client = cast(OnlineLeaseClient, request.app.state.online_lease_client)
         operator_http = cast(httpx.AsyncClient, request.app.state.online_http_client)
         metrics = cast(PlatformMetrics, request.app.state.platform_metrics)
-        try:
-            async with lease_client.acquire(
-                capability,
-                ttl_seconds=service_settings.leases.request_ttl_seconds,
-                work_context=_online_work_context(
-                    operation,
-                    trace_id=get_trace_id(),
-                ),
-                capacity_pool="online",
-            ) as lease:
-                started = time.perf_counter()
-                success = False
-                try:
+        work_context = _online_work_context(operation, trace_id=get_trace_id())
+        last_call_error: _VbasRetryableCallError | None = None
+        for attempt in range(1, service_settings.http.operator_max_attempts + 1):
+            current_instance_id = "unknown"
+            attempt_started_at = time.monotonic()
+            try:
+                async with lease_client.acquire(
+                    capability,
+                    ttl_seconds=service_settings.leases.request_ttl_seconds,
+                    work_context=work_context,
+                    capacity_pool="online",
+                    deadline=deadline,
+                ) as lease:
+                    current_instance_id = lease.instance_id
+                    remaining = remaining_deadline_seconds(deadline)
+                    if remaining <= 0:
+                        raise _VbasRetryableCallError(
+                            "VBas 在线分析总预算耗尽",
+                            instance_id=lease.instance_id,
+                            timeout=True,
+                        )
                     response = await asyncio.wait_for(
                         operator_http.post(
                             f"{lease.service_url.rstrip('/')}{endpoint}",
                             json=request_body,
                             headers={"X-Algorithm-Work-Type": "online"},
                         ),
-                        timeout=service_settings.http.hard_timeout_seconds,
+                        timeout=remaining,
                     )
+                    if response.status_code in {429, 502, 503, 504}:
+                        raise _VbasRetryableCallError(
+                            f"VBas 返回可恢复状态: HTTP {response.status_code}",
+                            instance_id=lease.instance_id,
+                        )
+                    if response.status_code in {400, 422}:
+                        raise _VbasDeterministicCallError(
+                            f"VBas 拒绝请求参数: HTTP {response.status_code}",
+                            business_code=40001,
+                        )
+                    if response.is_error:
+                        raise _VbasDeterministicCallError(
+                            f"VBas 返回不可恢复状态: HTTP {response.status_code}",
+                            business_code=50000,
+                        )
                     response.raise_for_status()
-                    body = response.json()
+                    try:
+                        body = response.json()
+                    except ValueError as exc:
+                        raise _VbasRetryableCallError(
+                            "VBas 响应不是合法 JSON",
+                            instance_id=lease.instance_id,
+                        ) from exc
                     if not isinstance(body, dict):
-                        raise ValueError("VBas 响应不是 JSON 对象")
-                    success = True
-                finally:
+                        raise _VbasRetryableCallError(
+                            "VBas 响应不是 JSON 对象",
+                            instance_id=lease.instance_id,
+                        )
                     metrics.observe_operator_request(
                         operator_code="vbas",
                         capability=capability,
                         instance_id=lease.instance_id,
-                        elapsed_seconds=time.perf_counter() - started,
-                        success=success,
+                        elapsed_seconds=time.monotonic() - attempt_started_at,
+                        success=True,
                     )
-        except OnlineCapacityLeaseError:
-            return BusinessResponse[JsonObject].failure(50301, "等待 VBas 在线容量超时")
-        except (TimeoutError, httpx.HTTPError, ValueError):
-            return BusinessResponse[JsonObject].failure(50000, "VBas 在线分析调用失败")
-        return body
+                    return body
+            except OnlineCapacityWaitTimeoutError:
+                return BusinessResponse[JsonObject].failure(
+                    50301,
+                    "等待 VBas 在线容量超时",
+                )
+            except ControlServiceUnavailableError:
+                return BusinessResponse[JsonObject].failure(
+                    50302,
+                    "Control 容量服务在允许时间内未恢复",
+                )
+            except ControlLeaseProtocolError:
+                return BusinessResponse[JsonObject].failure(
+                    50000,
+                    "Control 容量租约响应不可恢复",
+                )
+            except OnlineCapacityLeaseError:
+                return BusinessResponse[JsonObject].failure(
+                    50302,
+                    "Control 容量租约处理失败",
+                )
+            except asyncio.CancelledError:
+                raise
+            except _VbasDeterministicCallError as exc:
+                return BusinessResponse[JsonObject].failure(
+                    exc.business_code,
+                    (
+                        "VBas 在线请求参数被拒绝"
+                        if exc.business_code == 40001
+                        else "VBas 在线分析返回不可恢复错误"
+                    ),
+                )
+            except (TimeoutError, httpx.ReadTimeout) as exc:
+                last_call_error = _VbasRetryableCallError(
+                    "VBas 在线分析响应超时",
+                    instance_id=current_instance_id,
+                    timeout=True,
+                )
+                last_call_error.__cause__ = exc
+            except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+                last_call_error = _VbasRetryableCallError(
+                    f"VBas 在线分析连接或协议失败: {type(exc).__name__}",
+                    instance_id=current_instance_id,
+                )
+                last_call_error.__cause__ = exc
+            except _VbasRetryableCallError as exc:
+                last_call_error = exc
+            except Exception as exc:
+                logger.exception(
+                    "VBas 在线分析发生未分类错误",
+                    extra={
+                        "trace_id": work_context.trace_id,
+                        "capability": capability,
+                        "stage": "operator_call",
+                        "exception_type": type(exc).__name__,
+                        "attempt": attempt,
+                        "elapsed_seconds": round(time.monotonic() - started_at, 3),
+                        "remaining_seconds": round(
+                            remaining_deadline_seconds(deadline), 3
+                        ),
+                        "outcome": "failed",
+                    },
+                )
+                return BusinessResponse[JsonObject].failure(
+                    50000,
+                    "VBas 在线分析调用失败",
+                )
+
+            assert last_call_error is not None
+            metrics.observe_operator_request(
+                operator_code="vbas",
+                capability=capability,
+                instance_id=last_call_error.instance_id,
+                elapsed_seconds=time.monotonic() - attempt_started_at,
+                success=False,
+            )
+            metrics.record_capacity_recovery_event(
+                capacity_pool="online",
+                capability=capability,
+                instance_id=last_call_error.instance_id,
+                stage="operator_call",
+                exception_type=(
+                    "timeout"
+                    if last_call_error.timeout
+                    else type(last_call_error.__cause__ or last_call_error).__name__
+                ),
+                outcome=(
+                    "retrying"
+                    if attempt < service_settings.http.operator_max_attempts
+                    and remaining_deadline_seconds(deadline) > 0
+                    else "exhausted"
+                ),
+            )
+            remaining = remaining_deadline_seconds(deadline)
+            logger.warning(
+                "VBas 在线分析准备重选实例",
+                extra={
+                    "trace_id": work_context.trace_id,
+                    "capability": capability,
+                    "instance_id": last_call_error.instance_id,
+                    "stage": "operator_call",
+                    "exception_type": type(last_call_error.__cause__ or last_call_error).__name__,
+                    "attempt": attempt,
+                    "elapsed_seconds": round(time.monotonic() - started_at, 3),
+                    "remaining_seconds": round(remaining, 3),
+                    "outcome": (
+                        "retrying"
+                        if attempt < service_settings.http.operator_max_attempts
+                        and remaining > 0
+                        else "exhausted"
+                    ),
+                },
+            )
+            if attempt >= service_settings.http.operator_max_attempts or remaining <= 0:
+                break
+            retry_allowed = await wait_for_retry(
+                deadline=deadline,
+                attempt=attempt,
+                base_delay_seconds=service_settings.http.retry_base_delay_seconds,
+                max_delay_seconds=service_settings.http.retry_max_delay_seconds,
+            )
+            if not retry_allowed:
+                break
+
+        if last_call_error is not None and last_call_error.timeout:
+            return BusinessResponse[JsonObject].failure(
+                50401,
+                "VBas 在线分析响应超时",
+            )
+        return BusinessResponse[JsonObject].failure(
+            50201,
+            "VBas 在线分析连接或协议失败",
+        )
 
     @app.post("/online/vbas/teacher", response_model=None)
-    async def analyze_teacher_vbas(request_body: JsonObject, request: Request) -> JsonObject:
-        return await forward_vbas(request_body, request, capability="teacher_behavior", endpoint="/ImageDetect/teacher/v1.0.0", operation="online_vbas_teacher")
+    async def analyze_teacher_vbas(
+        request_body: JsonObject,
+        request: Request,
+    ) -> JsonObject | BusinessResponse[JsonObject]:
+        return await forward_vbas(
+            request_body,
+            request,
+            capability="teacher_behavior",
+            endpoint="/ImageDetect/teacher/v1.0.0",
+            operation="online_vbas_teacher",
+        )
 
     @app.post("/online/vbas/student", response_model=None)
-    async def analyze_student_vbas(request_body: JsonObject, request: Request) -> JsonObject:
-        return await forward_vbas(request_body, request, capability="student_behavior", endpoint="/ImageDetect/student/v1.0.0", operation="online_vbas_student")
+    async def analyze_student_vbas(
+        request_body: JsonObject,
+        request: Request,
+    ) -> JsonObject | BusinessResponse[JsonObject]:
+        return await forward_vbas(
+            request_body,
+            request,
+            capability="student_behavior",
+            endpoint="/ImageDetect/student/v1.0.0",
+            operation="online_vbas_student",
+        )
 
     @app.post("/online/vbas/person-count", response_model=None)
-    async def analyze_person_count_vbas(request_body: JsonObject, request: Request) -> JsonObject:
-        return await forward_vbas(request_body, request, capability="person_count", endpoint="/AE/SyncTasks2", operation="online_vbas_person_count")
+    async def analyze_person_count_vbas(
+        request_body: JsonObject,
+        request: Request,
+    ) -> JsonObject | BusinessResponse[JsonObject]:
+        return await forward_vbas(
+            request_body,
+            request,
+            capability="person_count",
+            endpoint="/AE/SyncTasks2",
+            operation="online_vbas_person_count",
+        )
 
     @app.post("/api/online/face/recognize")
     async def recognize_face(
@@ -329,7 +556,7 @@ def create_online_gateway_app(
                     response.raise_for_status()
                     body = response.json()
                     if not isinstance(body, dict):
-                        raise ValueError("人脸对比响应不是 JSON 对象")
+                        raise ValueError("人脸对比响应不是 JSON 对象")  # noqa: TRY004
                     success = True
                 finally:
                     metrics.observe_operator_request(
@@ -460,7 +687,7 @@ def create_online_gateway_app(
                     response.raise_for_status()
                     body = response.json()
                     if not isinstance(body, dict):
-                        raise ValueError("图像质量检测响应不是 JSON 对象")
+                        raise ValueError("图像质量检测响应不是 JSON 对象")  # noqa: TRY004
                     success = True
                 finally:
                     metrics.observe_operator_request(
@@ -532,7 +759,7 @@ def create_online_gateway_app(
                     response.raise_for_status()
                     body = response.json()
                     if not isinstance(body, dict):
-                        raise ValueError("OCR 响应不是 JSON 对象")
+                        raise ValueError("OCR 响应不是 JSON 对象")  # noqa: TRY004
                     success = True
                 finally:
                     metrics.observe_operator_request(
@@ -593,7 +820,7 @@ def create_online_gateway_app(
             return
         except WebSocketDisconnect:
             return
-        except Exception:
+        except Exception:  # noqa: BLE001 - WebSocket 边界统一关闭连接
             await websocket.close(code=1011, reason="实时 ASR 算子连接中断")
 
     @app.get("/ready")

@@ -189,6 +189,8 @@ def test_gateway_defaults_target_the_control_service_port() -> None:
     assert settings.http.max_connections == 2048
     assert settings.http.max_keepalive_connections == 512
     assert settings.http.pool_timeout_seconds > 0
+    assert settings.http.hard_timeout_seconds == 600
+    assert settings.http.operator_max_attempts == 3
 
 
 @pytest.mark.parametrize(
@@ -204,6 +206,10 @@ def test_gateway_defaults_target_the_control_service_port() -> None:
         {"pool_timeout_seconds": float("nan")},
         {"pool_timeout_seconds": float("inf")},
         {"pool_timeout_seconds": float("-inf")},
+        {"hard_timeout_seconds": 0.0},
+        {"operator_max_attempts": 0},
+        {"operator_max_attempts": 11},
+        {"retry_base_delay_seconds": 3, "retry_max_delay_seconds": 2},
     ],
 )
 def test_http_pool_configuration_rejects_invalid_bounds(

@@ -44,9 +44,13 @@ PostgreSQL 节点结果。`scan.end_frame_margin_seconds` 避开视频末端不�
 教师请求中的可选头部姿态仍属于同一批次，不额外占用容量。同步批次调用设置有限硬超时，
 跨越单次 TTL 时续租同一个租约，并在成功、失败、超时或取消后释放。容量不足属于离线等待，
 不会把课程节点标记为最终失败。VBas 尚未注册或暂时满载时，Consumer 保留当前消息且不提交
-Kafka offset，按 `worker.poll_interval_seconds` 原地重试；该等待不会让 Consumer 退出，因此 `/ready`
-仍保持就绪。关闭服务会中止等待且不提交未完成消息。HTTP `400/401`、租约响应非法等非容量错误
-仍会让后台循环失败并由 `/ready` 暴露。VBas 的学生、教师和头部姿态能力共享同一实例容量池。
+Kafka offset。租约申请对容量不足、Control 建连/连接超时和 HTTP `502/503/504` 共用
+`[lease_renewal].acquire_wait_timeout_seconds` 累计预算，默认 300 秒；退避从
+`acquire_retry_interval_seconds` 开始指数增长、带抖动并在 2 秒封顶。重试期间节点保持状态 50，
+未取得租约绝不调用 VBas，原 `task_id`、帧集合和稳定 `batch_id` 不变。关闭服务会立即取消等待且
+不提交未完成消息。确定性 HTTP 4xx、非法租约响应或预算耗尽会写入非空中文失败原因，并发布视觉
+失败终态事件，供 Orchestrator 推进任务和清理媒体。VBas 的学生、教师和头部姿态能力共享同一
+实例容量池。
 `[lease_renewal]` 允许同一 lease_id 在 TTL 安全窗口内对瞬时读取、连接或受控 5xx 有限重试；
 首次 `ReadError` 恢复时原批次继续，最终确认丢失只影响当前批次，不停止其他课程。释放 404
 视为幂等成功，瞬时释放结果不确定时记录日志并由 TTL 回收。

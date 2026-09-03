@@ -17,6 +17,7 @@ from online_gateway_service.app.core.config import (
 from online_gateway_service.app.infrastructure.capacity import (
     OnlineCapacityLeaseClient,
     OnlineCapacityLeaseError,
+    OnlineCapacityWaitTimeoutError,
     OnlineWorkContext,
 )
 from online_gateway_service.app.main import app
@@ -36,7 +37,11 @@ MINIMAL_PNG_DATA_URI = f"data:image/png;base64,{MINIMAL_PNG_BASE64}"
 def test_online_gateway_exposes_vbas_request_level_proxy() -> None:
     route_paths = {route.path for route in app.routes}
 
-    assert "/api/online/vbas/analyze" in route_paths
+    assert route_paths >= {
+        "/online/vbas/teacher",
+        "/online/vbas/student",
+        "/online/vbas/person-count",
+    }
 
 
 def test_online_gateway_exposes_face_recognition_proxy() -> None:
@@ -270,6 +275,7 @@ async def test_online_capacity_client_renews_context_and_releases() -> None:
             "capability": "ocr",
             "ttl_seconds": 1,
             "work_context": context.as_dict(),
+            "capacity_pool": "online",
         },
     )
     assert sum(path.endswith("/renew") for path, _ in calls) >= 2
@@ -328,7 +334,7 @@ async def test_online_capacity_renewal_failure_cancels_work_and_releases() -> No
 
 
 @pytest.mark.asyncio
-async def test_online_capacity_client_counts_rejected_lease() -> None:
+async def test_online_capacity_client_counts_capacity_wait_timeout() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/internal/operator-instances/lease"
         return httpx.Response(503, json={"detail": "暂无可用算子容量"})
@@ -339,8 +345,10 @@ async def test_online_capacity_client_counts_rejected_lease() -> None:
             http,
             control_service_url="http://control",
             metrics=metrics,
+            acquire_wait_timeout_seconds=0.02,
+            acquire_retry_interval_seconds=0.001,
         )
-        with pytest.raises(OnlineCapacityLeaseError, match="获取在线算子容量失败"):
+        with pytest.raises(OnlineCapacityWaitTimeoutError, match="超过"):
             async with client.acquire("detect_all"):
                 raise AssertionError("没有租约时不得进入算子调用")
 
@@ -351,8 +359,10 @@ async def test_online_capacity_client_counts_rejected_lease() -> None:
     )
     assert (
         'algorithm_capacity_lease_events_total{capability="detect_all",'
-        'instance_id="none",outcome="rejected"} 1.0' in rendered
+        'instance_id="none",outcome="timeout"} 1.0' in rendered
     )
+    assert "algorithm_capacity_recovery_events_total" in rendered
+    assert 'capacity_pool="online"' in rendered
 
 
 def test_online_ocr_timeout_and_upstream_errors_release_the_lease() -> None:
@@ -457,18 +467,14 @@ def test_online_vbas_proxies_complete_base64_request_through_one_lease(
     )
     try:
         with TestClient(online_app) as client:
-            response = client.post("/api/online/vbas/analyze", json=request_body)
+            response = client.post("/online/vbas/student", json=request_body)
     finally:
         asyncio.run(online_app.state.online_http_client.aclose())
 
     assert response.status_code == 200
     assert response.json() == {
-        "code": 0,
-        "message": "VBas 在线分析完成",
-        "data": {
-            "StatusObject": {"StatusString": "success", "StatusCode": 0},
-            "DataList": [],
-        },
+        "StatusObject": {"StatusString": "success", "StatusCode": 0},
+        "DataList": [],
     }
     assert acquired == ["student_behavior"]
     assert released == ["lease-vbas-1"]
@@ -680,16 +686,16 @@ def test_multi_image_vbas_request_is_not_split_and_preserves_partial_results(
     )
     try:
         with TestClient(online_app) as client:
-            body = client.post("/api/online/vbas/analyze", json=request_body).json()
+            body = client.post("/online/vbas/student", json=request_body).json()
     finally:
         asyncio.run(online_app.state.online_http_client.aclose())
 
     assert lease_count == 1
     assert forwarded_bodies == [request_body]
     assert [
-        item["StatusObject"]["ImageId"] for item in body["data"]["DataList"]
+        item["StatusObject"]["ImageId"] for item in body["DataList"]
     ] == ["image-ok", "image-failed"]
-    assert body["data"]["DataList"][1]["StatusObject"]["StatusCode"] == 400
+    assert body["DataList"][1]["StatusObject"]["StatusCode"] == 400
 
 
 def test_realtime_asr_keeps_one_sticky_lease_for_the_websocket_session(

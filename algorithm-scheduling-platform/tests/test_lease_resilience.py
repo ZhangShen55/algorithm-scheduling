@@ -7,12 +7,19 @@ import httpx
 import pytest
 
 from packages.platform_common.lease_resilience import (
+    ControlDeterministicFailureError,
+    ControlTransientFailureError,
+    LeaseCapacityUnavailableError,
     LeaseLostError,
     LeaseProtocolError,
     LeaseRenewalExhaustedError,
     LeaseRenewalPolicy,
+    classify_lease_response,
+    classify_lease_transport_error,
     release_lease_with_retry,
+    remaining_deadline_seconds,
     renew_lease_with_retry,
+    wait_for_retry,
 )
 
 
@@ -170,3 +177,68 @@ async def test_renewal_cancellation_is_not_converted_to_protocol_error() -> None
 
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+@pytest.mark.parametrize("status_code", (502, 503, 504))
+def test_control_service_errors_are_classified_as_transient(status_code: int) -> None:
+    request = httpx.Request("POST", "http://control/lease")
+    response = httpx.Response(status_code, request=request)
+
+    with pytest.raises(ControlTransientFailureError):
+        classify_lease_response(
+            response,
+            capability="person_count",
+            capacity_unavailable=False,
+        )
+
+
+def test_capacity_unavailable_has_distinct_type() -> None:
+    request = httpx.Request("POST", "http://control/lease")
+    response = httpx.Response(503, request=request)
+
+    with pytest.raises(LeaseCapacityUnavailableError):
+        classify_lease_response(
+            response,
+            capability="person_count",
+            capacity_unavailable=True,
+        )
+
+
+def test_deterministic_control_error_is_not_transient() -> None:
+    request = httpx.Request("POST", "http://control/lease")
+    response = httpx.Response(409, request=request)
+
+    with pytest.raises(ControlDeterministicFailureError):
+        classify_lease_response(
+            response,
+            capability="person_count",
+            capacity_unavailable=False,
+        )
+
+
+def test_control_connect_error_is_classified_without_using_message_text() -> None:
+    request = httpx.Request("POST", "http://control/lease")
+
+    first = classify_lease_transport_error(
+        httpx.ConnectError("", request=request)
+    )
+    second = classify_lease_transport_error(
+        httpx.ReadTimeout("任意文本", request=request)
+    )
+
+    assert isinstance(first, ControlTransientFailureError)
+    assert isinstance(second, ControlTransientFailureError)
+
+
+@pytest.mark.asyncio
+async def test_backoff_obeys_monotonic_deadline() -> None:
+    deadline = asyncio.get_running_loop().time() + 0.02
+
+    assert await wait_for_retry(
+        deadline=deadline,
+        attempt=8,
+        base_delay_seconds=1,
+        max_delay_seconds=2,
+        jitter_ratio=0,
+    ) is False
+    assert remaining_deadline_seconds(deadline) == 0

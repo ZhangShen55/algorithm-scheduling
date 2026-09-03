@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import random
-import time
 import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
@@ -13,10 +12,20 @@ from functools import partial
 import httpx
 
 from packages.platform_common.lease_resilience import (
+    ControlDeterministicFailureError,
+    ControlTransientFailureError,
+    InvalidControlResponseError,
+    LeaseAcquireError,
+    LeaseAcquireFailureKind,
+    LeaseCapacityUnavailableError,
     LeaseRenewalPolicy,
+    classify_lease_response,
+    classify_lease_transport_error,
     release_lease_with_retry,
     renew_lease_with_retry,
+    wait_for_retry,
 )
+from packages.platform_common.metrics import PlatformMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +68,14 @@ class CapacityLease:
 
 
 class CapacityLeaseClientError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_kind: LeaseAcquireFailureKind | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.failure_kind = failure_kind
 
 
 class CapacityUnavailableError(CapacityLeaseClientError):
@@ -73,12 +89,14 @@ class CapacityLeaseHttpClient:
         *,
         control_service_url: str,
         renewal_policy: LeaseRenewalPolicy | None = None,
+        metrics: PlatformMetrics | None = None,
         acquire_wait_timeout_seconds: float = 300.0,
         acquire_retry_interval_seconds: float = 0.2,
     ) -> None:
         self._http = http_client
         self._control_service_url = control_service_url.rstrip("/")
         self._renewal_policy = renewal_policy
+        self._metrics = metrics
         self._acquire_wait_timeout_seconds = acquire_wait_timeout_seconds
         self._acquire_retry_interval_seconds = acquire_retry_interval_seconds
 
@@ -100,37 +118,124 @@ class CapacityLeaseHttpClient:
         if work_context is not None:
             payload["work_context"] = work_context.as_dict()
         deadline = time.monotonic() + self._acquire_wait_timeout_seconds
-        delay = max(0.0, self._acquire_retry_interval_seconds)
-        last_error: Exception | None = None
+        started_at = time.monotonic()
+        attempt = 0
+        last_error: LeaseAcquireError | None = None
         while True:
-            try:
-                response = await self._http.post(
-                    f"{self._control_service_url}/internal/operator-instances/lease",
-                    json=payload,
-                )
-                if self._is_capacity_unavailable(response, capability=capability):
-                    last_error = CapacityUnavailableError(f"算子容量暂不可用: {capability}")
-                else:
-                    response.raise_for_status()
-                    body = response.json()
-                    lease = self._parse_lease(body)
-                    break
-            except httpx.HTTPStatusError as exc:
+            if time.monotonic() >= deadline:
                 raise CapacityLeaseClientError(
-                    f"获取算子容量租约失败: {capability}: HTTP {exc.response.status_code}"
-                ) from exc
-            except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
-                last_error = exc
-                raise CapacityLeaseClientError(
-                    f"获取算子容量租约失败: {capability}: {exc}"
-                ) from exc
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise CapacityLeaseClientError(
-                    f"等待算子容量超过 {self._acquire_wait_timeout_seconds:g} 秒: {capability}"
+                    f"等待算子容量超过 {self._acquire_wait_timeout_seconds:g} 秒: "
+                    f"{capability}",
+                    failure_kind=(
+                        last_error.kind
+                        if last_error is not None
+                        else LeaseAcquireFailureKind.CONTROL_TRANSIENT_FAILURE
+                    ),
                 ) from last_error
-            await asyncio.sleep(min(remaining, delay + random.uniform(0, delay * 0.25)))
-            delay = min(max(delay * 2, 0.2), 2.0)
+            attempt += 1
+            try:
+                response = await asyncio.wait_for(
+                    self._http.post(
+                        f"{self._control_service_url}/internal/operator-instances/lease",
+                        json=payload,
+                    ),
+                    timeout=max(0.0, deadline - time.monotonic()),
+                )
+                classify_lease_response(
+                    response,
+                    capability=capability,
+                    capacity_unavailable=self._is_capacity_unavailable(
+                        response,
+                        capability=capability,
+                    ),
+                )
+                try:
+                    lease = self._parse_lease(response.json())
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise InvalidControlResponseError(
+                        f"Control 容量租约响应无效: {type(exc).__name__}"
+                    ) from exc
+                break
+            except (ControlDeterministicFailureError, InvalidControlResponseError) as exc:
+                raise CapacityLeaseClientError(
+                    f"获取算子容量租约不可恢复: {capability}: {exc}",
+                    failure_kind=exc.kind,
+                ) from exc
+            except (LeaseCapacityUnavailableError, ControlTransientFailureError) as exc:
+                last_error = exc
+            except TimeoutError:
+                last_error = ControlTransientFailureError(
+                    "Control 视觉容量租约请求超过剩余预算"
+                )
+            except httpx.HTTPError as exc:
+                classified = classify_lease_transport_error(exc)
+                if isinstance(classified, ControlDeterministicFailureError):
+                    raise CapacityLeaseClientError(
+                        f"获取算子容量租约不可恢复: {capability}: {classified}",
+                        failure_kind=classified.kind,
+                    ) from exc
+                last_error = classified
+
+            elapsed = time.monotonic() - started_at
+            remaining = max(0.0, deadline - time.monotonic())
+            logger.warning(
+                "视觉容量租约申请等待恢复",
+                extra={
+                    **(work_context.as_dict() if work_context is not None else {}),
+                    "capability": capability,
+                    "stage": "lease_acquire",
+                    "exception_type": (
+                        last_error.kind.value if last_error is not None else "unknown"
+                    ),
+                    "attempt": attempt,
+                    "elapsed_seconds": round(elapsed, 3),
+                    "remaining_seconds": round(remaining, 3),
+                    "outcome": "retrying" if remaining > 0 else "timeout",
+                },
+            )
+            self._record_recovery_event(
+                capability=capability,
+                stage="lease_acquire",
+                exception_type=(
+                    last_error.kind.value if last_error is not None else "unknown"
+                ),
+                outcome="retrying" if remaining > 0 else "timeout",
+                capacity_pool=capacity_pool,
+            )
+            retry_allowed = await wait_for_retry(
+                deadline=deadline,
+                attempt=attempt,
+                base_delay_seconds=self._acquire_retry_interval_seconds,
+            )
+            if not retry_allowed:
+                kind = (
+                    last_error.kind
+                    if last_error is not None
+                    else LeaseAcquireFailureKind.CONTROL_TRANSIENT_FAILURE
+                )
+                if kind is LeaseAcquireFailureKind.CAPACITY_UNAVAILABLE:
+                    reason = (
+                        f"等待算子容量超过 {self._acquire_wait_timeout_seconds:g} 秒: "
+                        f"{capability}"
+                    )
+                else:
+                    reason = (
+                        "Control 容量租约服务在等待预算内未恢复: "
+                        f"{capability}"
+                    )
+                raise CapacityLeaseClientError(
+                    reason,
+                    failure_kind=kind,
+                ) from last_error
+
+        self._record_recovery_event(
+            capability=capability,
+            stage="lease_acquire",
+            exception_type="none",
+            outcome="acquired",
+            instance_id=lease.instance_id,
+            capacity_pool=capacity_pool,
+        )
 
         interval = renew_interval_seconds or max(min(ttl_seconds / 3, 20.0), 0.1)
         if interval >= ttl_seconds:
@@ -180,14 +285,28 @@ class CapacityLeaseHttpClient:
             renewal_task.cancel()
             with suppress(asyncio.CancelledError):
                 await renewal_task
-            released = await release_lease_with_retry(
-                lease_id=lease.lease_id,
-                release=lambda: self._http.post(
-                    f"{self._control_service_url}/internal/operator-instances/release",
-                    json={"lease_id": lease.lease_id},
-                ),
-                policy=renewal_policy,
-            )
+            try:
+                released = await release_lease_with_retry(
+                    lease_id=lease.lease_id,
+                    release=lambda: self._http.post(
+                        f"{self._control_service_url}/internal/operator-instances/release",
+                        json={"lease_id": lease.lease_id},
+                    ),
+                    policy=renewal_policy,
+                )
+            except Exception as exc:  # noqa: BLE001 - 释放失败不得覆盖分析根因
+                released = False
+                logger.warning(
+                    "视觉容量租约释放异常，等待 TTL 回收",
+                    extra={
+                        "lease_id": lease.lease_id,
+                        "capability": capability,
+                        "instance_id": lease.instance_id,
+                        "stage": "lease_release",
+                        "exception_type": type(exc).__name__,
+                        "outcome": "release_failed",
+                    },
+                )
             if not released:
                 logger.warning(
                     "视觉容量租约释放暂未确认，等待 TTL 回收",
@@ -197,6 +316,43 @@ class CapacityLeaseHttpClient:
                         "outcome": "release_failed",
                     },
                 )
+                self._record_recovery_event(
+                    capability=capability,
+                    stage="lease_release",
+                    exception_type="unconfirmed",
+                    outcome="release_failed",
+                    instance_id=lease.instance_id,
+                    capacity_pool=capacity_pool,
+                )
+            else:
+                self._record_recovery_event(
+                    capability=capability,
+                    stage="lease_release",
+                    exception_type="none",
+                    outcome="released",
+                    instance_id=lease.instance_id,
+                    capacity_pool=capacity_pool,
+                )
+
+    def _record_recovery_event(
+        self,
+        *,
+        capability: str,
+        stage: str,
+        exception_type: str,
+        outcome: str,
+        capacity_pool: str,
+        instance_id: str | None = None,
+    ) -> None:
+        if self._metrics is not None:
+            self._metrics.record_capacity_recovery_event(
+                capacity_pool=capacity_pool,
+                capability=capability,
+                instance_id=instance_id,
+                stage=stage,
+                exception_type=exception_type,
+                outcome=outcome,
+            )
 
     async def _renew_once(
         self,

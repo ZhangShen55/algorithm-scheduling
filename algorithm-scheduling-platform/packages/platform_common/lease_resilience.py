@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import random
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import TypeVar
 
 import httpx
@@ -39,6 +42,120 @@ class LeaseRenewalExhaustedError(RuntimeError):
 
 class LeaseProtocolError(RuntimeError):
     pass
+
+
+class LeaseAcquireFailureKind(StrEnum):
+    CAPACITY_UNAVAILABLE = "capacity_unavailable"
+    CONTROL_TRANSIENT_FAILURE = "control_transient_failure"
+    CONTROL_DETERMINISTIC_FAILURE = "control_deterministic_failure"
+    INVALID_CONTROL_RESPONSE = "invalid_control_response"
+
+
+class LeaseAcquireError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: LeaseAcquireFailureKind,
+        status_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.status_code = status_code
+
+
+class LeaseCapacityUnavailableError(LeaseAcquireError):
+    def __init__(self, capability: str) -> None:
+        super().__init__(
+            f"算子容量暂不可用: {capability}",
+            kind=LeaseAcquireFailureKind.CAPACITY_UNAVAILABLE,
+            status_code=503,
+        )
+
+
+class ControlTransientFailureError(LeaseAcquireError):
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(
+            message,
+            kind=LeaseAcquireFailureKind.CONTROL_TRANSIENT_FAILURE,
+            status_code=status_code,
+        )
+
+
+class ControlDeterministicFailureError(LeaseAcquireError):
+    def __init__(self, message: str, *, status_code: int) -> None:
+        super().__init__(
+            message,
+            kind=LeaseAcquireFailureKind.CONTROL_DETERMINISTIC_FAILURE,
+            status_code=status_code,
+        )
+
+
+class InvalidControlResponseError(LeaseAcquireError):
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            message,
+            kind=LeaseAcquireFailureKind.INVALID_CONTROL_RESPONSE,
+        )
+
+
+def classify_lease_response(
+    response: httpx.Response,
+    *,
+    capability: str,
+    capacity_unavailable: bool,
+) -> None:
+    """将 Control 租约 HTTP 响应转换为稳定类型，不依赖异常文本判断。"""
+
+    if capacity_unavailable:
+        raise LeaseCapacityUnavailableError(capability)
+    if response.status_code in {502, 503, 504}:
+        raise ControlTransientFailureError(
+            f"Control 租约服务暂不可用: HTTP {response.status_code}",
+            status_code=response.status_code,
+        )
+    if response.is_error:
+        raise ControlDeterministicFailureError(
+            f"Control 租约请求不可恢复: HTTP {response.status_code}",
+            status_code=response.status_code,
+        )
+
+
+def classify_lease_transport_error(exc: httpx.HTTPError) -> LeaseAcquireError:
+    if isinstance(exc, (httpx.NetworkError, httpx.TimeoutException)):
+        return ControlTransientFailureError(
+            f"Control 租约连接暂不可用: {type(exc).__name__}"
+        )
+    return ControlDeterministicFailureError(
+        f"Control 租约协议错误: {type(exc).__name__}",
+        status_code=500,
+    )
+
+
+def remaining_deadline_seconds(deadline: float) -> float:
+    return max(0.0, deadline - time.monotonic())
+
+
+async def wait_for_retry(
+    *,
+    deadline: float,
+    attempt: int,
+    base_delay_seconds: float,
+    max_delay_seconds: float = 2.0,
+    jitter_ratio: float = 0.25,
+) -> bool:
+    """在 monotonic 截止时间内退避；False 表示预算已经耗尽。"""
+
+    remaining = remaining_deadline_seconds(deadline)
+    if remaining <= 0:
+        return False
+    base_delay = min(
+        max_delay_seconds,
+        max(0.0, base_delay_seconds) * (2 ** max(0, attempt - 1)),
+    )
+    jitter = random.uniform(0.0, base_delay * max(0.0, jitter_ratio))
+    await asyncio.sleep(min(remaining, base_delay + jitter))
+    return remaining_deadline_seconds(deadline) > 0
 
 
 def is_transient_lease_error(exc: BaseException) -> bool:

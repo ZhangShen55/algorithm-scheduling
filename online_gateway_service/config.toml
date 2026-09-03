@@ -53,8 +53,14 @@ read_timeout_seconds = 60.0
 write_timeout_seconds = 60.0
 # 从 HTTP 连接池获取连接的有界正数超时秒数。
 pool_timeout_seconds = 5.0
-# 在线同步算子请求的绝对硬超时秒数。
+# 在线同步请求从进入网关到返回结果的端到端总预算秒数。
 hard_timeout_seconds = 600.0
+# 在线纯推理算子调用总尝试次数，包含首次调用。
+operator_max_attempts = 3
+# 在线纯推理失败后的基础退避秒数。
+retry_base_delay_seconds = 0.2
+# 在线纯推理指数退避允许达到的最大秒数。
+retry_max_delay_seconds = 2.0
 
 [leases]
 # 普通在线请求容量租约秒数。

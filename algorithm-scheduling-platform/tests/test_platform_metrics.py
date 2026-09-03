@@ -34,6 +34,14 @@ def test_metrics_endpoint_exposes_required_platform_dimensions(tmp_path: Path) -
         outcome="acquired",
         instance_id="vbas-gpu0",
     )
+    metrics.record_capacity_recovery_event(
+        capacity_pool="offline",
+        capability="teacher_behavior",
+        instance_id="vbas-gpu0",
+        stage="lease_acquire",
+        exception_type="control_transient_failure",
+        outcome="retrying",
+    )
     metrics.observe_operator_request(
         operator_code="vbas",
         capability="teacher_behavior",
@@ -64,6 +72,9 @@ def test_metrics_endpoint_exposes_required_platform_dimensions(tmp_path: Path) -
         'algorithm_capacity_lease_events_total{capability="teacher_behavior",'
         'instance_id="vbas-gpu0",outcome="acquired"} 1.0' in body
     )
+    assert "algorithm_capacity_recovery_events_total" in body
+    assert 'capacity_pool="offline"' in body
+    assert 'exception_type="control_transient_failure"' in body
     assert "algorithm_operator_request_latency_seconds" in body
     assert "algorithm_operator_request_errors_total" in body
     assert (

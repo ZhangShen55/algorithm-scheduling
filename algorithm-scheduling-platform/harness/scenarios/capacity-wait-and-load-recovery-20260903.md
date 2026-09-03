@@ -1,0 +1,112 @@
+# 容量等待与混合负载恢复验证（2026-09-03）
+
+## 1. 目标与当前状态
+
+本 Harness 对应 OpenSpec `stabilize-capacity-wait-and-load-recovery`。目标是修复 Vision 在 Control
+瞬时不可达时错误终止视觉节点，以及 Online Gateway 在正常容量竞争或下游瞬时故障时过早返回 A
+服务的问题，并在固定运行版本上完成故障注入、在线分档、离线基线、两轮混合压力、GPU 恢复和
+媒体生命周期验收。
+
+当前状态：本地实现与本地门禁已完成；远端发布和正式压力结果尚未写入。未完成全部门禁前，本文件
+不得给出变更通过结论。
+
+## 2. 不可覆盖的失败基线
+
+- 历史 Run ID：`cleanup-mixed-20full-200x10000-20260903-174427`。
+- 历史证据：`harness/scenarios/mixed-load-media-cleanup-validation-20260903.md`。
+- 在线人数识别：HTTP `10000/10000`，业务成功 `9884`，业务失败 `116`，该轮未通过。
+- Vision：两个 `TEACHER_BEHAVIOR_ANALYSIS` 节点在 Control 热替换窗口发生租约连接失败。
+- 旧 Control 容器：`52bca0eb13a389cd9b02ac319f3d8db6b8312bce13f39a81de0cbcbe87ad6683`。
+- 新 Control 容器：`e0f355d65302675718b0c26cc8f31828bca99067bed0c043bfa2aa82448674d2`。
+- 历史运行中服务版本发生变化，因此该轮既是有效缺陷证据，也是环境失效的正式验收 attempt；禁止
+  覆盖、删除或改写其原始报告。
+
+## 3. 实现边界与错误矩阵
+
+本变更不修改接口路径、请求字段、成功响应、四服务边界、VBas 模型或推理逻辑。三个 VBas 的权威
+边界为每实例 offline `1`、online `24`、内部 online queue `24`；Control 每实例最多发放 24 个
+online pool 租约，内部队列不计入平台注册容量。
+
+| 阶段 | 条件 | 是否恢复 | 最终结果 |
+| --- | --- | --- | --- |
+| 租约申请 | 容量暂不可用 | 在累计预算内退避 | 在线 `50301`；Vision 中文失败终态 |
+| 租约申请 | 建连/连接超时、HTTP 502/503/504 | 在累计预算内退避 | 在线 `50302`；Vision 中文失败终态 |
+| 租约申请 | HTTP 4xx 或非法响应 | 快速失败 | 在线 `50000`；Vision 中文失败终态 |
+| VBas 调用 | 建连/复位、429/502/503/504、读取超时、协议错误 | 最多三次并重选实例 | `50201` 或 `50401` |
+| VBas 调用 | 图片/坐标错误、HTTP 400/422 | 不重试 | `40001` |
+| VBas 调用 | 其他确定性/未分类错误 | 不重试 | `50000` |
+| 租约释放 | 404 | 幂等成功 | 保留原业务结果 |
+| 租约释放 | 瞬时失败耗尽 | TTL 回收并告警 | 不覆盖原业务/分析根因 |
+| 上游取消 | 容量等待或 VBas 调用中取消 | 传播取消 | 释放已取得租约，无后台调用残留 |
+
+## 4. 本地失败先行与回归证据
+
+- 旧 Vision 聚焦测试：`10 failed, 6 passed`；证明连接失败、可恢复 5xx 等路径未实现。
+- 旧 Gateway 测试收集失败；证明类型化租约异常尚不存在。
+- Vision 容量聚焦回归 `52 passed`；Vision 全量回归 `79 passed`。
+- Online Gateway 容量与路由聚焦回归 `55 passed`；纳入真实
+  `frame_000068.jpg` Smoke 后，Gateway 全量回归为 `92 passed`。
+- 平台共享租约、指标、日志、Gateway 合同聚焦回归 `47 passed`；Redis/Control 单实例 online=24
+  上限 `1 passed`；Vision VBas 与三调用方跨服务租约 `2 passed`。
+- 变更 Python 文件 Ruff 通过；`mypy --strict --follow-imports=silent` 检查 8 个变更源文件通过；
+  compileall 与两个 `app.main:app` 导入通过；OpenSpec strict 与 `git diff --check` 通过。
+- 两个服务均以真实 Uvicorn 进程启动。Gateway `/health`、`/ready` 为 200；Vision 使用 Mac 可写的
+  `/tmp` 存储覆盖后连接本机 PostgreSQL/Kafka，`/health`、`/ready` 为 200，并完成优雅停止。
+- 真实图片 Smoke 使用 `vbas/tests/teacher_person_count/frame_000068.jpg`，验证图片解码、原请求转发、
+  VBas 原始成功响应和租约边界；远端发布后仍须调用真实 VBas，不能以本地 Mock 代替远端门禁。
+- 平台全量非集成回归完整执行结果为 `3228 passed, 39 failed, 3 skipped, 172 deselected`。39 项属于
+  当前分支既有非本变更基线，集中在迁移 0008/0009 后的旧断言、旧 VBas 配置名、并行中的部署/
+  运维脚本测试、旧 Control HTTP 状态断言、Pipeline `run_id` 测试桩和旧 Dockerfile 合同；本变更
+  不修改这些文件，不将该组失败包装为通过。全导入严格 Mypy 还会报告既有 `repository.py` 和
+  Vision `events.py` 类型债务，限定本 change 的 8 个源文件检查已通过。
+- `test_unified_capacity_cross_service.py` 中旧 OCR 容量用例仍假设容量立即失败，并把 default pool
+  租约当作 online pool；该历史断言与本变更 VBas 有界等待语义无关，已单列为非本变更项，未改写。
+- 日志只允许记录 trace、capability、pool、stage、exception type、attempt、已耗时、剩余预算和
+  outcome；Base64、完整请求/响应、识别文本与 embedding 均为禁止字段。
+
+## 5. 远端发布门禁
+
+目标服务器为 `192.168.29.11`。每次发布前将完整 Git SHA、受影响服务旧容器/镜像完整 ID、OCI
+revision、实际配置 SHA-256、健康状态和磁盘空间写入独立 release 目录。使用干净 checkout 与现有
+BuildKit 缓存构建，不使用 `--no-cache`，不执行宽泛 container/image/system/buildx prune。
+
+全部新镜像完成 amd64、revision、source manifest、compile 和 import 校验后逐个替换。新容器通过
+health、readiness、注册和真实 Smoke 后，精确删除被替换的旧容器及无引用旧镜像；无关镜像、构建
+缓存、数据卷、历史证据和 `/data/result` 保留。
+
+## 6. 正式测试矩阵
+
+| 顺序 | 场景 | 规模 | 通过条件 |
+| ---: | --- | --- | --- |
+| 1 | Control 短暂不可用 | 5、15、30 秒各一轮 | Vision 全成功、attempt=1、batch 不重复、全部收敛 |
+| 2 | 三条 VBas 在线路由恢复 | 人数/教师/学生真实图片 | 响应兼容、重选有效、租约归零 |
+| 3 | 在线分档 | 72x5000、144x10000 | HTTP/业务成功 100%，错误分类为 0 |
+| 4 | 在线重复压力 | 200x10000 连续三轮 | 每轮完整终态和显存恢复 |
+| 5 | 离线基线 | 20 路四任务 | 80 类任务成功、节点 attempt=1、媒体清理 |
+| 6 | 最终混合 | 20 路四任务 + 200x10000，连续两轮 | 在线 100%，80 类任务成功，三卡均有真实工作 |
+
+## 7. 运行事实、GPU 与存储证据
+
+每个 attempt 使用唯一 Run ID 和 write-once 目录。开始及结束均保存容器完整 ID、镜像 revision、
+配置摘要和媒体输入；测试期间周期复核，任何变化均将 attempt 标记为环境失效。
+
+每组 VBas 正式压力前重新创建三个实例，ready 后空闲 5 分钟，以最后 60 秒显存中位数为基线。
+负载期间每 2 秒保存三卡显存、利用率、功耗、PID 到容器完整 ID、在线/离线租约及 VBas
+running/queued；终态后继续观察 5 分钟。恢复值超过基线 512 MiB、跨轮单调增长、OOM、GPU Xid、
+容器重启或剩余显存低于 2 GiB 时该轮失败并停止扩大负载。
+
+存储采集使用 `df` 和本轮 `/data/course/{task_id}` 增量，不高频递归扫描整个 `/data/result`。
+终态必须确认 `slides.mp4`、`teacher.wav`、`teacher.mp4`、`student.mp4` 和视觉临时目录按消费者终态
+删除，课程临时目录消失；`/data/result/{task_id}`、数据库结构化结果和失败事实保留。
+
+## 8. 收敛与结论规则
+
+每轮必须等待全部在线响应、课程/节点终态、活动租约、reported inflight、VBas running/queued、
+三个 Kafka Consumer lag、未发布 Outbox 和本轮课程缓存目录归零。驱动中断、监控缺失、运行事实
+变化或任何未收敛项只能记录为失败、未完成或环境失效。只有全部必需轮次及 GPU 恢复门禁通过后，
+才能在本文件追加最终“通过”结论。
+
+## 9. 执行结果
+
+待远端发布和每个正式 attempt 完成后，按 Run ID 逐项追加原始报告路径、请求规模、完整错误分类、
+任务终态、实例分布、GPU 基线/峰值/恢复值、存储清理和最终判定；不得覆盖前一轮记录。

@@ -30,8 +30,15 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 1
 
 图片请求由上游直接提供 Base64，网关不拉流、不截图、不进入 Kafka 或离线任务队列。每个同步
 请求申请一个带在线上下文的算子租约；在线 ASR 在整个 WebSocket 会话期间持有并续租同一个
-实例。容量不足不排队，统一以 HTTP `200`、业务码 `50301` 返回；算子调用或响应格式错误使用
-业务码 `50000`。
+实例。VBas 人数、教师和学生三条在线路由在 Gateway 内等待平台在线容量，不把瞬时容量不足直接
+返回上游。`[http].hard_timeout_seconds` 默认 600 秒，是从请求进入 Gateway 到响应生成的单一总预算；
+图片校验、容量等待、Control 恢复、VBas 调用、退避和实例重选共同消耗该预算。A 服务客户端和
+反向代理超时建议设置为 630 至 660 秒。
+
+VBas 纯图片推理默认最多调用三次（首次加两次重试）。建连失败、连接复位、HTTP
+`429/502/503/504`、读取超时和响应协议错误会先释放原租约，再在剩余预算内重新申请实例；请求
+正文、`TaskID` 和 `ImageID` 保持不变。HTTP `400/422` 和本地图片/坐标校验错误不重试。调用方
+取消连接时会取消容量等待或下游调用并释放已取得租约。
 
 `[leases]` 同时配置请求/WebSocket TTL 和续租重试、安全余量。瞬时网络读取失败会对原
 lease_id、原实例有限重试，不申请第二个实例；安全窗口耗尽或确认租约丢失只终止对应请求或
@@ -56,8 +63,10 @@ FaceRec `image.save_person_photo` 控制，当前默认值为 `false`。
 里程碑 2B 三卡部署使用 `[http].max_connections=2048`、
 `max_keepalive_connections=512` 和有界正数 `pool_timeout_seconds`。启动时会拒绝非正数连接上限、
 超过总连接数的保活上限以及非有限或非正数的池等待超时。连接池只保证网关能够承接
-千级并发；请求是否进入算子仍由 Control Service 容量租约决定，无容量时返回业务码 `50301`，
-不能把连接池大小当成算子的声明容量。
+千级并发；请求是否进入算子仍由 Control Service 容量租约决定。单实例注册的 online pool 容量
+等于 VBas `MaxConcurrentOnlineRequests`，不包含 `MaxQueueOnlineSize`；三个实例各 24 时最多同时
+持有 72 个平台在线租约，其余请求留在 Gateway 等待。等待预算耗尽才返回 `50301`，不能把连接池
+或 VBas 内部队列大小当成平台注册容量。
 
 四个在线图片入口在申请租约前校验 Base64 语法、解码后大小和图片可解码性；
 完整解码在有界线程池中执行，不阻塞网关的异步事件循环。非图片 Data URI、损坏图片和超过
@@ -67,6 +76,14 @@ FaceRec `image.save_person_photo` 控制，当前默认值为 `false`。
 并通过 `algorithm_capacity_lease_events_total` 累计 `requested`、`acquired`、`rejected`、
 `released` 和 `release_failed`。极短请求的调度证据应同时使用实例请求增量、租约事件增量和
 0.5–1 秒峰值采样，不能只依赖 5 秒时点快照。
+
+容量恢复指标 `algorithm_capacity_recovery_events_total` 按 `capacity_pool`、`capability`、
+`instance_id`、`stage`、`exception_type` 和 `outcome` 区分等待、重试、重选、超时、失败与释放。
+结构化日志包含 trace、尝试次数、已耗时和剩余预算，但不记录 Base64、完整请求/响应或识别结果。
+
+VBas 在线最终失败仍使用 HTTP `200`，业务码含义为：`50301` 容量等待超时、`50302` Control 在
+恢复预算内持续不可用、`50201` VBas 建连或协议类错误重试耗尽、`50401` VBas 响应超时重试耗尽、
+`50000` 确定性或未分类平台错误。成功响应保持 VBas 原响应，不增加外层包装。
 
 单图 OCR 接口为 `POST /api/online/ocr/recognize`：
 

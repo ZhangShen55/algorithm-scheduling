@@ -65,6 +65,19 @@ class PlatformMetrics:
             ("capability", "outcome", "instance_id"),
             registry=self.registry,
         )
+        self._capacity_recovery_events = Counter(
+            "algorithm_capacity_recovery_events",
+            "Capacity wait and operator recovery events by stage and normalized error.",
+            (
+                "capacity_pool",
+                "capability",
+                "instance_id",
+                "stage",
+                "exception_type",
+                "outcome",
+            ),
+            registry=self.registry,
+        )
         self._operator_latency = Histogram(
             "algorithm_operator_request_latency_seconds",
             "Synchronous operator request latency.",
@@ -153,6 +166,25 @@ class PlatformMetrics:
             capability=capability,
             outcome=outcome,
             instance_id=instance_id or "none",
+        ).inc()
+
+    def record_capacity_recovery_event(
+        self,
+        *,
+        capacity_pool: str,
+        capability: str,
+        stage: str,
+        exception_type: str,
+        outcome: str,
+        instance_id: str | None = None,
+    ) -> None:
+        self._capacity_recovery_events.labels(
+            capacity_pool=capacity_pool,
+            capability=capability,
+            instance_id=instance_id or "none",
+            stage=stage,
+            exception_type=exception_type,
+            outcome=outcome,
         ).inc()
 
     def observe_operator_request(

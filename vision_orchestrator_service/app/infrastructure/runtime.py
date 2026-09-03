@@ -147,7 +147,7 @@ class VisualCommandConsumerLoop:
                 for task in done:
                     try:
                         succeeded = task.result()
-                    except BaseException as exc:
+                    except BaseException as exc:  # noqa: BLE001 - 先收敛同批任务再传播
                         failure = failure or exc
                         continue
                     if succeeded:
@@ -268,6 +268,11 @@ class VisionOrchestratorRuntime:
         lease_client = CapacityLeaseHttpClient(
             resources.http_client,
             control_service_url=settings.control.base_url,
+            metrics=(
+                self._app.state.platform_metrics
+                if self._app is not None
+                else None
+            ),
             renewal_policy=LeaseRenewalPolicy(
                 max_attempts=settings.lease_renewal.max_attempts,
                 base_delay_seconds=settings.lease_renewal.base_delay_seconds,
