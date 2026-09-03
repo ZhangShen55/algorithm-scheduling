@@ -5,9 +5,9 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+
 from packages.platform_contracts.status import Priority, TaskType
 from packages.platform_contracts.vision import VisualAnalysisCommand
-
 from vision_orchestrator_service.app.application.analyzer import CourseVisualAnalyzer
 from vision_orchestrator_service.app.core.config import VisionSettings
 from vision_orchestrator_service.app.domain.evidence import VisionEvidencePublisher
@@ -204,6 +204,40 @@ async def test_teacher_analysis_refines_hits_and_persists_empty_safe_intervals(
     assert result.artifact_count and result.artifact_count > 0
     assert Path(result.artifact_path or "").is_dir()
     assert [item[0] for item in progress] == [5, 20, 75, 95]
+
+
+@pytest.mark.asyncio
+async def test_teacher_adaptive_scan_never_resubmits_the_same_frame_identity(
+    tmp_path: Path,
+) -> None:
+    class RecordingVbas(Vbas):
+        def __init__(self) -> None:
+            self.image_ids: list[str] = []
+
+        async def analyze(self, **kwargs):
+            self.image_ids.extend(frame.image_id for frame in kwargs["frames"])
+            return await super().analyze(**kwargs)
+
+    async def report(percent: int, stage: str, reason: str) -> None:
+        del percent, stage, reason
+
+    analyzer = _analyzer(tmp_path)
+    recorder = RecordingVbas()
+    analyzer._vbas = recorder
+    await analyzer.analyze(
+        _command(
+            tmp_path,
+            TaskType.TEACHER_BEHAVIOR,
+            strategy={
+                "coarse_interval_seconds": 10,
+                "refinement_intervals_seconds": [5, 2],
+            },
+        ),
+        report,
+    )
+
+    assert len(recorder.image_ids) > 4
+    assert len(recorder.image_ids) == len(set(recorder.image_ids))
 
 
 @pytest.mark.parametrize(

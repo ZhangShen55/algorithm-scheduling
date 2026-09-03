@@ -137,7 +137,8 @@ def test_runtime_contract_defaults_match_platform_topics_and_control_port() -> N
     assert settings.media.ffmpeg_binary == "ffmpeg"
     assert settings.scan.end_frame_margin_seconds == 0.5
     assert settings.vbas.max_batch_size == 8
-    assert settings.vbas.max_concurrency == 16
+    assert settings.vbas.capacity_snapshot_refresh_seconds == 1.0
+    assert settings.vbas.transient_max_attempts == 3
 
 
 @pytest.mark.parametrize("value", (0, -1, True, 1.5, "2"))

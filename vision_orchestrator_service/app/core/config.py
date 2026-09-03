@@ -105,8 +105,17 @@ class MediaConfig(BaseModel):
 class VbasConfig(BaseModel):
     request_timeout_seconds: float = 60.0
     max_batch_size: int = 8
-    max_concurrency: int = 16
     lease_ttl_seconds: int = 30
+    capacity_snapshot_refresh_seconds: float = Field(default=1.0, gt=0)
+    transient_max_attempts: int = Field(default=3, ge=1, le=10)
+    transient_retry_base_delay_seconds: float = Field(default=0.2, ge=0, le=30)
+    transient_retry_max_delay_seconds: float = Field(default=2.0, ge=0, le=60)
+
+    @model_validator(mode="after")
+    def validate_transient_retry_delays(self) -> VbasConfig:
+        if self.transient_retry_base_delay_seconds > self.transient_retry_max_delay_seconds:
+            raise ValueError("VBas 瞬时故障基础退避不能大于最大退避")
+        return self
 
 
 class CacheConfig(BaseModel):

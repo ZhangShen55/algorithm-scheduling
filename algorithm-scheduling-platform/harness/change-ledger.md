@@ -2556,3 +2556,14 @@
   `sha256:3a14bf29765f8402efd0e4d7bb79508072ee1055813ff1bcfaa8614b3982346a` 已精确核验不存在。
 - 本次 Harness 只补充发布校正证据；本地定向/完整测试、800 次竞态断言和远端 Kafka lag/日志
   检查沿用 `vision-consumer-terminal-state-race-20260902.md`，没有扩大为新的业务压测结论。
+
+## 2026-09-03 - Vision 到 VBas 批次容量、身份和瞬时故障修复
+
+- 现场任务 `test_all_0903_11` 的学生节点 22660 因 `s-0028` 未到达任一 VBas 的瞬时传输异常
+  直接失败，旧原因只有空字符串；本次增加窄范围有限重试和异常类型/实例/attempt 上下文。
+- 教师租约审计中 `t-0000=63`、`t-0001=18`，根因为每次自适应 detector 调用都从 batch 0
+  编号。时间点缓存仍有效；修复使用帧集合稳定摘要消除不同工作的 ID 碰撞。
+- Vision 固定 `max_concurrency=16` 被动态离线容量门控替代；当前三台 VBas 各 offline=1 时
+  有效并发为 3，Control 原子租约继续负责最终实例选择和防超卖。
+- 本地证据见 `scenarios/vision-vbas-batch-dispatch-stabilization-20260903.md`。当前只达到本地
+  静态、单元和真实 Redis/Control 定向集成层级，远端镜像替换与真实课程回归尚未执行。

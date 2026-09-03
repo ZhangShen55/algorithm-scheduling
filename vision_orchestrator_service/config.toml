@@ -135,10 +135,16 @@ max_concurrent_processes = 2
 request_timeout_seconds = 60.0
 # VBas 请求允许的最大批次大小。
 max_batch_size = 8
-# 全部课程、流类型和区域轮次共享的 VBas 批次并发上限。
-max_concurrency = 16
 # 单个 VBas 批次容量租约的时长秒数，长调用会自动续租。
 lease_ttl_seconds = 30
+# 从 Control 刷新 VBas 实例离线容量快照的周期秒数；有效并发为可调度实例 offline 容量之和。
+capacity_snapshot_refresh_seconds = 1.0
+# VBas 连接、读写或超时类瞬时故障的最大总尝试次数。
+transient_max_attempts = 3
+# VBas 瞬时故障首次重试前的基础退避秒数。
+transient_retry_base_delay_seconds = 0.2
+# VBas 瞬时故障指数退避允许达到的最大秒数。
+transient_retry_max_delay_seconds = 2.0
 
 [cache]
 # 内存推理结果最大条目数。

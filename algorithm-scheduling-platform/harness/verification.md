@@ -2375,3 +2375,30 @@ VBas 仅保留四条既有 FastAPI `on_event` 弃用告警，没有测试失败�
 `c52614677e1d9ac97430f021fba8130a09c40c6f`（`feat(调度): 按实时负载均衡算子实例`），并于
 2026-08-27 推送到 `origin/codex/milestone-2b-three-gpu-deployment`。远端缓存构建、同 revision
 发布和三类真实负载必须基于包含本条证据提交在内的后续完整 SHA，不能退回 `d449dbad`。
+
+## 2026-09-03 Vision 到 VBas 批次稳定化验证
+
+本节对应
+[`scenarios/vision-vbas-batch-dispatch-stabilization-20260903.md`](scenarios/vision-vbas-batch-dispatch-stabilization-20260903.md)
+和 OpenSpec `stabilize-vision-vbas-batch-dispatch`。执行：
+
+```bash
+cd algorithm-scheduling-platform
+./.venv/bin/python -m pytest -q tests/test_vbas_batch_client.py
+./.venv/bin/python -m pytest -q \
+  tests/integration/test_unified_capacity_cross_service.py -k vision_vbas_batch
+
+cd ../vision_orchestrator_service
+../algorithm-scheduling-platform/.venv/bin/python -m pytest -q tests
+../algorithm-scheduling-platform/.venv/bin/python -m compileall -q app
+../algorithm-scheduling-platform/.venv/bin/python -c \
+  'from app.main import app; print(app.title)'
+
+cd ..
+openspec validate stabilize-vision-vbas-batch-dispatch --strict
+git diff --check
+```
+
+结果为 VBas 批次聚焦 `16 passed`、Vision 全量 `64 passed`、真实 Redis/Control/VBas 定向集成
+`1 passed, 10 deselected`，compile/import、OpenSpec strict 和 diff check 退出 0。当前证据不包含
+远端修复镜像发布或真实课程回归；该门禁完成前不得把历史 `test_all_0903_11` 失败改写为通过。

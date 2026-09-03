@@ -9,6 +9,8 @@ from typing import Any, Protocol
 
 import httpx
 from fastapi import FastAPI
+from sqlalchemy import Engine, create_engine
+
 from packages.platform_common.kafka import (
     AioKafkaConsumerAdapter,
     AioKafkaProducerAdapter,
@@ -21,7 +23,6 @@ from packages.platform_contracts.vision import (
     LegacyVisualCommandError,
     VisualAnalysisCommand,
 )
-from sqlalchemy import Engine, create_engine
 
 from ..application.analyzer import CourseVisualAnalyzer
 from ..application.events import VisualCommandProcessor
@@ -29,7 +30,12 @@ from ..core.config import VisionSettings
 from ..domain.evidence import VisionEvidenceConfig, VisionEvidencePublisher
 from .capacity import CapacityLeaseHttpClient, CapacityUnavailableError
 from .media import FFmpegFrameExtractor
-from .vbas import VbasBatchClient, VbasBatchConfig
+from .vbas import (
+    ControlVbasOfflineCapacitySource,
+    VbasBatchClient,
+    VbasBatchConfig,
+    VbasOfflineCapacityGate,
+)
 
 
 class VisualConsumer(Protocol):
@@ -271,16 +277,35 @@ class VisionOrchestratorRuntime:
             acquire_wait_timeout_seconds=settings.lease_renewal.acquire_wait_timeout_seconds,
             acquire_retry_interval_seconds=settings.lease_renewal.acquire_retry_interval_seconds,
         )
+        capacity_source = ControlVbasOfflineCapacitySource(
+            resources.http_client,
+            control_service_url=settings.control.base_url,
+            refresh_seconds=settings.vbas.capacity_snapshot_refresh_seconds,
+            request_timeout_seconds=settings.control.timeout_seconds,
+        )
+        capacity_gate = VbasOfflineCapacityGate(
+            capacity_source,
+            wait_timeout_seconds=settings.lease_renewal.acquire_wait_timeout_seconds,
+            retry_interval_seconds=settings.lease_renewal.acquire_retry_interval_seconds,
+            shutdown_event=self.stop_event,
+        )
         vbas = VbasBatchClient(
             resources.http_client,
             lease_client,
             config=VbasBatchConfig(
                 batch_size=min(settings.scan.batch_size, settings.vbas.max_batch_size),
-                max_concurrency=settings.vbas.max_concurrency,
                 lease_ttl_seconds=settings.vbas.lease_ttl_seconds,
                 request_timeout_seconds=settings.vbas.request_timeout_seconds,
                 capacity_retry_delay_seconds=settings.worker.poll_interval_seconds,
+                transient_max_attempts=settings.vbas.transient_max_attempts,
+                transient_retry_base_delay_seconds=(
+                    settings.vbas.transient_retry_base_delay_seconds
+                ),
+                transient_retry_max_delay_seconds=(
+                    settings.vbas.transient_retry_max_delay_seconds
+                ),
             ),
+            capacity_gate=capacity_gate,
             shutdown_event=self.stop_event,
         )
         extractor = FFmpegFrameExtractor(

@@ -51,6 +51,16 @@ Kafka offset，按 `worker.poll_interval_seconds` 原地重试；该等待不会
 首次 `ReadError` 恢复时原批次继续，最终确认丢失只影响当前批次，不停止其他课程。释放 404
 视为幂等成功，瞬时释放结果不确定时记录日志并由 TTL 回收。
 
+Vision 不再使用固定 VBas 批次并发。它按短周期读取 Control 的算子快照，只统计 `ONLINE`、
+模型就绪 VBas 实例的 `capacity_pools.offline`，全部课程共享的有效批次并发为这些离线容量之和。
+在三实例且每实例 `MaxConcurrentOfflineBatches=1` 时，有效并发就是 `3`；等待批次不会提前
+申请租约或调用 VBas。快照只负责本地门控，实例选择和最终并发准入仍以 Control 原子租约为准。
+
+教师粗扫、加密扫描和学生全画面/区域批次使用由流类型、区域和帧集合稳定派生的 batch ID。
+不同帧集合不再复用 `t-0000` 等审计身份，同一逻辑批次的瞬时网络重试保持同一 ID。连接、
+读写、远端协议和超时类故障按 `[vbas]` 配置有限重试，每次重新申请租约；HTTP 或业务响应
+失败不重试，最终原因始终包含异常类型、实例、批次和尝试次数。
+
 容器镜像安装 `ffmpeg/ffprobe`。本地启动前也必须保证这两个命令可执行，并确保
 PostgreSQL 迁移、Kafka 视觉主题和 Control Service 已就绪。VBas 可以后启动，但它注册且有容量前
 视觉命令只会保留 offset 等待，不会向前执行。
