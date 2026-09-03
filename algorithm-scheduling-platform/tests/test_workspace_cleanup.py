@@ -3,19 +3,22 @@ from pathlib import Path
 
 from orchestrator_service.app.application.lifecycle import TerminalWorkspaceCleaner
 
-from packages.platform_contracts.status import NodeStatus
+from packages.platform_contracts.status import NodeStatus, TaskType
 
 
 @dataclass
 class TaskRecord:
     id: int
     status: NodeStatus
+    submission_id: str = "submission-001"
+    task_type: TaskType = TaskType.PPT
 
 
 @dataclass
 class NodeRecord:
     status: NodeStatus
     artifact_path: str | None = None
+    node_code: str = "PPT_SLICE"
 
 
 class CleanupRepository:

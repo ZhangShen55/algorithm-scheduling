@@ -135,6 +135,8 @@ result_root = "/data/result"
 max_video_bytes = 10737418240
 # 任务到达终态后是否清理 /data/course 下的中间文件。
 cleanup_terminal_workspace = true
+# 周期复核已终态课程临时目录的间隔秒数，用于补偿终态事件或即时清理中断。
+cleanup_reconcile_interval_seconds = 60.0
 
 [media]
 # 建立视频下载连接的超时秒数。

@@ -751,9 +751,11 @@ async def test_processor_persists_expected_analysis_failure_and_loop_continues(
         )
     ]
     assert repository.aggregated == [7, 8]
-    event = VisualAnalysisEvent.from_bytes(producer.sent[0])
-    assert event.node_id == completed_command.node_id
-    assert event.event_type is VisualEventType.COMPLETED
+    events = [VisualAnalysisEvent.from_bytes(value) for value in producer.sent]
+    assert [(event.node_id, event.event_type) for event in events] == [
+        (failed_command.node_id, VisualEventType.FAILED),
+        (completed_command.node_id, VisualEventType.COMPLETED),
+    ]
 
     stop_event.set()
     await asyncio.wait_for(task, timeout=1)
@@ -1216,6 +1218,131 @@ async def test_completed_node_republishes_terminal_event_without_reanalysis(tmp_
     event = VisualAnalysisEvent.from_bytes(producer.sent[0])
     assert event.event_type is VisualEventType.COMPLETED
     assert "重复发布" in event.reason
+
+
+@pytest.mark.asyncio
+async def test_failed_node_republishes_terminal_event_without_reanalysis(
+    tmp_path,
+) -> None:
+    command = _command(
+        tmp_path,
+        TaskType.STUDENT_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    )
+
+    class Analyzer:
+        async def analyze(self, command, progress):
+            raise AssertionError("failed node must not be analyzed again")
+
+    class Repository:
+        def get_node(self, node_id: int) -> object:
+            return SimpleNamespace(
+                id=node_id,
+                status=NodeStatus.FAILED,
+                course_task_type_id=7,
+                updated_at=datetime.now(UTC),
+            )
+
+    class Producer:
+        def __init__(self) -> None:
+            self.sent: list[bytes] = []
+
+        async def send_and_wait(self, topic: str, value: bytes, key: bytes) -> object:
+            del topic, key
+            self.sent.append(value)
+            return object()
+
+    producer = Producer()
+    processor = VisualCommandProcessor(
+        Analyzer(),
+        Repository(),
+        producer,
+        event_topic="visual.events",
+    )
+
+    await processor.handle(command.to_bytes())
+
+    event = VisualAnalysisEvent.from_bytes(producer.sent[0])
+    assert event.event_type is VisualEventType.FAILED
+    assert "重复发布" in event.reason
+
+
+@pytest.mark.asyncio
+async def test_failed_event_publish_error_is_healed_by_command_replay(tmp_path) -> None:
+    command = _command(
+        tmp_path,
+        TaskType.TEACHER_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    )
+
+    class Analyzer:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def analyze(self, command, progress):
+            del command, progress
+            self.calls += 1
+            raise VideoFrameError("课程视频无法解码")
+
+    class Repository:
+        def __init__(self) -> None:
+            self.node = SimpleNamespace(
+                id=command.node_id,
+                status=NodeStatus.RUNNING,
+                course_task_type_id=7,
+            )
+
+        def get_node(self, node_id: int) -> object:
+            assert node_id == command.node_id
+            return self.node
+
+        def transition_node(
+            self,
+            node_id: int,
+            status: NodeStatus,
+            reason: str,
+        ) -> object:
+            del reason
+            assert node_id == command.node_id
+            self.node.status = status
+            return self.node
+
+        def aggregate_task_type_state(self, course_task_type_id: int) -> object:
+            assert course_task_type_id == 7
+            return object()
+
+    class Producer:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.sent: list[bytes] = []
+
+        async def send_and_wait(self, topic: str, value: bytes, key: bytes) -> object:
+            del topic, key
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("Kafka 暂时不可用")
+            self.sent.append(value)
+            return object()
+
+    analyzer = Analyzer()
+    repository = Repository()
+    producer = Producer()
+    processor = VisualCommandProcessor(
+        analyzer,
+        repository,
+        producer,
+        event_topic="visual.events",
+    )
+
+    with pytest.raises(RuntimeError, match="Kafka 暂时不可用"):
+        await processor.handle(command.to_bytes())
+    assert repository.node.status is NodeStatus.FAILED
+
+    await processor.handle(command.to_bytes())
+
+    assert analyzer.calls == 1
+    event = VisualAnalysisEvent.from_bytes(producer.sent[0])
+    assert event.event_type is VisualEventType.FAILED
 
 
 @pytest.mark.asyncio

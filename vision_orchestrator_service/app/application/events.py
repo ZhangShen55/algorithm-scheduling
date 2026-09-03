@@ -133,15 +133,24 @@ class VisualCommandProcessor:
         if admission.disposition is VisualCommandDisposition.STALE:
             return
         if admission.disposition is VisualCommandDisposition.TERMINAL:
-            if admission.status is not NodeStatus.COMPLETED:
+            terminal_event = _terminal_event_type(admission.status)
+            if terminal_event is None:
                 return
             await self._publish(
                 VisualAnalysisEvent.create(
                     command,
-                    event_type=VisualEventType.COMPLETED,
+                    event_type=terminal_event,
                     progress=100,
-                    stage="完成",
-                    reason="视觉分析已完成，重复发布终态事件",
+                    stage=(
+                        "完成"
+                        if terminal_event is VisualEventType.COMPLETED
+                        else "失败"
+                    ),
+                    reason=(
+                        "视觉分析已完成，重复发布终态事件"
+                        if terminal_event is VisualEventType.COMPLETED
+                        else "视觉分析已失败，重复发布终态事件"
+                    ),
                 )
             )
             return
@@ -207,6 +216,22 @@ class VisualCommandProcessor:
             }:
                 raise RuntimeError(
                     f"未知视觉失败写入结果: {failed.disposition}"
+                ) from exc
+            if (
+                failed.disposition is VisualCommandDisposition.APPLIED
+                or (
+                    failed.disposition is VisualCommandDisposition.TERMINAL
+                    and failed.status is NodeStatus.FAILED
+                )
+            ):
+                await self._publish(
+                    VisualAnalysisEvent.create(
+                        command,
+                        event_type=VisualEventType.FAILED,
+                        progress=100,
+                        stage="失败",
+                        reason=f"视觉分析失败: {exc}",
+                    )
                 )
             return
         if isinstance(analyzed, NodeResultWrite):
@@ -255,3 +280,11 @@ class VisualCommandProcessor:
             event.to_bytes(),
             key,
         )
+
+
+def _terminal_event_type(status: NodeStatus) -> VisualEventType | None:
+    if status is NodeStatus.COMPLETED:
+        return VisualEventType.COMPLETED
+    if status is NodeStatus.FAILED:
+        return VisualEventType.FAILED
+    return None

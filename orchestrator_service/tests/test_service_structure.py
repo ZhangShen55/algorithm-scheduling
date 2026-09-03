@@ -46,6 +46,7 @@ node_concurrency = 3
 [storage]
 course_root = "/tmp/course-from-toml"
 result_root = "/tmp/result-from-toml"
+cleanup_reconcile_interval_seconds = 45.0
 """.strip(),
         encoding="utf-8",
     )
@@ -62,6 +63,7 @@ result_root = "/tmp/result-from-toml"
     assert settings.kafka.max_poll_records == 8
     assert settings.worker.node_concurrency == 5
     assert settings.storage.course_root == Path("/tmp/course-from-toml")
+    assert settings.storage.cleanup_reconcile_interval_seconds == 45.0
     assert not hasattr(settings, "redis")
 
 

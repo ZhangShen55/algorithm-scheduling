@@ -5,6 +5,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Literal
 
+from packages.platform_common.config import LoggingConfig
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
@@ -12,8 +13,6 @@ from pydantic_settings import (
     SettingsConfigDict,
     TomlConfigSettingsSource,
 )
-
-from packages.platform_common.config import LoggingConfig
 
 SERVICE_ROOT = Path(__file__).resolve().parents[2]
 _config_path_override: ContextVar[Path | None] = ContextVar(
@@ -122,6 +121,7 @@ class StorageConfig(BaseModel):
     result_root: Path = Path("/data/result")
     max_video_bytes: int = Field(default=10_737_418_240, gt=0)
     cleanup_terminal_workspace: bool = True
+    cleanup_reconcile_interval_seconds: float = Field(default=60.0, gt=0)
 
 
 class MediaConfig(BaseModel):

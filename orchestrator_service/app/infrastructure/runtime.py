@@ -470,6 +470,7 @@ class OrchestratorRuntime:
                 self._run_executor,
                 executor,
                 stale_node_recovery,
+                workspace_cleaner,
             ),
             "visual_dispatcher": partial(
                 self._run_visual_dispatcher,
@@ -495,9 +496,11 @@ class OrchestratorRuntime:
         self,
         executor: NodeExecutor,
         recovery: StaleNodeRecovery | None = None,
+        workspace_cleaner: TerminalWorkspaceCleaner | None = None,
     ) -> None:
         consecutive_errors = 0
         next_recovery_at = 0.0
+        next_workspace_cleanup_at = 0.0
         while not self.stop_event.is_set():
             try:
                 loop_time = asyncio.get_running_loop().time()
@@ -506,6 +509,17 @@ class OrchestratorRuntime:
                     next_recovery_at = (
                         loop_time
                         + self.settings.worker.recovery_scan_interval_seconds
+                    )
+                if (
+                    workspace_cleaner is not None
+                    and loop_time >= next_workspace_cleanup_at
+                ):
+                    await asyncio.to_thread(
+                        workspace_cleaner.reconcile_existing_workspaces
+                    )
+                    next_workspace_cleanup_at = (
+                        loop_time
+                        + self.settings.storage.cleanup_reconcile_interval_seconds
                     )
                 executed = await executor.run_once()
             except Exception as exc:

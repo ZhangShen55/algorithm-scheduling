@@ -358,18 +358,30 @@ class VisualEventProcessor:
                     return
                 raise
             return
-        if node.status is not NodeStatus.COMPLETED:
-            raise RuntimeError("视觉终态事件早于结果持久化")
-        if task.status is NodeStatus.COMPLETED:
+        expected_status = (
+            NodeStatus.COMPLETED
+            if event.event_type is VisualEventType.COMPLETED
+            else NodeStatus.FAILED
+        )
+        if node.status is not expected_status:
+            raise RuntimeError("视觉终态事件与节点持久化状态不一致")
+        if task.status is expected_status:
             await _cleanup_workspace(self._workspace_cleaner, task.task_id)
             return
-        if task.status in {NodeStatus.FAILED, NodeStatus.CANCELLED}:
+        if task.status in TERMINAL_VISUAL_STATUSES:
             raise RuntimeError("视觉终态事件与任务类型终态不一致")
         await asyncio.to_thread(
             self._repository.aggregate_task_type_state,
             node.course_task_type_id,
         )
         await _cleanup_workspace(self._workspace_cleaner, task.task_id)
+
+
+TERMINAL_VISUAL_STATUSES = {
+    NodeStatus.COMPLETED,
+    NodeStatus.FAILED,
+    NodeStatus.CANCELLED,
+}
 
 
 class VisualEventConsumer(Protocol):

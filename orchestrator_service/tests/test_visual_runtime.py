@@ -467,6 +467,24 @@ async def test_visual_events_are_idempotent_for_progress_and_completion() -> Non
 
 
 @pytest.mark.asyncio
+async def test_failed_visual_event_triggers_terminal_workspace_cleanup() -> None:
+    repository = Repository(
+        task=replace(_task(), status=NodeStatus.FAILED),
+        running=[_node(NodeStatus.FAILED)],
+    )
+    workspace_cleaner = RecordingWorkspaceCleaner()
+    processor = VisualEventProcessor(
+        repository,
+        workspace_cleaner=workspace_cleaner,
+    )
+
+    await processor.handle(_event(VisualEventType.FAILED))
+
+    assert repository.aggregated == []
+    assert workspace_cleaner.task_ids == ["course-001"]
+
+
+@pytest.mark.asyncio
 async def test_progress_repository_error_remains_fatal_while_node_is_running() -> None:
     processor = VisualEventProcessor(ProgressFailureRepository())
 

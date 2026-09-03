@@ -186,6 +186,20 @@ class ScriptedExecutor:
         return 0
 
 
+class IdleExecutor:
+    async def run_once(self) -> int:
+        return 0
+
+
+class RecordingWorkspaceCleaner:
+    def __init__(self) -> None:
+        self.called = asyncio.Event()
+
+    def reconcile_existing_workspaces(self) -> tuple[int, int]:
+        self.called.set()
+        return 1, 1
+
+
 def _settings(tmp_path: Path) -> OrchestratorSettings:
     return OrchestratorSettings.model_validate(
         {
@@ -337,6 +351,22 @@ async def test_executor_polling_retries_transient_control_transport_errors(
     assert executor.calls >= 2
     assert runtime.stop_event.is_set() is False
     assert task.done() is False
+
+    runtime.stop_event.set()
+    await asyncio.wait_for(task, timeout=0.5)
+
+
+@pytest.mark.asyncio
+async def test_executor_periodically_reconciles_terminal_workspaces(
+    tmp_path: Path,
+) -> None:
+    runtime, _, _ = _runtime(tmp_path)
+    cleaner = RecordingWorkspaceCleaner()
+    task = asyncio.create_task(
+        runtime._run_executor(IdleExecutor(), workspace_cleaner=cleaner)
+    )
+
+    await asyncio.wait_for(cleaner.called.wait(), timeout=0.5)
 
     runtime.stop_event.set()
     await asyncio.wait_for(task, timeout=0.5)

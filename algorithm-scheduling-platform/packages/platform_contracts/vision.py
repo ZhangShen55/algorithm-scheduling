@@ -19,6 +19,7 @@ class LegacyVisualCommandError(ValueError):
 class VisualEventType(StrEnum):
     PROGRESS = "VISUAL_ANALYSIS_PROGRESS"
     COMPLETED = "VISUAL_ANALYSIS_COMPLETED"
+    FAILED = "VISUAL_ANALYSIS_FAILED"
 
 
 @dataclass(frozen=True, slots=True)

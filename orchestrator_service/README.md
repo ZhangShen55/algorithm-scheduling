@@ -66,6 +66,14 @@ ASR 只调用离线转写算子并保存完整 v1.1.8 结果和 `effective_param
 节点、算子调用和结果回写都携带该版本，重复提交相同参数复用已完成版本，参数变化保留历史
 结果并创建新版本。Orchestrator 不注册、租赁或调用 Text Analysis。
 
+课程媒体按同一次 `submission_id` 的实际消费者及时释放：`PPT_SLICE` 终态后删除
+`slides.mp4`，ASR 终态后删除 `teacher.wav`，学生行为终态后删除 `student.mp4`，ASR 与教师
+行为中本次提交实际存在的消费者全部终态后删除共享 `teacher.mp4`。成功、失败和取消均属于
+终态；一项成功、一项失败也不会继续保留教师视频。所有已请求任务类型终态且持久结果完整后，
+删除整个 `/data/course/{task_id}`，始终保留 `/data/result/{task_id}`。即时清理中断时，
+`storage.cleanup_reconcile_interval_seconds` 控制周期对账重试，未知目录没有 PostgreSQL 任务事实
+时不会删除。
+
 Outbox Publisher、Kafka Consumer 和节点执行循环已经接入应用生命周期；`/ops/readiness`
 同时报告这些后台组件的状态。健康接口只说明进程存活，不能替代 readiness、真实基础设施和
 算子契约验证。
