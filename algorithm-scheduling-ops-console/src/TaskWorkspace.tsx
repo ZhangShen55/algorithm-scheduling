@@ -41,6 +41,7 @@ const REASON_TEXT: Record<string, string> = {
   invalid_input: '输入参数不合法',
   operator_error: '算子执行失败',
   sustained_visual_change: '持续画面变化，疑似播放视频',
+  repeated_dynamic_cluster: '重复动态画面聚集，疑似播放视频',
 }
 
 type Props = { config: ConsoleConfig; source: ConsoleData['source']; autoRefresh: boolean }
