@@ -126,5 +126,30 @@ running/queued；终态后继续观察 5 分钟。恢复值超过基线 512 MiB�
   `/app/packages` manifest 生成和测试。后续构建必须使用包含该修复的新最终 SHA，不能继续使用
   `6722e28`。
 
+### 9.2 缓存构建、替换与发布门禁
+
+- 最终发布 SHA：`88f83bf067ca93687700ec23b39a094463d70142`。实际受恢复逻辑影响的镜像为
+  Vision Orchestrator 和 Online Gateway；两者均从该 SHA 的 clean checkout 构建，未使用
+  `--no-cache`，未执行 image/buildx prune。
+- 新 Vision 镜像完整 ID：
+  `sha256:f6513cc53933c2e61eec667562732cde81163a95c175cb3699a694d4f573e55a`；新 Gateway 镜像完整
+  ID：`sha256:fea1b461a6cdb28cdd8407f2692474f591b102068fc6e959c7d4445ef3ad48e4`。两者均为
+  `linux/amd64`，OCI revision 与最终 SHA 一致，容器内 compile、`app.main:app` 导入和实际
+  `/app/app`、`/app/packages` manifest 校验全部通过。
+- 新 Vision 容器完整 ID：
+  `fa0c4a4579b0d3d863d2f981f719d3dfce1b3a87dffb5eb6cd26fbfb61cebc07`；新 Gateway 容器完整
+  ID：`ea71ea2f2e59f2c42dee4bdad48ecfe8ea665af2fbb37b02d3d21fc1d4c0f449`。两者 health/readiness
+  均通过，Vision 继续使用 `worker.concurrency=16` 和 ffmpeg 并发 `6`；Gateway 使用 600 秒总预算。
+- 真实图片 `frame_000068.jpg` 经 `/online/vbas/person-count` 返回 HTTP 200、VBas
+  `ErrCode=0`。短视频 `0912-360-410-S.mp4` 的 `STUDENT_BEHAVIOR` Smoke 在约 10 秒内按
+  `10 -> 50 -> 60` 达到成功终态；结束时 Outbox、平台队列和三实例活动租约均为 0。
+- 三个 VBas 均保持 `ONLINE`、`model_ready=true`、offline 容量 1、online 容量 24。发布日志未
+  检出 Base64/Data URI。新版本门禁通过后，已按完整 ID 删除旧 Vision 镜像
+  `sha256:8e8700...`；旧 Gateway 镜像 `sha256:10f61c...` 因有两个标签，先核对无容器引用，再
+  精确解除两个标签并删除。无关镜像、数据卷、历史证据和 BuildKit 缓存均保留。
+- 原始构建、镜像 inspect、manifest、部署、Smoke、租约与清理证据位于同一 Run ID 下的
+  `build/` 和 `deploy/` 目录；首次 Smoke 因 clean checkout 不包含未跟踪图片而在发请求前失败，
+  已保留事实，并将本机同一 fixture 传至受限测试目录后成功重跑。
+
 后续每个正式 attempt 按 Run ID 继续追加原始报告路径、请求规模、完整错误分类、任务终态、实例
 分布、GPU 基线/峰值/恢复值、存储清理和最终判定；不得覆盖前一轮记录。
