@@ -3,12 +3,12 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
-import tomllib
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -30,6 +30,18 @@ def test_service_has_complete_fastapi_project_layout() -> None:
         "README.md",
     ):
         assert (SERVICE_ROOT / relative_path).is_file(), relative_path
+
+
+def test_docker_image_embeds_a_revision_bound_source_manifest() -> None:
+    dockerfile = (SERVICE_ROOT / "docker/Dockerfile").read_text(encoding="utf-8")
+
+    assert "COPY algorithm-scheduling-platform/packages /app/packages" in dockerfile
+    assert "COPY algorithm-scheduling-platform/deploy/scripts/source_manifest.py" in dockerfile
+    assert '--revision "${EXPECTED_GIT_SHA}"' in dockerfile
+    assert "--source /app/app=app" in dockerfile
+    assert "--source /app/packages=packages" in dockerfile
+    assert "--output /app/.source-manifest.json" in dockerfile
+    assert "> /app/.source-manifest.sha256" in dockerfile
 
 
 def test_canonical_entrypoint_exposes_online_routes() -> None:

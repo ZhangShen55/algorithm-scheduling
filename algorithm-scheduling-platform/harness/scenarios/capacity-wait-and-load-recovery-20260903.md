@@ -45,7 +45,7 @@ online pool 租约，内部队列不计入平台注册容量。
 - 旧 Gateway 测试收集失败；证明类型化租约异常尚不存在。
 - Vision 容量聚焦回归 `52 passed`；Vision 全量回归 `79 passed`。
 - Online Gateway 容量与路由聚焦回归 `55 passed`；纳入真实
-  `frame_000068.jpg` Smoke 后，Gateway 全量回归为 `92 passed`。
+  `frame_000068.jpg` Smoke 和镜像源码 manifest 合同后，Gateway 全量回归为 `93 passed`。
 - 平台共享租约、指标、日志、Gateway 合同聚焦回归 `47 passed`；Redis/Control 单实例 online=24
   上限 `1 passed`；Vision VBas 与三调用方跨服务租约 `2 passed`。
 - 变更 Python 文件 Ruff 通过；`mypy --strict --follow-imports=silent` 检查 8 个变更源文件通过；
@@ -108,5 +108,23 @@ running/queued；终态后继续观察 5 分钟。恢复值超过基线 512 MiB�
 
 ## 9. 执行结果
 
-待远端发布和每个正式 attempt 完成后，按 Run ID 逐项追加原始报告路径、请求规模、完整错误分类、
-任务终态、实例分布、GPU 基线/峰值/恢复值、存储清理和最终判定；不得覆盖前一轮记录。
+### 9.1 发布前快照与干净源码
+
+- Run ID：`stabilize-capacity-20260903T130714Z`。
+- 发布前原始证据：
+  `/root/workspace/.algorithm-scheduling-restricted-reports/stabilize-capacity-wait-and-load-recovery/stabilize-capacity-20260903T130714Z/release-preflight/`。
+- 该目录已保存四个平台容器与镜像完整 inspect、OCI revision、实际 `config.toml` SHA-256、健康与
+  readiness、三卡 `nvidia-smi`、磁盘和 Docker 空间、Git 状态及媒体源响应；初次误探测 Control 和
+  Orchestrator 的 `/ready` 得到 404，已原样保留，并补采正确的 `/ops/readiness` 成功事实。
+- 发布前四平台、三 VBas 和全部中间件均为 healthy；三张 GPU 可见，`/data/course`、
+  `/data/result` 可写，媒体源 `192.168.29.12:5555` 可达，根文件系统剩余约 209 GiB。
+- 服务器没有可用的 GitHub SSH 凭据，直接 fetch 失败。未修改现有运行目录，改由本机已验证仓库
+  生成 Git bundle，服务器完成 bundle 校验后建立独立 clean checkout
+  `/root/workspace/algorithm-scheduling-release-6722e28`，冻结 SHA 为
+  `6722e285d0287ac7349083ccd093d8596ae2eb5e`。
+- 发布前复核发现 Online Gateway Dockerfile 缺少源码 manifest 门禁；已补充 `/app/app` 与
+  `/app/packages` manifest 生成和测试。后续构建必须使用包含该修复的新最终 SHA，不能继续使用
+  `6722e28`。
+
+后续每个正式 attempt 按 Run ID 继续追加原始报告路径、请求规模、完整错误分类、任务终态、实例
+分布、GPU 基线/峰值/恢复值、存储清理和最终判定；不得覆盖前一轮记录。
