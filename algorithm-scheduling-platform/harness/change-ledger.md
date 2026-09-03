@@ -2565,5 +2565,6 @@
   编号。时间点缓存仍有效；修复使用帧集合稳定摘要消除不同工作的 ID 碰撞。
 - Vision 固定 `max_concurrency=16` 被动态离线容量门控替代；当前三台 VBas 各 offline=1 时
   有效并发为 3，Control 原子租约继续负责最终实例选择和防超卖。
-- 本地证据见 `scenarios/vision-vbas-batch-dispatch-stabilization-20260903.md`。当前只达到本地
-  静态、单元和真实 Redis/Control 定向集成层级，远端镜像替换与真实课程回归尚未执行。
+- 证据见 `scenarios/vision-vbas-batch-dispatch-stabilization-20260903.md`。固定 SHA
+  `0c6186cbb374db07f3a3b1a1b0be749de75a80b9` 已在 `192.168.29.11` 完成 Vision 镜像替换、
+  health/readiness 和旧容器/旧镜像精确清理；真实课程回归仍未执行。

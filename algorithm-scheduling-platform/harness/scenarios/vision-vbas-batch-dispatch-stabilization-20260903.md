@@ -9,8 +9,8 @@
 - 瞬时 VBas HTTP 传输错误的有限重试和非空原因；
 - A 服务和 VBas HTTP 路径、字段保持不变。
 
-本记录不修改 `test_all_0903_11` 的历史失败事实，不把本地测试扩写成远端新镜像已经发布，
-也不宣称修复版本已完成真实课程回归。
+本记录不修改 `test_all_0903_11` 的历史失败事实。修复镜像已发布到远端，但尚未
+完成真实课程回归，因此不宣称历史失败已通过业务验收。
 
 ## 2. 远端失败现场
 
@@ -114,9 +114,34 @@ OpenSpec strict：valid
 300 秒等待，人工中断后结果为 `1 failed, 14 passed`。该失败与本次 Vision 代码无调用关系，
 不计为本变更通过证据，也没有被删除或改写；本次使用明确的 Vision 定向集成测试作为边界。
 
-## 6. 当前判定与后续门禁
+## 6. 远端发布验证
 
-本地静态、单元和真实 Redis/Control 租约定向集成通过。修复版本尚未在 `192.168.29.11`
-构建和替换，因此历史任务失败不能声称已经远端消除。下一门禁是从固定 Git SHA 构建新的
-`vision-orchestrator-service` 镜像，确认 readiness 后重跑学生、教师任务，检查三个实例接收、
-批次 ID、瞬时重试、节点终态和旧镜像精确清理。
+2026-09-03 在 `192.168.29.11` 使用固定提交
+`0c6186cbb374db07f3a3b1a1b0be749de75a80b9` 和现有 BuildKit/pip 缓存只重建
+`vision-orchestrator-service`。目标机 GitHub Deploy Key 暂时无法鉴权，故从本地已提交分支生成
+完整 Git bundle，通过 SCP 传输后创建干净 checkout；远端 checkout 的 HEAD 和镜像 revision
+均精确等于上述 SHA。
+
+发布前三个 VBas 实例均为 `ONLINE`、`model_ready=true`、`offline=1`，且在途数为 0。
+运行配置保留现场课程并发 `worker.concurrency=16` 和 FFmpeg 并发
+`media.max_concurrent_processes=6`；旧 `vbas.max_concurrency` 已不存在，实际 VBas 有效并发由
+三实例 `offline` 容量求和得到 3。
+
+替换和清理证据：
+
+```text
+old container: d8cd1f120c8a5eaf9eb49eb4b0bd2a04e079f9730c684c27e9b72b6ced1031e5
+new container: d0aa0e65163e850eb41c45197527abb917f44768a98483737153452e4f333beb
+old image:     7e6940d496333c57b0af36efc697f9c8d3fc3db42d26d74b7abddd11c776f0d4
+new image:     a51018ad8c02d6d906e421d8e0fc7983b3abc632e1912e67976e9bbed3284d41
+```
+
+Compose 已删除旧运行容器，旧镜像在确认无容器引用后按精确 image ID 删除。新容器
+`health=healthy`，`/health` 返回 `ok`，`/ready` 的 Kafka、PostgreSQL、Control 和视觉消费循环
+全部就绪，启动日志无 `ERROR/CRITICAL` 记录。
+
+## 7. 当前判定与后续门禁
+
+本地静态、单元、真实 Redis/Control 租约定向集成和远端发布健康门禁已通过。尚待使用
+新 `task_id` 重跑学生和教师真实课程任务，检查三个 VBas 实例接收、批次 ID、瞬时重试和
+节点终态。

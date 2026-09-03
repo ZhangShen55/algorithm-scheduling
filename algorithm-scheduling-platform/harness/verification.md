@@ -2400,5 +2400,7 @@ git diff --check
 ```
 
 结果为 VBas 批次聚焦 `16 passed`、Vision 全量 `64 passed`、真实 Redis/Control/VBas 定向集成
-`1 passed, 10 deselected`，compile/import、OpenSpec strict 和 diff check 退出 0。当前证据不包含
-远端修复镜像发布或真实课程回归；该门禁完成前不得把历史 `test_all_0903_11` 失败改写为通过。
+`1 passed, 10 deselected`，compile/import、OpenSpec strict 和 diff check 退出 0。固定 SHA
+`0c6186cbb374db07f3a3b1a1b0be749de75a80b9` 已在 `192.168.29.11` 完成新镜像发布，
+新容器 `healthy`，全部 readiness 依赖就绪，旧容器和旧镜像已精确清理。当前证据仍不包含
+真实课程回归；该门禁完成前不得把历史 `test_all_0903_11` 失败改写为通过。
