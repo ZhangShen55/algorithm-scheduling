@@ -260,6 +260,48 @@ async def test_online_capacity_recovers_from_transient_control_failure() -> None
 
 
 @pytest.mark.asyncio
+async def test_online_capacity_skips_and_releases_failed_instance() -> None:
+    lease_attempts = 0
+    released: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal lease_attempts
+        if request.url.path.endswith("/release"):
+            released.append(json.loads(request.content)["lease_id"])
+            return httpx.Response(200, request=request, json={"status": "RELEASED"})
+        lease_attempts += 1
+        instance_id = "vbas-gpu0" if lease_attempts == 1 else "vbas-gpu1"
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "lease_id": f"lease-{instance_id}",
+                "instance_id": instance_id,
+                "capability": "person_count",
+                "capacity_pool": "online",
+                "service_url": f"http://{instance_id}:8981",
+                "expires_at": "2099-01-01T00:00:00Z",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = OnlineCapacityLeaseClient(
+            http,
+            control_service_url="http://control",
+            acquire_wait_timeout_seconds=1,
+            acquire_retry_interval_seconds=0.001,
+        )
+        async with client.acquire(
+            "person_count",
+            excluded_instance_ids={"vbas-gpu0"},
+        ) as lease:
+            assert lease.instance_id == "vbas-gpu1"
+
+    assert lease_attempts == 2
+    assert released == ["lease-vbas-gpu0", "lease-vbas-gpu1"]
+
+
+@pytest.mark.asyncio
 async def test_online_capacity_uses_caller_deadline() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

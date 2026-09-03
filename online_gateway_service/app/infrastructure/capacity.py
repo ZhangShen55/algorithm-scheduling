@@ -4,13 +4,13 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator
+from collections.abc import Set as AbstractSet
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 
 import httpx
-
 from packages.platform_common.lease_resilience import (
     ControlDeterministicFailureError,
     ControlTransientFailureError,
@@ -111,6 +111,7 @@ class OnlineCapacityLeaseClient:
         renew_interval_seconds: float | None = None,
         capacity_pool: str = "online",
         deadline: float | None = None,
+        excluded_instance_ids: AbstractSet[str] | None = None,
     ) -> AsyncIterator[CapacityLease]:
         interval = renew_interval_seconds or max(min(ttl_seconds / 3, 20.0), 0.1)
         if interval >= ttl_seconds:
@@ -125,6 +126,7 @@ class OnlineCapacityLeaseClient:
         if work_context is not None:
             payload["work_context"] = work_context.as_dict()
         payload["capacity_pool"] = capacity_pool
+        excluded_instances = frozenset(excluded_instance_ids or ())
         self._record_lease_event(capability=capability, outcome="requested")
         started_at = time.monotonic()
         acquire_deadline = started_at + self._acquire_wait_timeout_seconds
@@ -158,6 +160,51 @@ class OnlineCapacityLeaseClient:
                     raise InvalidControlResponseError(
                         f"Control 在线容量租约响应无效: {type(exc).__name__}"
                     ) from exc
+                if lease.instance_id in excluded_instances:
+                    release = await self._http.post(
+                        f"{self._control_service_url}/internal/operator-instances/release",
+                        json={"lease_id": lease.lease_id},
+                    )
+                    if release.status_code != 404:
+                        release.raise_for_status()
+                    self._record_lease_event(
+                        capability=capability,
+                        outcome="avoided",
+                        instance_id=lease.instance_id,
+                    )
+                    self._record_recovery_event(
+                        capacity_pool=capacity_pool,
+                        capability=capability,
+                        instance_id=lease.instance_id,
+                        stage="lease_acquire",
+                        exception_type="excluded_failed_instance",
+                        outcome="rerouted",
+                    )
+                    logger.warning(
+                        "在线容量租约跳过本请求已失败实例",
+                        extra={
+                            **(
+                                work_context.as_dict()
+                                if work_context is not None
+                                else {}
+                            ),
+                            "capability": capability,
+                            "instance_id": lease.instance_id,
+                            "stage": "lease_acquire",
+                            "exception_type": "excluded_failed_instance",
+                            "attempt": attempt,
+                            "elapsed_seconds": round(
+                                time.monotonic() - started_at, 3
+                            ),
+                            "remaining_seconds": round(
+                                max(0.0, acquire_deadline - time.monotonic()), 3
+                            ),
+                            "outcome": "rerouted",
+                        },
+                    )
+                    raise LeaseCapacityUnavailableError(
+                        f"已跳过本请求中调用失败的算子实例: {lease.instance_id}"
+                    )
                 break
             except (ControlDeterministicFailureError, InvalidControlResponseError) as exc:
                 self._record_lease_event(capability=capability, outcome="failed")

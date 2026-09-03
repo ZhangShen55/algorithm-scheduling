@@ -10,8 +10,6 @@ from uuid import uuid4
 import httpx
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError, field_validator
-
 from packages.platform_common.config import PlatformSettings
 from packages.platform_common.lease_resilience import (
     LeaseRenewalPolicy,
@@ -21,6 +19,7 @@ from packages.platform_common.lease_resilience import (
 from packages.platform_common.metrics import PlatformMetrics
 from packages.platform_common.trace import get_trace_id, new_trace_id
 from packages.platform_contracts.responses import BusinessResponse
+from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError, field_validator
 
 from ..core.config import (
     SERVICE_ROOT,
@@ -91,6 +90,7 @@ class OnlineLeaseClient(Protocol):
         renew_interval_seconds: float | None = None,
         capacity_pool: str = "online",
         deadline: float | None = None,
+        excluded_instance_ids: set[str] | frozenset[str] | None = None,
     ) -> AbstractAsyncContextManager[CapacityLease]: ...
 
 
@@ -285,6 +285,7 @@ def create_online_gateway_app(
         metrics = cast(PlatformMetrics, request.app.state.platform_metrics)
         work_context = _online_work_context(operation, trace_id=get_trace_id())
         last_call_error: _VbasRetryableCallError | None = None
+        failed_instance_ids: set[str] = set()
         for attempt in range(1, service_settings.http.operator_max_attempts + 1):
             current_instance_id = "unknown"
             attempt_started_at = time.monotonic()
@@ -295,6 +296,7 @@ def create_online_gateway_app(
                     work_context=work_context,
                     capacity_pool="online",
                     deadline=deadline,
+                    excluded_instance_ids=failed_instance_ids,
                 ) as lease:
                     current_instance_id = lease.instance_id
                     remaining = remaining_deadline_seconds(deadline)
@@ -416,6 +418,8 @@ def create_online_gateway_app(
                 )
 
             assert last_call_error is not None
+            if last_call_error.instance_id != "unknown":
+                failed_instance_ids.add(last_call_error.instance_id)
             metrics.observe_operator_request(
                 operator_code="vbas",
                 capability=capability,

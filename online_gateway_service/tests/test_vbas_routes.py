@@ -9,6 +9,8 @@ from typing import Any
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
+
 from app.api.routes import create_online_gateway_app
 from app.core.config import HttpConfig, OnlineGatewaySettings
 from app.infrastructure.capacity import (
@@ -17,7 +19,6 @@ from app.infrastructure.capacity import (
     ControlServiceUnavailableError,
     OnlineCapacityWaitTimeoutError,
 )
-from fastapi.testclient import TestClient
 
 VALID_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 
@@ -37,10 +38,12 @@ class SequentialLease:
         self._service_urls = iter(service_urls)
         self.acquired: list[str] = []
         self.released: list[str] = []
+        self.excluded: list[set[str]] = []
 
     @asynccontextmanager
     async def acquire(self, capability: str, **kwargs: object):
         assert kwargs.get("deadline") is not None
+        self.excluded.append(set(kwargs.get("excluded_instance_ids", set())))
         service_url = next(self._service_urls)
         instance_id = service_url.split("//", 1)[1].split(":", 1)[0]
         self.acquired.append(instance_id)
@@ -329,6 +332,35 @@ def test_all_vbas_routes_share_recovery_behavior(path: str) -> None:
 
     assert response.json() == {"TaskResult": []}
     assert calls == 2
+
+
+def test_vbas_retry_excludes_the_failed_instance_from_next_lease() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(503, request=request)
+        return httpx.Response(200, request=request, json={"TaskResult": []})
+
+    leases = SequentialLease(
+        ["http://vbas-gpu0:8981", "http://vbas-gpu1:8981"]
+    )
+    app = create_online_gateway_app()
+    app.state.online_lease_client = leases
+    app.state.online_http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler)
+    )
+    payload = {"ImageList": [{"ImageID": "image-1", "Data": VALID_PNG}]}
+    try:
+        with TestClient(app) as client:
+            response = client.post("/online/vbas/person-count", json=payload)
+    finally:
+        asyncio.run(app.state.online_http_client.aclose())
+
+    assert response.json() == {"TaskResult": []}
+    assert leases.excluded == [set(), {"vbas-gpu0"}]
 
 
 @pytest.mark.parametrize(

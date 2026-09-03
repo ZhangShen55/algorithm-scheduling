@@ -153,3 +153,46 @@ running/queued；终态后继续观察 5 分钟。恢复值超过基线 512 MiB�
 
 后续每个正式 attempt 按 Run ID 继续追加原始报告路径、请求规模、完整错误分类、任务终态、实例
 分布、GPU 基线/峰值/恢复值、存储清理和最终判定；不得覆盖前一轮记录。
+
+### 9.3 Control 短暂不可用故障注入
+
+- 原始证据根目录：
+  `/root/workspace/.algorithm-scheduling-restricted-reports/stabilize-capacity-wait-and-load-recovery/`。
+- 首次 5 秒 attempt `control-fault-5s-20260903T135756Z` 的业务任务实际成功，数据库节点为状态 60、
+  `attempt=1`；但验收脚本误读北向接口未暴露的节点 `attempt` 字段而退出。该 attempt 原样保留为
+  “验收脚本失败”，未覆盖或改写，并使用全新 task_id 执行正式 5 秒重跑。
+- 正式 5 秒 attempt `control-fault-5s-retry-20260903T140203Z`：任务
+  `capwait-fault-5-retry-140203` 成功；观察 50 个唯一逻辑 `work_id` 和 50 个唯一租约，不存在同一
+  `work_id` 关联多个租约或实例；Vision 记录 21 条 `control_transient_failure` 恢复事件。
+- 正式 15 秒 attempt `control-fault-15s-20260903T140531Z`：任务 `capwait-fault-15-140531`
+  成功；观察 47 个唯一逻辑 `work_id` 和 47 个唯一租约，无重复逻辑工作；Vision 记录 31 条
+  `control_transient_failure` 恢复事件。
+- 正式 30 秒 attempt `control-fault-30s-20260903T140758Z`：任务 `capwait-fault-30-140758`
+  成功；观察 44 个唯一逻辑 `work_id` 和 44 个唯一租约，无重复逻辑工作；Vision 记录 52 条
+  `control_transient_failure` 恢复事件，单个逻辑工作的最高恢复尝试序号为 19。
+- 三档任务的 PostgreSQL 节点事实均为 `STUDENT_BEHAVIOR_ANALYSIS / 60 / attempt=1 / 视觉分析完成`。
+  每档最终 Kafka lag、活动租约、reported inflight、Outbox 与平台队列均为 0，
+  `/data/course/{task_id}` 均已删除；测试前后容器 ID 与配置摘要保持一致。
+- 正确解析结果保存在每个正式 attempt 的 `task-lease-summary-v2.json`，对应的脱敏恢复原始事件保存
+  在 `vision-recovery-events-v2.jsonl`。旧的错误派生文件 `task-lease-summary.json` 保留作为脚本缺陷
+  证据，不作为验收依据。
+- 判定：5、15、30 秒三档 Control 暂时不可用均通过。该结论只覆盖 Vision 租约申请恢复，不替代后续
+  三条在线路由、在线分档、离线全量、两轮混合负载和 GPU 恢复验收。
+
+### 9.4 在线实例中断失败先行与修复
+
+- `online-person-count-fault-20260903T141924Z`、`online-person-count-fault-20260903T142025Z` 和
+  `online-person-count-fault-20260903T142130Z` 分别在请求前停止一个 VBas。由于停止完成后心跳已
+  过期，Control 正确排除了该实例，全部请求成功但没有产生算子调用重选事件；三轮均保留为“未命中
+  故障”的无效恢复 attempt，不作为通过证据。
+- `online-person-count-fault-20260903T142257Z` 在观察到目标实例存在活动在线租约后立即停止
+  `vbas-gpu0`，真实命中已获租约后的算子中断。200 个请求中 193 个成功、7 个返回业务码 `50201`，
+  Gateway 记录 88 条重选事件；其中 7 个请求的三次调用全部再次选择 `vbas-gpu0` 后耗尽。
+- 根因不是 VBas 在线容量不足，而是失败实例停止上报后 `reported_inflight=0`，在心跳 TTL 到期前
+  反而持续成为最低负载候选；旧 Gateway 没有把同一请求已失败的实例传入后续租约选择边界。
+- 修复方式：Gateway 为单个请求维护失败实例集合；租约客户端再次取得集合内实例时立即释放租约并
+  在原 600 秒总预算内继续等待其他实例，跳过动作不消耗最多三次的真实算子调用次数。该行为不修改
+  北向请求/响应或 Control 内部租约合同。
+- 本地新增失败实例排除与租约释放测试，Gateway 全量回归为 `95 passed`，严格 Mypy、Ruff、
+  compileall 和 `app.main:app` 导入通过。远端须重建 Gateway 后从人数故障档重新执行，再继续教师与
+  学生路由；本节明确记录当前失败，不给出在线恢复通过结论。
