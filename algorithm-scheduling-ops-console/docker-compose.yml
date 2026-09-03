@@ -5,9 +5,9 @@ services:
     build:
       context: .
       args:
-        VITE_CONTROL_BASE_URL: "${VITE_CONTROL_BASE_URL:-/control}"
-        VITE_GATEWAY_BASE_URL: "${VITE_GATEWAY_BASE_URL:-/gateway}"
-        VITE_GPU_BASE_URL: "${VITE_GPU_BASE_URL:-http://192.168.29.11:9400}"
+        VITE_CONTROL_BASE_URL: "${VITE_CONTROL_BASE_URL:-}"
+        VITE_GATEWAY_BASE_URL: "${VITE_GATEWAY_BASE_URL:-}"
+        VITE_GPU_BASE_URL: "${VITE_GPU_BASE_URL:-}"
     image: "${OPS_CONSOLE_IMAGE:-algorithm-scheduling-ops-console:local}"
     restart: unless-stopped
     ports:

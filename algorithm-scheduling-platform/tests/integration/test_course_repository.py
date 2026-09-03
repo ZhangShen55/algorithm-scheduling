@@ -109,6 +109,126 @@ def test_sparse_task_type_creation_is_idempotent(repository: CourseRepository) -
     assert repository.count_courses() == 1
 
 
+def test_operations_course_filters_apply_before_count_and_pagination(
+    repository: CourseRepository,
+    database_engine: Engine,
+) -> None:
+    all_types = list(TaskType)
+    full = repository.create_task_types(
+        task_id="literal_%_test_all_0903_15",
+        writes=[TaskTypeWrite(task_type=task_type) for task_type in all_types],
+    )
+    partial = repository.create_task_types(
+        task_id="test_all_0903_partial",
+        writes=[TaskTypeWrite(task_type=TaskType.PPT)],
+    )
+    for item in full:
+        repository.update_task_type_state(item.id, NodeStatus.COMPLETED, "已完成")
+    repository.update_task_type_state(
+        partial[0].id,
+        NodeStatus.RUNNING,
+        "处理中",
+    )
+    with database_engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE course_task_types
+                SET updated_at = '2026-09-03T12:00:00Z'
+                WHERE task_id = 'literal_%_test_all_0903_15'
+                """
+            )
+        )
+
+    records, total = repository.list_course_jobs(
+        offset=0,
+        limit=1,
+        task_types=tuple(all_types + [TaskType.PPT]),
+        overall_status=NodeStatus.COMPLETED,
+        updated_from=datetime(2026, 9, 3, 12, 0, tzinfo=UTC),
+        updated_to=datetime(2026, 9, 3, 12, 0, tzinfo=UTC),
+        task_id_like="literal_%",
+    )
+    running, running_total = repository.list_course_jobs(
+        offset=0,
+        limit=10,
+        task_status_type=TaskType.PPT,
+        task_status=NodeStatus.RUNNING,
+    )
+
+    assert total == 1
+    assert [item.task_id for item in records] == ["literal_%_test_all_0903_15"]
+    assert len(records[0].task_types) == 4
+    assert running_total == 1
+    assert [item.task_id for item in running] == ["test_all_0903_partial"]
+
+
+def test_operations_node_times_and_outbox_status_are_read_only_projections(
+    repository: CourseRepository,
+    database_engine: Engine,
+) -> None:
+    task_type = repository.create_task_types(
+        task_id="course-observability",
+        writes=[TaskTypeWrite(task_type=TaskType.PPT)],
+    )[0]
+    node = repository.create_node(
+        course_task_type_id=task_type.id,
+        node_code="PPT_SLICE",
+        status=NodeStatus.PENDING,
+        priority=Priority.NORMAL,
+        reason="等待处理",
+    )
+    with database_engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE task_nodes
+                SET ready_at = '2026-09-03T12:00:00Z',
+                    claimed_at = '2026-09-03T12:00:02Z',
+                    started_at = '2026-09-03T12:00:03Z',
+                    finished_at = '2026-09-03T12:01:03Z'
+                WHERE id = :node_id
+                """
+            ),
+            {"node_id": node.id},
+        )
+
+    persisted = repository.get_node(node.id)
+    pending, pending_total = repository.list_outbox_events(offset=0, limit=10)
+    claimed = repository.claim_outbox_events(1)[0]
+    publishing, _ = repository.list_outbox_events(
+        offset=0,
+        limit=10,
+        publish_status="PUBLISHING",
+    )
+    repository.mark_outbox_failed(claimed.event_id, claimed.claim_token, "broker down")
+    retrying, _ = repository.list_outbox_events(
+        offset=0,
+        limit=10,
+        publish_status="RETRY_PENDING",
+    )
+    claimed_again = repository.claim_outbox_events(1)[0]
+    repository.mark_outbox_published(
+        claimed_again.event_id,
+        claimed_again.claim_token,
+    )
+    published, _ = repository.list_outbox_events(
+        offset=0,
+        limit=10,
+        publish_status="PUBLISHED",
+    )
+
+    assert persisted.ready_at == datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
+    assert persisted.claimed_at == datetime(2026, 9, 3, 12, 0, 2, tzinfo=UTC)
+    assert persisted.started_at == datetime(2026, 9, 3, 12, 0, 3, tzinfo=UTC)
+    assert persisted.finished_at == datetime(2026, 9, 3, 12, 1, 3, tzinfo=UTC)
+    assert pending_total == 1
+    assert pending[0].publish_status == "PENDING"
+    assert publishing[0].publish_status == "PUBLISHING"
+    assert retrying[0].publish_status == "RETRY_PENDING"
+    assert published[0].publish_status == "PUBLISHED"
+
+
 def test_operations_queue_snapshot_only_counts_nodes_with_active_parent_tasks(
     repository: CourseRepository,
 ) -> None:

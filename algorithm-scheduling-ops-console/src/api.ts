@@ -1,13 +1,28 @@
-import type { ActiveLeaseResponse, CapacitySnapshot, ConsoleConfig, ConsoleData, GatewayMetrics, GpuMetrics, KafkaMetrics, OperatorInstance, QueueSnapshot, TaskDetail, TaskListResponse } from './types'
+import type { ActiveLeaseResponse, CapacitySnapshot, ConfigSource, ConnectionTestResult, ConsoleConfig, ConsoleData, GatewayMetrics, GpuMetrics, KafkaMetrics, OperatorInstance, OutboxEvent, OutboxEventFilters, OutboxEventList, QueueSnapshot, TaskCode, TaskDetail, TaskListFilters, TaskListResponse, TaskResultPage, TaskTypeDetail } from './types'
 
-const DEFAULT_CONFIG: ConsoleConfig = {
-  controlBaseUrl: import.meta.env.VITE_CONTROL_BASE_URL || '/control',
-  gatewayBaseUrl: import.meta.env.VITE_GATEWAY_BASE_URL || '/gateway',
-  gpuBaseUrl: import.meta.env.VITE_GPU_BASE_URL || 'http://192.168.29.11:9400',
+export function deploymentTemplateConfig(hostname = window.location.hostname): ConsoleConfig {
+  const host = hostname || '127.0.0.1'
+  return {
+    controlBaseUrl: `http://${host}:18100`,
+    gatewayBaseUrl: `http://${host}:18103`,
+    gpuBaseUrl: `http://${host}:9400`,
+    refreshSeconds: 10,
+    leaseRefreshSeconds: 5,
+    gpuRefreshSeconds: 5,
+  }
+}
+
+const DEPLOYMENT_CONFIG = deploymentTemplateConfig()
+const BUILD_CONFIG: ConsoleConfig = {
+  controlBaseUrl: import.meta.env.VITE_CONTROL_BASE_URL || DEPLOYMENT_CONFIG.controlBaseUrl,
+  gatewayBaseUrl: import.meta.env.VITE_GATEWAY_BASE_URL || DEPLOYMENT_CONFIG.gatewayBaseUrl,
+  gpuBaseUrl: import.meta.env.VITE_GPU_BASE_URL || DEPLOYMENT_CONFIG.gpuBaseUrl,
   refreshSeconds: 10,
   leaseRefreshSeconds: 5,
   gpuRefreshSeconds: 5,
 }
+const HAS_BUILD_CONFIG = Boolean(import.meta.env.VITE_CONTROL_BASE_URL || import.meta.env.VITE_GATEWAY_BASE_URL || import.meta.env.VITE_GPU_BASE_URL)
+const DEFAULT_CONFIG = HAS_BUILD_CONFIG ? BUILD_CONFIG : DEPLOYMENT_CONFIG
 
 const CONFIG_KEY = 'algorithm-scheduling-ops-console-config'
 const LEGACY_CONFIG_KEY = 'ops-console-config'
@@ -37,6 +52,11 @@ export function loadConsoleConfig(): ConsoleConfig {
   }
 }
 
+export function consoleConfigSource(): ConfigSource {
+  if (window.localStorage.getItem(CONFIG_KEY) || window.localStorage.getItem(LEGACY_CONFIG_KEY)) return 'browser'
+  return HAS_BUILD_CONFIG ? 'build' : 'deployment-template'
+}
+
 export function saveConsoleConfig(config: ConsoleConfig): ConsoleConfig {
   const next = {
     controlBaseUrl: cleanBaseUrl(config.controlBaseUrl, DEFAULT_CONFIG.controlBaseUrl),
@@ -50,24 +70,63 @@ export function saveConsoleConfig(config: ConsoleConfig): ConsoleConfig {
   return next
 }
 
-export function defaultConsoleConfig(): ConsoleConfig { return { ...DEFAULT_CONFIG } }
+export function defaultConsoleConfig(): ConsoleConfig { return { ...DEPLOYMENT_CONFIG } }
 
 type HttpError = Error & { status: number; payload?: unknown }
 
 async function getJson<T>(base: string, path: string): Promise<T> {
   const response = await fetch(`${base}${path}`, { headers: { Accept: 'application/json' } })
+  const text = await response.text()
+  let payload: unknown
+  try {
+    payload = text ? JSON.parse(text) : null
+  } catch {
+    const portHint = /:5174(?:\/|$)/.test(base) ? '，当前地址指向前端端口 5174，请填写后端服务端口' : ''
+    throw Object.assign(new Error(`接口返回 HTML 或非 JSON 内容${portHint}`), { status: response.status }) as HttpError
+  }
   if (!response.ok) {
-    const payload = await response.json().catch(() => undefined)
-    const error = Object.assign(new Error(`${path} ${response.status}`), { status: response.status, payload }) as HttpError
+    const detail = payload && typeof payload === 'object' && 'detail' in payload ? String((payload as { detail: unknown }).detail) : `HTTP ${response.status}`
+    const error = Object.assign(new Error(`${path}：${detail}`), { status: response.status, payload }) as HttpError
     throw error
   }
-  return response.json() as Promise<T>
+  return payload as T
 }
 
 async function getText(base: string, path: string): Promise<string> {
   const response = await fetch(`${base}${path}`, { headers: { Accept: 'text/plain' } })
   if (!response.ok) throw new Error(`${path} ${response.status}`)
   return response.text()
+}
+
+function connectionFailure(service: ConnectionTestResult['service'], reason: unknown): ConnectionTestResult {
+  const message = reason instanceof TypeError
+    ? '网络连接失败，请检查 IP、端口、服务状态或浏览器跨域配置'
+    : reason instanceof Error ? reason.message : '读取失败'
+  return { service, ok: false, message }
+}
+
+export async function testControlConnection(config: ConsoleConfig): Promise<ConnectionTestResult> {
+  try {
+    const items = await getJson<OperatorInstance[]>(cleanBaseUrl(config.controlBaseUrl, DEFAULT_CONFIG.controlBaseUrl), '/ops/operator-instances')
+    if (!Array.isArray(items)) throw new Error('Control Service JSON 格式不符合预期')
+    return { service: 'control', ok: true, message: `读取成功，发现 ${items.length} 个实例` }
+  } catch (reason) { return connectionFailure('control', reason) }
+}
+
+export async function testGatewayConnection(config: ConsoleConfig): Promise<ConnectionTestResult> {
+  try {
+    const value = await getText(cleanBaseUrl(config.gatewayBaseUrl, DEFAULT_CONFIG.gatewayBaseUrl), '/metrics')
+    if (!/^#|^[\w:]+(?:\{|\s)/m.test(value)) throw new Error('Gateway 返回内容不是 Prometheus 指标格式')
+    return { service: 'gateway', ok: true, message: 'Prometheus 指标读取成功' }
+  } catch (reason) { return connectionFailure('gateway', reason) }
+}
+
+export async function testGpuConnection(config: ConsoleConfig): Promise<ConnectionTestResult> {
+  try {
+    const value = await getJson<GpuMetrics>(cleanBaseUrl(config.gpuBaseUrl, DEFAULT_CONFIG.gpuBaseUrl), '/gpu')
+    if (!Array.isArray(value.devices)) throw new Error('GPU 指标 JSON 格式不符合预期')
+    return { service: 'gpu', ok: true, message: `读取成功，发现 ${value.devices.length} 张显卡` }
+  } catch (reason) { return connectionFailure('gpu', reason) }
 }
 
 function parseNumber(value: string | undefined): number {
@@ -188,6 +247,7 @@ export async function fetchTaskList(
   sortBy: TaskListResponse['sort_by'] = 'updated_at',
   order: TaskListResponse['order'] = 'desc',
   config = loadConsoleConfig(),
+  filters: TaskListFilters = { taskTypes: [], statusScope: 'overall' },
 ): Promise<TaskListResponse> {
   const query = new URLSearchParams({
     page: String(page),
@@ -195,7 +255,48 @@ export async function fetchTaskList(
     sort_by: sortBy,
     order,
   })
+  filters.taskTypes.forEach((taskType) => query.append('task_type', taskType))
+  if (filters.statusScope === 'overall' && filters.overallStatus !== undefined) query.set('overall_status', String(filters.overallStatus))
+  if (filters.statusScope === 'task' && filters.taskStatusType && filters.taskStatus !== undefined) {
+    query.set('task_status_type', filters.taskStatusType)
+    query.set('task_status', String(filters.taskStatus))
+  }
+  if (filters.updatedFrom) query.set('updated_from', filters.updatedFrom)
+  if (filters.updatedTo) query.set('updated_to', filters.updatedTo)
+  if (filters.taskIdLike?.trim()) query.set('task_id_like', filters.taskIdLike.trim())
   return getJson<TaskListResponse>(cleanBaseUrl(config.controlBaseUrl, DEFAULT_CONFIG.controlBaseUrl), `/ops/course-jobs?${query.toString()}`)
+}
+
+export async function fetchTaskSummary(taskId: string, config = loadConsoleConfig()): Promise<TaskListResponse['items'][number]> {
+  return getJson(cleanBaseUrl(config.controlBaseUrl, DEFAULT_CONFIG.controlBaseUrl), `/ops/course-jobs/${encodeURIComponent(taskId)}/summary`)
+}
+
+export async function fetchTaskTypeDetail(taskId: string, taskType: TaskCode, config = loadConsoleConfig()): Promise<TaskTypeDetail> {
+  return getJson(cleanBaseUrl(config.controlBaseUrl, DEFAULT_CONFIG.controlBaseUrl), `/ops/course-jobs/${encodeURIComponent(taskId)}/task-types/${taskType}`)
+}
+
+export async function fetchTaskResult(taskId: string, taskType: TaskCode, nodeCode: string, section: string, page = 1, pageSize = 20, config = loadConsoleConfig()): Promise<TaskResultPage> {
+  const query = new URLSearchParams({ node_code: nodeCode, section, page: String(page), page_size: String(pageSize) })
+  return getJson(cleanBaseUrl(config.controlBaseUrl, DEFAULT_CONFIG.controlBaseUrl), `/ops/course-jobs/${encodeURIComponent(taskId)}/task-types/${taskType}/result?${query}`)
+}
+
+export async function fetchOutboxEvents(page = 1, pageSize = 20, filters: OutboxEventFilters = {}, config = loadConsoleConfig()): Promise<OutboxEventList> {
+  const query = new URLSearchParams({ page: String(page), page_size: String(pageSize), order: filters.order || 'desc' })
+  if (filters.taskId) query.set('task_id', filters.taskId)
+  if (filters.taskIdLike) query.set('task_id_like', filters.taskIdLike)
+  if (filters.eventType) query.set('event_type', filters.eventType)
+  if (filters.publishStatus) query.set('publish_status', filters.publishStatus)
+  if (filters.createdFrom) query.set('created_from', filters.createdFrom)
+  if (filters.createdTo) query.set('created_to', filters.createdTo)
+  return getJson(cleanBaseUrl(config.controlBaseUrl, DEFAULT_CONFIG.controlBaseUrl), `/ops/kafka/events?${query}`)
+}
+
+export async function fetchTaskEvents(taskId: string, config = loadConsoleConfig()): Promise<OutboxEventList> {
+  return getJson(cleanBaseUrl(config.controlBaseUrl, DEFAULT_CONFIG.controlBaseUrl), `/ops/course-jobs/${encodeURIComponent(taskId)}/events?page_size=100&order=asc`)
+}
+
+export async function fetchOutboxEvent(eventId: string, config = loadConsoleConfig()): Promise<OutboxEvent> {
+  return getJson(cleanBaseUrl(config.controlBaseUrl, DEFAULT_CONFIG.controlBaseUrl), `/ops/kafka/events/${encodeURIComponent(eventId)}`)
 }
 
 export async function fetchActiveLeases(instanceId: string, config = loadConsoleConfig()): Promise<ActiveLeaseResponse> {

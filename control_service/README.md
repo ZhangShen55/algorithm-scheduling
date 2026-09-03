@@ -52,7 +52,17 @@ ASR 任务的 `asr_options` 会在提交时补齐为完整参数快照，按稳�
 相同参数的已完成或活动版本直接复用，参数变化创建新的执行版本；课程查询会返回当前版本
 以及 `runs` 历史摘要，旧版本结果不会被覆盖。
 
-运维控制台可通过只读接口 `GET /ops/course-jobs` 查询最新课程任务，支持 `page`、`page_size`（最多 100）、`sort_by=updated_at|created_at|task_id` 和 `order=asc|desc`。默认按最近活动时间倒序；活动时间取课程记录更新时间与任务类型最新更新时间的较大值。该接口只读数据库，不改变 A 服务课程任务接口。
+运维控制台可通过只读接口 `GET /ops/course-jobs` 查询最新课程任务，支持 `page`、`page_size`（1～100）、`sort_by=updated_at|created_at|task_id`、`order=asc|desc`、可重复的 `task_type`（AND）、`overall_status`、成对的 `task_status_type/task_status`、`updated_from/updated_to` 和字面子串 `task_id_like`。默认按最近活动时间倒序；筛选在计数和分页前完成。
+
+任务排查使用分层只读接口，避免列表和摘要一次传输 OCR、ASR、逐帧或证据长结果：
+
+- `GET /ops/course-jobs/{task_id}/summary`：课程摘要；
+- `GET /ops/course-jobs/{task_id}/task-types/{task_type}`：任务类型与节点摘要；
+- `GET /ops/course-jobs/{task_id}/task-types/{task_type}/result`：按 `node_code`、`section`、`page`、`page_size` 读取结果区块；
+- `GET /ops/course-jobs/{task_id}/events`：课程 Outbox 时间线；
+- `GET /ops/kafka/events` 与 `GET /ops/kafka/events/{event_id}`：Outbox 列表和按需 payload。
+
+节点摘要返回 `ready_at/claimed_at/started_at/finished_at`，并派生排队、启动、算子处理和节点总耗时。缺失端点时耗时为 `null`，不得用 `updated_at` 推断。Outbox 的 `PUBLISHED` 仅表示 Kafka Broker 已确认；接口不返回 `claim_token`，也不伪造 Topic、Partition 或 Offset。以上接口不改变 A 服务 `/api/course-jobs`、Outbox 写入和 Kafka envelope。
 
 ## 数据库迁移
 

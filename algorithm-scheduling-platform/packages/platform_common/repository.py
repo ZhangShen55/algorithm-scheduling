@@ -197,8 +197,10 @@ class NodeRecord:
     progress: JsonObject
     effective_params: JsonObject | None
     updated_at: datetime
+    ready_at: datetime | None = None
     claimed_at: datetime | None = None
     started_at: datetime | None = None
+    finished_at: datetime | None = None
     claimed_by: str | None = None
     claim_token: UUID | None = None
     attempt: int = 0
@@ -239,6 +241,22 @@ class OutboxStateRecord:
     last_error: str | None
     claim_token: UUID | None
     claimed_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class OutboxEventRecord:
+    event_id: UUID
+    aggregate_type: str
+    aggregate_id: str
+    event_type: str
+    payload: JsonObject
+    available_at: datetime
+    published_at: datetime | None
+    publish_attempts: int
+    last_error: str | None
+    created_at: datetime
+    claimed_at: datetime | None
+    publish_status: str = "PENDING"
 
 
 def _json(value: Any) -> str:
@@ -292,8 +310,10 @@ def _node_record(row: RowMapping) -> NodeRecord:
         progress=row["progress"] or {},
         effective_params=row["result_effective_params"],
         updated_at=row["updated_at"],
+        ready_at=row.get("ready_at"),
         claimed_at=row["claimed_at"],
         started_at=row["started_at"],
+        finished_at=row.get("finished_at"),
         claimed_by=row["claimed_by"],
         claim_token=row["claim_token"],
         attempt=int(row["attempt"]),
@@ -751,6 +771,13 @@ class CourseRepository:
         limit: int,
         sort_by: str = "updated_at",
         descending: bool = True,
+        task_types: tuple[TaskType, ...] = (),
+        overall_status: NodeStatus | None = None,
+        task_status_type: TaskType | None = None,
+        task_status: NodeStatus | None = None,
+        updated_from: datetime | None = None,
+        updated_to: datetime | None = None,
+        task_id_like: str | None = None,
     ) -> tuple[list[CourseJobSummary], int]:
         sort_columns = {
             "updated_at": "updated_at",
@@ -761,31 +788,94 @@ class CourseRepository:
             raise ValueError(f"不支持的课程任务排序字段: {sort_by}")
         direction = "DESC" if descending else "ASC"
         sort_column = sort_columns[sort_by]
+        filters: list[str] = []
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        normalized_types = tuple(dict.fromkeys(item.value for item in task_types))
+        if normalized_types:
+            filters.append(
+                """
+                (SELECT count(DISTINCT selected.task_type)
+                   FROM course_task_types AS selected
+                  WHERE selected.task_id = job_activity.task_id
+                    AND selected.task_type = ANY(CAST(:task_types AS text[])))
+                = :task_type_count
+                """
+            )
+            params["task_types"] = list(normalized_types)
+            params["task_type_count"] = len(normalized_types)
+        if overall_status is not None:
+            filters.append("job_activity.overall_status = :overall_status")
+            params["overall_status"] = overall_status.value
+        if task_status_type is not None and task_status is not None:
+            filters.append(
+                """
+                EXISTS (
+                    SELECT 1
+                    FROM course_task_types AS selected_status
+                    WHERE selected_status.task_id = job_activity.task_id
+                      AND selected_status.task_type = :task_status_type
+                      AND selected_status.status = :task_status
+                )
+                """
+            )
+            params["task_status_type"] = task_status_type.value
+            params["task_status"] = task_status.value
+        if updated_from is not None:
+            filters.append("job_activity.updated_at >= :updated_from")
+            params["updated_from"] = updated_from
+        if updated_to is not None:
+            filters.append("job_activity.updated_at <= :updated_to")
+            params["updated_to"] = updated_to
+        if task_id_like:
+            filters.append(
+                "position(lower(:task_id_like) in lower(job_activity.task_id)) > 0"
+            )
+            params["task_id_like"] = task_id_like
+        where_clause = " AND ".join(filters) if filters else "TRUE"
+        activity_cte = """
+            SELECT cj.id,
+                   cj.task_id,
+                   cj.created_at,
+                   GREATEST(
+                       cj.updated_at,
+                       COALESCE(MAX(task_type.updated_at), cj.created_at)
+                   ) AS updated_at,
+                   CASE
+                       WHEN count(task_type.id) = 0 THEN 0
+                       WHEN bool_or(task_type.status = 70) THEN 70
+                       WHEN bool_or(task_type.status = 80) THEN 80
+                       WHEN bool_or(task_type.status = 50) THEN 50
+                       WHEN count(*) FILTER (WHERE task_type.status <> 60) > 0
+                           THEN max(task_type.status) FILTER (WHERE task_type.status <> 60)
+                       ELSE 60
+                   END AS overall_status
+            FROM course_jobs AS cj
+            LEFT JOIN course_task_types AS task_type
+              ON task_type.task_id = cj.task_id
+            GROUP BY cj.id, cj.task_id, cj.created_at, cj.updated_at
+        """
         with self._engine.connect() as connection:
             total = int(
-                connection.execute(text("SELECT count(*) FROM course_jobs")).scalar_one()
+                connection.execute(
+                    text(
+                        f"""
+                        WITH job_activity AS ({activity_cte})
+                        SELECT count(*) FROM job_activity WHERE {where_clause}
+                        """
+                    ),
+                    params,
+                ).scalar_one()
             )
             rows = connection.execute(
                 text(
                     f"""
-                    WITH job_activity AS (
-                        SELECT cj.id,
-                               cj.task_id,
-                               cj.created_at,
-                               GREATEST(
-                                   cj.updated_at,
-                                   COALESCE(MAX(task_type.updated_at), cj.created_at)
-                               ) AS updated_at
-                        FROM course_jobs AS cj
-                        LEFT JOIN course_task_types AS task_type
-                          ON task_type.task_id = cj.task_id
-                        GROUP BY cj.id, cj.task_id, cj.created_at, cj.updated_at
-                    ), page_jobs AS (
+                    WITH job_activity AS ({activity_cte}), page_jobs AS (
                         SELECT id, task_id, created_at, updated_at,
                                ROW_NUMBER() OVER (
                                    ORDER BY {sort_column} {direction}, id {direction}
                                ) AS job_order
                         FROM job_activity
+                        WHERE {where_clause}
                         ORDER BY {sort_column} {direction}, id {direction}
                         LIMIT :limit OFFSET :offset
                     )
@@ -804,7 +894,7 @@ class CourseRepository:
                     ORDER BY page_jobs.job_order, task_type.id
                     """
                 ),
-                {"limit": limit, "offset": offset},
+                params,
             ).mappings()
             grouped: dict[str, CourseJobSummary] = {}
             for row in rows:
@@ -831,6 +921,52 @@ class CourseRepository:
                     )
                 grouped[row["task_id"]] = current
             return list(grouped.values()), total
+
+    def get_course_job_summary(self, task_id: str) -> CourseJobSummary | None:
+        with self._engine.connect() as connection:
+            rows = list(
+                connection.execute(
+                    text(
+                        """
+                        SELECT cj.task_id, cj.created_at,
+                               GREATEST(
+                                   cj.updated_at,
+                                   COALESCE(MAX(task_type.updated_at) OVER (), cj.created_at)
+                               ) AS updated_at,
+                               task_type.id AS task_type_id,
+                               task_type.task_type,
+                               task_type.status,
+                               task_type.priority,
+                               task_type.updated_at AS task_type_updated_at
+                        FROM course_jobs AS cj
+                        LEFT JOIN course_task_types AS task_type
+                          ON task_type.task_id = cj.task_id
+                        WHERE cj.task_id = :task_id
+                        ORDER BY task_type.id
+                        """
+                    ),
+                    {"task_id": task_id},
+                ).mappings()
+            )
+        if not rows:
+            return None
+        first = rows[0]
+        task_types = tuple(
+            CourseTaskSummary(
+                task_type=TaskType(row["task_type"]),
+                status=NodeStatus(row["status"]),
+                priority=Priority(row["priority"]),
+                updated_at=row["task_type_updated_at"],
+            )
+            for row in rows
+            if row["task_type_id"] is not None
+        )
+        return CourseJobSummary(
+            task_id=first["task_id"],
+            created_at=first["created_at"],
+            updated_at=first["updated_at"],
+            task_types=task_types,
+        )
 
     def operations_queue_snapshot(self) -> OperationsQueueSnapshot:
         with self._engine.connect() as connection:
@@ -1740,6 +1876,130 @@ class CourseRepository:
             ).rowcount
         return int(updated or 0)
 
+    def list_outbox_events(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        task_id: str | None = None,
+        task_id_like: str | None = None,
+        event_type: str | None = None,
+        publish_status: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        descending: bool = True,
+    ) -> tuple[list[OutboxEventRecord], int]:
+        filters = ["aggregate_type = 'COURSE_TASK_TYPE'"]
+        params: dict[str, Any] = {"offset": offset, "limit": limit}
+        if task_id:
+            filters.append("payload ->> 'task_id' = :task_id")
+            params["task_id"] = task_id
+        if task_id_like:
+            filters.append(
+                "position(lower(:task_id_like) in lower(payload ->> 'task_id')) > 0"
+            )
+            params["task_id_like"] = task_id_like
+        if event_type:
+            filters.append("event_type = :event_type")
+            params["event_type"] = event_type
+        status_filters = {
+            "PUBLISHED": "published_at IS NOT NULL",
+            "RETRY_PENDING": "published_at IS NULL AND last_error IS NOT NULL",
+            "PUBLISHING": (
+                "published_at IS NULL AND last_error IS NULL "
+                "AND claimed_at IS NOT NULL AND claimed_at >= now() - interval '5 minutes'"
+            ),
+            "PENDING": (
+                "published_at IS NULL AND last_error IS NULL "
+                "AND (claimed_at IS NULL OR claimed_at < now() - interval '5 minutes')"
+            ),
+        }
+        if publish_status:
+            try:
+                filters.append(status_filters[publish_status])
+            except KeyError as exc:
+                raise ValueError(f"不支持的 Outbox 发布状态: {publish_status}") from exc
+        if created_from is not None:
+            filters.append("created_at >= :created_from")
+            params["created_from"] = created_from
+        if created_to is not None:
+            filters.append("created_at <= :created_to")
+            params["created_to"] = created_to
+        where_clause = " AND ".join(filters)
+        direction = "DESC" if descending else "ASC"
+        with self._engine.connect() as connection:
+            total = int(
+                connection.execute(
+                    text(f"SELECT count(*) FROM outbox_events WHERE {where_clause}"),
+                    params,
+                ).scalar_one()
+            )
+            rows = connection.execute(
+                text(
+                    f"""
+                    SELECT event_id, aggregate_type, aggregate_id, event_type, payload,
+                           available_at, published_at, publish_attempts, last_error,
+                           created_at, claimed_at,
+                           CASE
+                               WHEN published_at IS NOT NULL THEN 'PUBLISHED'
+                               WHEN last_error IS NOT NULL THEN 'RETRY_PENDING'
+                               WHEN claimed_at IS NOT NULL
+                                AND claimed_at >= now() - interval '5 minutes'
+                                   THEN 'PUBLISHING'
+                               ELSE 'PENDING'
+                           END AS publish_status
+                    FROM outbox_events
+                    WHERE {where_clause}
+                    ORDER BY created_at {direction}, event_id {direction}
+                    LIMIT :limit OFFSET :offset
+                    """
+                ),
+                params,
+            ).mappings()
+            return [self._outbox_event_record(row) for row in rows], total
+
+    def get_outbox_event(self, event_id: UUID) -> OutboxEventRecord | None:
+        with self._engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT event_id, aggregate_type, aggregate_id, event_type, payload,
+                           available_at, published_at, publish_attempts, last_error,
+                           created_at, claimed_at,
+                           CASE
+                               WHEN published_at IS NOT NULL THEN 'PUBLISHED'
+                               WHEN last_error IS NOT NULL THEN 'RETRY_PENDING'
+                               WHEN claimed_at IS NOT NULL
+                                AND claimed_at >= now() - interval '5 minutes'
+                                   THEN 'PUBLISHING'
+                               ELSE 'PENDING'
+                           END AS publish_status
+                    FROM outbox_events
+                    WHERE event_id = :event_id
+                      AND aggregate_type = 'COURSE_TASK_TYPE'
+                    """
+                ),
+                {"event_id": event_id},
+            ).mappings().one_or_none()
+        return self._outbox_event_record(row) if row is not None else None
+
+    @staticmethod
+    def _outbox_event_record(row: RowMapping) -> OutboxEventRecord:
+        return OutboxEventRecord(
+            event_id=UUID(str(row["event_id"])),
+            aggregate_type=str(row["aggregate_type"]),
+            aggregate_id=str(row["aggregate_id"]),
+            event_type=str(row["event_type"]),
+            payload=row["payload"] or {},
+            available_at=row["available_at"],
+            published_at=row["published_at"],
+            publish_attempts=int(row["publish_attempts"]),
+            last_error=row["last_error"],
+            created_at=row["created_at"],
+            claimed_at=row["claimed_at"],
+            publish_status=str(row["publish_status"]),
+        )
+
     def claim_outbox_events(self, batch_size: int) -> list[OutboxRecord]:
         if batch_size <= 0:
             raise ValueError("Outbox 批次大小必须大于 0")
@@ -2060,7 +2320,8 @@ class CourseRepository:
                     """
                     SELECT n.id, n.course_task_type_id, n.run_id, n.node_code, n.status, n.priority,
                            n.reason, n.required_capability, n.updated_at,
-                           n.claimed_at, n.started_at, n.claimed_by, n.claim_token,
+                           n.ready_at, n.claimed_at, n.started_at, n.finished_at,
+                           n.claimed_by, n.claim_token,
                            n.attempt,
                            r.result, r.artifact_path, r.artifact_count, r.progress,
                            r.effective_params AS result_effective_params
@@ -2091,7 +2352,8 @@ class CourseRepository:
                     f"""
                     SELECT n.id, n.course_task_type_id, n.run_id, n.node_code, n.status, n.priority,
                            n.reason, n.required_capability, n.updated_at,
-                           n.claimed_at, n.started_at, n.claimed_by, n.claim_token,
+                           n.ready_at, n.claimed_at, n.started_at, n.finished_at,
+                           n.claimed_by, n.claim_token,
                            n.attempt,
                            r.result, r.artifact_path, r.artifact_count, r.progress,
                            r.effective_params AS result_effective_params

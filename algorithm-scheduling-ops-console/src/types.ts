@@ -10,6 +10,13 @@ export type ConsoleConfig = {
   gpuRefreshSeconds: number
 }
 
+export type ConfigSource = 'browser' | 'build' | 'deployment-template'
+export type ConnectionTestResult = {
+  service: 'control' | 'gateway' | 'gpu'
+  ok: boolean
+  message: string
+}
+
 export type OperatorInstance = {
   instance_id: string
   operator_code: string
@@ -91,6 +98,15 @@ export type TaskNode = {
   updated_at?: string | null
   started_at?: string | null
   finished_at?: string | null
+  ready_at?: string | null
+  claimed_at?: string | null
+  queue_wait_ms?: number | null
+  startup_ms?: number | null
+  processing_duration_ms?: number | null
+  total_duration_ms?: number | null
+  reason?: string | null
+  result_summary?: Record<string, unknown>
+  effective_params?: Record<string, unknown> | null
   error_message?: string | null
   [key: string]: unknown
 }
@@ -114,6 +130,73 @@ export type TaskListResponse = {
   total_pages: number
   sort_by: 'updated_at' | 'created_at' | 'task_id'
   order: 'asc' | 'desc'
+}
+
+export type TaskCode = 'PPT' | 'ASR' | 'TEACHER_BEHAVIOR' | 'STUDENT_BEHAVIOR'
+export type TaskListFilters = {
+  taskTypes: TaskCode[]
+  statusScope: 'overall' | 'task'
+  overallStatus?: number
+  taskStatusType?: TaskCode
+  taskStatus?: number
+  updatedFrom?: string
+  updatedTo?: string
+  taskIdLike?: string
+}
+export type TaskTypeDetail = TaskType & {
+  reason?: string
+  priority?: string
+  updated_at?: string
+  effective_params?: Record<string, unknown> | null
+  nodes: TaskNode[]
+}
+export type TaskResultPage = {
+  task_id: string
+  task_type: TaskCode
+  section: string
+  results: Array<{
+    node_code: string
+    value?: unknown
+    items?: unknown[]
+    page?: number
+    page_size?: number
+    total?: number
+    total_pages?: number
+  }>
+}
+export type OutboxPublishStatus = 'PENDING' | 'PUBLISHING' | 'RETRY_PENDING' | 'PUBLISHED'
+export type OutboxEvent = {
+  event_id: string
+  aggregate_type: string
+  aggregate_id: string
+  event_type: string
+  task_id?: string | null
+  task_type?: string | null
+  publish_status: OutboxPublishStatus
+  available_at: string
+  claimed_at?: string | null
+  published_at?: string | null
+  publish_attempts: number
+  last_error?: string | null
+  created_at: string
+  payload?: Record<string, unknown>
+}
+export type OutboxEventList = {
+  items: OutboxEvent[]
+  page: number
+  page_size: number
+  total: number
+  total_pages: number
+  order: 'asc' | 'desc'
+}
+export type OutboxEventFilters = {
+  taskId?: string
+  taskIdLike?: string
+  eventType?: string
+  publishStatus?: OutboxPublishStatus
+  createdFrom?: string
+  createdTo?: string
+  order?: 'asc' | 'desc'
 }
 
 export type GatewayMetrics = {

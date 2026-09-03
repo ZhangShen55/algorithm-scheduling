@@ -8,6 +8,7 @@ from pathlib import Path
 from secrets import compare_digest
 from typing import Annotated, Any, Literal, Protocol, cast
 from urllib.parse import urlsplit
+from uuid import UUID
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request, status
@@ -41,6 +42,7 @@ from packages.platform_common.repository import (
     CourseJobSummary,
     NodeRecord,
     OperationsQueueSnapshot,
+    OutboxEventRecord,
     TaskTypeRecord,
     TaskTypeWrite,
 )
@@ -80,7 +82,16 @@ class CourseTaskRepository(Protocol):
         limit: int,
         sort_by: str,
         descending: bool,
+        task_types: tuple[TaskType, ...] = (),
+        overall_status: NodeStatus | None = None,
+        task_status_type: TaskType | None = None,
+        task_status: NodeStatus | None = None,
+        updated_from: datetime | None = None,
+        updated_to: datetime | None = None,
+        task_id_like: str | None = None,
     ) -> tuple[list[CourseJobSummary], int]: ...
+
+    def get_course_job_summary(self, task_id: str) -> CourseJobSummary | None: ...
 
     def list_nodes(
         self,
@@ -91,6 +102,22 @@ class CourseTaskRepository(Protocol):
     def operations_queue_snapshot(self) -> OperationsQueueSnapshot: ...
 
     def list_asr_runs(self, course_task_type_id: int) -> list[AsrRunRecord]: ...
+
+    def list_outbox_events(
+        self,
+        *,
+        offset: int,
+        limit: int,
+        task_id: str | None = None,
+        task_id_like: str | None = None,
+        event_type: str | None = None,
+        publish_status: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        descending: bool = True,
+    ) -> tuple[list[OutboxEventRecord], int]: ...
+
+    def get_outbox_event(self, event_id: UUID) -> OutboxEventRecord | None: ...
 
 
 class CourseJobSubmission(BaseModel):
@@ -357,7 +384,107 @@ def _task_response(record: TaskTypeRecord) -> dict[str, Any]:
     }
 
 
-def _node_response(record: NodeRecord) -> dict[str, Any]:
+def _elapsed_ms(started_at: datetime | None, finished_at: datetime | None) -> int | None:
+    if started_at is None or finished_at is None:
+        return None
+    return max(0, round((finished_at - started_at).total_seconds() * 1000))
+
+
+def _result_summary(record: NodeRecord) -> dict[str, Any]:
+    result = record.result if isinstance(record.result, dict) else {}
+    progress = record.progress or {}
+    summary: dict[str, Any] = {
+        "completed_count": progress.get("completed_count"),
+        "total_count": progress.get("total_count"),
+    }
+    if record.node_code == "PPT_SLICE":
+        images = result.get("images") if isinstance(result.get("images"), list) else []
+        segments = (
+            result.get("dynamic_segments")
+            if isinstance(result.get("dynamic_segments"), list)
+            else []
+        )
+        summary.update(
+            {
+                "slice_count": record.artifact_count
+                if record.artifact_count is not None
+                else len(images),
+                "dynamic_segment_count": len(segments),
+                "dynamic_duration_ms": sum(
+                    max(0, int(item.get("end_ms", 0)) - int(item.get("start_ms", 0)))
+                    for item in segments
+                    if isinstance(item, dict)
+                ),
+            }
+        )
+    elif record.node_code == "PPT_OCR":
+        pages = [item for item in result.values() if isinstance(item, dict)]
+        success = sum(1 for item in pages if str(item.get("text", "")).strip())
+        failed = sum(1 for item in pages if item.get("error"))
+        summary.update(
+            {
+                "page_count": len(pages),
+                "success_count": success,
+                "empty_count": max(0, len(pages) - success - failed),
+                "failed_count": failed,
+            }
+        )
+    elif record.node_code == "ASR_TRANSCRIPTION":
+        segments = result.get("segments") if isinstance(result.get("segments"), list) else []
+        duration_seconds = 0.0
+        for item in segments:
+            if not isinstance(item, dict):
+                continue
+            try:
+                duration_seconds = max(duration_seconds, float(item.get("ed", 0)))
+            except (TypeError, ValueError):
+                continue
+        summary.update(
+            {
+                "audio_duration_seconds": duration_seconds or None,
+                "language": result.get("language"),
+                "segment_count": len(segments),
+                "text_length": len(str(result.get("text", ""))),
+                "load_audio_time_ms": result.get("load_audio_time_ms"),
+                "gpu_time_ms": result.get("gpu_time_ms"),
+            }
+        )
+    elif record.node_code == "TEACHER_BEHAVIOR_ANALYSIS":
+        summary.update(
+            {
+                "duration_seconds": result.get("duration_seconds"),
+                "analysis_quality": result.get("analysis_quality"),
+                "total_frame_count": result.get("total_frame_count"),
+                "valid_frame_count": result.get("valid_frame_count"),
+                "valid_frame_ratio": result.get("valid_frame_ratio"),
+                "writing_interval_count": len(result.get("writing_intervals") or []),
+                "sitting_interval_count": len(result.get("sitting_intervals") or []),
+                "standing_interval_count": len(result.get("standing_intervals") or []),
+                "teaching_interval_count": len(result.get("teaching_intervals") or []),
+                "evidence_count": len(result.get("evidence") or []),
+            }
+        )
+    elif record.node_code == "STUDENT_BEHAVIOR_ANALYSIS":
+        summary.update(
+            {
+                "duration_seconds": result.get("duration_seconds"),
+                "student_count": result.get("student_count"),
+                "stable_person_count": result.get("stable_person_count"),
+                "recognized_total_person_count": result.get(
+                    "recognized_total_person_count"
+                ),
+                "attendance_rate": result.get("attendance_rate"),
+                "front_occupancy_ratio": result.get("front_occupancy_ratio"),
+                "back_occupancy_ratio": result.get("back_occupancy_ratio"),
+                "sample_interval_seconds": result.get("sample_interval_seconds"),
+                "frame_count": len(result.get("frames") or []),
+                "evidence_count": len(result.get("evidence") or []),
+            }
+        )
+    return summary
+
+
+def _node_response(record: NodeRecord, *, include_result: bool = True) -> dict[str, Any]:
     response: dict[str, Any] = {
         "node_code": record.node_code,
         "status": record.status.value,
@@ -366,19 +493,148 @@ def _node_response(record: NodeRecord) -> dict[str, Any]:
         "priority": record.priority.value,
         "required_capability": record.required_capability,
         "progress": record.progress,
+        "result_summary": _result_summary(record),
         "effective_params": record.effective_params,
+        "ready_at": record.ready_at,
         "claimed_at": record.claimed_at,
         "started_at": record.started_at,
+        "finished_at": record.finished_at,
         "updated_at": record.updated_at,
+        "queue_wait_ms": _elapsed_ms(record.ready_at, record.claimed_at),
+        "startup_ms": _elapsed_ms(record.claimed_at, record.started_at),
+        "processing_duration_ms": _elapsed_ms(record.started_at, record.finished_at),
+        "total_duration_ms": _elapsed_ms(record.ready_at, record.finished_at),
         "run_id": str(record.run_id) if record.run_id is not None else None,
     }
     if record.artifact_path is not None:
         response["path"] = record.artifact_path
     if record.artifact_count is not None:
         response["count"] = record.artifact_count
-    if record.result is not None:
+    if include_result and record.result is not None:
         response["result"] = record.result
     return response
+
+
+def _task_summary_response(
+    record: TaskTypeRecord,
+    nodes: list[NodeRecord],
+) -> dict[str, Any]:
+    response = _task_response(record)
+    response["nodes"] = [
+        _node_response(node, include_result=False)
+        for node in nodes
+    ]
+    return response
+
+
+def _outbox_status(record: OutboxEventRecord) -> str:
+    return record.publish_status
+
+
+def _outbox_response(
+    record: OutboxEventRecord,
+    *,
+    include_payload: bool,
+) -> dict[str, Any]:
+    response: dict[str, Any] = {
+        "event_id": str(record.event_id),
+        "aggregate_type": record.aggregate_type,
+        "aggregate_id": record.aggregate_id,
+        "event_type": record.event_type,
+        "task_id": record.payload.get("task_id"),
+        "task_type": record.payload.get("task_type"),
+        "publish_status": _outbox_status(record),
+        "available_at": record.available_at,
+        "claimed_at": record.claimed_at,
+        "published_at": record.published_at,
+        "publish_attempts": record.publish_attempts,
+        "last_error": record.last_error,
+        "created_at": record.created_at,
+    }
+    if include_payload:
+        response["payload"] = _safe_event_payload(record.payload)
+    return response
+
+
+def _safe_event_payload(value: Any) -> Any:
+    blocked_keys = {
+        "claim_token",
+        "password",
+        "secret",
+        "token",
+        "authorization",
+        "base64",
+        "image",
+        "audio",
+        "video",
+        "media_bytes",
+    }
+    if isinstance(value, dict):
+        return {
+            str(key): _safe_event_payload(item)
+            for key, item in value.items()
+            if str(key).lower() not in blocked_keys
+        }
+    if isinstance(value, list):
+        return [_safe_event_payload(item) for item in value]
+    return value
+
+
+def _paged_result(items: list[Any], *, page: int, page_size: int) -> dict[str, Any]:
+    total = len(items)
+    start = (page - 1) * page_size
+    return {
+        "items": items[start : start + page_size],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "total_pages": (total + page_size - 1) // page_size if total else 0,
+    }
+
+
+def _result_section(
+    node: NodeRecord,
+    *,
+    section: str,
+    page: int,
+    page_size: int,
+) -> dict[str, Any]:
+    result = node.result if isinstance(node.result, dict) else {}
+    if section == "summary":
+        return {"value": _result_summary(node)}
+    if section == "parameters":
+        return {"value": node.effective_params or {}}
+    if section == "dynamic_segments":
+        items = result.get("dynamic_segments")
+    elif section == "ocr_pages":
+        items = [
+            {"page": key, **value}
+            for key, value in sorted(result.items(), key=lambda item: str(item[0]))
+            if isinstance(value, dict)
+        ]
+    elif section == "transcript":
+        return {"value": result.get("text")}
+    elif section == "segments":
+        items = result.get("segments")
+    elif section == "speed_info":
+        items = result.get("speed_info")
+    elif section == "behavior_intervals":
+        items = [
+            {"kind": key.removesuffix("_intervals"), **interval}
+            for key, intervals in result.items()
+            if key.endswith("_intervals") and isinstance(intervals, list)
+            for interval in intervals
+            if isinstance(interval, dict)
+        ]
+    elif section in {"frames", "evidence"}:
+        items = result.get(section)
+    elif section == "scan":
+        return {"value": result.get("scan") or {}}
+    else:
+        raise ValueError(f"不支持的结果区块: {section}")
+    if not isinstance(items, list):
+        items = []
+    return _paged_result(items, page=page, page_size=page_size)
 
 
 def _queried_task_response(
@@ -836,7 +1092,21 @@ def create_control_app(
             default="updated_at"
         ),
         order: Literal["asc", "desc"] = Query(default="desc"),
+        task_type: list[TaskType] | None = Query(default=None),
+        overall_status: NodeStatus | None = Query(default=None),
+        task_status_type: TaskType | None = Query(default=None),
+        task_status: NodeStatus | None = Query(default=None),
+        updated_from: datetime | None = Query(default=None),
+        updated_to: datetime | None = Query(default=None),
+        task_id_like: str | None = Query(default=None, max_length=200),
     ) -> dict[str, Any]:
+        if (task_status_type is None) != (task_status is None):
+            raise HTTPException(
+                status_code=422,
+                detail="task_status_type 与 task_status 必须同时提供",
+            )
+        if updated_from is not None and updated_to is not None and updated_from > updated_to:
+            raise HTTPException(status_code=422, detail="updated_from 不能晚于 updated_to")
         repository = _course_repository(request)
         try:
             records, total = repository.list_course_jobs(
@@ -844,7 +1114,16 @@ def create_control_app(
                 limit=page_size,
                 sort_by=sort_by,
                 descending=order == "desc",
+                task_types=tuple(task_type or ()),
+                overall_status=overall_status,
+                task_status_type=task_status_type,
+                task_status=task_status,
+                updated_from=updated_from,
+                updated_to=updated_to,
+                task_id_like=(task_id_like or "").strip() or None,
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except (RuntimeError, SQLAlchemyError) as exc:
             raise HTTPException(status_code=503, detail="任务数据库暂不可用") from exc
         total_pages = (total + page_size - 1) // page_size if total else 0
@@ -855,6 +1134,111 @@ def create_control_app(
             "total": total,
             "total_pages": total_pages,
             "sort_by": sort_by,
+            "order": order,
+        }
+
+    @app.get("/ops/course-jobs/{task_id}/summary")
+    def inspect_course_job_summary(task_id: str, request: Request) -> dict[str, Any]:
+        try:
+            record = _course_repository(request).get_course_job_summary(task_id)
+        except (RuntimeError, SQLAlchemyError) as exc:
+            raise HTTPException(status_code=503, detail="任务数据库暂不可用") from exc
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"未找到课程任务: {task_id}")
+        return _course_job_summary_response(record)
+
+    @app.get("/ops/course-jobs/{task_id}/task-types/{task_type}")
+    def inspect_course_task_type(
+        task_id: str,
+        task_type: TaskType,
+        request: Request,
+    ) -> dict[str, Any]:
+        repository = _course_repository(request)
+        try:
+            record = next(
+                (item for item in repository.list_task_types(task_id) if item.task_type is task_type),
+                None,
+            )
+            if record is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"未找到课程任务项: {task_id}/{task_type.value}",
+                )
+            nodes = repository.list_nodes(record.id, record.run_id)
+        except HTTPException:
+            raise
+        except (RuntimeError, SQLAlchemyError) as exc:
+            raise HTTPException(status_code=503, detail="任务数据库暂不可用") from exc
+        return _task_summary_response(record, nodes)
+
+    @app.get("/ops/course-jobs/{task_id}/task-types/{task_type}/result")
+    def inspect_course_task_result(
+        task_id: str,
+        task_type: TaskType,
+        request: Request,
+        node_code: str | None = Query(default=None, min_length=1, max_length=100),
+        section: str = Query(default="summary", min_length=1, max_length=100),
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=20, ge=1, le=100),
+    ) -> dict[str, Any]:
+        repository = _course_repository(request)
+        try:
+            record = next(
+                (item for item in repository.list_task_types(task_id) if item.task_type is task_type),
+                None,
+            )
+            if record is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"未找到课程任务项: {task_id}/{task_type.value}",
+                )
+            nodes = repository.list_nodes(record.id, record.run_id)
+            selected = [node for node in nodes if node_code is None or node.node_code == node_code]
+            if not selected:
+                raise HTTPException(status_code=404, detail=f"未找到任务节点: {node_code}")
+            results = [
+                {
+                    "node_code": node.node_code,
+                    **_result_section(node, section=section, page=page, page_size=page_size),
+                }
+                for node in selected
+            ]
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except (RuntimeError, SQLAlchemyError) as exc:
+            raise HTTPException(status_code=503, detail="任务数据库暂不可用") from exc
+        return {
+            "task_id": task_id,
+            "task_type": task_type.value,
+            "section": section,
+            "results": results,
+        }
+
+    @app.get("/ops/course-jobs/{task_id}/events")
+    def inspect_course_job_events(
+        task_id: str,
+        request: Request,
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=20, ge=1, le=100),
+        order: Literal["asc", "desc"] = Query(default="asc"),
+    ) -> dict[str, Any]:
+        try:
+            records, total = _course_repository(request).list_outbox_events(
+                offset=(page - 1) * page_size,
+                limit=page_size,
+                task_id=task_id,
+                descending=order == "desc",
+            )
+        except (RuntimeError, SQLAlchemyError) as exc:
+            raise HTTPException(status_code=503, detail="任务数据库暂不可用") from exc
+        return {
+            "items": [_outbox_response(item, include_payload=False) for item in records],
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": (total + page_size - 1) // page_size if total else 0,
             "order": order,
         }
 
@@ -997,6 +1381,59 @@ def create_control_app(
             "publisher_status": publisher_status,
             "sampled_at": datetime.now(timezone.utc).isoformat(),
         }
+
+    @app.get("/ops/kafka/events")
+    def inspect_kafka_events(
+        request: Request,
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=20, ge=1, le=100),
+        task_id: str | None = Query(default=None, max_length=200),
+        task_id_like: str | None = Query(default=None, max_length=200),
+        event_type: str | None = Query(default=None, max_length=200),
+        publish_status: Literal[
+            "PENDING", "PUBLISHING", "RETRY_PENDING", "PUBLISHED"
+        ]
+        | None = Query(default=None),
+        created_from: datetime | None = Query(default=None),
+        created_to: datetime | None = Query(default=None),
+        order: Literal["asc", "desc"] = Query(default="desc"),
+    ) -> dict[str, Any]:
+        if created_from is not None and created_to is not None and created_from > created_to:
+            raise HTTPException(status_code=422, detail="created_from 不能晚于 created_to")
+        try:
+            records, total = _course_repository(request).list_outbox_events(
+                offset=(page - 1) * page_size,
+                limit=page_size,
+                task_id=(task_id or "").strip() or None,
+                task_id_like=(task_id_like or "").strip() or None,
+                event_type=(event_type or "").strip() or None,
+                publish_status=publish_status,
+                created_from=created_from,
+                created_to=created_to,
+                descending=order == "desc",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except (RuntimeError, SQLAlchemyError) as exc:
+            raise HTTPException(status_code=503, detail="任务数据库暂不可用") from exc
+        return {
+            "items": [_outbox_response(item, include_payload=False) for item in records],
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": (total + page_size - 1) // page_size if total else 0,
+            "order": order,
+        }
+
+    @app.get("/ops/kafka/events/{event_id}")
+    def inspect_kafka_event(event_id: UUID, request: Request) -> dict[str, Any]:
+        try:
+            record = _course_repository(request).get_outbox_event(event_id)
+        except (RuntimeError, SQLAlchemyError) as exc:
+            raise HTTPException(status_code=503, detail="任务数据库暂不可用") from exc
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"未找到 Outbox 事件: {event_id}")
+        return _outbox_response(record, include_payload=True)
 
     @app.get("/ops/queues")
     def inspect_queues(request: Request) -> dict[str, Any]:
