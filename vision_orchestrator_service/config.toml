@@ -133,6 +133,8 @@ ffprobe_binary = "ffprobe"
 command_timeout_seconds = 60.0
 # 单容器 ffmpeg/ffprobe 进程硬上限；固定 worker 和公平排队避免长课程一次占满等待队列。
 max_concurrent_processes = 2
+# 是否将同一批等间隔时间点合并为一次 ffmpeg 连续解码；不同课程和批次仍按进程上限并行。
+batch_extraction_enabled = true
 
 [vbas]
 # VBas 单次请求超时秒数。

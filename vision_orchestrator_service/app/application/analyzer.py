@@ -89,6 +89,7 @@ class _FrameResult:
     path: Path
     counts: JsonObject
     confidences: dict[str, float]
+    positions: dict[str, tuple[tuple[float, float, float, float], ...]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,37 +277,38 @@ class CourseVisualAnalyzer:
             self._settings.scan.end_frame_margin_seconds,
         )
         await progress.report(20, "学生扫描", "正在抽取学生视频采样帧")
-        regions: dict[str, list[JsonObject] | None] = {"full": None}
-        if command.front_points:
-            regions["front"] = command.front_points
-        if command.back_point:
-            regions["back"] = command.back_point
-        inferred_regions = await self._infer_regions(
+        total = await self._infer(
             command,
             VisionStream.STUDENT,
             video_path,
             points,
-            regions=regions,
             progress=progress,
         )
-        total = inferred_regions["full"]
-        front = inferred_regions.get("front", {})
-        back = inferred_regions.get("back", {})
+        front_counts = await self._student_region_counts(
+            command,
+            video_path,
+            points,
+            total,
+            region=command.front_points,
+            identity_suffix="front",
+            progress=progress,
+        )
+        back_counts = await self._student_region_counts(
+            command,
+            video_path,
+            points,
+            total,
+            region=command.back_point,
+            identity_suffix="back",
+            progress=progress,
+        )
         await progress.report(75, "学生聚合", "正在聚合学生人数和行为结果")
         observations = [
             StudentFrameObservation(
                 detected_total=int(item.counts.get("detected_total", 0)),
                 stable_person_count=int(item.counts.get("stable_person_count", 0)),
-                front_stable_person_count=int(
-                    front.get(point, item).counts.get("stable_person_count", 0)
-                    if front
-                    else 0
-                ),
-                back_stable_person_count=int(
-                    back.get(point, item).counts.get("stable_person_count", 0)
-                    if back
-                    else 0
-                ),
+                front_stable_person_count=front_counts.get(point, 0),
+                back_stable_person_count=back_counts.get(point, 0),
             )
             for point, item in sorted(total.items())
         ]
@@ -336,6 +338,47 @@ class CourseVisualAnalyzer:
         }
         await progress.report(95, "结果持久化", "正在持久化视觉结果")
         return self._node_result(command.task_id, result, evidence)
+
+    async def _student_region_counts(
+        self,
+        command: VisualAnalysisCommand,
+        video_path: Path,
+        points: list[float],
+        full_results: dict[float, _FrameResult],
+        *,
+        region: list[JsonObject] | None,
+        identity_suffix: str,
+        progress: _MonotonicProgress,
+    ) -> dict[float, int]:
+        if not region:
+            return {}
+        if all(
+            len(item.positions.get("stable_person_count", ()))
+            >= int(item.counts.get("stable_person_count", 0))
+            for item in full_results.values()
+        ):
+            return {
+                point: _count_boxes_in_polygon(
+                    item.positions.get("stable_person_count", ()),
+                    region,
+                )
+                for point, item in full_results.items()
+            }
+
+        # 兼容不返回人员框的旧 VBas 实例；正常实例走上面的单次推理路径。
+        fallback = await self._infer(
+            command,
+            VisionStream.STUDENT,
+            video_path,
+            points,
+            region=region,
+            identity_suffix=identity_suffix,
+            progress=progress,
+        )
+        return {
+            point: int(item.counts.get("stable_person_count", 0))
+            for point, item in fallback.items()
+        }
 
     async def _infer(
         self,
@@ -390,32 +433,32 @@ class CourseVisualAnalyzer:
         pipeline_started = time.monotonic()
         first_batch_observed = False
         first_vbas_observed = False
+        total_inference_batches = len(plans) * len(regions)
+        prepared_batches = 0
+        completed_inference_batches = 0
+        vbas_waiting = False
 
-        async def report_batch(
-            completed: int,
-            total: int,
-            *,
-            inference: bool,
-        ) -> None:
+        async def report_pipeline(*, force: bool = False) -> None:
             if progress is None:
                 return
-            if completed != total and completed % progress_interval:
+            active_count = max(prepared_batches, completed_inference_batches)
+            if not force and active_count % progress_interval:
                 return
-            if inference:
-                await progress.report(
-                    60,
-                    "VBas 推理",
-                    f"正在执行 VBas 推理（已完成 {completed}/{total} batch）",
-                )
-            else:
-                await progress.report(
-                    30,
-                    "视觉抽帧",
-                    f"正在抽取采样帧（已完成 {completed}/{total} batch）",
-                )
+            denominator = len(plans) + total_inference_batches
+            completed = prepared_batches + completed_inference_batches
+            percent = 20 + int(40 * completed / denominator)
+            state = "等待 VBas 离线容量" if vbas_waiting else "抽帧与推理并行处理中"
+            await progress.report(
+                percent,
+                "视觉流水线",
+                "正在处理视觉流水线"
+                f"（抽帧 {prepared_batches}/{len(plans)} batch，"
+                f"推理 {completed_inference_batches}/{total_inference_batches} batch；"
+                f"{state}）",
+            )
 
         async def produce() -> None:
-            nonlocal first_batch_observed
+            nonlocal first_batch_observed, prepared_batches
             try:
                 for index, plan in enumerate(plans, start=1):
                     extracted = await self._frames.extract(
@@ -424,11 +467,10 @@ class CourseVisualAnalyzer:
                         video_path=video_path,
                         timestamps=list(plan.timestamps),
                     )
-                    by_timestamp = {
-                        item.timestamp_seconds: item for item in extracted
-                    }
+                    by_timestamp = {item.timestamp_seconds: item for item in extracted}
                     prepared = tuple(by_timestamp[point] for point in plan.timestamps)
                     await ready.put(_PreparedFrameBatch(plan, prepared))
+                    prepared_batches = index
                     if self._metrics is not None:
                         self._metrics.record_batch(stream.value.lower(), "prepared")
                         if not first_batch_observed:
@@ -437,28 +479,23 @@ class CourseVisualAnalyzer:
                                 stream.value.lower(),
                                 time.monotonic() - pipeline_started,
                             )
-                    await report_batch(index, len(plans), inference=False)
+                    await report_pipeline(force=index == len(plans))
             finally:
                 await ready.put(None)
 
+        await report_pipeline(force=True)
         producer = asyncio.create_task(
             produce(),
             name=f"vision-media-{command.task_id}-{stream.value.lower()}",
         )
-        total_inference_batches = len(plans) * len(regions)
-        completed_inference_batches = 0
         try:
             while True:
                 prepared = await ready.get()
                 if prepared is None:
                     break
                 for identity_suffix, region in regions.items():
-                    if progress is not None:
-                        await progress.report(
-                            45,
-                            "VBas 容量等待",
-                            "正在等待 VBas 离线容量",
-                        )
+                    vbas_waiting = True
+                    await report_pipeline(force=True)
                     frames = [
                         VbasFrame(
                             image_id=(
@@ -478,37 +515,39 @@ class CourseVisualAnalyzer:
                             stream.value.lower(),
                             time.monotonic() - pipeline_started,
                         )
-                    responses = await self._vbas.analyze(
-                        task_id=command.task_id,
-                        stream=stream,
-                        frames=frames,
-                        trace_id=str(command.command_id),
-                    )
+                    try:
+                        responses = await self._vbas.analyze(
+                            task_id=command.task_id,
+                            stream=stream,
+                            frames=frames,
+                            trace_id=str(command.command_id),
+                        )
+                    finally:
+                        vbas_waiting = False
                     for frame, response in zip(frames, responses, strict=True):
                         item = response["response"]
-                        counts, confidences = _parse_result_list(item, stream)
+                        counts, confidences, positions = _parse_result_list(
+                            item, stream
+                        )
                         parsed[identity_suffix][frame.timestamp_seconds] = _FrameResult(
                             timestamp_seconds=frame.timestamp_seconds,
                             path=frame.path,
                             counts=counts,
                             confidences=confidences,
+                            positions=positions,
                         )
                     completed_inference_batches += 1
                     if self._metrics is not None:
                         self._metrics.record_batch(stream.value.lower(), "inferred")
-                    await report_batch(
-                        completed_inference_batches,
-                        total_inference_batches,
-                        inference=True,
+                    await report_pipeline(
+                        force=completed_inference_batches == total_inference_batches
                     )
             await producer
         finally:
             if not producer.done():
                 producer.cancel()
             await asyncio.gather(producer, return_exceptions=True)
-        expected_points = {
-            point for plan in plans for point in plan.timestamps
-        }
+        expected_points = {point for plan in plans for point in plan.timestamps}
         for identity_suffix, results in parsed.items():
             if set(results) != expected_points:
                 raise RuntimeError(
@@ -601,7 +640,11 @@ def build_course_visual_analyzer(
 def _parse_result_list(
     item: object,
     stream: VisionStream,
-) -> tuple[JsonObject, dict[str, float]]:
+) -> tuple[
+    JsonObject,
+    dict[str, float],
+    dict[str, tuple[tuple[float, float, float, float], ...]],
+]:
     if not isinstance(item, dict):
         raise TypeError("VBas 单帧结果不是对象")
     status = item.get("StatusObject")
@@ -615,6 +658,7 @@ def _parse_result_list(
     )
     counts: JsonObject = {name: 0 for name in mapping.values()}
     confidences: dict[str, float] = {}
+    object_positions: dict[str, tuple[tuple[float, float, float, float], ...]] = {}
     for raw in raw_results:
         if not isinstance(raw, dict):
             continue
@@ -636,7 +680,87 @@ def _parse_result_list(
             ]
             if confidence_values:
                 confidences[name] = min(1.0, max(0.0, max(confidence_values)))
-    return counts, confidences
+            parsed_positions = tuple(
+                box
+                for position in positions
+                if isinstance(position, dict)
+                and (box := _parse_box(position)) is not None
+            )
+            if parsed_positions:
+                object_positions[name] = parsed_positions
+    return counts, confidences, object_positions
+
+
+def _parse_box(position: JsonObject) -> tuple[float, float, float, float] | None:
+    try:
+        left = float(position["LeftTopX"])
+        top = float(position["LeftTopY"])
+        right = float(position["RightBtmX"])
+        bottom = float(position["RightBtmY"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not all(math.isfinite(value) for value in (left, top, right, bottom)):
+        return None
+    if right < left or bottom < top:
+        return None
+    return left, top, right, bottom
+
+
+def _count_boxes_in_polygon(
+    boxes: tuple[tuple[float, float, float, float], ...],
+    region: list[JsonObject],
+) -> int:
+    polygon = [(float(point["X"]), float(point["Y"])) for point in region]
+    if len(polygon) < 3:
+        raise ValueError("学生区域至少需要三个坐标点")
+    return sum(
+        _point_in_polygon((left + right) / 2, (top + bottom) / 2, polygon)
+        for left, top, right, bottom in boxes
+    )
+
+
+def _point_in_polygon(
+    x: float,
+    y: float,
+    polygon: list[tuple[float, float]],
+) -> bool:
+    inside = False
+    previous_x, previous_y = polygon[-1]
+    for current_x, current_y in polygon:
+        if _point_on_segment(
+            x,
+            y,
+            previous_x,
+            previous_y,
+            current_x,
+            current_y,
+        ):
+            return True
+        crosses = (current_y > y) != (previous_y > y)
+        if crosses:
+            boundary_x = (previous_x - current_x) * (y - current_y) / (
+                previous_y - current_y
+            ) + current_x
+            if x < boundary_x:
+                inside = not inside
+        previous_x, previous_y = current_x, current_y
+    return inside
+
+
+def _point_on_segment(
+    x: float,
+    y: float,
+    left_x: float,
+    left_y: float,
+    right_x: float,
+    right_y: float,
+) -> bool:
+    cross = (x - left_x) * (right_y - left_y) - (y - left_y) * (right_x - left_x)
+    if not math.isclose(cross, 0.0, abs_tol=1e-6):
+        return False
+    return min(left_x, right_x) <= x <= max(left_x, right_x) and min(
+        left_y, right_y
+    ) <= y <= max(left_y, right_y)
 
 
 def _intervals_from_observations(

@@ -5,9 +5,11 @@ import hashlib
 import json
 import logging
 import math
+import tempfile
 from collections.abc import Awaitable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
 
 from packages.platform_common.workspace import task_workspace
@@ -88,6 +90,7 @@ class FFmpegFrameExtractor:
         ffprobe_binary: str = "ffprobe",
         command_timeout_seconds: float = 60.0,
         max_concurrent_processes: int = 2,
+        batch_extraction_enabled: bool = True,
         metrics: VisionPipelineMetrics | None = None,
     ) -> None:
         if command_timeout_seconds <= 0:
@@ -103,6 +106,7 @@ class FFmpegFrameExtractor:
         self._ffprobe_binary = ffprobe_binary
         self._command_timeout_seconds = command_timeout_seconds
         self._max_concurrent_processes = max_concurrent_processes
+        self._batch_extraction_enabled = batch_extraction_enabled
         self._process_slots = asyncio.Semaphore(max_concurrent_processes)
         self._metrics = metrics
         self._active_processes: set[asyncio.subprocess.Process] = set()
@@ -150,6 +154,30 @@ class FFmpegFrameExtractor:
             raise ValueError("视觉抽帧时间点必须是非负有限值")
         if not unique_points:
             return []
+        if (
+            self._batch_extraction_enabled
+            and _uniform_interval(unique_points) is not None
+        ):
+            cached = [self._cached_frame(output_root, point) for point in unique_points]
+            if all(item is not None for item in cached):
+                return [item for item in cached if item is not None]
+            if all(item is None for item in cached):
+                try:
+                    return await self._extract_uniform_batch_limited(
+                        resolved,
+                        output_root,
+                        unique_points,
+                    )
+                except VideoFrameError as exc:
+                    logger.warning(
+                        "批量抽帧失败，回退为并行单帧抽取",
+                        extra={
+                            "task_id": task_id,
+                            "stream": stream.value.lower(),
+                            "frame_count": len(unique_points),
+                            "exception_type": type(exc).__name__,
+                        },
+                    )
         results: list[ExtractedFrame | None] = [None] * len(unique_points)
         point_iterator = iter(enumerate(unique_points))
 
@@ -183,6 +211,69 @@ class FFmpegFrameExtractor:
         if any(item is None for item in results):
             raise VideoFrameError("视觉抽帧结果不完整")
         return [item for item in results if item is not None]
+
+    async def _extract_uniform_batch_limited(
+        self,
+        video_path: Path,
+        output_root: Path,
+        timestamps: list[float],
+    ) -> list[ExtractedFrame]:
+        async with self._process_slot():
+            return await self._extract_uniform_batch(
+                video_path,
+                output_root,
+                timestamps,
+            )
+
+    async def _extract_uniform_batch(
+        self,
+        video_path: Path,
+        output_root: Path,
+        timestamps: list[float],
+    ) -> list[ExtractedFrame]:
+        interval = _uniform_interval(timestamps)
+        if interval is None:
+            raise VideoFrameError("批量抽帧时间点必须等间隔且至少包含两帧")
+        with tempfile.TemporaryDirectory(
+            prefix=".frame-batch-", dir=output_root
+        ) as raw:
+            temporary_root = Path(raw)
+            pattern = temporary_root / "frame-%06d.jpg"
+            await self._run(
+                [
+                    self._ffmpeg_binary,
+                    "-nostdin",
+                    "-loglevel",
+                    "error",
+                    "-ss",
+                    f"{timestamps[0]:.6f}",
+                    "-i",
+                    str(video_path),
+                    "-vf",
+                    f"fps=fps=1/{interval:.6f}:start_time=0:round=near",
+                    "-frames:v",
+                    str(len(timestamps)),
+                    "-q:v",
+                    "2",
+                    "-start_number",
+                    "0",
+                    "-y",
+                    str(pattern),
+                ]
+            )
+            generated = sorted(temporary_root.glob("frame-*.jpg"))
+            if len(generated) != len(timestamps):
+                raise VideoFrameError(
+                    f"批量抽帧结果数量不完整: {len(generated)}/{len(timestamps)}"
+                )
+            results: list[ExtractedFrame] = []
+            for timestamp_seconds, source in zip(timestamps, generated, strict=True):
+                if source.stat().st_size <= 0:
+                    raise VideoFrameError("批量抽帧生成了空图片")
+                target = self._frame_path(output_root, timestamp_seconds)
+                source.replace(target)
+                results.append(self._frame_result(target, timestamp_seconds))
+            return results
 
     async def _extract_one_limited(
         self,
@@ -270,8 +361,7 @@ class FFmpegFrameExtractor:
         output_root: Path,
         timestamp_seconds: float,
     ) -> ExtractedFrame:
-        timestamp_ms = round(timestamp_seconds * 1000)
-        target = output_root / f"frame-{timestamp_ms:012d}.jpg"
+        target = self._frame_path(output_root, timestamp_seconds)
         if not target.is_file() or target.stat().st_size <= 0:
             partial = output_root / f".{target.stem}.part.jpg"
             try:
@@ -300,9 +390,28 @@ class FFmpegFrameExtractor:
                 partial.replace(target)
             finally:
                 partial.unlink(missing_ok=True)
+        return self._frame_result(target, timestamp_seconds)
+
+    @staticmethod
+    def _frame_path(output_root: Path, timestamp_seconds: float) -> Path:
+        timestamp_ms = round(timestamp_seconds * 1000)
+        return output_root / f"frame-{timestamp_ms:012d}.jpg"
+
+    def _cached_frame(
+        self,
+        output_root: Path,
+        timestamp_seconds: float,
+    ) -> ExtractedFrame | None:
+        target = self._frame_path(output_root, timestamp_seconds)
+        if not target.is_file() or target.stat().st_size <= 0:
+            return None
+        return self._frame_result(target, timestamp_seconds)
+
+    @staticmethod
+    def _frame_result(target: Path, timestamp_seconds: float) -> ExtractedFrame:
         return ExtractedFrame(
             timestamp_seconds=timestamp_seconds,
-            frame_index=timestamp_ms,
+            frame_index=round(timestamp_seconds * 1000),
             path=target,
         )
 
@@ -363,3 +472,22 @@ class FFmpegFrameExtractor:
             "视觉媒体子进程已回收",
             extra={"pid": process.pid, "outcome": "terminated"},
         )
+
+
+def _uniform_interval(points: list[float]) -> float | None:
+    if len(points) < 2:
+        return None
+    interval = points[1] - points[0]
+    if interval <= 0:
+        return None
+    if any(
+        not math.isclose(
+            right - left,
+            interval,
+            rel_tol=0,
+            abs_tol=1e-6,
+        )
+        for left, right in pairwise(points)
+    ):
+        return None
+    return interval

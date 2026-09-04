@@ -57,19 +57,20 @@ async def test_ffmpeg_extractor_reads_shared_local_video_and_reuses_frame(
         task_id="course-media",
         stream=VisionStream.TEACHER,
         video_path=video,
-        timestamps=[0.0],
+        timestamps=[0.0, 0.25, 0.5],
     )
     second = await extractor.extract(
         task_id="course-media",
         stream=VisionStream.TEACHER,
         video_path=video,
-        timestamps=[0.0],
+        timestamps=[0.0, 0.25, 0.5],
     )
 
     assert duration >= 1
-    assert first[0].path == second[0].path
-    assert first[0].path.is_file()
-    assert first[0].path.is_relative_to(task_root / "vision/t")
+    assert len(first) == len(second) == 3
+    assert [item.path for item in first] == [item.path for item in second]
+    assert all(item.path.is_file() for item in first)
+    assert all(item.path.is_relative_to(task_root / "vision/t") for item in first)
 
 
 @pytest.mark.asyncio
@@ -95,6 +96,7 @@ async def test_extractor_limits_concurrent_ffmpeg_processes(
     extractor = FFmpegFrameExtractor(
         course_root=course_root,
         max_concurrent_processes=2,
+        batch_extraction_enabled=False,
     )
     active = 0
     maximum = 0
@@ -135,6 +137,73 @@ async def test_extractor_limits_concurrent_ffmpeg_processes(
     )
 
     assert len(teacher_frames) + len(student_frames) == 8
+    assert maximum == 2
+
+
+@pytest.mark.asyncio
+async def test_uniform_batch_commands_run_in_parallel_across_courses(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    course_root = tmp_path / "course"
+    first_root = course_root / "course-a"
+    second_root = course_root / "course-b"
+    first_root.mkdir(parents=True)
+    second_root.mkdir(parents=True)
+    first_video = first_root / "teacher.mp4"
+    second_video = second_root / "teacher.mp4"
+    first_video.write_bytes(b"fixture")
+    second_video.write_bytes(b"fixture")
+    extractor = FFmpegFrameExtractor(
+        course_root=course_root,
+        max_concurrent_processes=2,
+    )
+    active = 0
+    maximum = 0
+
+    async def fake_extract_uniform_batch(
+        video_path: Path,
+        output_root: Path,
+        timestamps: list[float],
+    ) -> list[ExtractedFrame]:
+        del video_path
+        nonlocal active, maximum
+        active += 1
+        maximum = max(maximum, active)
+        try:
+            await asyncio.sleep(0.03)
+            return [
+                ExtractedFrame(
+                    point,
+                    round(point * 1000),
+                    output_root / f"frame-{point}.jpg",
+                )
+                for point in timestamps
+            ]
+        finally:
+            active -= 1
+
+    monkeypatch.setattr(
+        extractor,
+        "_extract_uniform_batch",
+        fake_extract_uniform_batch,
+    )
+
+    await asyncio.gather(
+        extractor.extract(
+            task_id="course-a",
+            stream=VisionStream.TEACHER,
+            video_path=first_video,
+            timestamps=[0.0, 10.0, 20.0, 30.0],
+        ),
+        extractor.extract(
+            task_id="course-b",
+            stream=VisionStream.TEACHER,
+            video_path=second_video,
+            timestamps=[0.0, 10.0, 20.0, 30.0],
+        ),
+    )
+
     assert maximum == 2
 
 
@@ -185,6 +254,7 @@ async def test_short_course_starts_before_long_course_finishes(
     extractor = FFmpegFrameExtractor(
         course_root=course_root,
         max_concurrent_processes=2,
+        batch_extraction_enabled=False,
     )
     started: list[float] = []
 
@@ -261,6 +331,7 @@ async def test_many_courses_keep_media_waiters_and_processes_bounded(
     extractor = FFmpegFrameExtractor(
         course_root=course_root,
         max_concurrent_processes=2,
+        batch_extraction_enabled=False,
     )
 
     async def fake_extract_one(
@@ -307,6 +378,7 @@ async def test_probe_is_not_starved_by_long_frame_extraction(
     extractor = FFmpegFrameExtractor(
         course_root=course_root,
         max_concurrent_processes=2,
+        batch_extraction_enabled=False,
     )
     order: list[str] = []
 

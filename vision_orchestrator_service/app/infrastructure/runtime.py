@@ -485,6 +485,7 @@ class VisionOrchestratorRuntime:
             ffprobe_binary=settings.media.ffprobe_binary,
             command_timeout_seconds=settings.media.command_timeout_seconds,
             max_concurrent_processes=settings.media.max_concurrent_processes,
+            batch_extraction_enabled=settings.media.batch_extraction_enabled,
             metrics=self._pipeline_metrics,
         )
         evidence = VisionEvidencePublisher(

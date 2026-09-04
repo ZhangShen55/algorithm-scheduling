@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
-
 from packages.platform_contracts.status import Priority, TaskType
 from packages.platform_contracts.vision import VisualAnalysisCommand
+
 from vision_orchestrator_service.app.application.analyzer import CourseVisualAnalyzer
 from vision_orchestrator_service.app.core.config import VisionSettings
 from vision_orchestrator_service.app.domain.evidence import VisionEvidencePublisher
@@ -88,10 +89,9 @@ class Vbas:
                     _object(204, int(not writing)),
                 ]
             else:
-                region_count = 8 if frame.points else 0
                 result_list = [
-                    _object(100, 30),
-                    _object(101, region_count or 24),
+                    _object(100, 30, positions=_positions(30, front_count=10)),
+                    _object(101, 24, positions=_positions(24, front_count=8)),
                     _object(201, 1),
                     _object(202, 2),
                     _object(205, 4),
@@ -111,12 +111,30 @@ class Vbas:
         return results
 
 
-def _object(object_type: int, count: int) -> dict[str, object]:
+def _object(
+    object_type: int,
+    count: int,
+    *,
+    positions: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
     return {
         "ObjectType": object_type,
         "ObjectCount": count,
-        "ObjectPostList": ([{"Confidence": 0.9}] if count else []),
+        "ObjectPostList": positions or ([{"Confidence": 0.9}] if count else []),
     }
+
+
+def _positions(count: int, *, front_count: int) -> list[dict[str, object]]:
+    return [
+        {
+            "LeftTopX": 10 if index < front_count else 70,
+            "LeftTopY": 10,
+            "RightBtmX": 20 if index < front_count else 80,
+            "RightBtmY": 20,
+            "Confidence": 0.9,
+        }
+        for index in range(count)
+    ]
 
 
 def _command(
@@ -140,7 +158,16 @@ def _command(
         claim_token=UUID("00000000-0000-0000-0000-000000000031"),
         strategy=strategy,
         student_count=38 if task_type is TaskType.STUDENT_BEHAVIOR else None,
-        front_points=([{"X": 0, "Y": 0}] if task_type is TaskType.STUDENT_BEHAVIOR else None),
+        front_points=(
+            [
+                {"X": 0, "Y": 0},
+                {"X": 50, "Y": 0},
+                {"X": 50, "Y": 50},
+                {"X": 0, "Y": 50},
+            ]
+            if task_type is TaskType.STUDENT_BEHAVIOR
+            else None
+        ),
         back_point=None,
     )
 
@@ -207,9 +234,9 @@ async def test_teacher_analysis_refines_hits_and_persists_empty_safe_intervals(
     assert [item[0] for item in progress] == sorted(item[0] for item in progress)
     assert progress[0] == (5, "视频校验", "正在校验本地视频")
     assert any(item[2] == "正在探测视频时长" for item in progress)
-    assert any("正在抽取采样帧" in item[2] for item in progress)
-    assert any(item[2] == "正在等待 VBas 离线容量" for item in progress)
-    assert any("正在执行 VBas 推理" in item[2] for item in progress)
+    assert any("抽帧" in item[2] for item in progress)
+    assert any("等待 VBas 离线容量" in item[2] for item in progress)
+    assert any("推理" in item[2] for item in progress)
     assert progress[-1] == (95, "结果持久化", "正在持久化视觉结果")
 
 
@@ -275,11 +302,7 @@ async def test_teacher_analysis_avoids_unstable_video_end_but_keeps_real_duratio
     )
 
     requested = sorted(
-        {
-            point
-            for timestamps in extractor.requested_timestamps
-            for point in timestamps
-        }
+        {point for timestamps in extractor.requested_timestamps for point in timestamps}
     )
     assert requested == [0.0, expected_safe_end]
     assert isinstance(result.result, dict)
@@ -322,11 +345,14 @@ async def test_teacher_interval_uses_real_duration_after_safe_end_sampling(
     )
 
     assert isinstance(result.result, dict)
-    assert max(
-        point
-        for timestamps in extractor.requested_timestamps
-        for point in timestamps
-    ) == 4.5
+    assert (
+        max(
+            point
+            for timestamps in extractor.requested_timestamps
+            for point in timestamps
+        )
+        == 4.5
+    )
     assert result.result["writing_intervals"][-1]["end_seconds"] == 5.0
 
 
@@ -334,6 +360,14 @@ async def test_teacher_interval_uses_real_duration_after_safe_end_sampling(
 async def test_student_analysis_uses_regions_and_stable_database_fallback(
     tmp_path: Path,
 ) -> None:
+    class RecordingVbas(Vbas):
+        def __init__(self) -> None:
+            self.calls: list[list[object]] = []
+
+        async def analyze(self, **kwargs):
+            self.calls.append(list(kwargs["frames"]))
+            return await super().analyze(**kwargs)
+
     async def report(percent: int, stage: str, reason: str) -> None:
         del percent, stage, reason
 
@@ -342,7 +376,10 @@ async def test_student_analysis_uses_regions_and_stable_database_fallback(
         TaskType.STUDENT_BEHAVIOR,
         strategy={"interval_seconds": 10},
     )
-    result = await _analyzer(tmp_path).analyze(command, report)
+    analyzer = _analyzer(tmp_path)
+    recorder = RecordingVbas()
+    analyzer._vbas = recorder
+    result = await analyzer.analyze(command, report)
 
     assert isinstance(result.result, dict)
     assert result.result["recognized_total_person_count"] == 30
@@ -353,6 +390,7 @@ async def test_student_analysis_uses_regions_and_stable_database_fallback(
     assert 0.25 <= result.result["back_occupancy_ratio"] <= 0.40
     assert len(result.result["frames"]) == 3
     assert result.artifact_count and result.artifact_count > 0
+    assert len(recorder.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -373,12 +411,50 @@ async def test_student_regions_decode_each_sampling_point_once(tmp_path: Path) -
 
     extractor = analyzer._frames
     assert isinstance(extractor, FrameExtractor)
-    requested = [
-        point
-        for batch in extractor.requested_timestamps
-        for point in batch
-    ]
+    requested = [point for batch in extractor.requested_timestamps for point in batch]
     assert requested == [0.0, 10.0, 20.0]
+
+
+@pytest.mark.asyncio
+async def test_student_front_and_back_regions_share_one_vbas_inference(
+    tmp_path: Path,
+) -> None:
+    class RecordingVbas(Vbas):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def analyze(self, **kwargs):
+            self.calls += 1
+            return await super().analyze(**kwargs)
+
+    analyzer = _analyzer(tmp_path)
+    recorder = RecordingVbas()
+    analyzer._vbas = recorder
+    command = replace(
+        _command(
+            tmp_path,
+            TaskType.STUDENT_BEHAVIOR,
+            strategy={"interval_seconds": 10},
+        ),
+        back_point=[
+            {"X": 50, "Y": 0},
+            {"X": 100, "Y": 0},
+            {"X": 100, "Y": 50},
+            {"X": 50, "Y": 50},
+        ],
+    )
+
+    async def report(percent: int, stage: str, reason: str) -> None:
+        del percent, stage, reason
+
+    result = await analyzer.analyze(command, report)
+
+    assert isinstance(result.result, dict)
+    assert result.result["front_occupancy_ratio"] == pytest.approx(8 / 30, abs=1e-6)
+    assert result.result["back_occupancy_ratio"] == pytest.approx(16 / 30, abs=1e-6)
+    assert result.result["front_region_provided"] is True
+    assert result.result["back_region_provided"] is True
+    assert recorder.calls == 1
 
 
 @pytest.mark.asyncio
@@ -445,7 +521,9 @@ async def test_first_batch_reaches_vbas_before_all_frames_are_extracted(
 
 
 @pytest.mark.asyncio
-async def test_tail_batch_and_frame_identities_are_stable_on_replay(tmp_path: Path) -> None:
+async def test_tail_batch_and_frame_identities_are_stable_on_replay(
+    tmp_path: Path,
+) -> None:
     class RecordingVbas(Vbas):
         def __init__(self) -> None:
             self.calls: list[list[str]] = []
@@ -484,7 +562,7 @@ async def test_tail_batch_and_frame_identities_are_stable_on_replay(tmp_path: Pa
     recorder.calls.clear()
     await analyzer.analyze(command, report)
 
-    assert [len(call) for call in first_calls] == [2, 2, 1, 1]
+    assert [len(call) for call in first_calls] == [2, 1]
     assert recorder.calls == first_calls
 
 

@@ -93,10 +93,7 @@ class AdaptiveScanPlanner:
         )
         self._evaluate(coarse_points, detector, cache)
         candidate_windows = self._candidate_windows(coarse_points, cache)
-        if len(candidate_windows) > self._config.max_candidate_windows:
-            raise AdaptiveScanLimitError(
-                f"视觉候选窗口超过上限: {len(candidate_windows)}"
-            )
+        self._validate_candidate_limit(candidate_windows)
         if not candidate_windows:
             return AdaptiveScanResult((), (), len(cache), tuple(stages))
 
@@ -105,6 +102,14 @@ class AdaptiveScanPlanner:
             stages.append(f"topology_{_stage_value(interval)}s")
             for start, end in candidate_windows:
                 self._evaluate(_time_grid(start, end, interval), detector, cache)
+            candidate_windows = self._refined_candidate_windows(
+                candidate_windows,
+                interval,
+                cache,
+            )
+            self._validate_candidate_limit(candidate_windows)
+            if not candidate_windows:
+                break
 
         finest_interval = refinement_intervals[-1]
         intervals: list[BehaviorInterval] = []
@@ -137,10 +142,7 @@ class AdaptiveScanPlanner:
         )
         await self._evaluate_async(coarse_points, detector, cache)
         candidate_windows = self._candidate_windows(coarse_points, cache)
-        if len(candidate_windows) > self._config.max_candidate_windows:
-            raise AdaptiveScanLimitError(
-                f"视觉候选窗口超过上限: {len(candidate_windows)}"
-            )
+        self._validate_candidate_limit(candidate_windows)
         if not candidate_windows:
             return AdaptiveScanResult((), (), len(cache), tuple(stages))
 
@@ -151,6 +153,14 @@ class AdaptiveScanPlanner:
                 await self._evaluate_async(
                     _time_grid(start, end, interval), detector, cache
                 )
+            candidate_windows = self._refined_candidate_windows(
+                candidate_windows,
+                interval,
+                cache,
+            )
+            self._validate_candidate_limit(candidate_windows)
+            if not candidate_windows:
+                break
 
         finest_interval = refinement_intervals[-1]
         intervals: list[BehaviorInterval] = []
@@ -228,6 +238,28 @@ class AdaptiveScanPlanner:
             windows.append((coarse_points[left_index], coarse_points[right_index]))
         return windows
 
+    def _validate_candidate_limit(
+        self,
+        candidate_windows: list[tuple[float, float]],
+    ) -> None:
+        if len(candidate_windows) > self._config.max_candidate_windows:
+            raise AdaptiveScanLimitError(
+                f"视觉候选窗口超过上限: {len(candidate_windows)}"
+            )
+
+    def _refined_candidate_windows(
+        self,
+        parent_windows: list[tuple[float, float]],
+        interval: float,
+        cache: Mapping[float, bool],
+    ) -> list[tuple[float, float]]:
+        refined: list[tuple[float, float]] = []
+        for start, end in parent_windows:
+            refined.extend(
+                self._candidate_windows(_time_grid(start, end, interval), cache)
+            )
+        return _merge_windows(refined)
+
 
 def _positive_intervals(
     points: list[float],
@@ -244,6 +276,22 @@ def _positive_intervals(
     if run_start_index is not None and points[-1] > points[run_start_index]:
         intervals.append(BehaviorInterval(points[run_start_index], points[-1]))
     return intervals
+
+
+def _merge_windows(
+    windows: Iterable[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    ordered = sorted(windows)
+    if not ordered:
+        return []
+    merged = [ordered[0]]
+    for start, end in ordered[1:]:
+        previous_start, previous_end = merged[-1]
+        if start <= previous_end:
+            merged[-1] = (previous_start, max(previous_end, end))
+        else:
+            merged.append((start, end))
+    return merged
 
 
 def _time_grid(start: float, end: float, interval: float) -> list[float]:

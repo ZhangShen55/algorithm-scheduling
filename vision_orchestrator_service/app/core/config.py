@@ -102,6 +102,7 @@ class MediaConfig(BaseModel):
     ffprobe_binary: str = "ffprobe"
     command_timeout_seconds: float = 60.0
     max_concurrent_processes: Annotated[StrictInt, Field(gt=0)] = 2
+    batch_extraction_enabled: bool = True
 
 
 class VbasConfig(BaseModel):
