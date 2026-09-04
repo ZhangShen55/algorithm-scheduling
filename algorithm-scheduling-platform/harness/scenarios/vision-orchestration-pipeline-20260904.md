@@ -171,10 +171,72 @@ Pipeline `run_id` 桩、Dockerfile 旧阶段合同、旧 `tias` 身份断言和�
 涉及的 Vision、Orchestrator、Kafka 适配器、真实视觉集成、A 服务查询契约均在上方独立命令通过。
 本变更不修改或回滚这些并行开发文件，不能将该次仓库全量结果表述为全绿。
 
-## 待完成的服务器门禁
+## 服务器缓存构建与容器替换
 
-- 待记录 `192.168.29.11` 当前 Vision/Orchestrator 容器、镜像、revision、配置摘要和回滚命令。
-- 待使用已有 BuildKit 缓存构建并替换两个受影响镜像，校验 `linux/amd64`、revision、源码、
-  `app.main:app`、health/readiness 和 Kafka Consumer。
-- 新容器门禁通过后才精确删除被替换的旧容器和旧镜像。
-- 最终业务压力测试仍为“待用户执行”，本次不会代替用户发起 20 路离线任务。
+### 发布前资产与回滚边界
+
+- 目标主机：`192.168.29.11`，`x86_64`；Docker Server `26.1.4/amd64`；发布前根分区
+  可用约 `205 GiB`。
+- 旧 Orchestrator 容器：
+  `875c0ac2898469a06c219a4bd308206d7638d395e06bfe85406e89f64b99b140`，镜像
+  `sha256:f730c4e6946e1048203578a5fe4829c274faa38a120f97ee9b82042678db27e5`，revision
+  `f3329c61b775235421d93dae7dc1d44518e5b180`，发布前为 healthy。
+- 旧 Vision 容器：
+  `fa0c4a4579b0d3d863d2f981f719d3dfce1b3a87dffb5eb6cd26fbfb61cebc07`，镜像
+  `sha256:f6513cc53933c2e61eec667562732cde81163a95c175cb3699a694d4f573e55a`，revision
+  `88f83bf067ca93687700ec23b39a094463d70142`，发布前为 healthy。
+- Orchestrator 配置 SHA-256 为
+  `90748f310e456ebd16470b1bb084b35e788e7a2a1abdce82a2a72b4607b2c57c`；有效值保持
+  `worker.node_concurrency=16`、`kafka.max_poll_records=10`。
+- Vision 配置 SHA-256 为
+  `770dfb1ce2d29ac3cc3cb685fecd482f537e52dd8089712ac3049a8f335f0b0c`；有效值保持
+  `worker.concurrency=16`、`kafka.max_poll_records=2`、`scan.batch_size=8`、
+  `scan.batch_prefetch=2`、`media.max_concurrent_processes=6`。
+- 替换前曾将两个完整旧镜像 ID 分别标记为
+  `algorithm-scheduling/orchestrator-service:rollback-pre-1ff4e20` 和
+  `algorithm-scheduling/vision-orchestrator-service:rollback-pre-1ff4e20`。若门禁失败，精确回滚命令
+  为将对应 rollback 标签重新标记为本轮运行标签，再用本轮 Compose 与配置 override 对单服务执行
+  `docker compose up -d --no-deps --no-build --wait --wait-timeout 300 SERVICE`。本轮门禁通过后按任务
+  要求已删除这些临时回滚标签和旧镜像，不能再把该发布前命令当作当前可执行回滚入口。
+
+### 构建与镜像门禁
+
+- GitHub Deploy Key 在服务器上不可用，直接 clone 返回 `Permission denied (publickey)`；改用本机
+  对已推送分支生成完整 Git bundle 后通过 SCP 传输。服务器 release checkout 位于
+  `/root/workspace/algorithm-scheduling-release-1ff4e20`，校验 HEAD 为
+  `1ff4e2029b4664dd4ae7fe6f95bff6286d960f0b` 且工作树干净。
+- 使用默认 BuildKit 缓存分别构建，未使用 `--no-cache`，未执行 prune：
+  `algorithm-scheduling/orchestrator-service:v1.0_260904_1ff4e20` 与
+  `algorithm-scheduling/vision-orchestrator-service:v1.0_260904_1ff4e20`。
+- 新 Orchestrator 镜像 ID 为
+  `sha256:ed38492f8a168502686a7bd584e3ad3640eb8ebff6f41929ac1b0fc34adb65c0`；新 Vision
+  镜像 ID 为 `sha256:1b2043654845c43210be53989b2f192bbf6ee828d2128490ab2cd684e1291891`。
+- 两镜像均为 `amd64`，OCI revision 均为目标完整 SHA，内置源码 manifest 校验通过；分别通过
+  `app.main:app` 导入和实际挂载配置解析。最初的 Orchestrator 配置探针误用了 Vision 字段
+  `worker.concurrency` 而失败，改为正确字段 `worker.node_concurrency` 后通过；该探针错误未启动或
+  替换业务容器。
+
+### 逐服务替换与运行门禁
+
+- 先替换 Orchestrator，确认全部后台循环、PostgreSQL、Kafka Consumer 与 Control 检查 ready，
+  再替换 Vision；未重启 PostgreSQL、Kafka、Control、算子或其他容器。
+- 新 Orchestrator 容器 ID 为
+  `36109732256f768ea71fe08e9e998e45fc68105e08f4d1fa0a3705f948df0f15`；新 Vision 容器 ID
+  为 `030508d558a78c9239995dc18c2819b6961abfd9de69f9695ab1964b4fdee94d`。
+- 两容器均从同一 release checkout 启动，均为 running/healthy；`/config/config.toml` 指向
+  `/root/workspace/runtime-config/1ff4e20/` 下各自只读配置，`/data/course` 与 `/data/result`
+  挂载保持不变。
+- Orchestrator `/ops/readiness` 的 Outbox、课程 Consumer、节点执行器、视觉发布器、视觉事件
+  Consumer、PPT 对账、PostgreSQL、Kafka 和 Control 全部 ready。Vision `/ready` 的视觉命令
+  Consumer、PostgreSQL、Kafka 和 Control 全部 ready。
+- Vision `/metrics` 已暴露命令 pending/in-flight、槽位利用率、媒体 pending/running 指标；空载值
+  均为 0。新容器启动后的日志未发现 ERROR、CRITICAL、Traceback 或 Exception。
+
+### 精确清理与验收结论
+
+- Compose 原位替换已经删除两个旧容器；通过完整旧容器 ID 验证其不再存在。
+- 新容器全部通过门禁后，仅删除上述两个旧镜像及其原标签、临时 rollback 标签；验证完整旧镜像
+  ID 不再存在。没有删除其他容器、镜像、卷、课程结果或 BuildKit 缓存，也没有执行全局 prune。
+- OpenSpec 的缓存构建、版本、架构、源码、配置挂载、health/readiness 和 Kafka Consumer 发布门禁
+  已通过。最终业务压力测试仍为“待用户执行”；本次没有代替用户发起 20 路离线任务，也不将空载
+  健康检查表述为吞吐验收通过。

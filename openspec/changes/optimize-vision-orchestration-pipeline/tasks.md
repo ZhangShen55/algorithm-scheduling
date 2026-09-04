@@ -70,9 +70,9 @@
 
 ## 10. 服务器缓存构建与容器替换
 
-- [ ] 10.1 记录 `192.168.29.11` 受影响容器 ID、镜像 ID、Git revision、配置摘要、健康状态和精确回滚命令
-- [ ] 10.2 使用现有 BuildKit 缓存构建 `vision-orchestrator-service`，并在共享包或 Orchestrator 代码受影响时一并构建 `orchestrator-service`；不得使用 `--no-cache` 或全局 prune
-- [ ] 10.3 校验新镜像 revision、`linux/amd64` 架构、`app.main:app` 导入和配置挂载路径后逐个替换容器
-- [ ] 10.4 仅执行 health、readiness、Kafka Consumer 和运行版本门禁，不代替用户发起最终业务压力测试
-- [ ] 10.5 新容器全部正常后精确删除被替换的旧容器和旧镜像；失败时回滚并保留失败证据
-- [ ] 10.6 更新 Harness 的部署资产、门禁结果、删除清单和“最终压力测试待用户执行”结论
+- [x] 10.1 记录 `192.168.29.11` 受影响容器 ID、镜像 ID、Git revision、配置摘要、健康状态和精确回滚命令
+- [x] 10.2 使用现有 BuildKit 缓存构建 `vision-orchestrator-service`，并在共享包或 Orchestrator 代码受影响时一并构建 `orchestrator-service`；不得使用 `--no-cache` 或全局 prune
+- [x] 10.3 校验新镜像 revision、`linux/amd64` 架构、`app.main:app` 导入和配置挂载路径后逐个替换容器
+- [x] 10.4 仅执行 health、readiness、Kafka Consumer 和运行版本门禁，不代替用户发起最终业务压力测试
+- [x] 10.5 新容器全部正常后精确删除被替换的旧容器和旧镜像；失败时回滚并保留失败证据
+- [x] 10.6 更新 Harness 的部署资产、门禁结果、删除清单和“最终压力测试待用户执行”结论
