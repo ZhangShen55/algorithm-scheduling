@@ -240,3 +240,47 @@ Pipeline `run_id` 桩、Dockerfile 旧阶段合同、旧 `tias` 身份断言和�
 - OpenSpec 的缓存构建、版本、架构、源码、配置挂载、health/readiness 和 Kafka Consumer 发布门禁
   已通过。最终业务压力测试仍为“待用户执行”；本次没有代替用户发起 20 路离线任务，也不将空载
   健康检查表述为吞吐验收通过。
+
+## 后续抽帧与推理路径优化（`59c1761`）
+
+### 实现内容
+
+- 等间隔时间点改为一次 `ffmpeg` 连续解码和批量输出，避免每个时间点重复启动进程及从视频起点
+  解码；不同课程和批次仍可并行，并统一受 `media.max_concurrent_processes` 限制。
+- 批量抽帧异常时自动回退到受控的并行单帧抽取，保留已有任务的兼容和失败语义。
+- 教师行为加密扫描按 `10s -> 5s 重新收敛 -> 2s 重新收敛` 推进，后一级只扫描上一级收敛后的
+  边界范围，不再对全部 10 秒命中窗口重复扩散扫描。
+- 学生行为优先复用 VBas 全画面结果中的 `ObjectPostList` 人员坐标，一次推理计算总人数及前后排
+  人数；兼容不返回完整坐标的 VBas 实例，并在该情况下回退到原区域推理。
+- 视觉节点进度统一更新为抽帧数、推理数和容量等待阶段，避免数据库继续展示已经结束的
+  “等待 VBas”状态。
+- 新增 `media.batch_extraction_enabled` 开关，默认开启，便于部署时受控回退。
+
+### 本地验证
+
+- Vision 服务测试：`98 passed`。
+- 跨服务视觉相关测试：`14 passed`。
+- `compileall`、`app.main:app` 导入、Ruff 和 `git diff --check` 均通过。
+- 平台既有 `tests/test_vision_kafka_boundary.py` 仍按旧租约请求体断言，不接受当前已经存在的
+  `capacity_pool="offline"`；该测试属于工作区其他并行变更，本轮未修改，也未将跨服务全量测试
+  表述为全绿。
+
+### 服务器构建与替换
+
+- 目标主机：`192.168.29.11`，使用默认 BuildKit 缓存构建，未使用 `--no-cache`，未执行 prune。
+- 发布提交：`59c176159f7e52881f2f1304bf2b085b6f27a6ad`；服务器 release checkout：
+  `/root/workspace/algorithm-scheduling-release-59c1761`。
+- 新镜像：`algorithm-scheduling/vision-orchestrator-service:v1.0_260904_59c1761`，镜像 ID
+  `sha256:c014ee093ad60a327e537eb3e93cad78d0cc44dd514747b8c44194e7393448c5`，架构 `amd64`，
+  OCI revision 与发布提交一致，源码 manifest、`app.main:app` 导入及 `ffmpeg` 可用性检查通过。
+- 运行配置 SHA-256：`85bd32cca94b63ef3e293261c9c642f9436bb88bf082406e97f04bcf553d8590`；
+  有效值为 `worker.concurrency=16`、`media.max_concurrent_processes=6`、
+  `media.batch_extraction_enabled=true`。
+- 新容器 ID：`96415983237e61a82dd4b36ec4e0d6f0f8b5a0f8c9b56da29de02cfe9fe7e2a4`；
+  `/health` 返回 `ok`，`/ready` 中视觉命令 Consumer、PostgreSQL、Kafka 和 Control 均 ready，
+  Kafka Consumer 已加入 `vision-orchestrator` 消费组并取得视觉命令分区。
+- Compose 原位替换已删除旧容器；健康门禁通过后删除旧镜像
+  `sha256:1b2043654845c43210be53989b2f192bbf6ee828d2128490ab2cd684e1291891`。未重启其他平台服务、
+  算子或基础设施，未删除 BuildKit 缓存、课程数据或结果数据。
+- 本轮按照用户要求不执行业务压力测试。代码、镜像、配置和服务健康门禁已通过；教师/学生行为
+  端到端吞吐仍为“待用户验证”，需要依据用户后续测试结果判断是否继续调节 ffmpeg 并发数。
