@@ -49,6 +49,14 @@ class FakeConsumer:
         self.stopped = False
         self.commits: list[dict[TopicPartition, Any]] = []
         self.partition = TopicPartition("algorithm.course.commands", 0)
+        self.paused: list[TopicPartition] = []
+        self.resumed: list[TopicPartition] = []
+        self.subscribed_topics: list[str] = []
+        self.rebalance_listener: object | None = None
+
+    def subscribe(self, *, topics: list[str], listener: object) -> None:
+        self.subscribed_topics = list(topics)
+        self.rebalance_listener = listener
 
     async def start(self) -> None:
         self.started = True
@@ -62,6 +70,9 @@ class FakeConsumer:
         timeout_ms: int,
         max_records: int,
     ) -> dict[TopicPartition, list[FakeRecord]]:
+        if timeout_ms == 0:
+            assert max_records == 1
+            return {}
         assert timeout_ms == 250
         assert max_records == 5
         return {
@@ -92,6 +103,12 @@ class FakeConsumer:
 
     def assignment(self) -> set[TopicPartition]:
         return {self.partition}
+
+    def pause(self, *partitions: TopicPartition) -> None:
+        self.paused.extend(partitions)
+
+    def resume(self, *partitions: TopicPartition) -> None:
+        self.resumed.extend(partitions)
 
 
 class FakeAdmin:
@@ -154,6 +171,7 @@ async def test_consumer_polls_normalized_messages_and_commits_next_offset() -> N
 
     await adapter.start()
     messages = await adapter.poll(timeout_seconds=0.25)
+    await adapter.keepalive()
     await adapter.commit(messages[0])
     lag = await adapter.lag()
     await adapter.stop()
@@ -173,6 +191,9 @@ async def test_consumer_polls_normalized_messages_and_commits_next_offset() -> N
     assert lag == {"algorithm.course.commands:0": 5}
     assert consumer.started is True
     assert consumer.stopped is True
+    assert consumer.subscribed_topics == ["algorithm.course.commands"]
+    assert consumer.paused == [consumer.partition]
+    assert consumer.resumed == [consumer.partition]
 
 
 @pytest.mark.asyncio

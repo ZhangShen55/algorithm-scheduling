@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -31,7 +32,13 @@ from ..domain.student_aggregation import (
     StudentFrameObservation,
 )
 from ..infrastructure.cache import VisionStream
-from ..infrastructure.media import ExtractedFrame, FFmpegFrameExtractor
+from ..infrastructure.media import (
+    ExtractedFrame,
+    FFmpegFrameExtractor,
+    FrameBatchPlan,
+    build_frame_batch_plans,
+)
+from ..infrastructure.metrics import VisionPipelineMetrics
 from ..infrastructure.vbas import VbasBatchClient, VbasFrame
 from .events import ProgressCallback
 
@@ -84,6 +91,24 @@ class _FrameResult:
     confidences: dict[str, float]
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedFrameBatch:
+    plan: FrameBatchPlan
+    frames: tuple[ExtractedFrame, ...]
+
+
+class _MonotonicProgress:
+    def __init__(self, callback: ProgressCallback) -> None:
+        self._callback = callback
+        self._last_percent = 0
+        self._lock = asyncio.Lock()
+
+    async def report(self, percent: int, stage: str, reason: str) -> None:
+        async with self._lock:
+            self._last_percent = max(self._last_percent, percent)
+            await self._callback(self._last_percent, stage, reason)
+
+
 class CourseVisualAnalyzer:
     def __init__(
         self,
@@ -93,24 +118,38 @@ class CourseVisualAnalyzer:
         evidence_publisher: VisionEvidencePublisher,
         *,
         settings: VisionSettings,
+        metrics: VisionPipelineMetrics | None = None,
     ) -> None:
         self._repository = repository
         self._frames = frame_extractor
         self._vbas = vbas_client
         self._evidence = evidence_publisher
         self._settings = settings
+        self._metrics = metrics
 
     async def analyze(
         self,
         command: VisualAnalysisCommand,
         progress: ProgressCallback,
     ) -> NodeResultWrite:
+        progress_reporter = _MonotonicProgress(progress)
+        await progress_reporter.report(5, "视频校验", "正在校验本地视频")
         video_path = self._validated_command_video(command)
-        await progress(5, "视频校验", "正在校验本地视觉视频")
+        await progress_reporter.report(10, "视频探测", "正在探测视频时长")
         duration = await self._frames.duration_seconds(video_path)
         if command.task_type is TaskType.TEACHER_BEHAVIOR:
-            return await self._analyze_teacher(command, video_path, duration, progress)
-        return await self._analyze_student(command, video_path, duration, progress)
+            return await self._analyze_teacher(
+                command,
+                video_path,
+                duration,
+                progress_reporter,
+            )
+        return await self._analyze_student(
+            command,
+            video_path,
+            duration,
+            progress_reporter,
+        )
 
     def _validated_command_video(self, command: VisualAnalysisCommand) -> Path:
         try:
@@ -132,7 +171,7 @@ class CourseVisualAnalyzer:
         command: VisualAnalysisCommand,
         video_path: Path,
         duration: float,
-        progress: ProgressCallback,
+        progress: _MonotonicProgress,
     ) -> NodeResultWrite:
         settings = self._settings
         coarse = _strategy_positive_float(
@@ -162,6 +201,7 @@ class CourseVisualAnalyzer:
                 VisionStream.TEACHER,
                 video_path,
                 selected,
+                progress=progress,
             )
             observations.update(inferred)
             return {
@@ -172,7 +212,7 @@ class CourseVisualAnalyzer:
                 for point in selected
             }
 
-        await progress(20, "粗粒度扫描", "正在执行教师行为粗粒度扫描")
+        await progress.report(20, "教师扫描", "正在抽取教师行为采样帧")
         scan_duration = _safe_sampling_end(
             duration,
             settings.scan.end_frame_margin_seconds,
@@ -181,7 +221,7 @@ class CourseVisualAnalyzer:
             duration_seconds=scan_duration,
             detector=detect,
         )
-        await progress(75, "边界细化", "正在聚合教师行为区间")
+        await progress.report(75, "教师聚合", "正在聚合教师行为区间")
         intervals = {
             behavior: _intervals_from_observations(
                 observations,
@@ -215,7 +255,7 @@ class CourseVisualAnalyzer:
                 "evidence": _evidence_result(evidence),
             }
         )
-        await progress(95, "结果持久化", outcome.reason)
+        await progress.report(95, "结果持久化", "正在持久化视觉结果")
         return self._node_result(command.task_id, result, evidence)
 
     async def _analyze_student(
@@ -223,7 +263,7 @@ class CourseVisualAnalyzer:
         command: VisualAnalysisCommand,
         video_path: Path,
         duration: float,
-        progress: ProgressCallback,
+        progress: _MonotonicProgress,
     ) -> NodeResultWrite:
         interval = _strategy_positive_float(
             command.strategy,
@@ -235,38 +275,24 @@ class CourseVisualAnalyzer:
             interval,
             self._settings.scan.end_frame_margin_seconds,
         )
-        await progress(20, "学生抽帧", "正在抽取学生视频采样帧")
-        total = await self._infer(
+        await progress.report(20, "学生扫描", "正在抽取学生视频采样帧")
+        regions: dict[str, list[JsonObject] | None] = {"full": None}
+        if command.front_points:
+            regions["front"] = command.front_points
+        if command.back_point:
+            regions["back"] = command.back_point
+        inferred_regions = await self._infer_regions(
             command,
             VisionStream.STUDENT,
             video_path,
             points,
+            regions=regions,
+            progress=progress,
         )
-        front = (
-            await self._infer(
-                command,
-                VisionStream.STUDENT,
-                video_path,
-                points,
-                region=command.front_points,
-                identity_suffix="front",
-            )
-            if command.front_points
-            else {}
-        )
-        back = (
-            await self._infer(
-                command,
-                VisionStream.STUDENT,
-                video_path,
-                points,
-                region=command.back_point,
-                identity_suffix="back",
-            )
-            if command.back_point
-            else {}
-        )
-        await progress(75, "学生聚合", "正在聚合学生人数和行为结果")
+        total = inferred_regions["full"]
+        front = inferred_regions.get("front", {})
+        back = inferred_regions.get("back", {})
+        await progress.report(75, "学生聚合", "正在聚合学生人数和行为结果")
         observations = [
             StudentFrameObservation(
                 detected_total=int(item.counts.get("detected_total", 0)),
@@ -308,7 +334,7 @@ class CourseVisualAnalyzer:
             ],
             "evidence": _evidence_result(evidence),
         }
-        await progress(95, "结果持久化", "学生行为分析完成")
+        await progress.report(95, "结果持久化", "正在持久化视觉结果")
         return self._node_result(command.task_id, result, evidence)
 
     async def _infer(
@@ -320,43 +346,175 @@ class CourseVisualAnalyzer:
         *,
         region: list[JsonObject] | None = None,
         identity_suffix: str = "full",
+        progress: _MonotonicProgress | None = None,
     ) -> dict[float, _FrameResult]:
-        extracted = await self._frames.extract(
+        results = await self._infer_regions(
+            command,
+            stream,
+            video_path,
+            points,
+            regions={identity_suffix: region},
+            progress=progress,
+        )
+        return results[identity_suffix]
+
+    async def _infer_regions(
+        self,
+        command: VisualAnalysisCommand,
+        stream: VisionStream,
+        video_path: Path,
+        points: list[float],
+        *,
+        regions: dict[str, list[JsonObject] | None],
+        progress: _MonotonicProgress | None = None,
+    ) -> dict[str, dict[float, _FrameResult]]:
+        plans = build_frame_batch_plans(
             task_id=command.task_id,
             stream=stream,
-            video_path=video_path,
             timestamps=points,
+            batch_size=min(
+                self._settings.scan.batch_size,
+                self._settings.vbas.max_batch_size,
+            ),
+            identity_suffix="assets",
         )
-        by_timestamp = {item.timestamp_seconds: item for item in extracted}
-        frames = [
-            VbasFrame(
-                image_id=(
-                    f"{stream.value.lower()}-{identity_suffix}-"
-                    f"{round(point * 1000):012d}"
-                ),
-                path=by_timestamp[point].path,
-                frame_index=round(point * 1000),
-                timestamp_seconds=point,
-                points=region,
-            )
-            for point in points
-        ]
-        responses = await self._vbas.analyze(
-            task_id=command.task_id,
-            stream=stream,
-            frames=frames,
-            trace_id=str(command.command_id),
+        parsed: dict[str, dict[float, _FrameResult]] = {
+            identity: {} for identity in regions
+        }
+        if not plans:
+            return parsed
+        ready: asyncio.Queue[_PreparedFrameBatch | None] = asyncio.Queue(
+            maxsize=self._settings.scan.batch_prefetch
         )
-        parsed: dict[float, _FrameResult] = {}
-        for frame, response in zip(frames, responses, strict=True):
-            item = response["response"]
-            counts, confidences = _parse_result_list(item, stream)
-            parsed[frame.timestamp_seconds] = _FrameResult(
-                timestamp_seconds=frame.timestamp_seconds,
-                path=frame.path,
-                counts=counts,
-                confidences=confidences,
-            )
+        progress_interval = self._settings.scan.progress_update_interval_batches
+        pipeline_started = time.monotonic()
+        first_batch_observed = False
+        first_vbas_observed = False
+
+        async def report_batch(
+            completed: int,
+            total: int,
+            *,
+            inference: bool,
+        ) -> None:
+            if progress is None:
+                return
+            if completed != total and completed % progress_interval:
+                return
+            if inference:
+                await progress.report(
+                    60,
+                    "VBas 推理",
+                    f"正在执行 VBas 推理（已完成 {completed}/{total} batch）",
+                )
+            else:
+                await progress.report(
+                    30,
+                    "视觉抽帧",
+                    f"正在抽取采样帧（已完成 {completed}/{total} batch）",
+                )
+
+        async def produce() -> None:
+            nonlocal first_batch_observed
+            try:
+                for index, plan in enumerate(plans, start=1):
+                    extracted = await self._frames.extract(
+                        task_id=command.task_id,
+                        stream=stream,
+                        video_path=video_path,
+                        timestamps=list(plan.timestamps),
+                    )
+                    by_timestamp = {
+                        item.timestamp_seconds: item for item in extracted
+                    }
+                    prepared = tuple(by_timestamp[point] for point in plan.timestamps)
+                    await ready.put(_PreparedFrameBatch(plan, prepared))
+                    if self._metrics is not None:
+                        self._metrics.record_batch(stream.value.lower(), "prepared")
+                        if not first_batch_observed:
+                            first_batch_observed = True
+                            self._metrics.observe_first_batch_wait(
+                                stream.value.lower(),
+                                time.monotonic() - pipeline_started,
+                            )
+                    await report_batch(index, len(plans), inference=False)
+            finally:
+                await ready.put(None)
+
+        producer = asyncio.create_task(
+            produce(),
+            name=f"vision-media-{command.task_id}-{stream.value.lower()}",
+        )
+        total_inference_batches = len(plans) * len(regions)
+        completed_inference_batches = 0
+        try:
+            while True:
+                prepared = await ready.get()
+                if prepared is None:
+                    break
+                for identity_suffix, region in regions.items():
+                    if progress is not None:
+                        await progress.report(
+                            45,
+                            "VBas 容量等待",
+                            "正在等待 VBas 离线容量",
+                        )
+                    frames = [
+                        VbasFrame(
+                            image_id=(
+                                f"{stream.value.lower()}-{identity_suffix}-"
+                                f"{round(frame.timestamp_seconds * 1000):012d}"
+                            ),
+                            path=frame.path,
+                            frame_index=frame.frame_index,
+                            timestamp_seconds=frame.timestamp_seconds,
+                            points=region,
+                        )
+                        for frame in prepared.frames
+                    ]
+                    if self._metrics is not None and not first_vbas_observed:
+                        first_vbas_observed = True
+                        self._metrics.observe_first_vbas_request(
+                            stream.value.lower(),
+                            time.monotonic() - pipeline_started,
+                        )
+                    responses = await self._vbas.analyze(
+                        task_id=command.task_id,
+                        stream=stream,
+                        frames=frames,
+                        trace_id=str(command.command_id),
+                    )
+                    for frame, response in zip(frames, responses, strict=True):
+                        item = response["response"]
+                        counts, confidences = _parse_result_list(item, stream)
+                        parsed[identity_suffix][frame.timestamp_seconds] = _FrameResult(
+                            timestamp_seconds=frame.timestamp_seconds,
+                            path=frame.path,
+                            counts=counts,
+                            confidences=confidences,
+                        )
+                    completed_inference_batches += 1
+                    if self._metrics is not None:
+                        self._metrics.record_batch(stream.value.lower(), "inferred")
+                    await report_batch(
+                        completed_inference_batches,
+                        total_inference_batches,
+                        inference=True,
+                    )
+            await producer
+        finally:
+            if not producer.done():
+                producer.cancel()
+            await asyncio.gather(producer, return_exceptions=True)
+        expected_points = {
+            point for plan in plans for point in plan.timestamps
+        }
+        for identity_suffix, results in parsed.items():
+            if set(results) != expected_points:
+                raise RuntimeError(
+                    f"视觉批次结果不完整: {identity_suffix} "
+                    f"{len(results)}/{len(expected_points)}"
+                )
         return parsed
 
     def _publish_teacher_evidence(

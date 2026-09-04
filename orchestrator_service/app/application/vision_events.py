@@ -78,6 +78,15 @@ class VisualDispatchRepository(Protocol):
         reason: str,
     ) -> NodeRecord: ...
 
+    def update_node_progress_if_reason(
+        self,
+        node_id: int,
+        progress: dict[str, object],
+        *,
+        expected_reason: str,
+        reason: str,
+    ) -> bool: ...
+
     def aggregate_task_type_state(self, course_task_type_id: int) -> TaskTypeRecord: ...
 
 
@@ -156,6 +165,7 @@ class VisualNodeCoordinator:
                 "视觉命令发布失败，等待 Kafka 恢复",
             )
             raise
+        await self._mark_published_if_preparing(node)
         await asyncio.to_thread(
             self._repository.aggregate_task_type_state,
             node.course_task_type_id,
@@ -203,8 +213,18 @@ class VisualNodeCoordinator:
                     "视觉运行中节点恢复发布失败，等待重试",
                 )
                 raise
+            await self._mark_published_if_preparing(node)
             recovered += 1
         return recovered
+
+    async def _mark_published_if_preparing(self, node: NodeRecord) -> None:
+        await asyncio.to_thread(
+            self._repository.update_node_progress_if_reason,
+            node.id,
+            dict(node.progress),
+            expected_reason="视觉节点已领取，正在准备本地视频",
+            reason="视觉命令已发布，等待 Vision 消费",
+        )
 
     async def _transition_for_retry(
         self,

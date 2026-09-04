@@ -7,6 +7,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from prometheus_client import CollectorRegistry, generate_latest
 from pydantic import ValidationError
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
@@ -136,6 +137,8 @@ def test_runtime_contract_defaults_match_platform_topics_and_control_port() -> N
     assert settings.control.base_url == "http://127.0.0.1:18100"
     assert settings.media.ffmpeg_binary == "ffmpeg"
     assert settings.scan.end_frame_margin_seconds == 0.5
+    assert settings.scan.batch_prefetch == 2
+    assert settings.scan.progress_update_interval_batches == 2
     assert settings.vbas.max_batch_size == 8
     assert settings.vbas.capacity_snapshot_refresh_seconds == 1.0
     assert settings.vbas.transient_max_attempts == 3
@@ -147,3 +150,28 @@ def test_media_process_limit_must_be_strictly_positive(value: object) -> None:
 
     with pytest.raises(ValidationError, match="max_concurrent_processes"):
         VisionSettings(media={"max_concurrent_processes": value})
+
+
+def test_pipeline_metrics_expose_bounded_queue_and_batch_signals() -> None:
+    from app.infrastructure.metrics import VisionPipelineMetrics
+
+    registry = CollectorRegistry()
+    metrics = VisionPipelineMetrics(registry)
+    metrics.set_command_counts(pending=2, in_flight=3, limit=4)
+    metrics.set_media_counts(pending=1, running=2)
+    metrics.observe_first_batch_wait("student", 0.25)
+    metrics.observe_first_vbas_request("student", 0.5)
+    metrics.record_batch("student", "prepared")
+    payload = generate_latest(registry).decode("utf-8")
+
+    for metric_name in (
+        "algorithm_vision_command_pending",
+        "algorithm_vision_command_in_flight",
+        "algorithm_vision_command_slot_utilization_ratio",
+        "algorithm_vision_media_pending",
+        "algorithm_vision_media_running",
+        "algorithm_vision_first_frame_batch_wait_seconds",
+        "algorithm_vision_first_vbas_request_delay_seconds",
+        "algorithm_vision_batch_events_total",
+    ):
+        assert metric_name in payload

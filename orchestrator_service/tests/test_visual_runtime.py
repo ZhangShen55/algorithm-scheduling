@@ -8,6 +8,13 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+
+from orchestrator_service.app.application.vision_events import (
+    VisualCommandPublisher,
+    VisualEventConsumerLoop,
+    VisualEventProcessor,
+    VisualNodeCoordinator,
+)
 from packages.platform_common.kafka import KafkaMessage
 from packages.platform_common.repository import (
     NodeRecord,
@@ -19,13 +26,6 @@ from packages.platform_contracts.vision import (
     VisualAnalysisCommand,
     VisualAnalysisEvent,
     VisualEventType,
-)
-
-from orchestrator_service.app.application.vision_events import (
-    VisualCommandPublisher,
-    VisualEventConsumerLoop,
-    VisualEventProcessor,
-    VisualNodeCoordinator,
 )
 
 
@@ -130,6 +130,18 @@ class Repository:
     ) -> NodeRecord:
         self.progress.append((node_id, progress, reason))
         return replace(_node(), status=NodeStatus.RUNNING, progress=progress)
+
+    def update_node_progress_if_reason(
+        self,
+        node_id: int,
+        progress: dict[str, object],
+        *,
+        expected_reason: str,
+        reason: str,
+    ) -> bool:
+        assert expected_reason == "视觉节点已领取，正在准备本地视频"
+        self.progress.append((node_id, progress, reason))
+        return True
 
     def aggregate_task_type_state(self, course_task_type_id: int) -> TaskTypeRecord:
         self.aggregated.append(course_task_type_id)
@@ -240,6 +252,38 @@ class Producer:
         return object()
 
 
+class AdvancingProducer(Producer):
+    def __init__(self, repository: StageAdvancingRepository) -> None:
+        super().__init__()
+        self._repository = repository
+
+    async def send_and_wait(self, topic: str, value: bytes, key: bytes) -> object:
+        result = await super().send_and_wait(topic, value, key)
+        self._repository.reason = "正在校验本地视频"
+        return result
+
+
+class StageAdvancingRepository(Repository):
+    def __init__(self, *, node: NodeRecord) -> None:
+        super().__init__(node=node)
+        self.reason = "视觉节点已领取，正在准备本地视频"
+
+    def update_node_progress_if_reason(
+        self,
+        node_id: int,
+        progress: dict[str, object],
+        *,
+        expected_reason: str,
+        reason: str,
+    ) -> bool:
+        assert node_id == 31
+        if self.reason != expected_reason:
+            return False
+        self.reason = reason
+        self.progress.append((node_id, progress, reason))
+        return True
+
+
 @pytest.mark.asyncio
 async def test_visual_node_claim_prepares_shared_submission_and_publishes(tmp_path: Path) -> None:
     repository = Repository(node=_node())
@@ -264,12 +308,34 @@ async def test_visual_node_claim_prepares_shared_submission_and_publishes(tmp_pa
         )
     ]
     assert repository.transitions[0][1] is NodeStatus.RUNNING
+    assert repository.progress[-1] == (
+        31,
+        {},
+        "视觉命令已发布，等待 Vision 消费",
+    )
     command = VisualAnalysisCommand.from_bytes(producer.sent[0][1])
     assert command.local_video_path == str(downloader.path)
     assert command.submission_id == "submission-shared-001"
     assert command.dispatch_attempt == 1
     assert command.claim_token == UUID("00000000-0000-0000-0000-000000000031")
     assert producer.sent[0][2] == b"course-001:TEACHER_BEHAVIOR"
+
+
+@pytest.mark.asyncio
+async def test_visual_publish_does_not_overwrite_stage_advanced_by_consumer(
+    tmp_path: Path,
+) -> None:
+    repository = StageAdvancingRepository(node=_node())
+    coordinator = VisualNodeCoordinator(
+        repository,
+        Downloader(tmp_path),
+        VisualCommandPublisher(AdvancingProducer(repository), topic="visual"),
+        worker_id="worker-visual",
+    )
+
+    assert await coordinator.run_once() == 1
+    assert repository.reason == "正在校验本地视频"
+    assert repository.progress == []
 
 
 @pytest.mark.asyncio
@@ -302,6 +368,7 @@ async def test_visual_media_failure_is_terminal_and_next_node_can_run(tmp_path: 
         NodeStatus.FAILED,
         NodeStatus.RUNNING,
     ]
+    assert repository.progress[-1][2] == "视觉命令已发布，等待 Vision 消费"
     assert len(producer.sent) == 1
 
 
@@ -328,6 +395,10 @@ async def test_visual_recovery_republishes_same_stable_command_without_reclaim(
     assert first.command_id.version == 5
     assert repository.claims == []
     assert repository.transitions == []
+    assert [reason for _, _, reason in repository.progress] == [
+        "视觉命令已发布，等待 Vision 消费",
+        "视觉命令已发布，等待 Vision 消费",
+    ]
 
 
 @pytest.mark.asyncio

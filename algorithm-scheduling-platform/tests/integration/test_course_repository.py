@@ -422,6 +422,44 @@ def test_running_visual_node_progress_uses_platform_node_result(
     assert updated.progress == {"percent": 35, "stage": "粗粒度扫描"}
 
 
+def test_visual_publish_reason_compare_and_set_preserves_newer_stage(
+    repository: CourseRepository,
+) -> None:
+    task_type = repository.create_task_types(
+        task_id="course-visual-publish-cas",
+        writes=[TaskTypeWrite(task_type=TaskType.TEACHER_BEHAVIOR)],
+    )[0]
+    node = repository.create_node(
+        course_task_type_id=task_type.id,
+        node_code="TEACHER_BEHAVIOR_ANALYSIS",
+        status=NodeStatus.RUNNING,
+        priority=Priority.NORMAL,
+        reason="视觉节点已领取，正在准备本地视频",
+    )
+
+    assert repository.update_node_progress_if_reason(
+        node.id,
+        {},
+        expected_reason="视觉节点已领取，正在准备本地视频",
+        reason="视觉命令已发布，等待 Vision 消费",
+    )
+    repository.update_node_progress(
+        node.id,
+        {"percent": 1, "stage": "视频校验"},
+        reason="正在校验本地视频",
+    )
+
+    assert not repository.update_node_progress_if_reason(
+        node.id,
+        {},
+        expected_reason="视觉节点已领取，正在准备本地视频",
+        reason="视觉命令已发布，等待 Vision 消费",
+    )
+    current = repository.get_node(node.id)
+    assert current.reason == "正在校验本地视频"
+    assert current.progress == {"percent": 1, "stage": "视频校验"}
+
+
 def test_visual_fallback_value_is_created_once_and_reused(
     repository: CourseRepository,
 ) -> None:

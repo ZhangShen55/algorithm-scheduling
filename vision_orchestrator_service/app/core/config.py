@@ -83,6 +83,8 @@ class StorageConfig(BaseModel):
 
 class ScanConfig(BaseModel):
     batch_size: int = 8
+    batch_prefetch: Annotated[StrictInt, Field(gt=0, le=8)] = 2
+    progress_update_interval_batches: Annotated[StrictInt, Field(gt=0)] = 2
     default_interval_seconds: float = 10.0
     refinement_intervals_seconds: tuple[float, ...] = (5.0, 2.0)
     end_frame_margin_seconds: Annotated[

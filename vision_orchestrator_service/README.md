@@ -33,6 +33,19 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8010 --workers 1
 同时运行的 ffmpeg/ffprobe 进程数，默认 `2`；该字段只保护本地 CPU/内存，不改变扫描点、
 VBas 批次或平台注册容量。
 
+视觉命令 Consumer 使用长期在途池：`worker.concurrency` 是课程级命令上限，
+`kafka.max_poll_records` 仅是单次预取量。任一课程完成后立即继续 poll 并补位，不等待同一次
+poll 中的其他慢课程。执行中的命令和单次 pending 预取都有界；同一 Kafka partition 即使发生
+乱序完成，也只提交连续完成的 offset。课程槽位全满时 Consumer 使用不取新消息的 keepalive
+poll 维持组成员资格，停止或取消时未完成消息不提交并可重放。
+
+每轮扫描按 `scan.batch_size` 生成稳定的批次计划，生产者与推理消费者之间使用容量为
+`scan.batch_prefetch`（默认 `2`）的队列。首批图片准备后立即等待 VBas 离线租约并开始推理，
+下一批抽帧可同时进行，尾部不足一批仍会提交。抽帧器只创建固定数量 worker，共享
+`media.max_concurrent_processes` 的 FIFO 槽位，因此长课程不会把整节课的数百个时间点一次性
+排在其他课程的时长探测和首批抽帧之前。ffmpeg/ffprobe 使用可取消子进程，超时、命令失败和
+服务关闭都会回收进程及临时 `.part` 文件。
+
 教师泳道先按可配置粗粒度扫描，命中板书或坐姿后按
 `scan.refinement_intervals_seconds` 逐级加密；教师行为区间和学生人数结果写入现有
 PostgreSQL 节点结果。`scan.end_frame_margin_seconds` 避开视频末端不可稳定解码的时间点，
@@ -59,6 +72,10 @@ Vision 不再使用固定 VBas 批次并发。它按短周期读取 Control 的�
 模型就绪 VBas 实例的 `capacity_pools.offline`，全部课程共享的有效批次并发为这些离线容量之和。
 在三实例且每实例 `MaxConcurrentOfflineBatches=1` 时，有效并发就是 `3`；等待批次不会提前
 申请租约或调用 VBas。快照只负责本地门控，实例选择和最终并发准入仍以 Control 原子租约为准。
+
+学生全画面、前排和后排分析复用同一时间点的一张本地图片，仅以各自稳定的区域身份调用
+VBas，不再重复解码视频。节点查询中的整数状态码保持不变，`reason` 会依次反映校验视频、
+探测时长、抽帧 batch 进度、等待 VBas 容量、推理 batch 进度、聚合和持久化阶段。
 
 教师粗扫、加密扫描和学生全画面/区域批次使用由流类型、区域和帧集合稳定派生的 batch ID。
 不同帧集合不再复用 `t-0000` 等审计身份，同一逻辑批次的瞬时网络重试保持同一 ID。连接、

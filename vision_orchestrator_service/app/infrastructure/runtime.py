@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -30,6 +31,7 @@ from ..core.config import VisionSettings
 from ..domain.evidence import VisionEvidenceConfig, VisionEvidencePublisher
 from .capacity import CapacityLeaseHttpClient, CapacityUnavailableError
 from .media import FFmpegFrameExtractor
+from .metrics import VisionPipelineMetrics
 from .vbas import (
     ControlVbasOfflineCapacitySource,
     VbasBatchClient,
@@ -43,9 +45,20 @@ class VisualConsumer(Protocol):
 
     async def commit(self, message: KafkaMessage) -> None: ...
 
+    async def keepalive(self) -> None: ...
+
+    def set_partitions_revoked_callback(self, callback: Callable[..., Any]) -> None: ...
+
 
 class CommandHandler(Protocol):
     async def handle(self, value: bytes) -> None: ...
+
+
+@dataclass(slots=True)
+class _PartitionCommitState:
+    next_offset: int
+    messages: dict[int, KafkaMessage]
+    completed_offsets: set[int]
 
 
 class VisualCommandConsumerLoop:
@@ -57,6 +70,7 @@ class VisualCommandConsumerLoop:
         poll_timeout_seconds: float,
         retry_delay_seconds: float = 1.0,
         concurrency: int = 1,
+        metrics: VisionPipelineMetrics | None = None,
     ) -> None:
         if retry_delay_seconds <= 0:
             raise ValueError("视觉命令重试间隔必须大于 0")
@@ -67,109 +81,260 @@ class VisualCommandConsumerLoop:
         self._poll_timeout_seconds = poll_timeout_seconds
         self._retry_delay_seconds = retry_delay_seconds
         self._concurrency = concurrency
+        self._metrics = metrics
+        self._pending: deque[KafkaMessage] = deque()
+        self._in_flight: dict[asyncio.Task[bool], KafkaMessage] = {}
+        self._partitions: dict[tuple[str, int], _PartitionCommitState] = {}
+        self._handled_total = 0
+        self._peak_pending = 0
+        self._peak_in_flight = 0
+        set_rebalance_callback = getattr(
+            self._consumer,
+            "set_partitions_revoked_callback",
+            None,
+        )
+        if callable(set_rebalance_callback):
+            set_rebalance_callback(self._on_partitions_revoked)
 
-    async def run_once(self, *, stop_event: asyncio.Event | None = None) -> int:
-        messages = await self._consumer.poll(timeout_seconds=self._poll_timeout_seconds)
-        if not messages:
-            return 0
-        handled = 0
-        completed: set[tuple[str, int, int]] = set()
-        committed: set[tuple[str, int, int]] = set()
-        slots = asyncio.Semaphore(self._concurrency)
+    @property
+    def pending_count(self) -> int:
+        return len(self._pending)
 
-        def message_key(message: KafkaMessage) -> tuple[str, int, int]:
-            return message.topic, message.partition, message.offset
+    @property
+    def in_flight_count(self) -> int:
+        return len(self._in_flight)
 
-        async def commit_contiguous() -> None:
-            by_partition: dict[tuple[str, int], list[KafkaMessage]] = {}
-            for candidate in messages:
-                by_partition.setdefault(
-                    (candidate.topic, candidate.partition), []
-                ).append(candidate)
-            for partition_messages in by_partition.values():
-                for candidate in sorted(
-                    partition_messages, key=lambda item: item.offset
-                ):
-                    key = message_key(candidate)
-                    if key in committed:
-                        continue
-                    if key not in completed:
-                        break
-                    await self._consumer.commit(candidate)
-                    committed.add(key)
+    @property
+    def peak_pending_count(self) -> int:
+        return self._peak_pending
 
-        async def process(message: KafkaMessage) -> bool:
-            async with slots:
-                while True:
-                    try:
-                        await self._processor.handle(message.value)
-                        return True
-                    except CapacityUnavailableError:
-                        if stop_event is None:
-                            raise
-                        try:
-                            await asyncio.wait_for(
-                                stop_event.wait(), timeout=self._retry_delay_seconds
-                            )
-                        except TimeoutError:
-                            continue
-                        return False
+    @property
+    def peak_in_flight_count(self) -> int:
+        return self._peak_in_flight
 
-        tasks: dict[asyncio.Task[bool], KafkaMessage] = {}
+    @staticmethod
+    def _partition_key(message: KafkaMessage) -> tuple[str, int]:
+        return message.topic, message.partition
+
+    def _register_messages(self, messages: list[KafkaMessage]) -> None:
+        by_partition: dict[tuple[str, int], list[KafkaMessage]] = {}
         for message in messages:
+            by_partition.setdefault(self._partition_key(message), []).append(message)
+
+        for partition_key, partition_messages in by_partition.items():
+            ordered = sorted(partition_messages, key=lambda item: item.offset)
+            state = self._partitions.get(partition_key)
+            if state is None:
+                state = _PartitionCommitState(
+                    next_offset=ordered[0].offset,
+                    messages={},
+                    completed_offsets=set(),
+                )
+                self._partitions[partition_key] = state
+            for message in ordered:
+                if message.offset < state.next_offset or message.offset in state.messages:
+                    continue
+                state.messages[message.offset] = message
+                try:
+                    VisualAnalysisCommand.from_bytes(message.value)
+                except (LegacyVisualCommandError, ValueError):
+                    # 旧代次或非法信封无法通过重试恢复，仍受连续 offset 水位约束。
+                    state.completed_offsets.add(message.offset)
+                    continue
+                self._pending.append(message)
+        self._peak_pending = max(self._peak_pending, len(self._pending))
+        self._record_metrics()
+
+    async def _commit_contiguous(self) -> None:
+        for state in self._partitions.values():
+            while state.next_offset in state.completed_offsets:
+                message = state.messages[state.next_offset]
+                await self._consumer.commit(message)
+                state.completed_offsets.remove(state.next_offset)
+                del state.messages[state.next_offset]
+                state.next_offset += 1
+
+    async def _process(
+        self,
+        message: KafkaMessage,
+        stop_event: asyncio.Event | None,
+    ) -> bool:
+        while True:
             try:
-                VisualAnalysisCommand.from_bytes(message.value)
-            except LegacyVisualCommandError:
-                # 旧命令无法证明属于当前领取代次；确认后由 Orchestrator 启动恢复重发。
-                completed.add(message_key(message))
-                continue
-            except ValueError:
-                # 非法信封重试也不会恢复，标记完成后仍按分区连续水位提交。
-                completed.add(message_key(message))
-                continue
+                await self._processor.handle(message.value)
+                return True
+            except CapacityUnavailableError:
+                if stop_event is None:
+                    raise
+                try:
+                    await asyncio.wait_for(
+                        stop_event.wait(), timeout=self._retry_delay_seconds
+                    )
+                except TimeoutError:
+                    continue
+                return False
+
+    def _fill_available_slots(self, stop_event: asyncio.Event | None) -> None:
+        if stop_event is not None and stop_event.is_set():
+            return
+        while self._pending and len(self._in_flight) < self._concurrency:
+            message = self._pending.popleft()
             task = asyncio.create_task(
-                process(message),
+                self._process(message, stop_event),
                 name=(
                     f"vision-command-{message.topic}-{message.partition}-"
                     f"{message.offset}"
                 ),
             )
-            tasks[task] = message
+            self._in_flight[task] = message
+        self._peak_in_flight = max(self._peak_in_flight, len(self._in_flight))
+        self._record_metrics()
 
-        await commit_contiguous()
-        pending = set(tasks)
-        try:
-            while pending:
-                done, pending = await asyncio.wait(
-                    pending, return_when=asyncio.FIRST_COMPLETED
-                )
-                failure: BaseException | None = None
-                for task in done:
-                    try:
-                        succeeded = task.result()
-                    except BaseException as exc:  # noqa: BLE001 - 先收敛同批任务再传播
-                        failure = failure or exc
-                        continue
-                    if succeeded:
-                        completed.add(message_key(tasks[task]))
-                        handled += 1
-                await commit_contiguous()
-                if failure is not None:
-                    for task in pending:
-                        task.cancel()
-                    await asyncio.gather(*pending, return_exceptions=True)
-                    raise failure
-        finally:
-            for task in pending:
-                if not task.done():
-                    task.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
+    async def _reap_completed(
+        self,
+        *,
+        wait: bool,
+        timeout_seconds: float | None = None,
+    ) -> int:
+        if not self._in_flight:
+            return 0
+        if wait:
+            done, _ = await asyncio.wait(
+                self._in_flight,
+                timeout=timeout_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        else:
+            done = {task for task in self._in_flight if task.done()}
+        handled = 0
+        failure: BaseException | None = None
+        for task in done:
+            message = self._in_flight.pop(task, None)
+            if message is None:
+                continue
+            try:
+                succeeded = task.result()
+            except BaseException as exc:  # noqa: BLE001 - 基础设施错误交给运行时门禁
+                failure = failure or exc
+                continue
+            if not succeeded:
+                continue
+            state = self._partitions[self._partition_key(message)]
+            state.completed_offsets.add(message.offset)
+            handled += 1
+        self._handled_total += handled
+        self._record_metrics()
+        await self._commit_contiguous()
+        if failure is not None:
+            raise failure
         return handled
 
+    async def _cancel_in_flight(self) -> None:
+        tasks = tuple(self._in_flight)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._in_flight.clear()
+        self._record_metrics()
+
+    async def _on_partitions_revoked(self, partitions: set[Any]) -> None:
+        revoked = {
+            (str(partition.topic), int(partition.partition))
+            for partition in partitions
+        }
+        tasks = [
+            task
+            for task, message in self._in_flight.items()
+            if self._partition_key(message) in revoked
+        ]
+        for task in tasks:
+            self._in_flight.pop(task, None)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._pending = deque(
+            message
+            for message in self._pending
+            if self._partition_key(message) not in revoked
+        )
+        for partition_key in revoked:
+            self._partitions.pop(partition_key, None)
+        self._record_metrics()
+
+    def _record_metrics(self) -> None:
+        if self._metrics is not None:
+            self._metrics.set_command_counts(
+                pending=len(self._pending),
+                in_flight=len(self._in_flight),
+                limit=self._concurrency,
+            )
+
+    async def run_once(self, *, stop_event: asyncio.Event | None = None) -> int:
+        if self._pending or self._in_flight:
+            raise RuntimeError("视觉命令单轮入口不能与未收敛任务重入")
+        handled_before = self._handled_total
+        messages = await self._consumer.poll(timeout_seconds=self._poll_timeout_seconds)
+        if not messages:
+            return 0
+        self._register_messages(messages)
+        await self._commit_contiguous()
+        self._fill_available_slots(stop_event)
+        try:
+            while self._pending or self._in_flight:
+                if self._in_flight:
+                    handled = await self._reap_completed(
+                        wait=True,
+                        timeout_seconds=self._poll_timeout_seconds,
+                    )
+                    if handled == 0:
+                        keepalive = getattr(self._consumer, "keepalive", None)
+                        if callable(keepalive):
+                            await keepalive()
+                self._fill_available_slots(stop_event)
+                if stop_event is not None and stop_event.is_set() and self._pending:
+                    break
+        finally:
+            if self._in_flight:
+                await self._cancel_in_flight()
+        return self._handled_total - handled_before
+
     async def run(self, stop_event: asyncio.Event) -> None:
-        while not stop_event.is_set():
-            await self.run_once(stop_event=stop_event)
+        try:
+            while True:
+                await self._reap_completed(wait=False)
+                self._fill_available_slots(stop_event)
+
+                if stop_event.is_set():
+                    if not self._in_flight:
+                        return
+                    await self._reap_completed(wait=True)
+                    continue
+
+                if not self._pending and len(self._in_flight) < self._concurrency:
+                    messages = await self._consumer.poll(
+                        timeout_seconds=self._poll_timeout_seconds
+                    )
+                    if messages:
+                        self._register_messages(messages)
+                        await self._commit_contiguous()
+                        self._fill_available_slots(stop_event)
+                        continue
+
+                if self._in_flight:
+                    handled = await self._reap_completed(
+                        wait=True,
+                        timeout_seconds=self._poll_timeout_seconds,
+                    )
+                    if handled == 0:
+                        keepalive = getattr(self._consumer, "keepalive", None)
+                        if callable(keepalive):
+                            await keepalive()
+        finally:
+            await self._cancel_in_flight()
 
 
 @dataclass(slots=True)
@@ -207,6 +372,7 @@ class VisionOrchestratorRuntime:
         self._producer_started = False
         self._consumer_started = False
         self._app: FastAPI | None = None
+        self._pipeline_metrics: VisionPipelineMetrics | None = None
 
     def attach(self, app: FastAPI) -> None:
         self._app = app
@@ -319,6 +485,7 @@ class VisionOrchestratorRuntime:
             ffprobe_binary=settings.media.ffprobe_binary,
             command_timeout_seconds=settings.media.command_timeout_seconds,
             max_concurrent_processes=settings.media.max_concurrent_processes,
+            metrics=self._pipeline_metrics,
         )
         evidence = VisionEvidencePublisher(
             result_root=settings.storage.result_root,
@@ -336,6 +503,7 @@ class VisionOrchestratorRuntime:
             vbas,
             evidence,
             settings=settings,
+            metrics=self._pipeline_metrics,
         )
 
     async def start(self, app: FastAPI) -> None:
@@ -353,6 +521,14 @@ class VisionOrchestratorRuntime:
             self._producer_started = True
             await self.resources.consumer.start()
             self._consumer_started = True
+            if (
+                self._pipeline_metrics is None
+                and self._app is not None
+                and hasattr(self._app.state, "platform_metrics")
+            ):
+                self._pipeline_metrics = VisionPipelineMetrics(
+                    self._app.state.platform_metrics.registry
+                )
             analyzer = self._analyzer_factory(self.resources)
             processor = VisualCommandProcessor(
                 analyzer,
@@ -366,6 +542,7 @@ class VisionOrchestratorRuntime:
                 poll_timeout_seconds=self.settings.kafka.poll_timeout_seconds,
                 retry_delay_seconds=self.settings.worker.poll_interval_seconds,
                 concurrency=self.settings.worker.concurrency,
+                metrics=self._pipeline_metrics,
             )
             self.tasks = {
                 "visual_command_consumer": asyncio.create_task(

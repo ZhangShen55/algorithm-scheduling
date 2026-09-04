@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer  # type: ignore[import-untyped]
+from aiokafka.abc import ConsumerRebalanceListener  # type: ignore[import-untyped]
 from aiokafka.admin import AIOKafkaAdminClient, NewTopic  # type: ignore[import-untyped]
 from aiokafka.errors import TopicAlreadyExistsError  # type: ignore[import-untyped]
 from aiokafka.structs import OffsetAndMetadata, TopicPartition  # type: ignore[import-untyped]
@@ -24,6 +25,24 @@ class KafkaMessage:
     key: bytes | None
     value: bytes
     timestamp_ms: int | None
+
+
+class _AdapterRebalanceListener(ConsumerRebalanceListener):
+    def __init__(self) -> None:
+        self._on_revoked: Callable[[set[TopicPartition]], Awaitable[None]] | None = None
+
+    def set_on_revoked(
+        self,
+        callback: Callable[[set[TopicPartition]], Awaitable[None]],
+    ) -> None:
+        self._on_revoked = callback
+
+    async def on_partitions_revoked(self, revoked: set[TopicPartition]) -> None:
+        if self._on_revoked is not None:
+            await self._on_revoked(revoked)
+
+    async def on_partitions_assigned(self, assigned: set[TopicPartition]) -> None:
+        del assigned
 
 
 class AioKafkaProducerAdapter:
@@ -64,8 +83,8 @@ class AioKafkaConsumerAdapter:
         consumer_factory: Callable[..., Any] = AIOKafkaConsumer,
     ) -> None:
         self._max_poll_records = max_poll_records
+        self._rebalance_listener = _AdapterRebalanceListener()
         self._consumer = consumer_factory(
-            *topics,
             bootstrap_servers=bootstrap_servers,
             group_id=group_id,
             client_id=client_id,
@@ -73,6 +92,13 @@ class AioKafkaConsumerAdapter:
             auto_offset_reset=auto_offset_reset,
             max_poll_records=max_poll_records,
         )
+        self._consumer.subscribe(topics=topics, listener=self._rebalance_listener)
+
+    def set_partitions_revoked_callback(
+        self,
+        callback: Callable[[set[TopicPartition]], Awaitable[None]],
+    ) -> None:
+        self._rebalance_listener.set_on_revoked(callback)
 
     async def start(self) -> None:
         await self._consumer.start()
@@ -105,6 +131,16 @@ class AioKafkaConsumerAdapter:
         await self._consumer.commit(
             {partition: OffsetAndMetadata(message.offset + 1, "")}
         )
+
+    async def keepalive(self) -> None:
+        partitions = tuple(self._consumer.assignment())
+        if not partitions:
+            return
+        self._consumer.pause(*partitions)
+        try:
+            await self._consumer.getmany(timeout_ms=0, max_records=1)
+        finally:
+            self._consumer.resume(*partitions)
 
     async def lag(self) -> dict[str, int]:
         partitions = list(self._consumer.assignment())

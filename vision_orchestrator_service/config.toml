@@ -55,7 +55,7 @@ consumer_group = "vision-orchestrator"
 enable_auto_commit = false
 # 新消费组没有 offset 时从最早消息开始读取。
 auto_offset_reset = "earliest"
-# 单次 poll 最多领取的课程级视觉命令数。
+# 单次 poll 最多预取的课程级视觉命令数；它不是并发上限，空闲槽位会连续 poll 补满。
 max_poll_records = 2
 # Kafka 单次 poll 的最长等待秒数。
 poll_timeout_seconds = 1.0
@@ -87,7 +87,7 @@ acquire_wait_timeout_seconds = 300.0
 acquire_retry_interval_seconds = 0.2
 
 [worker]
-# 视觉任务处理并发数。
+# 课程级视觉命令在途上限；不等于 ffmpeg 进程数或 VBas batch 并发。
 concurrency = 2
 # 工作进程轮询间隔秒数。
 poll_interval_seconds = 1.0
@@ -105,6 +105,10 @@ evidence_root = "/data/result/evidence"
 [scan]
 # 单次 VBas 扫描批次大小。
 batch_size = 8
+# 每个课程允许提前准备的抽帧 batch 数；有界队列满后生产者等待推理消费。
+batch_prefetch = 2
+# 抽帧和推理进度每完成多少个 batch 更新一次；尾批始终更新。
+progress_update_interval_batches = 2
 # 默认帧扫描间隔秒数。
 default_interval_seconds = 10.0
 # 命中教师板书或坐姿后依次使用的加密检测间隔秒数。
@@ -127,7 +131,7 @@ ffmpeg_binary = "ffmpeg"
 ffprobe_binary = "ffprobe"
 # 单条视频命令的硬超时秒数。
 command_timeout_seconds = 60.0
-# 单个服务容器内同时运行的 ffmpeg/ffprobe 进程上限，防止密集抽帧触发内存峰值。
+# 单容器 ffmpeg/ffprobe 进程硬上限；固定 worker 和公平排队避免长课程一次占满等待队列。
 max_concurrent_processes = 2
 
 [vbas]

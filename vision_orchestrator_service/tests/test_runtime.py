@@ -8,7 +8,9 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+from aiokafka.structs import TopicPartition
 from fastapi import FastAPI
+
 from packages.platform_common.kafka import KafkaMessage
 from packages.platform_common.repository import (
     RepositoryStateConflictError,
@@ -21,7 +23,6 @@ from packages.platform_contracts.vision import (
     VisualAnalysisEvent,
     VisualEventType,
 )
-
 from vision_orchestrator_service.app.application.events import (
     VisualCommandProcessor as ProductionVisualCommandProcessor,
 )
@@ -52,6 +53,32 @@ class Consumer:
 
     async def commit(self, message: KafkaMessage) -> None:
         self.committed.append(message.offset)
+
+
+class StreamingConsumer:
+    def __init__(self) -> None:
+        self.batches: asyncio.Queue[list[KafkaMessage]] = asyncio.Queue()
+        self.committed: list[int] = []
+        self.commit_event = asyncio.Event()
+        self.keepalive_calls = 0
+
+    async def publish(self, messages: list[KafkaMessage]) -> None:
+        await self.batches.put(messages)
+
+    async def poll(self, *, timeout_seconds: float) -> list[KafkaMessage]:
+        try:
+            return await asyncio.wait_for(
+                self.batches.get(), timeout=timeout_seconds
+            )
+        except TimeoutError:
+            return []
+
+    async def commit(self, message: KafkaMessage) -> None:
+        self.committed.append(message.offset)
+        self.commit_event.set()
+
+    async def keepalive(self) -> None:
+        self.keepalive_calls += 1
 
 
 class LegacyRepositoryCasAdapter:
@@ -476,6 +503,359 @@ async def test_consumer_limits_concurrent_course_processing(tmp_path) -> None:
     release.set()
     assert await asyncio.wait_for(task, timeout=1) == 4
     assert consumer.committed == [0, 1, 2, 3]
+
+
+@pytest.mark.asyncio
+async def test_consumer_fills_free_slots_when_commands_arrive_staggered(tmp_path) -> None:
+    base = _command(
+        tmp_path,
+        TaskType.TEACHER_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    )
+    values = {
+        node_id: replace(
+            base,
+            command_id=UUID(f"00000000-0000-0000-0000-{node_id:012d}"),
+            node_id=node_id,
+        ).to_bytes()
+        for node_id in (101, 102, 103)
+    }
+    started = {node_id: asyncio.Event() for node_id in values}
+    releases = {node_id: asyncio.Event() for node_id in values}
+
+    class Processor:
+        async def handle(self, value: bytes) -> None:
+            node_id = VisualAnalysisCommand.from_bytes(value).node_id
+            started[node_id].set()
+            await releases[node_id].wait()
+
+    consumer = StreamingConsumer()
+    loop = VisualCommandConsumerLoop(
+        consumer,
+        Processor(),
+        poll_timeout_seconds=0.01,
+        concurrency=2,
+    )
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(loop.run(stop_event))
+
+    await consumer.publish([_message(values[101], 0)])
+    await asyncio.wait_for(started[101].wait(), timeout=1)
+    await consumer.publish([_message(values[102], 1)])
+    await asyncio.wait_for(started[102].wait(), timeout=1)
+    releases[102].set()
+    await consumer.publish([_message(values[103], 2)])
+    await asyncio.wait_for(started[103].wait(), timeout=1)
+
+    assert releases[101].is_set() is False
+    assert loop.peak_in_flight_count == 2
+    assert consumer.committed == []
+
+    releases[101].set()
+    releases[103].set()
+    while consumer.committed != [0, 1, 2]:
+        consumer.commit_event.clear()
+        await asyncio.wait_for(consumer.commit_event.wait(), timeout=1)
+    stop_event.set()
+    await asyncio.wait_for(task, timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_consumer_refills_after_fast_command_from_same_poll(tmp_path) -> None:
+    base = _command(
+        tmp_path,
+        TaskType.STUDENT_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    )
+    values = [
+        replace(
+            base,
+            command_id=UUID(f"00000000-0000-0000-0000-{index:012d}"),
+            node_id=200 + index,
+        ).to_bytes()
+        for index in range(3)
+    ]
+    slow_release = asyncio.Event()
+    replacement_started = asyncio.Event()
+
+    class Processor:
+        async def handle(self, value: bytes) -> None:
+            node_id = VisualAnalysisCommand.from_bytes(value).node_id
+            if node_id == 200:
+                await slow_release.wait()
+            elif node_id == 202:
+                replacement_started.set()
+
+    consumer = StreamingConsumer()
+    await consumer.publish([_message(values[0], 10), _message(values[1], 11)])
+    await consumer.publish([_message(values[2], 12)])
+    loop = VisualCommandConsumerLoop(
+        consumer,
+        Processor(),
+        poll_timeout_seconds=0.01,
+        concurrency=2,
+    )
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(loop.run(stop_event))
+
+    await asyncio.wait_for(replacement_started.wait(), timeout=1)
+    assert slow_release.is_set() is False
+    assert consumer.committed == []
+
+    slow_release.set()
+    while consumer.committed != [10, 11, 12]:
+        consumer.commit_event.clear()
+        await asyncio.wait_for(consumer.commit_event.wait(), timeout=1)
+    stop_event.set()
+    await asyncio.wait_for(task, timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_consumer_keeps_in_flight_and_pending_backlog_bounded(tmp_path) -> None:
+    base = _command(
+        tmp_path,
+        TaskType.STUDENT_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    )
+    messages = [
+        _message(
+            replace(
+                base,
+                command_id=UUID(f"00000000-0000-0000-0000-{index:012d}"),
+                node_id=300 + index,
+            ).to_bytes(),
+            index,
+        )
+        for index in range(6)
+    ]
+    two_started = asyncio.Event()
+    release = asyncio.Event()
+    active = 0
+
+    class Processor:
+        async def handle(self, value: bytes) -> None:
+            nonlocal active
+            del value
+            active += 1
+            if active == 2:
+                two_started.set()
+            try:
+                await release.wait()
+            finally:
+                active -= 1
+
+    consumer = StreamingConsumer()
+    await consumer.publish(messages)
+    loop = VisualCommandConsumerLoop(
+        consumer,
+        Processor(),
+        poll_timeout_seconds=0.01,
+        concurrency=2,
+    )
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(loop.run(stop_event))
+    await asyncio.wait_for(two_started.wait(), timeout=1)
+
+    assert loop.in_flight_count == 2
+    assert loop.pending_count == 4
+    assert loop.peak_in_flight_count == 2
+    assert loop.peak_pending_count == len(messages)
+
+    stop_event.set()
+    release.set()
+    await asyncio.wait_for(task, timeout=1)
+    assert loop.in_flight_count == 0
+    assert loop.pending_count == 4
+    assert consumer.committed == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_consumer_tracks_contiguous_offsets_across_polls(tmp_path) -> None:
+    base = _command(
+        tmp_path,
+        TaskType.TEACHER_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    )
+    values = [
+        replace(
+            base,
+            command_id=UUID(f"00000000-0000-0000-0000-{index:012d}"),
+            node_id=400 + index,
+        ).to_bytes()
+        for index in range(3)
+    ]
+    first_release = asyncio.Event()
+    third_finished = asyncio.Event()
+
+    class Processor:
+        async def handle(self, value: bytes) -> None:
+            node_id = VisualAnalysisCommand.from_bytes(value).node_id
+            if node_id == 400:
+                await first_release.wait()
+            elif node_id == 402:
+                third_finished.set()
+
+    consumer = StreamingConsumer()
+    await consumer.publish([_message(values[0], 100), _message(values[1], 101)])
+    await consumer.publish([_message(values[2], 102)])
+    loop = VisualCommandConsumerLoop(
+        consumer,
+        Processor(),
+        poll_timeout_seconds=0.01,
+        concurrency=2,
+    )
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(loop.run(stop_event))
+    await asyncio.wait_for(third_finished.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+    assert consumer.committed == []
+
+    first_release.set()
+    while consumer.committed != [100, 101, 102]:
+        consumer.commit_event.clear()
+        await asyncio.wait_for(consumer.commit_event.wait(), timeout=1)
+    stop_event.set()
+    await asyncio.wait_for(task, timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_consumer_cancellation_leaves_message_replayable_after_restart(
+    tmp_path,
+) -> None:
+    value = _command(
+        tmp_path,
+        TaskType.TEACHER_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    ).to_bytes()
+    started = asyncio.Event()
+
+    class BlockingProcessor:
+        async def handle(self, value: bytes) -> None:
+            del value
+            started.set()
+            await asyncio.Event().wait()
+
+    first_consumer = StreamingConsumer()
+    await first_consumer.publish([_message(value, 50)])
+    first_loop = VisualCommandConsumerLoop(
+        first_consumer,
+        BlockingProcessor(),
+        poll_timeout_seconds=0.01,
+    )
+    first_task = asyncio.create_task(first_loop.run(asyncio.Event()))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    first_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_task
+
+    assert first_consumer.committed == []
+    assert first_loop.in_flight_count == 0
+
+    second_consumer = StreamingConsumer()
+    await second_consumer.publish([_message(value, 50)])
+
+    class SuccessfulProcessor:
+        async def handle(self, value: bytes) -> None:
+            del value
+
+    second_loop = VisualCommandConsumerLoop(
+        second_consumer,
+        SuccessfulProcessor(),
+        poll_timeout_seconds=0.01,
+    )
+    stop_event = asyncio.Event()
+    second_task = asyncio.create_task(second_loop.run(stop_event))
+    await asyncio.wait_for(second_consumer.commit_event.wait(), timeout=1)
+    stop_event.set()
+    await asyncio.wait_for(second_task, timeout=1)
+    assert second_consumer.committed == [50]
+
+
+@pytest.mark.asyncio
+async def test_consumer_keeps_kafka_membership_alive_while_slots_are_full(
+    tmp_path,
+) -> None:
+    value = _command(
+        tmp_path,
+        TaskType.TEACHER_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    ).to_bytes()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class Processor:
+        async def handle(self, value: bytes) -> None:
+            del value
+            started.set()
+            await release.wait()
+
+    consumer = StreamingConsumer()
+    await consumer.publish([_message(value)])
+    loop = VisualCommandConsumerLoop(
+        consumer,
+        Processor(),
+        poll_timeout_seconds=0.01,
+    )
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(loop.run(stop_event))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    while consumer.keepalive_calls == 0:
+        await asyncio.sleep(0.005)
+
+    release.set()
+    await asyncio.wait_for(consumer.commit_event.wait(), timeout=1)
+    stop_event.set()
+    await asyncio.wait_for(task, timeout=1)
+    assert consumer.keepalive_calls >= 1
+
+
+@pytest.mark.asyncio
+async def test_consumer_rebalance_cancels_only_revoked_partition_work(tmp_path) -> None:
+    value = _command(
+        tmp_path,
+        TaskType.TEACHER_BEHAVIOR,
+        strategy={"coarse_interval_seconds": 10},
+    ).to_bytes()
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    class RebalanceConsumer(StreamingConsumer):
+        def __init__(self) -> None:
+            super().__init__()
+            self.callback = None
+
+        def set_partitions_revoked_callback(self, callback) -> None:
+            self.callback = callback
+
+    class Processor:
+        async def handle(self, value: bytes) -> None:
+            del value
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+    consumer = RebalanceConsumer()
+    await consumer.publish([_message(value, 70)])
+    loop = VisualCommandConsumerLoop(
+        consumer,
+        Processor(),
+        poll_timeout_seconds=0.01,
+    )
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(loop.run(stop_event))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    assert consumer.callback is not None
+
+    await consumer.callback({TopicPartition("visual", 0)})
+    await asyncio.wait_for(cancelled.wait(), timeout=1)
+
+    assert loop.in_flight_count == 0
+    assert consumer.committed == []
+    stop_event.set()
+    await asyncio.wait_for(task, timeout=1)
 
 
 @pytest.mark.asyncio

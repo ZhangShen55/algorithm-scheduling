@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
@@ -203,7 +204,13 @@ async def test_teacher_analysis_refines_hits_and_persists_empty_safe_intervals(
     ]
     assert result.artifact_count and result.artifact_count > 0
     assert Path(result.artifact_path or "").is_dir()
-    assert [item[0] for item in progress] == [5, 20, 75, 95]
+    assert [item[0] for item in progress] == sorted(item[0] for item in progress)
+    assert progress[0] == (5, "视频校验", "正在校验本地视频")
+    assert any(item[2] == "正在探测视频时长" for item in progress)
+    assert any("正在抽取采样帧" in item[2] for item in progress)
+    assert any(item[2] == "正在等待 VBas 离线容量" for item in progress)
+    assert any("正在执行 VBas 推理" in item[2] for item in progress)
+    assert progress[-1] == (95, "结果持久化", "正在持久化视觉结果")
 
 
 @pytest.mark.asyncio
@@ -346,3 +353,189 @@ async def test_student_analysis_uses_regions_and_stable_database_fallback(
     assert 0.25 <= result.result["back_occupancy_ratio"] <= 0.40
     assert len(result.result["frames"]) == 3
     assert result.artifact_count and result.artifact_count > 0
+
+
+@pytest.mark.asyncio
+async def test_student_regions_decode_each_sampling_point_once(tmp_path: Path) -> None:
+    analyzer = _analyzer(tmp_path)
+
+    async def report(percent: int, stage: str, reason: str) -> None:
+        del percent, stage, reason
+
+    await analyzer.analyze(
+        _command(
+            tmp_path,
+            TaskType.STUDENT_BEHAVIOR,
+            strategy={"interval_seconds": 10},
+        ),
+        report,
+    )
+
+    extractor = analyzer._frames
+    assert isinstance(extractor, FrameExtractor)
+    requested = [
+        point
+        for batch in extractor.requested_timestamps
+        for point in batch
+    ]
+    assert requested == [0.0, 10.0, 20.0]
+
+
+@pytest.mark.asyncio
+async def test_first_batch_reaches_vbas_before_all_frames_are_extracted(
+    tmp_path: Path,
+) -> None:
+    second_batch_started = asyncio.Event()
+    release_second_batch = asyncio.Event()
+    first_vbas_call = asyncio.Event()
+
+    class PipelineExtractor(FrameExtractor):
+        def __init__(self, root: Path) -> None:
+            super().__init__(root, duration=50.0)
+            self.calls = 0
+
+        async def extract(self, **kwargs):
+            self.calls += 1
+            if self.calls == 2:
+                second_batch_started.set()
+                await release_second_batch.wait()
+            return await super().extract(**kwargs)
+
+    class RecordingVbas(Vbas):
+        async def analyze(self, **kwargs):
+            first_vbas_call.set()
+            return await super().analyze(**kwargs)
+
+    settings = VisionSettings(
+        storage={
+            "course_root": tmp_path / "course",
+            "result_root": tmp_path / "result",
+        },
+        scan={"batch_size": 2, "batch_prefetch": 2},
+        evidence={"same_category_min_interval_seconds": 0},
+    )
+    analyzer = CourseVisualAnalyzer(
+        Repository(),
+        PipelineExtractor(tmp_path / "frames"),
+        RecordingVbas(),
+        VisionEvidencePublisher(result_root=settings.storage.result_root),
+        settings=settings,
+    )
+
+    async def report(percent: int, stage: str, reason: str) -> None:
+        del percent, stage, reason
+
+    task = asyncio.create_task(
+        analyzer.analyze(
+            _command(
+                tmp_path,
+                TaskType.STUDENT_BEHAVIOR,
+                strategy={"interval_seconds": 10},
+            ),
+            report,
+        )
+    )
+    await asyncio.wait_for(second_batch_started.wait(), timeout=1)
+    await asyncio.wait_for(first_vbas_call.wait(), timeout=1)
+
+    assert task.done() is False
+
+    release_second_batch.set()
+    await asyncio.wait_for(task, timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_tail_batch_and_frame_identities_are_stable_on_replay(tmp_path: Path) -> None:
+    class RecordingVbas(Vbas):
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        async def analyze(self, **kwargs):
+            self.calls.append([frame.image_id for frame in kwargs["frames"]])
+            return await super().analyze(**kwargs)
+
+    settings = VisionSettings(
+        storage={
+            "course_root": tmp_path / "course",
+            "result_root": tmp_path / "result",
+        },
+        scan={"batch_size": 2},
+        evidence={"same_category_min_interval_seconds": 0},
+    )
+    recorder = RecordingVbas()
+    analyzer = CourseVisualAnalyzer(
+        Repository(),
+        FrameExtractor(tmp_path / "frames", duration=25.0),
+        recorder,
+        VisionEvidencePublisher(result_root=settings.storage.result_root),
+        settings=settings,
+    )
+
+    async def report(percent: int, stage: str, reason: str) -> None:
+        del percent, stage, reason
+
+    command = _command(
+        tmp_path,
+        TaskType.STUDENT_BEHAVIOR,
+        strategy={"interval_seconds": 10},
+    )
+    await analyzer.analyze(command, report)
+    first_calls = [list(call) for call in recorder.calls]
+    recorder.calls.clear()
+    await analyzer.analyze(command, report)
+
+    assert [len(call) for call in first_calls] == [2, 2, 1, 1]
+    assert recorder.calls == first_calls
+
+
+@pytest.mark.asyncio
+async def test_failed_batch_cancels_its_media_producer(tmp_path: Path) -> None:
+    producer_cancelled = asyncio.Event()
+
+    class BlockingExtractor(FrameExtractor):
+        def __init__(self, root: Path) -> None:
+            super().__init__(root, duration=50.0)
+            self.calls = 0
+
+        async def extract(self, **kwargs):
+            self.calls += 1
+            if self.calls > 1:
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    producer_cancelled.set()
+            return await super().extract(**kwargs)
+
+    class FailingVbas(Vbas):
+        async def analyze(self, **kwargs):
+            del kwargs
+            raise ValueError("受控 VBas 批次失败")
+
+    settings = VisionSettings(
+        storage={
+            "course_root": tmp_path / "course",
+            "result_root": tmp_path / "result",
+        },
+        scan={"batch_size": 2},
+    )
+    analyzer = CourseVisualAnalyzer(
+        Repository(),
+        BlockingExtractor(tmp_path / "frames"),
+        FailingVbas(),
+        VisionEvidencePublisher(result_root=settings.storage.result_root),
+        settings=settings,
+    )
+
+    async def report(percent: int, stage: str, reason: str) -> None:
+        del percent, stage, reason
+
+    with pytest.raises(ValueError, match="受控 VBas 批次失败"):
+        await analyzer.analyze(
+            _command(
+                tmp_path,
+                TaskType.STUDENT_BEHAVIOR,
+                strategy={"interval_seconds": 10},
+            ),
+            report,
+        )
+    await asyncio.wait_for(producer_cancelled.wait(), timeout=1)

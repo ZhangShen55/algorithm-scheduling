@@ -2268,6 +2268,56 @@ class CourseRepository:
             )
         return self.get_node(node_id)
 
+    def update_node_progress_if_reason(
+        self,
+        node_id: int,
+        progress: JsonObject,
+        *,
+        expected_reason: str,
+        reason: str,
+    ) -> bool:
+        """仅在节点仍处于调用方观察到的运行阶段时更新进度。"""
+
+        with self._engine.begin() as connection:
+            current_value = connection.execute(
+                text(
+                    "SELECT status, reason FROM task_nodes "
+                    "WHERE id = :node_id FOR UPDATE"
+                ),
+                {"node_id": node_id},
+            ).mappings().one_or_none()
+            if current_value is None:
+                raise RepositoryNotFoundError(f"节点不存在: {node_id}")
+            if (
+                NodeStatus(current_value["status"]) is not NodeStatus.RUNNING
+                or current_value["reason"] != expected_reason
+            ):
+                return False
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO node_results (task_node_id, progress)
+                    VALUES (:node_id, CAST(:progress AS jsonb))
+                    ON CONFLICT (task_node_id) DO UPDATE
+                    SET progress = EXCLUDED.progress,
+                        updated_at = now()
+                    """
+                ),
+                {"node_id": node_id, "progress": _json(progress)},
+            )
+            connection.execute(
+                text(
+                    """
+                    UPDATE task_nodes
+                    SET reason = :reason,
+                        updated_at = now()
+                    WHERE id = :node_id
+                    """
+                ),
+                {"node_id": node_id, "reason": reason},
+            )
+        return True
+
     def merge_node_progress(
         self,
         node_id: int,
