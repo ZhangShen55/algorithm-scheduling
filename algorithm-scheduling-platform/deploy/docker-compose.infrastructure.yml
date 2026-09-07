@@ -10,7 +10,9 @@ services:
       POSTGRES_PASSWORD: algorithm
       TZ: Asia/Shanghai
     ports:
-      - "127.0.0.1:5432:5432"
+      # 默认监听所有网卡，允许受控内网客户端通过服务器地址访问。
+      # 可通过 PLATFORM_BIND_HOST 限定为指定网卡地址。
+      - "${PLATFORM_BIND_HOST:-0.0.0.0}:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -28,7 +30,9 @@ services:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: EXTERNAL://:9092,INTERNAL://:29092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: EXTERNAL://127.0.0.1:9092,INTERNAL://kafka:29092
+      # 外部客户端必须拿到服务器可达地址，不能广播 127.0.0.1。
+      # PLATFORM_ADVERTISED_HOST 应设置为服务器的内网 IP。
+      KAFKA_ADVERTISED_LISTENERS: EXTERNAL://${PLATFORM_ADVERTISED_HOST:-192.168.29.11}:9092,INTERNAL://kafka:29092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT,INTERNAL:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
@@ -38,7 +42,7 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
     ports:
-      - "127.0.0.1:9092:9092"
+      - "${PLATFORM_BIND_HOST:-0.0.0.0}:9092:9092"
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
@@ -55,7 +59,7 @@ services:
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "127.0.0.1:6379:6379"
+      - "${PLATFORM_BIND_HOST:-0.0.0.0}:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:

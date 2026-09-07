@@ -135,9 +135,9 @@ when platform processes intentionally run on the host.
 
 | Component | Host endpoint | Exposure / credentials |
 |---|---|---|
-| PostgreSQL | `127.0.0.1:5432` | database/user/password: `algorithm` |
-| Kafka | `127.0.0.1:9092` | PLAINTEXT development listener |
-| Redis | `127.0.0.1:6379` | database 0, no development password |
+| PostgreSQL | `192.168.29.11:5432`（默认绑定 `0.0.0.0`） | database/user/password: `algorithm` |
+| Kafka | `192.168.29.11:9092`（默认绑定 `0.0.0.0`） | PLAINTEXT development listener |
+| Redis | `192.168.29.11:6379`（默认绑定 `0.0.0.0`） | database 0, no development password |
 | MongoDB | `127.0.0.1:27017` | root username/password: `root`/`root`, `authSource=admin` |
 | control-service | `0.0.0.0:18100` | A/可信内网北向入口 |
 | orchestrator-service | `127.0.0.1:18101` | 仅宿主机运维/内部回调 |
@@ -149,8 +149,11 @@ These addresses are for host-run platform processes. Platform containers on the
 `mongodb:27017`. FaceRec authenticates against MongoDB with `authSource=admin`.
 Kafka 的固定双 listener 为
 `KAFKA_LISTENERS=EXTERNAL://:9092,INTERNAL://:29092,CONTROLLER://:9093` 和
-`KAFKA_ADVERTISED_LISTENERS=EXTERNAL://127.0.0.1:9092,INTERNAL://kafka:29092`；
-不要在容器内使用 `127.0.0.1:9092`。
+`KAFKA_ADVERTISED_LISTENERS=EXTERNAL://${PLATFORM_ADVERTISED_HOST:-192.168.29.11}:9092,INTERNAL://kafka:29092`；
+不要在容器内使用宿主机地址，容器内仍使用 `kafka:29092`。
+
+基础设施端口默认监听所有网卡。可通过 `PLATFORM_BIND_HOST` 限定绑定地址，
+并通过 `PLATFORM_ADVERTISED_HOST` 指定 Kafka 对外广播的服务器地址。
 
 The MongoDB `root`/`root` values are approved committed defaults. They may be overridden
 with shell environment variables `MONGO_ROOT_USERNAME` and `MONGO_ROOT_PASSWORD` before the first startup of an empty

@@ -388,7 +388,7 @@ ws://online-gateway-service:8001
 
 容器内部不能用 `127.0.0.1` 访问另一个容器。Kafka 固定监听
 `EXTERNAL://:9092` 与 `INTERNAL://:29092`，分别广播
-`EXTERNAL://127.0.0.1:9092` 与 `INTERNAL://kafka:29092`；宿主机进程使用前者，
+`EXTERNAL://${PLATFORM_ADVERTISED_HOST:-192.168.29.11}:9092` 与 `INTERNAL://kafka:29092`；宿主机进程使用前者，
 平台容器使用 `kafka:29092`。
 
 ### 7.3 视频 URL 与本地结果 path

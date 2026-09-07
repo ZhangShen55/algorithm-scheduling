@@ -54,6 +54,7 @@ EXPECTED_DATABASE_COLUMNS = {
     "task_nodes": {
         "id",
         "course_task_type_id",
+        "run_id",
         "node_code",
         "status",
         "priority",
@@ -81,6 +82,18 @@ EXPECTED_DATABASE_COLUMNS = {
         "result_version",
         "created_at",
         "updated_at",
+    },
+    "task_type_runs": {
+        "run_id",
+        "course_task_type_id",
+        "params_fingerprint",
+        "effective_params",
+        "status",
+        "reason",
+        "result",
+        "created_at",
+        "started_at",
+        "finished_at",
     },
     "node_work_items": {
         "id",
@@ -147,6 +160,9 @@ EXPECTED_DATABASE_INDEXES = {
     "idx_outbox_events_pending_scan": "outbox_events",
     "idx_task_node_dependencies_prerequisite": "task_node_dependencies",
     "idx_operator_instance_events_instance_time": "operator_instance_events",
+    "idx_task_type_runs_lookup": "task_type_runs",
+    "idx_task_type_runs_status": "task_type_runs",
+    "uq_task_type_runs_active_fingerprint": "task_type_runs",
 }
 TOPIC_METADATA_PATTERN = re.compile(
     r"Topic:\s*(?P<topic>\S+).*?PartitionCount:\s*(?P<partitions>[0-9]+)"
@@ -164,9 +180,10 @@ WILDCARD_HOST = "*"
 SOCKET_SCOPE_ZONE_PATTERN = re.compile(r"[A-Za-z0-9_.-]+")
 PortMapping = tuple[int, int, str, str]
 EXPECTED_PLATFORM_PORT_MAPPINGS = {
-    "postgres": (5432, 5432, "tcp", "127.0.0.1"),
-    "redis": (6379, 6379, "tcp", "127.0.0.1"),
-    "kafka": (9092, 9092, "tcp", "127.0.0.1"),
+    # 基础设施对外提供受控内网访问；0.0.0.0 在规范化后表示通配监听。
+    "postgres": (5432, 5432, "tcp", WILDCARD_HOST),
+    "redis": (6379, 6379, "tcp", WILDCARD_HOST),
+    "kafka": (9092, 9092, "tcp", WILDCARD_HOST),
     "mongodb": (27017, 27017, "tcp", "127.0.0.1"),
     "control-service": (18100, 18100, "tcp", WILDCARD_HOST),
     "orchestrator-service": (18101, 18101, "tcp", "127.0.0.1"),
@@ -241,7 +258,8 @@ def validate_database_catalog(tables_text: str, columns_text: str, indexes_text:
     expected_tables = set(EXPECTED_DATABASE_COLUMNS)
     if len(table_names) != len(set(table_names)) or set(table_names) != expected_tables:
         raise PreflightError(
-            "PostgreSQL table catalog must contain exactly the 10 formal scheduling tables"
+            "PostgreSQL table catalog must contain exactly "
+            f"{len(expected_tables)} formal scheduling tables"
         )
     for table, comment in table_rows:
         if not _has_chinese_comment(comment):

@@ -78,8 +78,10 @@ stdout；默认单文件上限 100 MiB、归档保留 7 日，字段由各自根
 - 当前拓扑权威为 7 类算子、21 个实例、18 个 GPU 实例、3 个 CPU PPT Slice 实例和 14 个
   配置解析进程。发布证据必须包含 7/7 算子 Smoke、217 条反例、26 条压力/恢复用例和 6 项
   B 级人工复核，且全部绑定同一最终 Git SHA。
-- A/远程主机只访问 `control-service:18100` 和 `online-gateway-service:18103`。`18101`、`18102`、PostgreSQL `5432`、Kafka `9092`、Redis `6379`、MongoDB `27017` 和全部 21 个算子宿主机端口必须绑定 `127.0.0.1`；容器间继续使用 `algorithm-platform` 网络和服务名。
-- Kafka 同时提供 `EXTERNAL://:9092` 与 `INTERNAL://:29092`，分别广播 `EXTERNAL://127.0.0.1:9092` 与 `INTERNAL://kafka:29092`。容器不得使用宿主机广播地址。
+- A/远程业务主机只访问 `control-service:18100` 和 `online-gateway-service:18103`。PostgreSQL `5432`、Kafka `9092`、Redis `6379` 默认绑定 `0.0.0.0`（可由 `PLATFORM_BIND_HOST` 收窄）；`18101`、`18102`、MongoDB `27017` 和全部 21 个算子宿主机端口仍绑定 `127.0.0.1`。容器间继续使用 `algorithm-platform` 网络和服务名。
+- Kafka 同时提供 `EXTERNAL://:9092` 与 `INTERNAL://:29092`，分别广播
+  `EXTERNAL://${PLATFORM_ADVERTISED_HOST:-192.168.29.11}:9092` 与
+  `INTERNAL://kafka:29092`。容器内必须使用 `kafka:29092`，不得使用宿主机广播地址。
 - 发布构建必须显式传入完整 `EXPECTED_GIT_SHA`。四个平台运行容器通过 `preflight runtime --git-sha SHA` 校验最终镜像 revision；每个算子 profile 以及全 21 实例分别通过 `preflight operators --profile PROFILE --git-sha SHA` 和 `preflight operators --full --git-sha SHA` 校验。Smoke 的 `--git-sha` 只标记报告归属，不替代镜像 attestation。
 - 首次全量注册预检固定发布 canonical `registration/operator-registration.json`。Stage45 在实例停止、恢复和重新注册后只能使用 `preflight operators --full --evidence-checkpoint stage45-post-recovery` 发布独立的恢复后证据；该 checkpoint 不能用于 profile/instance，也不能替代聚合器所需的 canonical full 报告。两类文件都保持 write-once。
 - B 级复核只能在对应 `business/review-requests/{offline,vision}.json` 发布后按 phase 提交；输入和索引必须位于整个 Git 工作区及 release 之外，权限 `0600`。六项复核使用固定逐案 `observed` 字段，证据以 `release:<相对路径>#sha256:<摘要>` 绑定当前 release 中已存在的脱敏 `0600` 文件；不得预制、跨 phase 混合或把原视频、图片、完整 ASR/OCR 文本写入普通报告。
