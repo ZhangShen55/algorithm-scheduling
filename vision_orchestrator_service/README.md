@@ -21,6 +21,10 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8010 --workers 1
 配置按内置默认值、根目录 `config.toml`、`VISION_` 环境变量的顺序加载。
 嵌套字段使用双下划线，`CONFIG_PATH` 可以指定其他 TOML 文件。
 
+`[benchmark].stage_logging_enabled` 默认关闭。仅在受控完整链路基准期间启用时，服务会记录
+媒体、租约和 VBas 调用的阶段名、任务/批次标识、实例及单调时间；不会记录媒体内容、文件
+内容或模型响应。验证结束后应恢复为 `false`。
+
 `/health` 只表示进程存活；`/ready` 会检查视觉命令 Consumer 后台循环，以及按
 `[readiness]` 开关启用的 PostgreSQL、Kafka 和 Control Service 依赖。后台循环
 退出或必需依赖不可用时返回 HTTP `503`。

@@ -191,3 +191,7 @@ require_postgres = true
 require_kafka = true
 # 就绪检查是否要求控制服务可用。
 require_control = true
+
+[benchmark]
+# 是否记录媒体、租约和 VBas 请求的基准阶段元数据；仅在受控测试期间启用。
+stage_logging_enabled = false

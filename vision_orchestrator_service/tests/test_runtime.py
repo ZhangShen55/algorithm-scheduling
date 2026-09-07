@@ -10,7 +10,6 @@ from uuid import UUID
 import pytest
 from aiokafka.structs import TopicPartition
 from fastapi import FastAPI
-
 from packages.platform_common.kafka import KafkaMessage
 from packages.platform_common.repository import (
     RepositoryStateConflictError,
@@ -23,6 +22,7 @@ from packages.platform_contracts.vision import (
     VisualAnalysisEvent,
     VisualEventType,
 )
+
 from vision_orchestrator_service.app.application.events import (
     VisualCommandProcessor as ProductionVisualCommandProcessor,
 )
@@ -237,6 +237,34 @@ def test_runtime_passes_worker_retry_delay_and_shutdown_event_to_vbas(tmp_path) 
 
     assert analyzer._vbas._config.capacity_retry_delay_seconds == 0.125
     assert analyzer._vbas._shutdown_event is runtime.stop_event
+    assert analyzer._vbas._stage_observer is None
+    assert analyzer._frames._stage_observer is None
+
+
+def test_runtime_enables_shared_benchmark_stage_observer(tmp_path) -> None:
+    settings = VisionSettings(
+        benchmark={"stage_logging_enabled": True},
+        storage={
+            "course_root": tmp_path / "course",
+            "result_root": tmp_path / "result",
+        },
+    )
+    runtime = VisionOrchestratorRuntime(settings)
+    resources = VisionResources(
+        engine=object(),
+        repository=object(),
+        http_client=object(),
+        producer=object(),
+        consumer=object(),
+        topic_manager=object(),
+    )
+
+    analyzer = runtime._build_analyzer(resources)
+
+    observer = analyzer._vbas._stage_observer
+    assert observer is not None
+    assert analyzer._frames._stage_observer is observer
+    assert analyzer._vbas._lease_client._stage_observer is observer
 
 
 @pytest.mark.asyncio

@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
 import pytest
+import tomllib
 from prometheus_client import CollectorRegistry, generate_latest
 from pydantic import ValidationError
 
@@ -74,6 +74,7 @@ def test_config_has_only_the_required_top_level_sections() -> None:
         "student_behavior",
         "evidence",
         "readiness",
+        "benchmark",
     }
     lowered = raw.lower()
     assert "redis" not in lowered

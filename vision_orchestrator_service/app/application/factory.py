@@ -1,5 +1,4 @@
 from fastapi import FastAPI
-
 from packages.platform_common.application import create_service_app
 from packages.platform_common.config import PlatformSettings
 

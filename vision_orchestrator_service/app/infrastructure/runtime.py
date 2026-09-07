@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import deque
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -10,8 +11,6 @@ from typing import Any, Protocol
 
 import httpx
 from fastapi import FastAPI
-from sqlalchemy import Engine, create_engine
-
 from packages.platform_common.kafka import (
     AioKafkaConsumerAdapter,
     AioKafkaProducerAdapter,
@@ -24,6 +23,7 @@ from packages.platform_contracts.vision import (
     LegacyVisualCommandError,
     VisualAnalysisCommand,
 )
+from sqlalchemy import Engine, create_engine
 
 from ..application.analyzer import CourseVisualAnalyzer
 from ..application.events import VisualCommandProcessor
@@ -38,6 +38,23 @@ from .vbas import (
     VbasBatchConfig,
     VbasOfflineCapacityGate,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _log_benchmark_stage(event: str, detail: dict[str, object]) -> None:
+    logger.info(
+        "视觉基准阶段 event=%s task_id=%s stream=%s batch_id=%s "
+        "operation=%s instance_id=%s outcome=%s monotonic_seconds=%s",
+        event,
+        detail.get("task_id", "-"),
+        detail.get("stream", "-"),
+        detail.get("batch_id", "-"),
+        detail.get("operation", "-"),
+        detail.get("instance_id", "-"),
+        detail.get("outcome", "-"),
+        detail.get("monotonic_seconds", "-"),
+    )
 
 
 class VisualConsumer(Protocol):
@@ -431,6 +448,9 @@ class VisionOrchestratorRuntime:
 
     def _build_analyzer(self, resources: VisionResources) -> CourseVisualAnalyzer:
         settings = self.settings
+        stage_observer = (
+            _log_benchmark_stage if settings.benchmark.stage_logging_enabled else None
+        )
         lease_client = CapacityLeaseHttpClient(
             resources.http_client,
             control_service_url=settings.control.base_url,
@@ -447,6 +467,7 @@ class VisionOrchestratorRuntime:
             ),
             acquire_wait_timeout_seconds=settings.lease_renewal.acquire_wait_timeout_seconds,
             acquire_retry_interval_seconds=settings.lease_renewal.acquire_retry_interval_seconds,
+            stage_observer=stage_observer,
         )
         capacity_source = ControlVbasOfflineCapacitySource(
             resources.http_client,
@@ -478,6 +499,7 @@ class VisionOrchestratorRuntime:
             ),
             capacity_gate=capacity_gate,
             shutdown_event=self.stop_event,
+            stage_observer=stage_observer,
         )
         extractor = FFmpegFrameExtractor(
             course_root=settings.storage.course_root,
@@ -487,6 +509,7 @@ class VisionOrchestratorRuntime:
             max_concurrent_processes=settings.media.max_concurrent_processes,
             batch_extraction_enabled=settings.media.batch_extraction_enabled,
             metrics=self._pipeline_metrics,
+            stage_observer=stage_observer,
         )
         evidence = VisionEvidencePublisher(
             result_root=settings.storage.result_root,

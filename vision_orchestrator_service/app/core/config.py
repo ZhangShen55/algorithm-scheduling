@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from typing import Annotated
 
+from packages.platform_common.config import LoggingConfig
 from pydantic import BaseModel, Field, StrictInt, model_validator
 from pydantic_settings import (
     BaseSettings,
@@ -11,8 +12,6 @@ from pydantic_settings import (
     SettingsConfigDict,
     TomlConfigSettingsSource,
 )
-
-from packages.platform_common.config import LoggingConfig
 
 SERVICE_ROOT = Path(__file__).resolve().parents[2]
 
@@ -145,6 +144,10 @@ class ReadinessConfig(BaseModel):
     require_control: bool = True
 
 
+class BenchmarkConfig(BaseModel):
+    stage_logging_enabled: bool = False
+
+
 class VisionSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="VISION_",
@@ -168,6 +171,7 @@ class VisionSettings(BaseSettings):
     student_behavior: BehaviorConfig = BehaviorConfig()
     evidence: EvidenceConfig = EvidenceConfig()
     readiness: ReadinessConfig = ReadinessConfig()
+    benchmark: BenchmarkConfig = BenchmarkConfig()
 
     @model_validator(mode="after")
     def validate_lease_safety_window(self) -> VisionSettings:
