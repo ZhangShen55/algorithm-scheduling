@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+PLATFORM_ROOT="${PLATFORM_ROOT:-/root/workspace/algorithm-scheduling/algorithm-scheduling-platform}"
+REPORT_ROOT="${REPORT_ROOT:-${PLATFORM_ROOT}/deploy/reports/vbas-throughput}"
+CAMPAIGN_ID="${CAMPAIGN_ID:-vbas-throughput-$(date +%Y%m%d%H%M%S)}"
+ATTEMPT="${ATTEMPT:-1}"
+STREAM="${STREAM:-student}"
+VIDEO="${VIDEO:-/data/course/vbas-benchmark/videos/student.mp4}"
+COURSE_ROOT="${COURSE_ROOT:-/data/course}"
+TIERS="${TIERS:-16 12 8 6 4 2 1}"
+BATCH_SIZE="${BATCH_SIZE:-8}"
+FRAME_INTERVAL_SECONDS="${FRAME_INTERVAL_SECONDS:-10}"
+PYTHON_BIN="${PYTHON_BIN:-${PLATFORM_ROOT}/.venv/bin/python}"
+GIT_SHA="${GIT_SHA:-}"
+
+if [[ "${STREAM}" != "teacher" && "${STREAM}" != "student" ]]; then
+  echo "STREAM 必须为 teacher 或 student" >&2
+  exit 2
+fi
+if [[ ! -f "${VIDEO}" ]]; then
+  echo "固定媒体视频不存在: ${VIDEO}" >&2
+  exit 2
+fi
+if [[ ! -x "${PYTHON_BIN}" ]]; then
+  echo "基准 Python 不可执行: ${PYTHON_BIN}" >&2
+  exit 2
+fi
+
+cd "${PLATFORM_ROOT}" || exit 2
+if [[ -n "${GIT_SHA}" ]]; then
+  git_sha="${GIT_SHA}"
+else
+  git_sha="$(git -C "${PLATFORM_ROOT}/.." rev-parse HEAD)" || exit 2
+fi
+
+overall=0
+for tier in ${TIERS}; do
+  PYTHONPATH="${PLATFORM_ROOT}:${PLATFORM_ROOT}/.." \
+    "${PYTHON_BIN}" scripts/run_vbas_throughput_benchmark.py media \
+      --campaign-id "${CAMPAIGN_ID}" \
+      --attempt "${ATTEMPT}" \
+      --git-sha "${git_sha}" \
+      --report-root "${REPORT_ROOT}" \
+      --case-id "media-${STREAM}-s${tier}" \
+      --video "${VIDEO}" \
+      --course-root "${COURSE_ROOT}" \
+      --stream "${STREAM}" \
+      --active-streams "${tier}" \
+      --batch-size "${BATCH_SIZE}" \
+      --frame-interval-seconds "${FRAME_INTERVAL_SECONDS}" \
+      --max-concurrent-processes "${tier}"
+  result=$?
+  if [[ "${result}" -ne 0 ]]; then
+    overall=2
+  fi
+done
+
+exit "${overall}"

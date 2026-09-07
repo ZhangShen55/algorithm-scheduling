@@ -49,6 +49,40 @@ def test_memory_assessment_rejects_continuing_growth() -> None:
     assert result.half_delta_mib > 128
 
 
+def test_memory_assessment_accepts_mid_run_cache_step_then_recent_plateau() -> None:
+    samples = [
+        GpuSample(
+            recorded_at="2026-09-07T00:00:00Z",
+            monotonic_seconds=float(index),
+            phase="steady",
+            gpu_index=0,
+            memory_used_mib=4500 if index < 310 else 5080,
+            memory_total_mib=24_000,
+            utilization_percent=90,
+            power_watts=180,
+            process_count=1,
+            process_memory_mib=5080,
+            container_name="vbas0",
+            container_restart_count=0,
+            container_running=True,
+        )
+        for index in range(601)
+    ]
+
+    result = assess_memory_stability(
+        samples,
+        guardrails=BenchmarkGuardrails(
+            memory_half_delta_tolerance_mib=256,
+            memory_slope_tolerance_mib_per_minute=64,
+        ),
+    )
+
+    assert result.status == "stable"
+    assert result.peak_mib == 5080
+    assert result.half_delta_mib == 0
+    assert result.slope_mib_per_minute < 64
+
+
 def test_collector_failure_latches_guardrail_without_losing_evidence() -> None:
     def broken(_command: object) -> str:
         raise OSError("nvidia-smi unavailable")

@@ -214,11 +214,13 @@ def assess_memory_stability(
             half_delta_mib=0.0,
             slope_mib_per_minute=0.0,
         )
-    midpoint = len(values) // 2
-    first_p50 = _quantile(values[:midpoint], 0.50)
-    second_p50 = _quantile(values[midpoint:], 0.50)
+    recent_samples = _recent_samples(samples, window_seconds=300.0)
+    recent_values = [sample.memory_used_mib for sample in recent_samples]
+    midpoint = len(recent_values) // 2
+    first_p50 = _quantile(recent_values[:midpoint], 0.50)
+    second_p50 = _quantile(recent_values[midpoint:], 0.50)
     delta = second_p50 - first_p50
-    slope = _linear_slope_mib_per_minute(samples)
+    slope = _linear_slope_mib_per_minute(recent_samples)
     peak = max(values)
     if peak > guardrails.max_gpu_memory_mib:
         status, reason = "unstable", "稳态显存越过硬护栏"
@@ -239,6 +241,18 @@ def assess_memory_stability(
         half_delta_mib=delta,
         slope_mib_per_minute=slope,
     )
+
+
+def _recent_samples(
+    samples: Sequence[GpuSample],
+    *,
+    window_seconds: float,
+) -> Sequence[GpuSample]:
+    if not samples:
+        return samples
+    cutoff = samples[-1].monotonic_seconds - window_seconds
+    recent = [sample for sample in samples if sample.monotonic_seconds >= cutoff]
+    return recent if len(recent) >= 4 else samples
 
 
 def _parse_gpu_rows(output: str) -> dict[int, tuple[float, float, float, float]]:

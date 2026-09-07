@@ -103,6 +103,15 @@ CAMPAIGN_ID="$CAMPAIGN_ID" MODE=mixed SCOPE=triple \
 生成的临时帧目录；固定输入视频和其他 campaign 目录不会被删除。
 
 ```bash
+CAMPAIGN_ID="$CAMPAIGN_ID" STREAM=student \
+  VIDEO=/data/course/vbas-benchmark/videos/student.mp4 \
+  deploy/scripts/run-vbas-media-feed-staircase
+```
+
+阶梯脚本默认逐档执行 `16 12 8 6 4 2 1`；可用 `TIERS` 和 `ATTEMPT`
+精确重跑失败档，已有 attempt 仍禁止覆盖。
+
+```bash
 PYTHONPATH="$PWD:$PWD/.." .venv/bin/python \
   scripts/run_vbas_throughput_benchmark.py media \
   --campaign-id "$CAMPAIGN_ID" --attempt 1 \
