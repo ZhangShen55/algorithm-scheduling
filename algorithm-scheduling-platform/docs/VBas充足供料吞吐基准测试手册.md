@@ -135,7 +135,30 @@ PYTHONPATH="$PWD:$PWD/.." .venv/bin/python \
   --batch-size 8 --batch-count 1000 --target-slots 6
 ```
 
-## 7. 结论规则
+## 7. 完整链路采集与分析
+
+完整链路必须打开 Vision 的 `[benchmark].stage_logging_enabled`，并同时保存测试窗口内的
+Vision JSONL 日志和一秒级 `nvidia-smi` CSV。`--capacity` 是三个已注册 VBas 实例的离线
+槽位总和；例如每实例 `MaxConcurrentOfflineBatches = 2` 时填写 `6`。
+
+```bash
+PYTHONPATH="$PWD:$PWD/.." .venv/bin/python \
+  scripts/run_vbas_throughput_benchmark.py full-chain-report \
+  --vision-log "$ATTEMPT_ROOT/vision.log" \
+  --gpu-csv "$ATTEMPT_ROOT/gpu-series.csv" \
+  --capacity "$TOTAL_OFFLINE_SLOTS" \
+  --output "$ATTEMPT_ROOT/analysis.json"
+```
+
+报告使用 `lease_requested` 作为 batch 已进入可下发阶段的代理：槽位空闲且待租约 batch
+不足时计为供料空档；待租约 batch 足以填满空闲槽位时才计为租约/分发空档。完整链路当前
+没有显式 ready queue 深度，因此报告必须保留这项口径，不能把代理指标描述成直接队列采样。
+
+若任一 `vbas_started` 缺少对应 `vbas_finished`、GPU 样本少于稳定性门槛，或任务未到终态，
+分析状态必须保持 `incomplete_evidence` 或显存 `insufficient_evidence`。后续排空不能补写为通过，
+应使用全新 task ID 和 attempt 重跑。
+
+## 8. 结论规则
 
 - 最高稳定吞吐档和达到该吞吐 95% 的最低并发档必须同时报告。
 - 候选拐点至少重复两轮；吞吐相对偏差超过 5% 时保持“未收敛”。
@@ -143,13 +166,45 @@ PYTHONPATH="$PWD:$PWD/.." .venv/bin/python \
 - ready queue 不足时的空档归因于供料；ready 足够但槽位空闲时才归因于租约/分发。
 - 完整链路只应用隔离测试选出的候选参数，每轮只改一个变量或直接依赖的一组变量。
 
-## 8. 证据目录
+## 9. 本次实测参数及适用范围
+
+2026-09-07 在两张 RTX 4090 D、一张 RTX 3090，VBas revision `61b5fdc`、Vision revision
+`e3ed85a` 上得到以下候选：
+
+```toml
+# 每个 VBas 实例
+[TIAS]
+MaxConcurrentOfflineBatches = 2
+
+# vision-orchestrator-service
+[worker]
+concurrency = 16
+
+[media]
+max_concurrent_processes = 4
+
+[benchmark]
+stage_logging_enabled = false
+```
+
+该候选适用于 8 路课程同时执行教师和学生视觉分析的当前负载。两轮完整链路耗时为
+672/675 秒，相对 D0 的 1148 秒平均缩短 41.33%，显存稳定且任务全部成功。它没有持续填满
+六个 VBas 槽位：平均活跃约 1.14/6、峰值 5/6，因此不得据此继续放大离线容量。需要进一步
+提高吞吐时，应优化教师自适应扫描的预取和解码复用，并增加显式 ready queue 观测。
+
+## 10. 证据目录
 
 ```text
 deploy/reports/vbas-throughput/{campaign_id}/{case_id}/attempt-{NNN}/
 ├── identity.json
-├── load.json | media.json | dispatch.json | preflight.json
-├── gpu.json
+├── load.json | media.json | dispatch.json | preflight.json | analysis.json
+├── vision.log
+├── gpu.json | gpu-series.csv
+├── task-states.ndjson
+├── operator-snapshot-{start,final}.json
+├── leases-vbas-gpu{0,1,2}-final.json
+├── container-inspect-{start,final}.json
+├── media-residuals.txt
 └── summary.json
 ```
 

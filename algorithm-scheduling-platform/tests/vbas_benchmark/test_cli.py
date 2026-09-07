@@ -31,3 +31,22 @@ def test_vbas_cli_default_uses_long_window_sample_floor() -> None:
     )
 
     assert args.min_steady_batches == 100
+
+
+def test_full_chain_report_cli_requires_capacity_and_sources() -> None:
+    args = build_parser().parse_args(
+        [
+            "full-chain-report",
+            "--vision-log",
+            "/tmp/vision.log",
+            "--gpu-csv",
+            "/tmp/gpu.csv",
+            "--capacity",
+            "6",
+            "--output",
+            "/tmp/report.json",
+        ]
+    )
+
+    assert args.command == "full-chain-report"
+    assert args.capacity == 6

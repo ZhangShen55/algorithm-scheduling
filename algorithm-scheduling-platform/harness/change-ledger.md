@@ -2613,3 +2613,26 @@
   多服务器 NFS 仍是未实施设计，不记为已验收。
 - 完整证据见 `scenarios/ops-console-load-storage-recovery-20260907.md`。本轮没有重启、
   替换或删除远程容器，没有执行 prune，没有删除卷或 `/data/result`。
+
+## 2026-09-07 - VBas 充足供料吞吐基准与完整链路收敛
+
+- Campaign `vbas-throughput-20260907-d387d7f` 在 `192.168.29.11` 的两张 RTX 4090 D 和一张
+  RTX 3090 上完整执行 VBas 教师、学生、混合高到低阶梯、纯媒体活动流阶梯、预抽帧真实
+  租约分发、D0 和两轮候选完整链路；固定 fixture manifest SHA-256 为
+  `81c16dca90e052ddf954c70ef08b9d783b47c4bcbbd1f444b83e9d1251c75422`。
+- 教师、学生、混合 95% 最低并发拐点分别为 c2、c2、c3；混合 c8 的最高观测吞吐为
+  4.792 batch/s，但存在低频 `AttributeError` HTTP 500，未作为可靠建议。纯媒体教师/学生
+  拐点均为 s4；s16 因约 2576 个 FFmpeg 线程和 load average 超过 116 出现过度调度。
+- 权威 D0 `offline=1/media=8` 为 16/16 节点完成、1328 batch、1148 秒。候选
+  `offline=2/media=4` 两轮均为 16/16、1328 batch、672/675 秒，吞吐偏差 0.603%；平均
+  吞吐比 D0 提升 70.87%，墙钟缩短 41.33%，三卡显存稳定、Consumer ready、租约归零、
+  临时媒体清理完成且容器零重启。
+- 候选平均活跃仅 1.142/6 和 1.130/6，三实例同时空闲为 28.59% 和 26.43%，峰值 5/6，
+  六槽时间为 0；租约/分发空档为 0。因此完整链路持续供满目标明确未通过，瓶颈归因于
+  教师自适应扫描和媒体供料，不通过继续扩大 VBas 容量掩盖。
+- 新增 `full-chain-report` 只写一次分析入口，正确区分瞬时传输失败 attempt 与同 batch 成功
+  重试。D0 首轮因任务编号补零采集错误、最后一个 finish 缺失和无 GPU 时序明确标为非权威，
+  原错误证据未删除或改写。
+- 远端最终保留 `offline=2/media=4/worker=16`，基准阶段日志已恢复关闭；Vision revision
+  `e3ed85a` 和 VBas revision `61b5fdc` 均 healthy。完整证据及未通过口径见
+  `scenarios/vbas-throughput-sufficient-feed-20260907.md`。

@@ -29,6 +29,22 @@ max_concurrent_processes = 16
 # 固定视频的基础抽帧间隔。
 frame_interval_seconds = 10
 
+[full_chain]
+# D0 与候选均使用的课程任务数，每个任务同时包含教师和学生视觉节点。
+task_count = 8
+# Vision 课程级命令并发；不是 VBas batch 并发。
+worker_concurrency = 16
+# D0 三个 VBas 实例各自声明的离线 batch 槽位。
+baseline_offline_batches_per_instance = 1
+# D0 Vision 同时运行的媒体进程上限。
+baseline_media_processes = 8
+# 隔离基准选出的候选离线 batch 槽位。
+candidate_offline_batches_per_instance = 2
+# 纯媒体基准选出的候选媒体并发拐点。
+candidate_media_processes = 4
+# 完整链路 GPU 时序采样间隔。
+gpu_sample_interval_seconds = 1
+
 [guardrails]
 # 累计错误率硬上限；1% 阈值至少观察 100 个响应后判定。
 max_error_rate = 0.01

@@ -33,6 +33,7 @@ from .fixtures import (
     sha256_file,
     validate_manifest_files,
 )
+from .full_chain import build_full_chain_document
 from .load import LoadRunConfig, run_sustained_load
 from .media import remove_media_fixture_outputs, run_media_feed_isolation
 from .models import (
@@ -115,6 +116,14 @@ def build_parser() -> argparse.ArgumentParser:
     preflight.add_argument("--config-path", type=Path, required=True)
     preflight.add_argument("--control-url", default="http://127.0.0.1:18100")
 
+    full_chain = subparsers.add_parser(
+        "full-chain-report", help="分析完整视觉链路阶段日志和 GPU 采样"
+    )
+    full_chain.add_argument("--vision-log", type=Path, required=True)
+    full_chain.add_argument("--gpu-csv", type=Path, required=True)
+    full_chain.add_argument("--capacity", type=int, required=True)
+    full_chain.add_argument("--output", type=Path, required=True)
+
     return parser
 
 
@@ -148,6 +157,16 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run_dispatch(args))
     if args.command == "preflight":
         return _preflight(args)
+    if args.command == "full-chain-report":
+        atomic_write_once_json(
+            args.output,
+            build_full_chain_document(
+                args.vision_log,
+                args.gpu_csv,
+                capacity=args.capacity,
+            ),
+        )
+        return 0
     raise AssertionError(f"未处理的命令: {args.command}")
 
 
