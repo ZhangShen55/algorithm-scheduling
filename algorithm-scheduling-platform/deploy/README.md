@@ -486,6 +486,9 @@ The template uses these invariants:
   preflight rejects both a missing value and `local-development-registry-token`.
 - `PLATFORM_GPU_ID` records the routing label; `NVIDIA_VISIBLE_DEVICES` constrains the
   container to the same GPU.
+- `PLATFORM_HOST_ID` records the fixed host IPv4 in the default registry labels. For a
+  multi-host deployment, set it per host; an explicit `PLATFORM_INSTANCE_LABELS` JSON
+  remains authoritative and must contain both `host_id` and `gpu`.
 - `/ops/health` checks process liveness after model startup.
 - ASR always uses one Uvicorn worker per container; more capacity means more containers.
 

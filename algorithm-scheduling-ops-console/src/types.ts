@@ -5,9 +5,17 @@ export type ConsoleConfig = {
   controlBaseUrl: string
   gatewayBaseUrl: string
   gpuBaseUrl: string
+  gpuNodes?: GpuNodeConfig[]
   refreshSeconds: number
   leaseRefreshSeconds: number
   gpuRefreshSeconds: number
+}
+
+export type GpuNodeConfig = {
+  hostId: string
+  name: string
+  url: string
+  enabled: boolean
 }
 
 export type ConfigSource = 'browser' | 'build' | 'deployment-template'
@@ -221,6 +229,7 @@ export type KafkaMetrics = {
 }
 
 export type GpuDevice = {
+  host_id?: string
   index: number
   name: string
   utilization_percent: number
@@ -233,9 +242,19 @@ export type GpuDevice = {
 
 export type GpuMetrics = {
   status: 'ok' | 'unavailable'
+  host_id?: string
   sampled_at: number
   devices: GpuDevice[]
   error?: string
+}
+
+export type GpuNodeState = {
+  config: GpuNodeConfig
+  status: 'ok' | 'unavailable' | 'identity_error'
+  metrics: GpuMetrics | null
+  error?: string
+  lastSuccessAt?: string
+  compatibility?: boolean
 }
 
 export type OperationsTrendPoint = {
@@ -259,6 +278,7 @@ export type ConsoleData = {
   gateway: GatewayMetrics
   kafka: KafkaMetrics
   gpu: GpuMetrics
+  gpuNodes: GpuNodeState[]
   source: 'live' | 'demo'
   refreshedAt: string
 }

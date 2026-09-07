@@ -1,4 +1,4 @@
-import type { ActiveLeaseResponse, CapacitySnapshot, ConfigSource, ConnectionTestResult, ConsoleConfig, ConsoleData, GatewayMetrics, GpuMetrics, KafkaMetrics, OperatorInstance, OutboxEvent, OutboxEventFilters, OutboxEventList, QueueSnapshot, TaskCode, TaskDetail, TaskListFilters, TaskListResponse, TaskResultPage, TaskTypeDetail } from './types'
+import type { ActiveLeaseResponse, CapacitySnapshot, ConfigSource, ConnectionTestResult, ConsoleConfig, ConsoleData, GatewayMetrics, GpuMetrics, GpuNodeConfig, GpuNodeState, KafkaMetrics, OperatorInstance, OutboxEvent, OutboxEventFilters, OutboxEventList, QueueSnapshot, TaskCode, TaskDetail, TaskListFilters, TaskListResponse, TaskResultPage, TaskTypeDetail } from './types'
 
 export function deploymentTemplateConfig(hostname = window.location.hostname): ConsoleConfig {
   const host = hostname || '127.0.0.1'
@@ -6,6 +6,7 @@ export function deploymentTemplateConfig(hostname = window.location.hostname): C
     controlBaseUrl: `http://${host}:18100`,
     gatewayBaseUrl: `http://${host}:18103`,
     gpuBaseUrl: `http://${host}:9400`,
+    gpuNodes: [{ hostId: host, name: '平台 GPU 主机', url: `http://${host}:9400`, enabled: true }],
     refreshSeconds: 10,
     leaseRefreshSeconds: 5,
     gpuRefreshSeconds: 5,
@@ -13,15 +14,25 @@ export function deploymentTemplateConfig(hostname = window.location.hostname): C
 }
 
 const DEPLOYMENT_CONFIG = deploymentTemplateConfig()
+function buildGpuNodes(raw: string | undefined): GpuNodeConfig[] {
+  if (!raw) return DEPLOYMENT_CONFIG.gpuNodes!
+  try {
+    const parsed = JSON.parse(raw) as GpuNodeConfig[]
+    return Array.isArray(parsed) && parsed.length ? parsed : DEPLOYMENT_CONFIG.gpuNodes!
+  } catch {
+    return DEPLOYMENT_CONFIG.gpuNodes!
+  }
+}
 const BUILD_CONFIG: ConsoleConfig = {
   controlBaseUrl: import.meta.env.VITE_CONTROL_BASE_URL || DEPLOYMENT_CONFIG.controlBaseUrl,
   gatewayBaseUrl: import.meta.env.VITE_GATEWAY_BASE_URL || DEPLOYMENT_CONFIG.gatewayBaseUrl,
   gpuBaseUrl: import.meta.env.VITE_GPU_BASE_URL || DEPLOYMENT_CONFIG.gpuBaseUrl,
+  gpuNodes: import.meta.env.VITE_GPU_NODES ? buildGpuNodes(import.meta.env.VITE_GPU_NODES) : import.meta.env.VITE_GPU_BASE_URL ? [{ hostId: DEPLOYMENT_CONFIG.gpuNodes![0].hostId, name: '平台 GPU 主机', url: import.meta.env.VITE_GPU_BASE_URL, enabled: true }] : DEPLOYMENT_CONFIG.gpuNodes,
   refreshSeconds: 10,
   leaseRefreshSeconds: 5,
   gpuRefreshSeconds: 5,
 }
-const HAS_BUILD_CONFIG = Boolean(import.meta.env.VITE_CONTROL_BASE_URL || import.meta.env.VITE_GATEWAY_BASE_URL || import.meta.env.VITE_GPU_BASE_URL)
+const HAS_BUILD_CONFIG = Boolean(import.meta.env.VITE_CONTROL_BASE_URL || import.meta.env.VITE_GATEWAY_BASE_URL || import.meta.env.VITE_GPU_BASE_URL || import.meta.env.VITE_GPU_NODES)
 const DEFAULT_CONFIG = HAS_BUILD_CONFIG ? BUILD_CONFIG : DEPLOYMENT_CONFIG
 
 const CONFIG_KEY = 'algorithm-scheduling-ops-console-config'
@@ -32,6 +43,43 @@ function cleanBaseUrl(value: string, fallback: string): string {
   return normalized || fallback
 }
 
+function normalizeGpuNode(node: Partial<GpuNodeConfig>, fallback: GpuNodeConfig): GpuNodeConfig {
+  return {
+    hostId: String(node.hostId || fallback.hostId).trim(),
+    name: String(node.name || fallback.name).trim() || fallback.name,
+    url: cleanBaseUrl(String(node.url || fallback.url), fallback.url),
+    enabled: node.enabled !== false,
+  }
+}
+
+export function validateGpuNodeConfigs(nodes: GpuNodeConfig[]): string | null {
+  const seen = new Set<string>()
+  for (const node of nodes.filter((item) => item.enabled)) {
+    const parts = node.hostId.trim().split('.')
+    if (parts.length !== 4 || parts.some((part) => !/^\d+$/.test(part) || Number(part) > 255)) return `服务器 IP 无效：${node.hostId || '未填写'}`
+    if (seen.has(node.hostId.trim())) return `服务器 IP 重复：${node.hostId}`
+    seen.add(node.hostId.trim())
+    try {
+      const url = new URL(node.url)
+      if (!['http:', 'https:'].includes(url.protocol) || !url.hostname) return `Exporter 地址无效：${node.url}`
+    } catch {
+      return `Exporter 地址无效：${node.url}`
+    }
+  }
+  return null
+}
+
+export function configuredGpuNodes(stored: Partial<ConsoleConfig>, defaults = DEFAULT_CONFIG.gpuNodes!): GpuNodeConfig[] {
+  const fallback = defaults[0]
+  if (Array.isArray(stored.gpuNodes) && stored.gpuNodes.length) {
+    return stored.gpuNodes.map((node) => normalizeGpuNode(node, fallback))
+  }
+  if (stored.gpuBaseUrl) {
+    return [normalizeGpuNode({ hostId: fallback.hostId, name: fallback.name, url: stored.gpuBaseUrl, enabled: true }, fallback)]
+  }
+  return defaults.map((node) => normalizeGpuNode(node, fallback))
+}
+
 function clampNumber(value: number, minimum: number, maximum: number, fallback: number): number {
   return Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, Math.round(value))) : fallback
 }
@@ -39,10 +87,12 @@ function clampNumber(value: number, minimum: number, maximum: number, fallback: 
 export function loadConsoleConfig(): ConsoleConfig {
   try {
     const stored = JSON.parse(window.localStorage.getItem(CONFIG_KEY) || window.localStorage.getItem(LEGACY_CONFIG_KEY) || '{}') as Partial<ConsoleConfig>
+    const gpuNodes = configuredGpuNodes(stored)
     return {
       controlBaseUrl: cleanBaseUrl(stored.controlBaseUrl || DEFAULT_CONFIG.controlBaseUrl, DEFAULT_CONFIG.controlBaseUrl),
       gatewayBaseUrl: cleanBaseUrl(stored.gatewayBaseUrl || DEFAULT_CONFIG.gatewayBaseUrl, DEFAULT_CONFIG.gatewayBaseUrl),
-      gpuBaseUrl: cleanBaseUrl(stored.gpuBaseUrl || DEFAULT_CONFIG.gpuBaseUrl, DEFAULT_CONFIG.gpuBaseUrl),
+      gpuBaseUrl: cleanBaseUrl(gpuNodes[0]?.url || stored.gpuBaseUrl || DEFAULT_CONFIG.gpuBaseUrl, DEFAULT_CONFIG.gpuBaseUrl),
+      gpuNodes,
       refreshSeconds: clampNumber(Number(stored.refreshSeconds), 1, 60, DEFAULT_CONFIG.refreshSeconds),
       leaseRefreshSeconds: clampNumber(Number(stored.leaseRefreshSeconds), 1, 30, DEFAULT_CONFIG.leaseRefreshSeconds),
       gpuRefreshSeconds: clampNumber(Number(stored.gpuRefreshSeconds), 1, 30, DEFAULT_CONFIG.gpuRefreshSeconds),
@@ -58,10 +108,13 @@ export function consoleConfigSource(): ConfigSource {
 }
 
 export function saveConsoleConfig(config: ConsoleConfig): ConsoleConfig {
+  const fallback = DEFAULT_CONFIG.gpuNodes![0]
+  const gpuNodes = (config.gpuNodes?.length ? config.gpuNodes : [{ hostId: fallback.hostId, name: fallback.name, url: config.gpuBaseUrl, enabled: true }]).map((node) => normalizeGpuNode(node, fallback))
   const next = {
     controlBaseUrl: cleanBaseUrl(config.controlBaseUrl, DEFAULT_CONFIG.controlBaseUrl),
     gatewayBaseUrl: cleanBaseUrl(config.gatewayBaseUrl, DEFAULT_CONFIG.gatewayBaseUrl),
-    gpuBaseUrl: cleanBaseUrl(config.gpuBaseUrl, DEFAULT_CONFIG.gpuBaseUrl),
+    gpuBaseUrl: cleanBaseUrl(gpuNodes[0]?.url || config.gpuBaseUrl, DEFAULT_CONFIG.gpuBaseUrl),
+    gpuNodes,
     refreshSeconds: clampNumber(config.refreshSeconds, 1, 60, DEFAULT_CONFIG.refreshSeconds),
     leaseRefreshSeconds: clampNumber(config.leaseRefreshSeconds, 1, 30, DEFAULT_CONFIG.leaseRefreshSeconds),
     gpuRefreshSeconds: clampNumber(config.gpuRefreshSeconds, 1, 30, DEFAULT_CONFIG.gpuRefreshSeconds),
@@ -129,9 +182,12 @@ export async function testGatewayConnection(config: ConsoleConfig): Promise<Conn
 
 export async function testGpuConnection(config: ConsoleConfig): Promise<ConnectionTestResult> {
   try {
-    const value = await getJson<GpuMetrics>(cleanBaseUrl(config.gpuBaseUrl, DEFAULT_CONFIG.gpuBaseUrl), '/gpu')
-    if (!Array.isArray(value.devices)) throw new Error('GPU 指标 JSON 格式不符合预期')
-    return { service: 'gpu', ok: true, message: `读取成功，发现 ${value.devices.length} 张显卡` }
+    const states = await fetchGpuNodeStates(config)
+    const healthy = states.filter((state) => state.status === 'ok')
+    const failed = states.filter((state) => state.status !== 'ok')
+    if (!healthy.length) throw new Error(failed.map((state) => `${state.config.hostId}：${state.error || '读取失败'}`).join('；'))
+    const devices = healthy.reduce((sum, state) => sum + (state.metrics?.devices.length || 0), 0)
+    return { service: 'gpu', ok: !failed.length, message: `${failed.length ? '部分读取成功' : '读取成功'}，${healthy.length} 台主机 ${devices} 张显卡${failed.length ? `；失败 ${failed.length} 台` : ''}` }
   } catch (reason) { return connectionFailure('gpu', reason) }
 }
 
@@ -225,8 +281,7 @@ function normalizeStorage(payload: ConsoleData['storage']): ConsoleData['storage
 export async function fetchConsoleData(config = loadConsoleConfig()): Promise<ConsoleData> {
   const controlBase = cleanBaseUrl(config.controlBaseUrl, DEFAULT_CONFIG.controlBaseUrl)
   const gatewayBase = cleanBaseUrl(config.gatewayBaseUrl, DEFAULT_CONFIG.gatewayBaseUrl)
-  const gpuBase = cleanBaseUrl(config.gpuBaseUrl, DEFAULT_CONFIG.gpuBaseUrl)
-  const [instances, snapshots, queues, storage, readiness, controlMetricsText, metricsText, gpu, kafka] = await Promise.all([
+  const [instances, snapshots, queues, storage, readiness, controlMetricsText, metricsText, gpuNodes, kafka] = await Promise.all([
     getJson<OperatorInstance[]>(controlBase, '/ops/operator-instances'),
     getJson<CapacitySnapshot[]>(controlBase, '/ops/operator-instances/snapshot'),
     getJson<QueueSnapshot>(controlBase, '/ops/queues'),
@@ -239,10 +294,10 @@ export async function fetchConsoleData(config = loadConsoleConfig()): Promise<Co
     }),
     getText(controlBase, '/metrics').catch(() => ''),
     getText(gatewayBase, '/metrics', 3000).catch(() => ''),
-    getJson<GpuMetrics>(gpuBase, '/gpu').catch((error) => ({ status: 'unavailable', sampled_at: Date.now() / 1000, devices: [], error: String(error) }) as GpuMetrics),
+    fetchGpuNodeStates(config),
     fetchKafkaMetrics(config).catch(() => null),
   ])
-  return { instances, snapshots, queues, storage, readiness, gateway: parsePrometheus(metricsText), kafka: kafka || parsePlatformMetrics(controlMetricsText), gpu, source: 'live', refreshedAt: new Date().toISOString() }
+  return { instances, snapshots, queues, storage, readiness, gateway: parsePrometheus(metricsText), kafka: kafka || parsePlatformMetrics(controlMetricsText), gpu: aggregateGpuMetrics(gpuNodes), gpuNodes, source: 'live', refreshedAt: new Date().toISOString() }
 }
 
 export async function fetchTask(taskId: string, config = loadConsoleConfig()): Promise<TaskDetail> {
@@ -312,7 +367,68 @@ export async function fetchActiveLeases(instanceId: string, config = loadConsole
 }
 
 export async function fetchGpuMetrics(config = loadConsoleConfig()): Promise<GpuMetrics> {
-  return getJson<GpuMetrics>(cleanBaseUrl(config.gpuBaseUrl, DEFAULT_CONFIG.gpuBaseUrl), '/gpu')
+  return aggregateGpuMetrics(await fetchGpuNodeStates(config))
+}
+
+const gpuNodeRequests = new Map<string, Promise<GpuNodeState>>()
+
+function fetchGpuNodeState(node: GpuNodeConfig, legacySingleNode: boolean): Promise<GpuNodeState> {
+  const requestKey = `${node.hostId}\n${node.url}`
+  const existing = gpuNodeRequests.get(requestKey)
+  if (existing) return existing
+  const request = (async (): Promise<GpuNodeState> => {
+    try {
+      const metrics = await getJson<GpuMetrics>(cleanBaseUrl(node.url, node.url), '/gpu', 3000)
+      if (!Array.isArray(metrics.devices)) throw new Error('GPU 指标 JSON 格式不符合预期')
+      if (legacySingleNode && !metrics.host_id) {
+        return { config: { ...node, hostId: '兼容单节点' }, status: 'ok', metrics: { ...metrics, host_id: undefined, devices: metrics.devices.map((device) => ({ ...device })) }, lastSuccessAt: new Date().toISOString(), compatibility: true }
+      }
+      if (metrics.host_id !== node.hostId) {
+        return { config: node, status: 'identity_error', metrics, error: `主机身份不一致：配置 ${node.hostId}，响应 ${metrics.host_id || '缺失'}` }
+      }
+      return { config: node, status: 'ok', metrics: { ...metrics, devices: metrics.devices.map((device) => ({ ...device, host_id: metrics.host_id })) }, lastSuccessAt: new Date().toISOString() }
+    } catch (reason) {
+      return { config: node, status: 'unavailable', metrics: null, error: reason instanceof Error ? reason.message : 'GPU 指标读取失败' }
+    }
+  })()
+  gpuNodeRequests.set(requestKey, request)
+  void request.finally(() => {
+    if (gpuNodeRequests.get(requestKey) === request) gpuNodeRequests.delete(requestKey)
+  })
+  return request
+}
+
+export async function fetchGpuNodeStates(config = loadConsoleConfig()): Promise<GpuNodeState[]> {
+  const legacySingleNode = !config.gpuNodes?.length
+  const nodes = (config.gpuNodes?.length ? config.gpuNodes : [{ hostId: 'unknown', name: 'GPU 主机', url: config.gpuBaseUrl, enabled: true }]).filter((node) => node.enabled)
+  return Promise.all(nodes.map((node) => fetchGpuNodeState(node, legacySingleNode)))
+}
+
+export function aggregateGpuMetrics(states: GpuNodeState[]): GpuMetrics {
+  const healthy = states.filter((state) => state.status === 'ok' && state.metrics)
+  const devices = healthy.flatMap((state) => state.metrics?.devices || [])
+  const sampledAt = healthy.reduce((latest, state) => Math.max(latest, state.metrics?.sampled_at || 0), 0)
+  const errors = states.filter((state) => state.status !== 'ok').map((state) => `${state.config.hostId}：${state.error || '不可用'}`)
+  return {
+    status: healthy.length ? 'ok' : 'unavailable',
+    sampled_at: sampledAt || Date.now() / 1000,
+    devices,
+    error: errors.length ? errors.join('；') : undefined,
+  }
+}
+
+export function mergeGpuNodeStates(previous: GpuNodeState[], current: GpuNodeState[]): GpuNodeState[] {
+  const previousByHost = new Map(previous.map((state) => [state.config.hostId, state]))
+  return current.map((state) => {
+    if (state.status === 'ok') return state
+    const old = previousByHost.get(state.config.hostId)
+    return old?.metrics ? { ...state, metrics: old.metrics, lastSuccessAt: old.lastSuccessAt } : state
+  })
+}
+
+export function mergeConsoleGpuSnapshots(previous: ConsoleData, current: ConsoleData): ConsoleData {
+  const gpuNodes = mergeGpuNodeStates(previous.gpuNodes, current.gpuNodes)
+  return { ...current, gpuNodes, gpu: aggregateGpuMetrics(gpuNodes) }
 }
 
 export async function fetchKafkaMetrics(config = loadConsoleConfig()): Promise<KafkaMetrics> {
@@ -372,6 +488,7 @@ export function emptyConsoleData(): ConsoleData {
     gateway: { requestTotal: 0, errorTotal: 0, latencyCount: 0, latencySum: 0, p95LatencyMs: 0, capacityRejected: 0, byOperator: [], sampledAt: new Date().toISOString() },
     kafka: { status: 'unavailable', publisherStatus: 'unavailable', outboxPending: 0, published: 0, publishFailed: 0, consumerLag: 0, sampledAt: new Date().toISOString() },
     gpu: { status: 'unavailable', sampled_at: Date.now() / 1000, devices: [] },
+    gpuNodes: [],
     source: 'live',
     refreshedAt: new Date().toISOString(),
   }
@@ -384,8 +501,9 @@ export function demoData(): ConsoleData {
   ] as const
   const instances: OperatorInstance[] = definitions.flatMap(([code, count, capacity, device]) => Array.from({ length: count }, (_, index) => {
     const inflight = (index + code.length) % 4
-    return { instance_id: `${code}-${device.toLowerCase()}${index}`, operator_code: code, capabilities: [code === 'vbas' ? 'student_behavior' : code], service_url: `http://${code}-${index}:8000`, declared_capacity: capacity, model_version: '2026.08.31', api_version: 'v1', labels: { device }, lifecycle: 'ONLINE', inflight, model_ready: true, last_heartbeat_at: new Date(Date.now() - index * 18000).toISOString() }
+    return { instance_id: `${code}-${device.toLowerCase()}${index}`, operator_code: code, capabilities: [code === 'vbas' ? 'student_behavior' : code], service_url: `http://${code}-${index}:8000`, declared_capacity: capacity, model_version: '2026.08.31', api_version: 'v1', labels: { device, host_id: '192.168.29.11', ...(device === 'GPU' ? { gpu: String(index) } : {}) }, lifecycle: 'ONLINE', inflight, model_ready: true, last_heartbeat_at: new Date(Date.now() - index * 18000).toISOString() }
   }))
   const snapshots = instances.map((instance) => ({ instance_id: instance.instance_id, operator_code: instance.operator_code, lifecycle: instance.lifecycle, model_ready: instance.model_ready, declared_capacity: instance.declared_capacity, reported_inflight: instance.inflight, active_lease_count: Math.max(0, instance.inflight - 1), schedulable_used: instance.inflight, attribution_difference: 1, capacity_mismatch: true, capacity_pools: { default: instance.declared_capacity }, inflight_by_pool: { default: instance.inflight } }))
-  return { instances, snapshots, queues: { outbox_pending: 8, queues: [{ status: 10, status_text: '待处理', priority: 20, capability: 'ppt_slice', count: 4 }, { status: 20, status_text: '处理中', priority: 20, capability: 'asr_offline', count: 7 }, { status: 30, status_text: '等待容量', priority: 10, capability: 'ocr', count: 3 }] }, storage: { roots: [{ kind: 'course', path: '/data/course', total_bytes: 107374182400, used_bytes: 55834574848, free_bytes: 51539607552 }, { kind: 'result', path: '/data/result', total_bytes: 107374182400, used_bytes: 32212254720, free_bytes: 75161927680 }] }, readiness: { status: 'ready', checks: { postgres: 'ok', redis: 'ok', schema: 'ok' } }, gateway: { requestTotal: 12840, errorTotal: 36, latencyCount: 12840, latencySum: 4423, p95LatencyMs: 780, capacityRejected: 12, byOperator: [{ name: 'vbas', value: 6600 }, { name: 'facerec', value: 3210 }, { name: 'ocr', value: 2100 }, { name: 'screen_det', value: 930 }], sampledAt: new Date().toISOString() }, kafka: { status: 'ok', publisherStatus: 'ok', outboxPending: 8, published: 44210, publishFailed: 9, consumerLag: 3, sampledAt: new Date().toISOString() }, gpu: { status: 'ok', sampled_at: Date.now() / 1000, devices: [0, 1, 2].map(index => ({ index, name: 'NVIDIA GPU', utilization_percent: 35 + index * 17, memory_used_bytes: 7_000_000_000 + index * 1_200_000_000, memory_total_bytes: 24_000_000_000, temperature_celsius: 55 + index * 3, power_watts: 100 + index * 8, process_count: 6 + index })) }, source: 'demo', refreshedAt: new Date().toISOString() }
+  const gpuNodes: GpuNodeState[] = [{ config: { hostId: '192.168.29.11', name: '平台 GPU 主机', url: 'http://192.168.29.11:9400', enabled: true }, status: 'ok', metrics: { status: 'ok', host_id: '192.168.29.11', sampled_at: Date.now() / 1000, devices: [0, 1, 2].map(index => ({ host_id: '192.168.29.11', index, name: 'NVIDIA GPU', utilization_percent: 35 + index * 17, memory_used_bytes: 7_000_000_000 + index * 1_200_000_000, memory_total_bytes: 24_000_000_000, temperature_celsius: 55 + index * 3, power_watts: 100 + index * 8, process_count: 6 + index })) } }]
+  return { instances, snapshots, queues: { outbox_pending: 8, queues: [{ status: 10, status_text: '待处理', priority: 20, capability: 'ppt_slice', count: 4 }, { status: 20, status_text: '处理中', priority: 20, capability: 'asr_offline', count: 7 }, { status: 30, status_text: '等待容量', priority: 10, capability: 'ocr', count: 3 }] }, storage: { roots: [{ kind: 'course', path: '/data/course', total_bytes: 107374182400, used_bytes: 55834574848, free_bytes: 51539607552 }, { kind: 'result', path: '/data/result', total_bytes: 107374182400, used_bytes: 32212254720, free_bytes: 75161927680 }] }, readiness: { status: 'ready', checks: { postgres: 'ok', redis: 'ok', schema: 'ok' } }, gateway: { requestTotal: 12840, errorTotal: 36, latencyCount: 12840, latencySum: 4423, p95LatencyMs: 780, capacityRejected: 12, byOperator: [{ name: 'vbas', value: 6600 }, { name: 'facerec', value: 3210 }, { name: 'ocr', value: 930 }], sampledAt: new Date().toISOString() }, kafka: { status: 'ok', publisherStatus: 'ok', outboxPending: 8, published: 44210, publishFailed: 9, consumerLag: 3, sampledAt: new Date().toISOString() }, gpu: aggregateGpuMetrics(gpuNodes), gpuNodes, source: 'demo', refreshedAt: new Date().toISOString() }
 }

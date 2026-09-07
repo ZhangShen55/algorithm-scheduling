@@ -1,0 +1,6 @@
+# Merge these entries into control_service/config.toml on the platform host.
+# The value must exactly match the remote operator's PLATFORM_SERVICE_URL.
+[operator_registry.trusted_service_urls]
+asr-offline-29-12-gpu0 = "http://192.168.29.12:28083"
+
+# Add one entry per remote instance. Do not use a Docker-only service name.

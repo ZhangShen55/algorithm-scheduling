@@ -1,3 +1,4 @@
+import json
 import tomllib
 from pathlib import Path
 from typing import Any, cast
@@ -93,6 +94,10 @@ def assert_operator_compose_matrix(compose: dict[str, Any]) -> None:
             )
             assert environment["PLATFORM_INSTANCE_ID"] == name
             assert environment["PLATFORM_SERVICE_URL"] == f"http://{name}:{container_port}"
+            assert json.loads(environment["PLATFORM_INSTANCE_LABELS"]) == {
+                "host_id": "${PLATFORM_HOST_ID:-192.168.29.11}",
+                "gpu": str(gpu_index),
+            }
             assert environment["PLATFORM_GPU_ID"] == str(gpu_index)
             assert environment["UVICORN_WORKERS"] == "1"
             assert environment["NVIDIA_VISIBLE_DEVICES"] == str(gpu_index)
@@ -159,6 +164,9 @@ def assert_operator_compose_matrix(compose: dict[str, Any]) -> None:
             )
             assert environment["PLATFORM_INSTANCE_ID"] == name
             assert environment["PLATFORM_SERVICE_URL"] == f"http://{name}:{container_port}"
+            assert json.loads(environment["PLATFORM_INSTANCE_LABELS"]) == {
+                "host_id": "${PLATFORM_HOST_ID:-192.168.29.11}",
+            }
             assert environment["UVICORN_WORKERS"] == "1"
             assert "PLATFORM_GPU_ID" not in environment
             assert "deploy" not in service
@@ -194,6 +202,28 @@ def _config_target(operator: str) -> str:
 
 def test_compose_declares_exact_three_gpu_and_three_cpu_operator_matrix() -> None:
     assert_operator_compose_matrix(load_operator_compose())
+
+
+def test_operator_compose_declares_explicit_multihost_labels() -> None:
+    services = load_operator_compose()["services"]
+    expected_host_id = "${PLATFORM_HOST_ID:-192.168.29.11}"
+
+    for operator in GPU_OPERATORS:
+        for gpu_index in range(3):
+            labels = json.loads(
+                services[f"{operator}-gpu{gpu_index}"]["environment"][
+                    "PLATFORM_INSTANCE_LABELS"
+                ]
+            )
+            assert labels == {"host_id": expected_host_id, "gpu": str(gpu_index)}
+
+    for instance_index in range(3):
+        labels = json.loads(
+            services[f"ppt-slice-cpu{instance_index}"]["environment"][
+                "PLATFORM_INSTANCE_LABELS"
+            ]
+        )
+        assert labels == {"host_id": expected_host_id}
 
 
 def test_platform_compose_requires_explicit_operator_registry_token() -> None:

@@ -14,7 +14,11 @@ npm run dev
 - `/control` -> `http://127.0.0.1:18100`
 - `/gateway` -> `http://127.0.0.1:8001`
 
-GPU exporter 通常直接配置为 `http://127.0.0.1:9400`。可以通过 `VITE_CONTROL_BASE_URL`、`VITE_GATEWAY_BASE_URL` 和 `VITE_GPU_BASE_URL` 设置默认地址。
+GPU exporter 通常直接配置为 `http://127.0.0.1:9400`。可以通过 `VITE_CONTROL_BASE_URL`、`VITE_GATEWAY_BASE_URL` 和 `VITE_GPU_BASE_URL` 设置默认地址。多主机部署使用 `VITE_GPU_NODES` JSON 数组，例如：
+
+```json
+[{"hostId":"192.168.29.11","name":"平台 GPU 主机","url":"http://192.168.29.11:9400","enabled":true},{"hostId":"192.168.29.12","name":"测试 GPU 主机","url":"http://192.168.29.12:9400","enabled":true}]
+```
 
 ## Docker 启动
 

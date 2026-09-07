@@ -15,7 +15,7 @@ from packages.operator_registry_client.client import (
     OperatorRegistryClientConfig,
     OperatorRuntimeStatus,
 )
-from packages.operator_registry_client.runtime import _wrap_lifespan
+from packages.operator_registry_client.runtime import _env_labels, _wrap_lifespan
 
 
 def _write_operator_config(path: Path, body: str) -> Path:
@@ -168,6 +168,36 @@ def client_config() -> OperatorRegistryClientConfig:
 
 def test_registry_package_exposes_reusable_fastapi_runtime_installer() -> None:
     assert hasattr(registry_package, "install_operator_runtime")
+
+
+def test_default_environment_labels_include_host_and_gpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PLATFORM_INSTANCE_LABELS", raising=False)
+    monkeypatch.setenv("PLATFORM_HOST_ID", "192.168.29.12")
+    monkeypatch.setenv("PLATFORM_GPU_ID", "1")
+
+    assert _env_labels() == {
+        "host_id": "192.168.29.12",
+        "gpu": "1",
+    }
+
+
+def test_explicit_environment_labels_remain_authoritative(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "PLATFORM_INSTANCE_LABELS",
+        '{"host_id":"192.168.29.12","gpu":"2","rack":"gpu-room"}',
+    )
+    monkeypatch.setenv("PLATFORM_HOST_ID", "192.168.29.99")
+    monkeypatch.setenv("PLATFORM_GPU_ID", "0")
+
+    assert _env_labels() == {
+        "host_id": "192.168.29.12",
+        "gpu": "2",
+        "rack": "gpu-room",
+    }
 
 
 def test_runtime_installer_exposes_identity_status_and_drain_without_changing_business_routes(

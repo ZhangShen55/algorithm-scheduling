@@ -11,6 +11,7 @@ services:
       - "${GPU_METRICS_BIND_HOST:-0.0.0.0}:9400:9400"
     environment:
       GPU_EXPORTER_PORT: "9400"
+      GPU_EXPORTER_HOST_ID: "${GPU_EXPORTER_HOST_ID:?set the fixed host IPv4 address}"
     deploy:
       resources:
         reservations:

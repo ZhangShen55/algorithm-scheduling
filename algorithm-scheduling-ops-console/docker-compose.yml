@@ -8,6 +8,7 @@ services:
         VITE_CONTROL_BASE_URL: "${VITE_CONTROL_BASE_URL:-}"
         VITE_GATEWAY_BASE_URL: "${VITE_GATEWAY_BASE_URL:-}"
         VITE_GPU_BASE_URL: "${VITE_GPU_BASE_URL:-}"
+        VITE_GPU_NODES: '${VITE_GPU_NODES:-}'
     image: "${OPS_CONSOLE_IMAGE:-algorithm-scheduling-ops-console:local}"
     restart: unless-stopped
     ports:

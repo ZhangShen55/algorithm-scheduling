@@ -40,6 +40,7 @@ x-gpu2-reservation: &gpu2-reservation
 x-operator-environment: &operator-environment
   UVICORN_WORKERS: "1"
   PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}
+  PLATFORM_HOST_ID: ${PLATFORM_HOST_ID:-192.168.29.11}
 
 x-asr-offline-environment: &asr-offline-environment
   <<: *operator-environment
@@ -153,6 +154,7 @@ services:
       <<: *asr-offline-environment
       PLATFORM_INSTANCE_ID: asr-offline-gpu0
       PLATFORM_SERVICE_URL: http://asr-offline-gpu0:8083
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}","gpu":"0"}'
       PLATFORM_GPU_ID: "0"
       NVIDIA_VISIBLE_DEVICES: "0"
     deploy: *gpu0-reservation
@@ -165,6 +167,7 @@ services:
       <<: *asr-offline-environment
       PLATFORM_INSTANCE_ID: asr-offline-gpu1
       PLATFORM_SERVICE_URL: http://asr-offline-gpu1:8083
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}","gpu":"1"}'
       PLATFORM_GPU_ID: "1"
       NVIDIA_VISIBLE_DEVICES: "1"
     deploy: *gpu1-reservation
@@ -177,6 +180,7 @@ services:
       <<: *asr-offline-environment
       PLATFORM_INSTANCE_ID: asr-offline-gpu2
       PLATFORM_SERVICE_URL: http://asr-offline-gpu2:8083
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}","gpu":"2"}'
       PLATFORM_GPU_ID: "2"
       NVIDIA_VISIBLE_DEVICES: "2"
     deploy: *gpu2-reservation
@@ -189,6 +193,7 @@ services:
       <<: *asr-online-environment
       PLATFORM_INSTANCE_ID: asr-online-gpu0
       PLATFORM_SERVICE_URL: http://asr-online-gpu0:8084
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}","gpu":"0"}'
       PLATFORM_GPU_ID: "0"
       NVIDIA_VISIBLE_DEVICES: "0"
     deploy: *gpu0-reservation
@@ -201,6 +206,7 @@ services:
       <<: *asr-online-environment
       PLATFORM_INSTANCE_ID: asr-online-gpu1
       PLATFORM_SERVICE_URL: http://asr-online-gpu1:8084
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}","gpu":"1"}'
       PLATFORM_GPU_ID: "1"
       NVIDIA_VISIBLE_DEVICES: "1"
     deploy: *gpu1-reservation
@@ -213,6 +219,7 @@ services:
       <<: *asr-online-environment
       PLATFORM_INSTANCE_ID: asr-online-gpu2
       PLATFORM_SERVICE_URL: http://asr-online-gpu2:8084
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}","gpu":"2"}'
       PLATFORM_GPU_ID: "2"
       NVIDIA_VISIBLE_DEVICES: "2"
     deploy: *gpu2-reservation
@@ -225,6 +232,7 @@ services:
       <<: *ocr-environment
       PLATFORM_INSTANCE_ID: ocr-gpu0
       PLATFORM_SERVICE_URL: http://ocr-gpu0:8866
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}","gpu":"0"}'
       PLATFORM_GPU_ID: "0"
       NVIDIA_VISIBLE_DEVICES: "0"
     deploy: *gpu0-reservation
@@ -237,6 +245,7 @@ services:
       <<: *ocr-environment
       PLATFORM_INSTANCE_ID: ocr-gpu1
       PLATFORM_SERVICE_URL: http://ocr-gpu1:8866
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}","gpu":"1"}'
       PLATFORM_GPU_ID: "1"
       NVIDIA_VISIBLE_DEVICES: "1"
     deploy: *gpu1-reservation
@@ -249,6 +258,7 @@ services:
       <<: *ocr-environment
       PLATFORM_INSTANCE_ID: ocr-gpu2
       PLATFORM_SERVICE_URL: http://ocr-gpu2:8866
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}","gpu":"2"}'
       PLATFORM_GPU_ID: "2"
       NVIDIA_VISIBLE_DEVICES: "2"
     deploy: *gpu2-reservation
@@ -261,6 +271,7 @@ services:
       <<: *vbas-environment
       PLATFORM_INSTANCE_ID: vbas-gpu0
       PLATFORM_SERVICE_URL: http://vbas-gpu0:8981
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}","gpu":"0"}'
       PLATFORM_GPU_ID: "0"
       NVIDIA_VISIBLE_DEVICES: "0"
     deploy: *gpu0-reservation
@@ -273,6 +284,7 @@ services:
       <<: *vbas-environment
       PLATFORM_INSTANCE_ID: vbas-gpu1
       PLATFORM_SERVICE_URL: http://vbas-gpu1:8981
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}","gpu":"1"}'
       PLATFORM_GPU_ID: "1"
       NVIDIA_VISIBLE_DEVICES: "1"
     deploy: *gpu1-reservation
@@ -285,6 +297,7 @@ services:
       <<: *vbas-environment
       PLATFORM_INSTANCE_ID: vbas-gpu2
       PLATFORM_SERVICE_URL: http://vbas-gpu2:8981
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}","gpu":"2"}'
       PLATFORM_GPU_ID: "2"
       NVIDIA_VISIBLE_DEVICES: "2"
     deploy: *gpu2-reservation
@@ -297,6 +310,7 @@ services:
       <<: *facerec-environment
       PLATFORM_INSTANCE_ID: facerec-gpu0
       PLATFORM_SERVICE_URL: http://facerec-gpu0:8000
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}","gpu":"0"}'
       PLATFORM_GPU_ID: "0"
       NVIDIA_VISIBLE_DEVICES: "0"
     deploy: *gpu0-reservation
@@ -309,6 +323,7 @@ services:
       <<: *facerec-environment
       PLATFORM_INSTANCE_ID: facerec-gpu1
       PLATFORM_SERVICE_URL: http://facerec-gpu1:8000
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}","gpu":"1"}'
       PLATFORM_GPU_ID: "1"
       NVIDIA_VISIBLE_DEVICES: "1"
     deploy: *gpu1-reservation
@@ -321,6 +336,7 @@ services:
       <<: *facerec-environment
       PLATFORM_INSTANCE_ID: facerec-gpu2
       PLATFORM_SERVICE_URL: http://facerec-gpu2:8000
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}","gpu":"2"}'
       PLATFORM_GPU_ID: "2"
       NVIDIA_VISIBLE_DEVICES: "2"
     deploy: *gpu2-reservation
@@ -333,6 +349,7 @@ services:
       <<: *screen-det-environment
       PLATFORM_INSTANCE_ID: screen-det-gpu0
       PLATFORM_SERVICE_URL: http://screen-det-gpu0:8880
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}","gpu":"0"}'
       PLATFORM_GPU_ID: "0"
       NVIDIA_VISIBLE_DEVICES: "0"
     deploy: *gpu0-reservation
@@ -345,6 +362,7 @@ services:
       <<: *screen-det-environment
       PLATFORM_INSTANCE_ID: screen-det-gpu1
       PLATFORM_SERVICE_URL: http://screen-det-gpu1:8880
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}","gpu":"1"}'
       PLATFORM_GPU_ID: "1"
       NVIDIA_VISIBLE_DEVICES: "1"
     deploy: *gpu1-reservation
@@ -357,6 +375,7 @@ services:
       <<: *screen-det-environment
       PLATFORM_INSTANCE_ID: screen-det-gpu2
       PLATFORM_SERVICE_URL: http://screen-det-gpu2:8880
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}","gpu":"2"}'
       PLATFORM_GPU_ID: "2"
       NVIDIA_VISIBLE_DEVICES: "2"
     deploy: *gpu2-reservation
@@ -369,6 +388,7 @@ services:
       <<: *ppt-slice-environment
       PLATFORM_INSTANCE_ID: ppt-slice-cpu0
       PLATFORM_SERVICE_URL: http://ppt-slice-cpu0:9001
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}"}'
 
   ppt-slice-cpu1:
     <<: *ppt-slice
@@ -378,6 +398,7 @@ services:
       <<: *ppt-slice-environment
       PLATFORM_INSTANCE_ID: ppt-slice-cpu1
       PLATFORM_SERVICE_URL: http://ppt-slice-cpu1:9001
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}"}'
 
   ppt-slice-cpu2:
     <<: *ppt-slice
@@ -387,6 +408,7 @@ services:
       <<: *ppt-slice-environment
       PLATFORM_INSTANCE_ID: ppt-slice-cpu2
       PLATFORM_SERVICE_URL: http://ppt-slice-cpu2:9001
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"${PLATFORM_HOST_ID:-192.168.29.11}"}'
 
 networks:
   algorithm-platform:

@@ -4,6 +4,7 @@ import json
 import os
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from ipaddress import IPv4Address
 
 try:
     import pynvml
@@ -11,9 +12,21 @@ except ImportError:  # pragma: no cover - exercised by the container image
     pynvml = None  # type: ignore[assignment]
 
 
+def configured_host_id() -> str:
+    value = os.environ.get("GPU_EXPORTER_HOST_ID", "").strip()
+    if not value:
+        raise RuntimeError("GPU_EXPORTER_HOST_ID is required")
+    try:
+        address = IPv4Address(value)
+    except ValueError as exc:
+        raise RuntimeError("GPU_EXPORTER_HOST_ID must be a valid IPv4 address") from exc
+    return str(address)
+
+
 def gpu_snapshot() -> dict[str, object]:
     if pynvml is None:
         raise RuntimeError("pynvml is unavailable")
+    host_id = configured_host_id()
     pynvml.nvmlInit()
     try:
         devices: list[dict[str, object]] = []
@@ -46,12 +59,13 @@ def gpu_snapshot() -> dict[str, object]:
                 "power_watts": power,
                 "process_count": process_count,
             })
-        return {"status": "ok", "sampled_at": time.time(), "devices": devices}
+        return {"status": "ok", "host_id": host_id, "sampled_at": time.time(), "devices": devices}
     finally:
         pynvml.nvmlShutdown()
 
 
 def prometheus(snapshot: dict[str, object]) -> str:
+    host_id = str(snapshot["host_id"])
     lines = [
         "# HELP algorithm_gpu_exporter_up Whether NVML was read successfully.",
         "# TYPE algorithm_gpu_exporter_up gauge",
@@ -59,7 +73,11 @@ def prometheus(snapshot: dict[str, object]) -> str:
     ]
     for device in snapshot["devices"]:
         item = device  # type: ignore[assignment]
-        labels = f'gpu_index="{item["index"]}",gpu_name="{str(item["name"]).replace(chr(34), chr(39))}"'
+        gpu_name = str(item["name"]).replace(chr(34), chr(39))
+        labels = (
+            f'host_id="{host_id}",gpu_index="{item["index"]}",'
+            f'gpu_name="{gpu_name}"'
+        )
         values = {
             "algorithm_gpu_utilization_percent": item["utilization_percent"],
             "algorithm_gpu_memory_used_bytes": item["memory_used_bytes"],
@@ -92,7 +110,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         try:
             if self.path == "/health":
-                body = json.dumps({"status": "ok"}).encode()
+                body = json.dumps({"status": "ok", "host_id": configured_host_id()}).encode()
                 content_type = "application/json"
             elif self.path == "/metrics":
                 body = prometheus(gpu_snapshot()).encode()

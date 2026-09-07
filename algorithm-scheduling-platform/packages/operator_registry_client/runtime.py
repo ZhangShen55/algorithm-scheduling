@@ -275,7 +275,13 @@ def _env_labels() -> dict[str, str]:
     raw = os.getenv("PLATFORM_INSTANCE_LABELS", "").strip()
     if not raw:
         gpu = os.getenv("PLATFORM_GPU_ID", "").strip()
-        return {"gpu": gpu} if gpu else {}
+        host_id = os.getenv("PLATFORM_HOST_ID", "").strip()
+        labels: dict[str, str] = {}
+        if host_id:
+            labels["host_id"] = host_id
+        if gpu:
+            labels["gpu"] = gpu
+        return labels
     value = json.loads(raw)
     if not isinstance(value, dict) or not all(
         isinstance(key, str) and isinstance(item, str) for key, item in value.items()

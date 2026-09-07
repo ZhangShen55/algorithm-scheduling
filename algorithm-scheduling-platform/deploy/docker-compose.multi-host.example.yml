@@ -1,0 +1,58 @@
+name: algorithm-remote-gpu-node
+
+# This file is an example for the remote host 192.168.29.12.
+# The platform services and infrastructure stay on 192.168.29.11.
+services:
+  asr-offline-29-12-gpu0:
+    image: ${ASR_OFFLINE_IMAGE:-seacraft-asr-offline:v1.0_260812}
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:28083:8083"
+    environment:
+      OPERATOR_PORT: "8083"
+      PORT: "8083"
+      CONFIG_PATH: /config.toml
+      UVICORN_WORKERS: "1"
+      PLATFORM_OPERATOR_REGISTRY_TOKEN: ${OPERATOR_REGISTRY_TOKEN:?set the registry token}
+      PLATFORM_INSTANCE_ID: asr-offline-29-12-gpu0
+      PLATFORM_HOST_ID: 192.168.29.12
+      PLATFORM_GPU_ID: "0"
+      PLATFORM_SERVICE_URL: http://192.168.29.12:28083
+      PLATFORM_INSTANCE_LABELS: '{"host_id":"192.168.29.12","gpu":"0"}'
+      NVIDIA_VISIBLE_DEVICES: "0"
+    volumes:
+      - {type: bind, source: "${COURSE_ROOT:-/data/course}", target: /data/course}
+      - {type: bind, source: "${RESULT_ROOT:-/data/result}", target: /data/result}
+      - {type: bind, source: ./config/operators/asr_offline.gpu.toml, target: /config.toml, read_only: true}
+    networks: [algorithm-remote]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+
+  gpu-metrics-exporter:
+    build:
+      context: ../..
+      dockerfile: gpu_metrics_exporter/Dockerfile
+    image: "${GPU_METRICS_IMAGE:-algorithm-gpu-metrics-exporter:local}"
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:9400:9400"
+    environment:
+      GPU_EXPORTER_PORT: "9400"
+      GPU_EXPORTER_HOST_ID: 192.168.29.12
+    networks: [algorithm-remote]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+networks:
+  algorithm-remote:
+    name: algorithm-remote

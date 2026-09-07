@@ -1,5 +1,23 @@
 # Change Ledger
 
+## 2026-09-08 - `support-multi-host-gpu-observability` 双主机发布与验收
+
+- 两台真实 GPU 主机分别以 `192.168.29.11`、`192.168.29.12` 作为 `host_id` 运行只读
+  NVML Exporter，控制台并行展示 6 张 GPU；`.11` 的 18 个 GPU 算子按
+  `host_id + gpu_index` 精确关联，`.12` 按约定保持空算子并显示“未部署算子”。
+- `.11` 的 21 个现役算子按 GPU0、GPU1、GPU2、CPU 顺序滚动注入标签并全部 ONLINE；
+  VBas 保持 benchmark 后 `v1.0_260831` 镜像、1 秒心跳和离线批并发 2 配置。
+- 前端最终镜像为 `algorithm-scheduling/ops-console:v0.9_260908_multi_host`，镜像 ID
+  `sha256:e3d8bdbc390ffa58466d1f2f4ac1f837515a7de404ef42a99d648f048fd04a76`；旧
+  `v0.4/v0.5/v0.6/v0.7/v0.8` 在新版本健康后精确删除。
+- 浏览器实测 1 秒刷新布局稳定；受控停止 `.12` Exporter 后最近成功快照保留，`.11`、实例和
+  网关不受影响，恢复后约 3 秒自动上线。截图和完整证据见
+  `harness/scenarios/multi-host-gpu-observability-20260908.md`。
+- 本地前端 `18 passed`，Exporter/注册/Compose 专项 `34 passed`；Ruff、compileall、OpenSpec
+  strict 和 CORS/端点预检通过。已有 VBas 旧矩阵断言与 benchmark 配置不一致，未回退配置。
+- `.12` Docker NAT 链缺失，因此 Exporter 使用 host 网络，未重启 Docker、未影响既有
+  `5555/5556` 媒体服务。未部署真实远程算子或生产 NFS，OpenSpec 7.4 保持未完成。
+
 ## 2026-09-02 - Vision Consumer 终态竞态远端镜像替换
 
 - 在 `192.168.29.11` 仅重建并替换 `vision-orchestrator-service`，未触碰七个算子及其他三个平台服务。
