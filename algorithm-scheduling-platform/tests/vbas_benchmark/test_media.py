@@ -114,3 +114,15 @@ async def test_zero_delay_media_sink_never_constructs_vbas_client(
     assert result.prepared_batches == 2
     assert [event.event for event in result.events].count("sink_completed") == 2
     assert not any(event.event.startswith("vbas") for event in result.events)
+
+
+def test_media_cleanup_only_removes_current_campaign_outputs(tmp_path: Path) -> None:
+    current = tmp_path / "vbas-feed-campaign-current-student-000"
+    other = tmp_path / "vbas-feed-campaign-other-student-000"
+    current.mkdir()
+    other.mkdir()
+
+    media_module.remove_media_fixture_outputs(tmp_path, "campaign-current")
+
+    assert not current.exists()
+    assert other.is_dir()

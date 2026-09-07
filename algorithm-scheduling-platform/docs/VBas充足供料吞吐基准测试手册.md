@@ -99,6 +99,8 @@ CAMPAIGN_ID="$CAMPAIGN_ID" MODE=mixed SCOPE=triple \
 ## 6. 纯媒体和预抽帧分发
 
 纯媒体使用固定本地视频，将 `--active-streams` 依次设为 `16/12/8/6/4/2/1`，且 `--max-concurrent-processes` 不小于活动流数。
+每个媒体 attempt 会记录输入视频 SHA-256，并在成功或失败后清理当前 campaign
+生成的临时帧目录；固定输入视频和其他 campaign 目录不会被删除。
 
 ```bash
 PYTHONPATH="$PWD:$PWD/.." .venv/bin/python \

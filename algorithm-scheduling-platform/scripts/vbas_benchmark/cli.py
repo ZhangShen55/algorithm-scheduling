@@ -34,7 +34,7 @@ from .fixtures import (
     validate_manifest_files,
 )
 from .load import LoadRunConfig, run_sustained_load
-from .media import run_media_feed_isolation
+from .media import remove_media_fixture_outputs, run_media_feed_isolation
 from .models import (
     BenchmarkGuardrails,
     BenchmarkIdentity,
@@ -246,20 +246,31 @@ async def _run_vbas(args: argparse.Namespace) -> int:
 
 
 async def _run_media(args: argparse.Namespace) -> int:
-    identity = _identity(args, ("not-applicable",), vars(args))
+    video_sha256 = sha256_file(args.video)
+    config_document = {**vars(args), "video_sha256": video_sha256}
+    identity = _identity(args, ("not-applicable",), config_document)
     root = attempt_root(args.report_root, identity, args.case_id)
-    result = await run_media_feed_isolation(
-        video_path=args.video,
-        course_root=args.course_root,
-        campaign_id=args.campaign_id,
-        stream=(VisionStream.TEACHER if args.stream == "teacher" else VisionStream.STUDENT),
-        active_streams=args.active_streams,
-        batch_size=args.batch_size,
-        sample_interval_seconds=args.frame_interval_seconds,
-        max_concurrent_processes=args.max_concurrent_processes,
-    )
-    atomic_write_once_json(root / "identity.json", identity_document(identity))
-    atomic_write_once_json(root / "media.json", result.to_document())
+    try:
+        result = await run_media_feed_isolation(
+            video_path=args.video,
+            course_root=args.course_root,
+            campaign_id=args.campaign_id,
+            stream=(
+                VisionStream.TEACHER
+                if args.stream == "teacher"
+                else VisionStream.STUDENT
+            ),
+            active_streams=args.active_streams,
+            batch_size=args.batch_size,
+            sample_interval_seconds=args.frame_interval_seconds,
+            max_concurrent_processes=args.max_concurrent_processes,
+        )
+        document = result.to_document()
+        document["video_sha256"] = video_sha256
+        atomic_write_once_json(root / "identity.json", identity_document(identity))
+        atomic_write_once_json(root / "media.json", document)
+    finally:
+        remove_media_fixture_outputs(args.course_root, args.campaign_id)
     return 0 if result.status == "passed" else 2
 
 
@@ -320,8 +331,10 @@ async def _run_dispatch(args: argparse.Namespace) -> int:
         )
     identity = _identity(args, ("runtime-routed",), vars(args))
     root = attempt_root(args.report_root, identity, args.case_id)
+    document = result.to_document()
+    document["fixture_manifest_sha256"] = sha256_file(args.manifest)
     atomic_write_once_json(root / "identity.json", identity_document(identity))
-    atomic_write_once_json(root / "dispatch.json", result.to_document())
+    atomic_write_once_json(root / "dispatch.json", document)
     return 0 if result.status == "passed" else 2
 
 
