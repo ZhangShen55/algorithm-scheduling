@@ -64,3 +64,19 @@ MaxQueueSize = 0
 - PostgreSQL、Redis、Kafka 已可从 Mac 通过 `192.168.29.11` 直接访问。
 - 远端备份目录：`/root/workspace/deployment-backups/high-utilization-lan-access-20260828`。
 - 尚未执行新参数下的全量课程、显存峰值、GPU 利用率、在线容量不足和吞吐复验，因此本记录只证明部署与空载门禁通过。
+
+## 2026-09-07 源码与预检权威收口
+
+- 对应实现提交：`85f8c4747749955613c17311ad641d21a60cb8e7`。基础设施 Compose 默认将
+  PostgreSQL、Redis 和 Kafka EXTERNAL 绑定到 `0.0.0.0`，允许通过 `PLATFORM_BIND_HOST`
+  收窄；Kafka 外部广播默认使用 `192.168.29.11:9092`，容器内继续使用 `kafka:29092`。
+- 部署预检同步当前数据库结构：`task_nodes.run_id`、`task_type_runs` 及其三个正式索引均纳入
+  catalog 校验；VBas 注册测试权威同步 `student_behavior`、`teacher_behavior`、`person_count`
+  三项 capability。
+- `algorithm-scheduling-platform/tests/test_infrastructure_config.py`：`4 passed`。
+- `algorithm-scheduling-platform/tests/test_milestone_2b_scripts.py`：`312 passed in 221.86s`。
+- `preflight_checks.py` 执行 `compileall` 通过，
+  `docker compose -f deploy/docker-compose.infrastructure.yml config --quiet` 通过，Git diff
+  whitespace 检查通过。
+- 本节记录源码、测试和 Compose 契约已经与 2026-08-28 的真实局域网运行事实对齐；2026-09-07
+  未重新创建远端基础设施容器，因此不新增远端部署或数据持久化结论。
