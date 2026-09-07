@@ -8,7 +8,7 @@
 ## 2. 前端项目重命名和真实数据状态
 
 - [x] 2.1 将 `ops-console/` 源码目录迁移为 `algorithm-scheduling-ops-console/`，同步 `package.json`、lockfile、README、标题、localStorage key 和文档/脚本引用，并保留用户已有源文件内容
-- [ ] 2.2 清理项目交付边界中的 `node_modules/`、`dist/` 和测试输出，补充 `.dockerignore`，确保源代码项目只保留构建所需资产
+- [x] 2.2 清理项目交付边界中的 `node_modules/`、`dist/` 和测试输出，补充 `.dockerignore`，确保源代码项目只保留构建所需资产
 - [x] 2.3 调整数据加载状态：默认实时模式首屏显示加载态，真实接口失败时显示可重试错误和数据来源，不自动把演示快照作为实时结果；演示模式必须显式启用并持续标识
 - [x] 2.4 保留并校验 Control Service / gateway-online 的协议、IP、端口配置，默认使用 `/control` 和 `/gateway`，支持保存、恢复默认、测试读取和刷新周期校验
 - [x] 2.5 为接口请求增加页面切换/重复刷新时的取消或过期保护，避免旧响应覆盖当前配置和视图状态
@@ -39,8 +39,9 @@
 ## 6. 集成验证和交付
 
 - [x] 6.1 执行前端 `npm ci`、`npm run build`，检查无 TypeScript、Vite 和未解析资源错误
-- [ ] 6.2 执行控制台和 GPU exporter Docker build 及 Compose config/启动验证，确认首页、直连 CORS、GPU `/health` 和 `/gpu` 可用
-- [ ] 6.3 使用 `192.168.29.11` 上真实 Control Service、online-gateway-service 和 GPU exporter 验证健康、实例、任务分页、task_id 详情、实例 active lease、Kafka 聚合、网关指标和 GPU 快照，记录服务版本不一致时的可诊断错误
+- [x] 6.2 执行控制台和 GPU exporter Docker build 及 Compose config/启动验证，确认首页、直连 CORS、GPU `/health` 和 `/gpu` 可用
+- [x] 6.3 使用 `192.168.29.11` 上真实 Control Service、online-gateway-service 和 GPU exporter 验证健康、实例、任务分页、task_id 详情、实例 active lease、Kafka 聚合、网关指标和 GPU 快照，记录服务版本不一致时的可诊断错误
   - 2026-09-02 已完成 Control Service 和 online-gateway-service 的同版本构建、候选门禁、正式发布、CORS、任务/实例/Kafka/网关指标及 A 服务兼容验证；GPU exporter 尚未部署，因此本项保持未完成。证据见 `algorithm-scheduling-platform/harness/scenarios/ops-console-backend-observability-deployment-20260902.md`。
-- [ ] 6.4 在桌面和移动视口检查实例清单、详情抽屉、任务分页、图表和配置抽屉无重叠/溢出，并验证四套视觉风格只改变样式不改变数据和接口行为
-- [ ] 6.5 全局搜索并修正旧 `ops-console` 路径引用，确认 A 服务接口、平台部署文档和 OpenSpec 工件没有因重命名产生错误路径
+  - 2026-09-03 已部署前端和 GPU exporter，并完成三服务联合验收；采样时活动租约为 0，实例租约接口按真实空态验收。证据见 `algorithm-scheduling-platform/harness/scenarios/ops-console-and-gpu-metrics-deployment-20260903.md`。
+- [x] 6.4 在桌面和移动视口检查实例清单、详情抽屉、任务分页、图表和配置抽屉无重叠/溢出，并验证四套视觉风格只改变样式不改变数据和接口行为
+- [x] 6.5 全局搜索并修正旧 `ops-console` 路径引用，确认 A 服务接口、平台部署文档和 OpenSpec 工件没有因重命名产生错误路径

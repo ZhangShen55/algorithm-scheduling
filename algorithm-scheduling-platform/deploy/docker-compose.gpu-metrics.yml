@@ -1,0 +1,25 @@
+name: algorithm-gpu-metrics
+
+services:
+  gpu-metrics-exporter:
+    build:
+      context: ../..
+      dockerfile: gpu_metrics_exporter/Dockerfile
+    image: "${GPU_METRICS_IMAGE:-algorithm-gpu-metrics-exporter:local}"
+    restart: unless-stopped
+    ports:
+      - "${GPU_METRICS_BIND_HOST:-0.0.0.0}:9400:9400"
+    environment:
+      GPU_EXPORTER_PORT: "9400"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9400/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
