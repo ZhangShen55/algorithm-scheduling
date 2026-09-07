@@ -157,8 +157,9 @@ Content-Type: application/json
 ## 5. 追踪与重试
 
 A 服务应为一次业务调用保留自身请求标识。网关会为每个请求生成或传播 `trace_id`，但不会在
-容量租约中保存 Base64、图片内容或识别文本。在线调用不保证实例轮询均衡；只保证按注册、健康
-和共享容量选择可用实例。A 服务重试会形成新的在线请求和新租约，不应假设仍命中原实例。
+容量租约中保存 Base64、图片内容或识别文本。在线调用按实例注册状态、健康状态、声明容量和
+实时在途量选择可用实例，不是简单固定轮询；A 服务仍不应假设重试会命中原实例。A 服务重试会
+形成新的在线请求和新租约。
 
 ## 6. 离线课程任务详细合同
 
@@ -898,10 +899,24 @@ A 不得在看到任务终态后自行删除 /data/course。平台的安全清�
 和网络层错误仍可能返回非 200。A 必须先检查 HTTP 状态和响应是否为可解析 JSON，再检查外层
 code 与算子内层状态，不得把“HTTP 200”单独当成业务成功。
 
-### 7.2 VBas 师生行为分析
+### 7.2 VBas 在线接口
+
+网关将 VBas 在线能力拆分为三个路由，三者均接收单次 JSON 请求、按请求选择一个已注册的
+VBas 实例，并将该实例的响应原样返回。网关不会把一个 `ImageList` 拆到多个实例。
+
+| 能力 | 网关路由 | VBas 原始路由 | 注册能力标识 |
+|---|---|---|---|
+| 教师行为 | `POST /online/vbas/teacher` | `/ImageDetect/teacher/v1.0.0` | `teacher_behavior` |
+| 学生行为 | `POST /online/vbas/student` | `/ImageDetect/student/v1.0.0` | `student_behavior` |
+| 纯人数检测 | `POST /online/vbas/person-count` | `/AE/SyncTasks2` | `person_count` |
+
+教师和学生行为路由使用 VBas 的 `ImageList[].StoragePath`、`ImageId`、`Points` 等字段；纯人数
+检测路由保持 `/AE/SyncTasks2` 的请求和响应字段（见 7.2.2），不要把两种 schema 混用。
+
+#### 7.2.1 教师/学生行为请求
 
 ```http
-POST /api/online/vbas/analyze
+POST /online/vbas/student
 Content-Type: application/json
 ```
 
@@ -923,6 +938,19 @@ Content-Type: application/json
   ]
 }
 ```
+
+教师请求只需将路径替换为 `/online/vbas/teacher`，并可增加：
+
+```json
+{
+  "ReturnHeadPose": false
+}
+```
+
+`stream_type` 仅用于兼容上游请求标识，网关路由已经决定实际能力；建议学生请求传 `student`、
+教师请求传 `teacher`。`ImageList` 中每一项都应包含单图 Base64/Data URL 的 `StoragePath` 和
+唯一 `ImageId`。`Points` 为可选裁剪多边形，坐标使用原图坐标系；`frame_id`、`frame_index`、
+`timestamp_seconds` 可用于上游追踪。
 
 规则：
 
@@ -959,32 +987,75 @@ ResultList 中的 ObjectType 是稳定数值类型，ObjectCount 是该类数量
 ObjectPostList 中的坐标字段是 LeftTopX、LeftTopY、RightBtmX、RightBtmY，Confidence 可选；
 教师坐/站结果还可带 SuspectedSitting 或 PostureFallback。ObjectCount=0 时 ObjectPostList 通常为 null。
 
-典型响应：
+教师/学生路由响应为 VBas 原始响应，不包含网关统一的 `code/message/data` 外层。典型响应：
 
 ```json
 {
-  "code": 0,
-  "message": "VBas 在线分析完成",
-  "data": {
-    "StatusObject": {"StatusString": "success", "StatusCode": 0},
-    "DataList": [
-      {
-        "StatusObject": {
-          "ImageId": "student-001",
-          "StatusString": "success",
-          "StatusCode": 0
-        },
-        "ResultList": []
-      }
-    ]
-  }
+  "StatusObject": {"StatusString": "success", "StatusCode": 0},
+  "DataList": [
+    {
+      "StatusObject": {
+        "ImageId": "student-001",
+        "StatusString": "success",
+        "StatusCode": 0
+      },
+      "ResultList": []
+    }
+  ]
 }
 ```
 
-外层 data.StatusObject.StatusCode 和每个 DataList[i].StatusObject.StatusCode 都要检查。外层
-成功但某张图片 StatusCode != 0 时属于部分失败，A 应按图片 ID 重试或记录，不要重发整个成功项集合。
-当前 VBas 实现在单图处理抛异常时也可能直接返回非 2xx，网关会将它折叠为外层 code=50000；
-这种情况没有可用 DataList，A 只能把整次结果视为未知/失败并做有界重试。
+检查响应根部 `StatusObject.StatusCode` 和每个 `DataList[i].StatusObject.StatusCode`。某张图片
+失败时属于部分失败，A 应按图片 ID 记录或重试，不要重发整个成功项集合。当前 VBas 单图处理
+抛异常时可能返回非 2xx，网关会返回 HTTP 200 的业务错误对象 `{"code":50000,...}`；此时
+没有可用的 `DataList`，A 只能把整次结果视为未知/失败并做有界重试。
+
+#### 7.2.2 纯人数检测（SyncTasks2）
+
+该路由只执行 VBas 的纯人数检测能力，对应原始 `/AE/SyncTasks2`，支持 `AnalysisRule.AlgParams`
+中的 `PolygonList` 区域裁剪。请求字段保持算子原协议：图片使用 `ImageList[].ImageID` 和
+`ImageList[].Data`，不要改成教师/学生行为接口的 `ImageId`、`StoragePath`。
+
+```http
+POST /online/vbas/person-count
+Content-Type: application/json
+```
+
+```json
+{
+  "TaskID": "online-person-count-001",
+  "TaskType": 4,
+  "ImageList": [
+    {
+      "ImageID": "student-001",
+      "Data": "data:image/jpeg;base64,/9j/4AAQ..."
+    }
+  ],
+  "AnalysisRule": {
+    "AlgParams": {
+      "ImageFormat": 1,
+      "ImageResolution": {"ImageWidth": 1920, "ImageHeight": 1080},
+      "PolygonList": []
+    }
+  },
+  "RunAlways": false
+}
+```
+
+网关仍会校验 `Data` 是否为有效图片并申请 `person_count` 容量租约，但响应不做字段改写，
+保持 `/AE/SyncTasks2` 的结构：
+
+```json
+{
+  "Response": {"ErrCode": 0, "Desc": "success"},
+  "TaskID": "online-person-count-001",
+  "FreeCapacity": 7,
+  "TaskResult": []
+}
+```
+
+`PolygonList` 为空表示整图检测；传入多边形时由 VBas 按区域裁剪后检测。纯人数检测结果中的
+`FreeCapacity` 是算子返回的剩余能力提示，不是 A 服务下一次请求必须使用的容量值。
 
 ### 7.3 FaceRec 人脸识别
 
@@ -1652,7 +1723,9 @@ affinity。因此，对传递本地绝对路径的离线 capability，所有可�
 |---|---|---|---|
 | 提交离线课程任务 | POST | /api/course-jobs | Control Service |
 | 查询课程完整状态 | GET | /api/course-jobs/{task_id} | Control Service |
-| 在线 VBas | POST | /api/online/vbas/analyze | Online Gateway |
+| 在线教师行为 | POST | /online/vbas/teacher | Online Gateway |
+| 在线学生行为 | POST | /online/vbas/student | Online Gateway |
+| 在线纯人数检测 | POST | /online/vbas/person-count | Online Gateway |
 | 在线人脸识别 | POST | /api/online/face/recognize | Online Gateway |
 | 单人人物录入/更新 | POST | /api/online/face/persons | Online Gateway |
 | 批量人物录入/更新 | POST | /api/online/face/persons/batch | Online Gateway |

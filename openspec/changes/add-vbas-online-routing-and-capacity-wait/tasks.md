@@ -41,7 +41,7 @@
 - [x] 5.1 更新四服务配置模板、VBas 配置示例和中文注释
 - [x] 5.2 更新 A 服务对接文档，记录三个新路由及请求/响应样例
 - [x] 5.3 更新部署和运行手册，说明在线队列按实例生效
-- [ ] 5.4 完成 VBas 单实例和三实例分配验证
-- [ ] 5.5 完成教师、学生、人数三类真实图片请求验证
-- [ ] 5.6 完成 `MaxConcurrentOnlineRequests=24`、`MaxQueueOnlineSize=24` 下的 512 并发回归
-- [ ] 5.7 运行相关项目测试、`compileall`、健康检查并记录 Harness 证据
+- [x] 5.4 完成 VBas 单实例和三实例分配验证
+- [x] 5.5 完成教师、学生、人数三类真实图片请求验证
+- [x] 5.6 完成 `MaxConcurrentOnlineRequests=24`、`MaxQueueOnlineSize=24` 下的 512 并发回归
+- [x] 5.7 运行相关项目测试、`compileall`、健康检查并记录 Harness 证据
