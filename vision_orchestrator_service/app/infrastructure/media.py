@@ -6,7 +6,8 @@ import json
 import logging
 import math
 import tempfile
-from collections.abc import Awaitable
+import time
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from itertools import pairwise
@@ -16,6 +17,8 @@ from packages.platform_common.workspace import task_workspace
 
 from .cache import VisionStream
 from .metrics import VisionPipelineMetrics
+
+MediaStageObserver = Callable[[str, dict[str, object]], None]
 
 
 class VideoFrameError(RuntimeError):
@@ -92,6 +95,7 @@ class FFmpegFrameExtractor:
         max_concurrent_processes: int = 2,
         batch_extraction_enabled: bool = True,
         metrics: VisionPipelineMetrics | None = None,
+        stage_observer: MediaStageObserver | None = None,
     ) -> None:
         if command_timeout_seconds <= 0:
             raise ValueError("视频命令超时必须大于 0")
@@ -109,6 +113,7 @@ class FFmpegFrameExtractor:
         self._batch_extraction_enabled = batch_extraction_enabled
         self._process_slots = asyncio.Semaphore(max_concurrent_processes)
         self._metrics = metrics
+        self._stage_observer = stage_observer
         self._active_processes: set[asyncio.subprocess.Process] = set()
         self._pending_jobs = 0
         self._running_jobs = 0
@@ -131,9 +136,14 @@ class FFmpegFrameExtractor:
     def peak_running_jobs(self) -> int:
         return self._peak_running_jobs
 
-    async def duration_seconds(self, video_path: Path) -> float:
+    async def duration_seconds(
+        self,
+        video_path: Path,
+        *,
+        task_id: str | None = None,
+    ) -> float:
         resolved = self._validated_video(video_path)
-        async with self._process_slot():
+        async with self._process_slot("ffprobe", task_id=task_id):
             return await self._probe_duration(resolved)
 
     async def extract(
@@ -167,6 +177,8 @@ class FFmpegFrameExtractor:
                         resolved,
                         output_root,
                         unique_points,
+                        task_id=task_id,
+                        stream=stream,
                     )
                 except VideoFrameError as exc:
                     logger.warning(
@@ -191,6 +203,8 @@ class FFmpegFrameExtractor:
                     resolved,
                     output_root,
                     point,
+                    task_id=task_id,
+                    stream=stream,
                 )
 
         workers = [
@@ -217,8 +231,16 @@ class FFmpegFrameExtractor:
         video_path: Path,
         output_root: Path,
         timestamps: list[float],
+        *,
+        task_id: str,
+        stream: VisionStream,
     ) -> list[ExtractedFrame]:
-        async with self._process_slot():
+        async with self._process_slot(
+            "ffmpeg_batch",
+            task_id=task_id,
+            stream=stream,
+            batch_id=_stage_batch_id(timestamps),
+        ):
             return await self._extract_uniform_batch(
                 video_path,
                 output_root,
@@ -280,8 +302,16 @@ class FFmpegFrameExtractor:
         video_path: Path,
         output_root: Path,
         timestamp_seconds: float,
+        *,
+        task_id: str,
+        stream: VisionStream,
     ) -> ExtractedFrame:
-        async with self._process_slot():
+        async with self._process_slot(
+            "ffmpeg_frame",
+            task_id=task_id,
+            stream=stream,
+            batch_id=_stage_batch_id([timestamp_seconds]),
+        ):
             result = self._extract_one(
                 video_path,
                 output_root,
@@ -292,10 +322,30 @@ class FFmpegFrameExtractor:
             return result
 
     @asynccontextmanager
-    async def _process_slot(self):
+    async def _process_slot(
+        self,
+        operation: str,
+        *,
+        task_id: str | None = None,
+        stream: VisionStream | None = None,
+        batch_id: str | None = None,
+    ):
+        queued_at = time.monotonic()
         self._pending_jobs += 1
         self._peak_pending_jobs = max(self._peak_pending_jobs, self._pending_jobs)
         self._record_metrics()
+        self._observe(
+            "media_queued",
+            {
+                "operation": operation,
+                "task_id": task_id,
+                "stream": stream.value.lower() if stream is not None else None,
+                "batch_id": batch_id,
+                "pending_jobs": self._pending_jobs,
+                "running_jobs": self._running_jobs,
+                "monotonic_seconds": queued_at,
+            },
+        )
         try:
             await self._process_slots.acquire()
         except BaseException:
@@ -306,12 +356,40 @@ class FFmpegFrameExtractor:
         self._running_jobs += 1
         self._peak_running_jobs = max(self._peak_running_jobs, self._running_jobs)
         self._record_metrics()
+        started_at = time.monotonic()
+        self._observe(
+            "media_started",
+            {
+                "operation": operation,
+                "task_id": task_id,
+                "stream": stream.value.lower() if stream is not None else None,
+                "batch_id": batch_id,
+                "queue_wait_seconds": started_at - queued_at,
+                "pending_jobs": self._pending_jobs,
+                "running_jobs": self._running_jobs,
+                "monotonic_seconds": started_at,
+            },
+        )
         try:
             yield
         finally:
+            finished_at = time.monotonic()
             self._running_jobs -= 1
             self._process_slots.release()
             self._record_metrics()
+            self._observe(
+                "media_finished",
+                {
+                    "operation": operation,
+                    "task_id": task_id,
+                    "stream": stream.value.lower() if stream is not None else None,
+                    "batch_id": batch_id,
+                    "elapsed_seconds": finished_at - started_at,
+                    "pending_jobs": self._pending_jobs,
+                    "running_jobs": self._running_jobs,
+                    "monotonic_seconds": finished_at,
+                },
+            )
 
     def _record_metrics(self) -> None:
         if self._metrics is not None:
@@ -319,6 +397,10 @@ class FFmpegFrameExtractor:
                 pending=self._pending_jobs,
                 running=self._running_jobs,
             )
+
+    def _observe(self, event: str, detail: dict[str, object]) -> None:
+        if self._stage_observer is not None:
+            self._stage_observer(event, detail)
 
     def _validated_video(self, video_path: Path) -> Path:
         if not video_path.is_absolute():
@@ -491,3 +573,10 @@ def _uniform_interval(points: list[float]) -> float | None:
     ):
         return None
     return interval
+
+
+def _stage_batch_id(timestamps: list[float]) -> str:
+    digest = hashlib.sha256(
+        json.dumps(timestamps, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"frames-{digest}"

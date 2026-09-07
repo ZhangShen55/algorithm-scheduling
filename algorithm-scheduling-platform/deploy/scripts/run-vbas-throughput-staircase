@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+PLATFORM_ROOT="${PLATFORM_ROOT:-/root/workspace/algorithm-scheduling/algorithm-scheduling-platform}"
+REPORT_ROOT="${REPORT_ROOT:-${PLATFORM_ROOT}/deploy/reports/vbas-throughput}"
+CAMPAIGN_ID="${CAMPAIGN_ID:-vbas-throughput-$(date +%Y%m%d%H%M%S)}"
+FIXTURE_ROOT="${FIXTURE_ROOT:-/data/course/vbas-benchmark/fixtures}"
+FIXTURE_CONTAINER_ROOT="${FIXTURE_CONTAINER_ROOT:-/data/course/vbas-benchmark/fixtures}"
+MANIFEST="${MANIFEST:-${FIXTURE_ROOT}/manifest.json}"
+VBAS_CONFIG="${VBAS_CONFIG:-}"
+MODE="${MODE:-student}"
+SCOPE="${SCOPE:-triple}"
+WARMUP_SECONDS="${WARMUP_SECONDS:-60}"
+STEADY_SECONDS="${STEADY_SECONDS:-600}"
+MIN_STEADY_BATCHES="${MIN_STEADY_BATCHES:-10000}"
+MAX_TOTAL_SECONDS="${MAX_TOTAL_SECONDS:-3600}"
+TIERS="${TIERS:-8 6 4 3 2 1}"
+CONTROL_URL="${CONTROL_URL:-http://127.0.0.1:18100}"
+
+containers=(
+  algorithm-operators-vbas-gpu0-1
+  algorithm-operators-vbas-gpu1-1
+  algorithm-operators-vbas-gpu2-1
+)
+targets=(
+  "vbas-gpu0,http://127.0.0.1:18981,0,algorithm-operators-vbas-gpu0-1"
+  "vbas-gpu1,http://127.0.0.1:28981,1,algorithm-operators-vbas-gpu1-1"
+  "vbas-gpu2,http://127.0.0.1:38981,2,algorithm-operators-vbas-gpu2-1"
+)
+ports=(18981 28981 38981)
+gpu_indices=(0 1 2)
+
+mounted_configs=()
+for container in "${containers[@]}"; do
+  mounted_config="$(docker inspect "${container}" --format \
+    '{{range .Mounts}}{{if eq .Destination "/workspace/config.toml"}}{{.Source}}{{end}}{{end}}')"
+  if [[ -z "${mounted_config}" ]]; then
+    echo "VBas 容器未挂载 /workspace/config.toml: ${container}" >&2
+    exit 2
+  fi
+  mounted_configs+=("${mounted_config}")
+done
+if [[ "${mounted_configs[0]}" != "${mounted_configs[1]}" || \
+      "${mounted_configs[0]}" != "${mounted_configs[2]}" ]]; then
+  echo "三个 VBas 实例未使用同一份配置，拒绝执行阶梯" >&2
+  exit 2
+fi
+
+if [[ -z "${VBAS_CONFIG}" ]]; then
+  VBAS_CONFIG="${mounted_configs[0]}"
+elif [[ "${VBAS_CONFIG}" != "${mounted_configs[0]}" ]]; then
+  echo "VBAS_CONFIG 不是三个运行容器实际挂载的配置" >&2
+  exit 2
+fi
+
+if [[ "${MODE}" != "teacher" && "${MODE}" != "student" && "${MODE}" != "mixed" ]]; then
+  echo "MODE 必须为 teacher、student 或 mixed" >&2
+  exit 2
+fi
+if [[ "${SCOPE}" != "single" && "${SCOPE}" != "triple" ]]; then
+  echo "SCOPE 必须为 single 或 triple" >&2
+  exit 2
+fi
+if [[ ! -f "${VBAS_CONFIG}" || ! -f "${MANIFEST}" ]]; then
+  echo "VBas 配置或 fixture manifest 不存在" >&2
+  exit 2
+fi
+
+config_backup="$(mktemp)"
+cp -- "${VBAS_CONFIG}" "${config_backup}"
+restore_config() {
+  cp -- "${config_backup}" "${VBAS_CONFIG}"
+  rm -f -- "${config_backup}"
+}
+trap restore_config EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+cd "${PLATFORM_ROOT}" || exit 2
+git_sha="$(git -C "${PLATFORM_ROOT}/.." rev-parse HEAD)" || exit 2
+target_args=(--target "${targets[0]}")
+if [[ "${SCOPE}" == "triple" ]]; then
+  target_args+=(--target "${targets[1]}" --target "${targets[2]}")
+fi
+
+verify_idle_leases() {
+  local instance_id lease_document
+  for instance_id in vbas-gpu0 vbas-gpu1 vbas-gpu2; do
+    lease_document="$(curl --fail --silent --show-error --max-time 5 \
+      "${CONTROL_URL}/ops/operator-instances/${instance_id}/active-leases")" || return 1
+    if ! .venv/bin/python -c \
+      'import json,sys; raise SystemExit(0 if json.load(sys.stdin).get("active_lease_count") == 0 else 1)' \
+      <<<"${lease_document}"; then
+      echo "VBas 存在活跃离线租约，拒绝重启: ${instance_id}" >&2
+      return 1
+    fi
+  done
+}
+
+verify_runtime() {
+  local index container device_request healthy port
+  for index in "${!containers[@]}"; do
+    container="${containers[${index}]}"
+    port="${ports[${index}]}"
+    device_request="$(docker inspect "${container}" --format \
+      '{{json .HostConfig.DeviceRequests}}')" || return 1
+    if [[ "${device_request}" != *"\"${gpu_indices[${index}]}\""* ]]; then
+      echo "VBas GPU 绑定与预期不符: ${container}" >&2
+      return 1
+    fi
+    if ! docker exec "${container}" test -w /workspace/logs; then
+      echo "VBas 日志目录不可写: ${container}" >&2
+      return 1
+    fi
+    healthy=0
+    for _ in $(seq 1 180); do
+      if curl --fail --silent --max-time 2 \
+        "http://127.0.0.1:${port}/AE/Health" >/dev/null; then
+        healthy=1
+        break
+      fi
+      sleep 1
+    done
+    if [[ "${healthy}" -ne 1 ]]; then
+      echo "VBas 模型未就绪: ${container}" >&2
+      return 1
+    fi
+  done
+}
+
+verify_idle_leases || exit 2
+verify_runtime || exit 2
+
+overall=0
+for tier in ${TIERS}; do
+  verify_idle_leases || exit 2
+  temporary_config="$(mktemp "${VBAS_CONFIG}.XXXXXX")"
+  sed -E "s/^MaxConcurrentOfflineBatches = [0-9]+/MaxConcurrentOfflineBatches = ${tier}/" \
+    "${VBAS_CONFIG}" >"${temporary_config}"
+  if [[ "$(grep -c "^MaxConcurrentOfflineBatches = ${tier}$" "${temporary_config}")" -ne 1 ]]; then
+    rm -f -- "${temporary_config}"
+    echo "无法唯一更新 MaxConcurrentOfflineBatches" >&2
+    exit 2
+  fi
+  chmod --reference="${VBAS_CONFIG}" "${temporary_config}"
+  mv -- "${temporary_config}" "${VBAS_CONFIG}"
+
+  docker restart "${containers[@]}" >/dev/null || exit 2
+  verify_runtime || exit 2
+
+  case_id="${MODE}-${SCOPE}-c${tier}"
+  PYTHONPATH="${PLATFORM_ROOT}:${PLATFORM_ROOT}/.." \
+    .venv/bin/python scripts/run_vbas_throughput_benchmark.py vbas \
+      --campaign-id "${CAMPAIGN_ID}" \
+      --attempt 1 \
+      --git-sha "${git_sha}" \
+      --report-root "${REPORT_ROOT}" \
+      --case-id "${case_id}" \
+      --fixture-root "${FIXTURE_ROOT}" \
+      --fixture-root-in-container "${FIXTURE_CONTAINER_ROOT}" \
+      --manifest "${MANIFEST}" \
+      --effective-config-path "${VBAS_CONFIG}" \
+      --mode "${MODE}" \
+      --concurrency "${tier}" \
+      --batch-size 8 \
+      --warmup-seconds "${WARMUP_SECONDS}" \
+      --steady-seconds "${STEADY_SECONDS}" \
+      --min-steady-batches "${MIN_STEADY_BATCHES}" \
+      --max-total-seconds "${MAX_TOTAL_SECONDS}" \
+      "${target_args[@]}"
+  result=$?
+  if [[ "${result}" -ne 0 ]]; then
+    overall=2
+  fi
+done
+
+exit "${overall}"

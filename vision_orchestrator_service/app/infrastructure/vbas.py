@@ -5,7 +5,7 @@ import hashlib
 import json
 import logging
 import time
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +18,7 @@ from .capacity import CapacityLease, CapacityUnavailableError, WorkContext
 
 JsonObject = dict[str, Any]
 logger = logging.getLogger(__name__)
+VbasStageObserver = Callable[[str, dict[str, object]], None]
 
 
 class VbasAdapterError(RuntimeError):
@@ -278,12 +279,14 @@ class VbasBatchClient:
         config: VbasBatchConfig | None = None,
         capacity_gate: VbasOfflineCapacityGate | None = None,
         shutdown_event: asyncio.Event | None = None,
+        stage_observer: VbasStageObserver | None = None,
     ) -> None:
         self._http = http_client
         self._lease_client = lease_client
         self._config = config or VbasBatchConfig()
         self._shutdown_event = shutdown_event
         self._capacity_gate = capacity_gate
+        self._stage_observer = stage_observer
 
     async def analyze(
         self,
@@ -463,6 +466,15 @@ class VbasBatchClient:
         if stream is VisionStream.TEACHER:
             request["ReturnHeadPose"] = False
 
+        self._observe(
+            "lease_requested",
+            {
+                "task_id": task_id,
+                "batch_id": batch_id,
+                "stream": stream_type,
+                "monotonic_seconds": time.monotonic(),
+            },
+        )
         async with self._lease_client.acquire(
             capability,
             ttl_seconds=self._config.lease_ttl_seconds,
@@ -475,7 +487,27 @@ class VbasBatchClient:
                 trace_id=trace_id,
             ),
         ) as lease:
+            self._observe(
+                "lease_acquired",
+                {
+                    "task_id": task_id,
+                    "batch_id": batch_id,
+                    "stream": stream_type,
+                    "instance_id": lease.instance_id,
+                    "monotonic_seconds": time.monotonic(),
+                },
+            )
             try:
+                self._observe(
+                    "vbas_started",
+                    {
+                        "task_id": task_id,
+                        "batch_id": batch_id,
+                        "stream": stream_type,
+                        "instance_id": lease.instance_id,
+                        "monotonic_seconds": time.monotonic(),
+                    },
+                )
                 response = await asyncio.wait_for(
                     self._http.post(
                         f"{lease.service_url.rstrip('/')}{endpoint}",
@@ -489,6 +521,16 @@ class VbasBatchClient:
                     )
                 response.raise_for_status()
                 body = response.json()
+                self._observe(
+                    "vbas_finished",
+                    {
+                        "task_id": task_id,
+                        "batch_id": batch_id,
+                        "stream": stream_type,
+                        "instance_id": lease.instance_id,
+                        "monotonic_seconds": time.monotonic(),
+                    },
+                )
             except CapacityUnavailableError:
                 raise
             except (TimeoutError, httpx.TransportError) as exc:
@@ -581,6 +623,10 @@ class VbasBatchClient:
                 )
             results.append({"image_id": expected.image_id, "response": item})
         return results
+
+    def _observe(self, event: str, detail: dict[str, object]) -> None:
+        if self._stage_observer is not None:
+            self._stage_observer(event, detail)
 
 
 @asynccontextmanager

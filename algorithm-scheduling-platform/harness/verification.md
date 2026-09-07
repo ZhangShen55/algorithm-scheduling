@@ -5,6 +5,55 @@ platform root, use the explicit workspace import path below; this prevents a
 bare top-level `tests` package from another checkout from shadowing the
 platform tests:
 
+## 2026-09-07 VBas 充足供料吞吐基准本地门禁
+
+本节对应
+[`scenarios/vbas-throughput-sufficient-feed-20260907.md`](scenarios/vbas-throughput-sufficient-feed-20260907.md)
+和 OpenSpec `benchmark-vbas-throughput-with-sufficient-feed`。从工作区根目录执行：
+
+```bash
+PYTHONPATH="$PWD/algorithm-scheduling-platform:$PWD" \
+  algorithm-scheduling-platform/.venv/bin/python -m pytest -q \
+  algorithm-scheduling-platform/tests/vbas_benchmark \
+  algorithm-scheduling-platform/tests/test_vbas_batch_client.py \
+  algorithm-scheduling-platform/tests/test_vision_cache.py
+
+PYTHONPATH="$PWD/vision_orchestrator_service:$PWD/algorithm-scheduling-platform:$PWD" \
+  algorithm-scheduling-platform/.venv/bin/python -m pytest -q \
+  vision_orchestrator_service/tests
+
+PYTHONPATH="$PWD/algorithm-scheduling-platform:$PWD" \
+  algorithm-scheduling-platform/.venv/bin/python -m pytest -q \
+  algorithm-scheduling-platform/tests/test_vbas_batch_client.py \
+  algorithm-scheduling-platform/tests/test_vision_cache.py \
+  algorithm-scheduling-platform/tests/test_vision_kafka_boundary.py
+
+algorithm-scheduling-platform/.venv/bin/ruff check \
+  algorithm-scheduling-platform/scripts/vbas_benchmark \
+  algorithm-scheduling-platform/scripts/run_vbas_throughput_benchmark.py \
+  algorithm-scheduling-platform/tests/vbas_benchmark \
+  vision_orchestrator_service/app/infrastructure/media.py \
+  vision_orchestrator_service/app/infrastructure/vbas.py \
+  vision_orchestrator_service/app/infrastructure/capacity.py
+
+PYTHONPATH="$PWD/algorithm-scheduling-platform:$PWD" MYPYPATH="$PWD" \
+  algorithm-scheduling-platform/.venv/bin/mypy --strict --explicit-package-bases \
+  algorithm-scheduling-platform/scripts/vbas_benchmark \
+  algorithm-scheduling-platform/scripts/run_vbas_throughput_benchmark.py
+
+python -m compileall -q \
+  algorithm-scheduling-platform/scripts/vbas_benchmark \
+  algorithm-scheduling-platform/tests/vbas_benchmark \
+  vision_orchestrator_service/app
+
+bash -n algorithm-scheduling-platform/deploy/scripts/run-vbas-throughput-staircase
+```
+
+2026-09-07 完整结果分别为 benchmark 相关 `41 passed`、Vision 服务
+`98 passed`、平台视觉边界 `25 passed`，Ruff、strict Mypy、compileall 和 Bash
+语法通过。该证据只达到本地静态/单元与仿真层级；`192.168.29.11`
+三卡阶梯、媒体供料、真实租约分发和完整链路尚未在本节记录为通过。
+
 ## 2026-08-23 A 服务极限负载 Campaign 本地门禁
 
 本节对应

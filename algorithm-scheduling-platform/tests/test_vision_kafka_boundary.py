@@ -249,7 +249,11 @@ async def test_vision_vbas_calls_use_control_service_capacity_lease() -> None:
     assert captured == [
         (
             "/internal/operator-instances/lease",
-            {"capability": "teacher_behavior", "ttl_seconds": 90},
+            {
+                "capability": "teacher_behavior",
+                "ttl_seconds": 90,
+                "capacity_pool": "offline",
+            },
         ),
         (
             "/internal/operator-instances/release",

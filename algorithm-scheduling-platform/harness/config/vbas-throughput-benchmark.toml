@@ -1,0 +1,45 @@
+[campaign]
+# 相同输入、镜像和配置下的默认随机种子。
+seed = 20260907
+# 每个候选拐点至少重复的轮数。
+candidate_repeats = 2
+
+[vbas]
+# 单实例从高到低的离线 batch 并发阶梯。
+concurrency_tiers = [8, 6, 4, 3, 2, 1]
+# 每个请求包含的图片数，与当前离线业务批次一致。
+batch_size = 8
+# 模型预热时长，不计入稳态吞吐。
+warmup_seconds = 60
+# 每档最小稳态时长。
+steady_seconds = 600
+# 稳态窗口至少完成的 batch 数，时长和数量必须同时满足。
+min_steady_batches = 10000
+# 单请求硬超时。
+request_timeout_seconds = 120
+# 单档总时间硬上限。
+max_total_seconds = 3600
+
+[media]
+# 纯媒体供料活动流从高到低的阶梯。
+active_stream_tiers = [16, 12, 8, 6, 4, 2, 1]
+# 纯媒体阶段不人为压低 FFmpeg 进程上限。
+max_concurrent_processes = 16
+# 固定视频的基础抽帧间隔。
+frame_interval_seconds = 10
+
+[guardrails]
+# 稳态累计错误率硬上限。
+max_error_rate = 0.01
+# 24 GiB 卡预留系统余量后的显存硬护栏。
+max_gpu_memory_mib = 22000
+# 稳态后半段 P50 相对前半段允许增长的显存。
+memory_half_delta_tolerance_mib = 256
+# 稳态显存允许的最大上升斜率。
+memory_slope_tolerance_mib_per_minute = 64
+# 相对预热 P95 的尾延迟恶化倍数。
+max_latency_degradation_ratio = 2.0
+# 请求完成后补位的 P95 上限。
+max_replenish_p95_seconds = 0.1
+# 负载器必须持续达到的目标在途比例。
+min_inflight_ratio = 0.90

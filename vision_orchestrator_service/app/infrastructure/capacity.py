@@ -3,14 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
 
 import httpx
-
 from packages.platform_common.lease_resilience import (
     ControlDeterministicFailureError,
     ControlTransientFailureError,
@@ -28,6 +27,7 @@ from packages.platform_common.lease_resilience import (
 from packages.platform_common.metrics import PlatformMetrics
 
 logger = logging.getLogger(__name__)
+CapacityStageObserver = Callable[[str, dict[str, object]], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +92,7 @@ class CapacityLeaseHttpClient:
         metrics: PlatformMetrics | None = None,
         acquire_wait_timeout_seconds: float = 300.0,
         acquire_retry_interval_seconds: float = 0.2,
+        stage_observer: CapacityStageObserver | None = None,
     ) -> None:
         self._http = http_client
         self._control_service_url = control_service_url.rstrip("/")
@@ -99,6 +100,7 @@ class CapacityLeaseHttpClient:
         self._metrics = metrics
         self._acquire_wait_timeout_seconds = acquire_wait_timeout_seconds
         self._acquire_retry_interval_seconds = acquire_retry_interval_seconds
+        self._stage_observer = stage_observer
 
     @asynccontextmanager
     async def acquire(
@@ -133,6 +135,13 @@ class CapacityLeaseHttpClient:
                     ),
                 ) from last_error
             attempt += 1
+            self._observe(
+                "lease_attempt",
+                capability=capability,
+                work_context=work_context,
+                attempt=attempt,
+                outcome="started",
+            )
             try:
                 response = await asyncio.wait_for(
                     self._http.post(
@@ -202,6 +211,15 @@ class CapacityLeaseHttpClient:
                 outcome="retrying" if remaining > 0 else "timeout",
                 capacity_pool=capacity_pool,
             )
+            self._observe(
+                "lease_retry",
+                capability=capability,
+                work_context=work_context,
+                attempt=attempt,
+                outcome=(
+                    last_error.kind.value if last_error is not None else "unknown"
+                ),
+            )
             retry_allowed = await wait_for_retry(
                 deadline=deadline,
                 attempt=attempt,
@@ -235,6 +253,14 @@ class CapacityLeaseHttpClient:
             outcome="acquired",
             instance_id=lease.instance_id,
             capacity_pool=capacity_pool,
+        )
+        self._observe(
+            "lease_authority_acquired",
+            capability=capability,
+            work_context=work_context,
+            attempt=attempt,
+            outcome="acquired",
+            instance_id=lease.instance_id,
         )
 
         interval = renew_interval_seconds or max(min(ttl_seconds / 3, 20.0), 0.1)
@@ -333,6 +359,38 @@ class CapacityLeaseHttpClient:
                     instance_id=lease.instance_id,
                     capacity_pool=capacity_pool,
                 )
+            self._observe(
+                "lease_released" if released else "lease_release_unconfirmed",
+                capability=capability,
+                work_context=work_context,
+                attempt=attempt,
+                outcome="released" if released else "unconfirmed",
+                instance_id=lease.instance_id,
+            )
+
+    def _observe(
+        self,
+        event: str,
+        *,
+        capability: str,
+        work_context: WorkContext | None,
+        attempt: int,
+        outcome: str,
+        instance_id: str | None = None,
+    ) -> None:
+        if self._stage_observer is None:
+            return
+        detail: dict[str, object] = {
+            "capability": capability,
+            "attempt": attempt,
+            "outcome": outcome,
+            "monotonic_seconds": time.monotonic(),
+        }
+        if work_context is not None:
+            detail["batch_id"] = work_context.work_id
+        if instance_id is not None:
+            detail["instance_id"] = instance_id
+        self._stage_observer(event, detail)
 
     def _record_recovery_event(
         self,
