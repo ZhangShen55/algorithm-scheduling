@@ -16,6 +16,8 @@ MIN_STEADY_BATCHES="${MIN_STEADY_BATCHES:-10000}"
 MAX_TOTAL_SECONDS="${MAX_TOTAL_SECONDS:-3600}"
 TIERS="${TIERS:-8 6 4 3 2 1}"
 CONTROL_URL="${CONTROL_URL:-http://127.0.0.1:18100}"
+PYTHON_BIN="${PYTHON_BIN:-${PLATFORM_ROOT}/.venv/bin/python}"
+GIT_SHA="${GIT_SHA:-}"
 
 containers=(
   algorithm-operators-vbas-gpu0-1
@@ -65,6 +67,10 @@ if [[ ! -f "${VBAS_CONFIG}" || ! -f "${MANIFEST}" ]]; then
   echo "VBas 配置或 fixture manifest 不存在" >&2
   exit 2
 fi
+if [[ ! -x "${PYTHON_BIN}" ]]; then
+  echo "基准 Python 不可执行: ${PYTHON_BIN}" >&2
+  exit 2
+fi
 
 config_backup="$(mktemp)"
 cp -- "${VBAS_CONFIG}" "${config_backup}"
@@ -77,7 +83,11 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 cd "${PLATFORM_ROOT}" || exit 2
-git_sha="$(git -C "${PLATFORM_ROOT}/.." rev-parse HEAD)" || exit 2
+if [[ -n "${GIT_SHA}" ]]; then
+  git_sha="${GIT_SHA}"
+else
+  git_sha="$(git -C "${PLATFORM_ROOT}/.." rev-parse HEAD)" || exit 2
+fi
 target_args=(--target "${targets[0]}")
 if [[ "${SCOPE}" == "triple" ]]; then
   target_args+=(--target "${targets[1]}" --target "${targets[2]}")
@@ -88,7 +98,7 @@ verify_idle_leases() {
   for instance_id in vbas-gpu0 vbas-gpu1 vbas-gpu2; do
     lease_document="$(curl --fail --silent --show-error --max-time 5 \
       "${CONTROL_URL}/ops/operator-instances/${instance_id}/active-leases")" || return 1
-    if ! .venv/bin/python -c \
+    if ! "${PYTHON_BIN}" -c \
       'import json,sys; raise SystemExit(0 if json.load(sys.stdin).get("active_lease_count") == 0 else 1)' \
       <<<"${lease_document}"; then
       echo "VBas 存在活跃离线租约，拒绝重启: ${instance_id}" >&2
@@ -150,7 +160,7 @@ for tier in ${TIERS}; do
 
   case_id="${MODE}-${SCOPE}-c${tier}"
   PYTHONPATH="${PLATFORM_ROOT}:${PLATFORM_ROOT}/.." \
-    .venv/bin/python scripts/run_vbas_throughput_benchmark.py vbas \
+    "${PYTHON_BIN}" scripts/run_vbas_throughput_benchmark.py vbas \
       --campaign-id "${CAMPAIGN_ID}" \
       --attempt 1 \
       --git-sha "${git_sha}" \
