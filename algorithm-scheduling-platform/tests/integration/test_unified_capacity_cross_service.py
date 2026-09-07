@@ -900,7 +900,6 @@ async def test_vision_vbas_batch_crosses_control_and_renews_one_attributed_lease
             ),
             config=VbasBatchConfig(
                 batch_size=2,
-                max_concurrency=1,
                 lease_ttl_seconds=1,
                 request_timeout_seconds=3,
             ),
@@ -920,15 +919,18 @@ async def test_vision_vbas_batch_crosses_control_and_renews_one_attributed_lease
             )
         ).json()
         assert initial["active_lease_count"] == 1
-        assert initial["leases"][0]["work_context"] == {
+        context = initial["leases"][0]["work_context"]
+        assert context == {
             "source_service": "vision-orchestrator-service",
             "work_type": "vbas_teacher_batch",
-            "work_id": "course-vision-t-0000",
+            "work_id": context["work_id"],
             "task_id": "course-vision",
             "node_id": None,
-            "item_id": "course-vision-t-0000",
+            "item_id": context["work_id"],
             "trace_id": "trace-vision",
+            "capacity_pool": "offline",
         }
+        assert context["work_id"].startswith("course-vision-t-0000-")
         lease_id = initial["leases"][0]["lease_id"]
         acquired_at = initial["leases"][0]["acquired_at"]
 
