@@ -2600,3 +2600,16 @@
 - `/data/course` 峰值约 26.03 GiB，随后本轮 20 个课程目录和全部临时媒体清零；
   `/data/result` 的 20 个结果目录全部保留。完整证据见
   `scenarios/mixed-load-media-cleanup-validation-20260903.md`，本轮明确不作为里程碑 2B 通过结论。
+
+## 2026-09-07 - 运维控制台压测存储阻塞修复与 GPU 源码纳管核对
+
+- `e4a26415f01778517cd98e5f549b5edf8cf057fb` 将 `/ops/storage` 默认改为快速文件系统统计，
+  并对前端存储和网关子请求局部降级，避免单个慢接口清空总览其他成功数据。
+- `4bd506113c7689906f3960a209042aeecd784653` 补齐之前已部署但未进入 Git 的 GPU Exporter
+  源码和 Compose，并提交已有的 OpenSpec 完成记录；远程容器内源码摘要与本地一致。
+- 2026-09-07 只读复核中，`/ops/storage?include_directory_bytes=false` 约 `0.012s`，
+  Control、前端和 GPU Exporter 均为 `running/healthy`、重启 0，21 个算子实例可读。
+- OpenSpec 仍为 `27/28`，仅 3.6 的全页面响应映射及空态/错误态测试未完成；
+  多服务器 NFS 仍是未实施设计，不记为已验收。
+- 完整证据见 `scenarios/ops-console-load-storage-recovery-20260907.md`。本轮没有重启、
+  替换或删除远程容器，没有执行 prune，没有删除卷或 `/data/result`。
