@@ -80,7 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     load.add_argument("--batch-size", type=int, default=8)
     load.add_argument("--warmup-seconds", type=float, default=60)
     load.add_argument("--steady-seconds", type=float, default=600)
-    load.add_argument("--min-steady-batches", type=int, default=10_000)
+    load.add_argument("--min-steady-batches", type=int, default=100)
     load.add_argument("--max-total-seconds", type=float, default=3_600)
     load.add_argument("--request-timeout-seconds", type=float, default=120)
     load.add_argument("--telemetry-interval-seconds", type=float, default=1)

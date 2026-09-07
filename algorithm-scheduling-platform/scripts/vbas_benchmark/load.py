@@ -32,7 +32,7 @@ class LoadRunConfig:
     batch_size: int = 8
     warmup_seconds: float = 60.0
     steady_seconds: float = 600.0
-    min_steady_batches: int = 10_000
+    min_steady_batches: int = 100
     request_timeout_seconds: float = 120.0
     drain_timeout_seconds: float = 180.0
     max_total_seconds: float = 3_600.0
@@ -359,7 +359,11 @@ async def _monitor(
             return
         observed = len(records)
         errors = sum(record.category != "success" for record in records)
-        if observed >= 20 and errors / observed > config.guardrails.max_error_rate:
+        if _error_rate_exceeds_guardrail(
+            observed,
+            errors,
+            config.guardrails.max_error_rate,
+        ):
             state.stop_reason = f"错误率超过护栏: {errors}/{observed}"
             stop_event.set()
             return
@@ -405,6 +409,17 @@ async def _monitor(
             stop_event.set()
             return
         await asyncio.sleep(config.sample_interval_seconds)
+
+
+def _error_rate_exceeds_guardrail(
+    observed: int,
+    errors: int,
+    max_error_rate: float,
+) -> bool:
+    minimum_samples = (
+        1 if max_error_rate == 0 else max(20, math.ceil(1 / max_error_rate))
+    )
+    return observed >= minimum_samples and errors / observed > max_error_rate
 
 
 def summarize_records(

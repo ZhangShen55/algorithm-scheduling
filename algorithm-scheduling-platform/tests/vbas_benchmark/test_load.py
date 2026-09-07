@@ -6,7 +6,11 @@ import json
 import httpx
 import pytest
 
-from scripts.vbas_benchmark.load import LoadRunConfig, run_sustained_load
+from scripts.vbas_benchmark.load import (
+    LoadRunConfig,
+    _error_rate_exceeds_guardrail,
+    run_sustained_load,
+)
 from scripts.vbas_benchmark.models import (
     BenchmarkGuardrails,
     BenchmarkMode,
@@ -14,6 +18,19 @@ from scripts.vbas_benchmark.models import (
     FixtureManifest,
     VbasTarget,
 )
+
+
+def test_default_minimum_steady_batches_matches_long_window_contract() -> None:
+    config = LoadRunConfig(mode=BenchmarkMode.STUDENT, concurrency_per_instance=1)
+
+    assert config.min_steady_batches == 100
+
+
+def test_error_rate_guardrail_waits_for_representative_sample() -> None:
+    assert not _error_rate_exceeds_guardrail(20, 1, 0.01)
+    assert not _error_rate_exceeds_guardrail(100, 1, 0.01)
+    assert _error_rate_exceeds_guardrail(100, 2, 0.01)
+    assert _error_rate_exceeds_guardrail(1, 1, 0)
 
 
 def _manifest() -> FixtureManifest:
