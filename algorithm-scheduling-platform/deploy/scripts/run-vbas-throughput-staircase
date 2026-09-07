@@ -4,6 +4,7 @@ set -uo pipefail
 PLATFORM_ROOT="${PLATFORM_ROOT:-/root/workspace/algorithm-scheduling/algorithm-scheduling-platform}"
 REPORT_ROOT="${REPORT_ROOT:-${PLATFORM_ROOT}/deploy/reports/vbas-throughput}"
 CAMPAIGN_ID="${CAMPAIGN_ID:-vbas-throughput-$(date +%Y%m%d%H%M%S)}"
+ATTEMPT="${ATTEMPT:-1}"
 FIXTURE_ROOT="${FIXTURE_ROOT:-/data/course/vbas-benchmark/fixtures}"
 FIXTURE_CONTAINER_ROOT="${FIXTURE_CONTAINER_ROOT:-/data/course/vbas-benchmark/fixtures}"
 MANIFEST="${MANIFEST:-${FIXTURE_ROOT}/manifest.json}"
@@ -184,7 +185,7 @@ for tier in ${TIERS}; do
   PYTHONPATH="${PLATFORM_ROOT}:${PLATFORM_ROOT}/.." \
     "${PYTHON_BIN}" scripts/run_vbas_throughput_benchmark.py vbas \
       --campaign-id "${CAMPAIGN_ID}" \
-      --attempt 1 \
+      --attempt "${ATTEMPT}" \
       --git-sha "${git_sha}" \
       --report-root "${REPORT_ROOT}" \
       --case-id "${case_id}" \

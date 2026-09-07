@@ -93,6 +93,8 @@ CAMPAIGN_ID="$CAMPAIGN_ID" MODE=mixed SCOPE=triple \
 阶梯脚本会暂时修改当前 VBas 容器实际挂载的 `config.toml`，每档重启三实例，在退出、中断或失败时恢复原配置。高位档触发护栏时证据保留为失败，脚本继续执行下一低档。
 当代码以不含 `.git` 和 `.venv` 的 release 快照部署时，显式传入
 `GIT_SHA` 与 `PYTHON_BIN`；证据仍记录被发布的准确提交，且不要求服务器持有 GitHub 私钥。
+使用 `TIERS='8 6' ATTEMPT=2` 可只重跑指定档位，并将证据写入新的 attempt；
+不得使用相同 attempt 覆盖已有失败或通过结果。
 
 ## 6. 纯媒体和预抽帧分发
 
