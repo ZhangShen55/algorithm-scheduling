@@ -75,8 +75,30 @@ fi
 config_backup="$(mktemp)"
 cp -- "${VBAS_CONFIG}" "${config_backup}"
 restore_config() {
+  local original_status=$?
+  local port healthy
   cp -- "${config_backup}" "${VBAS_CONFIG}"
   rm -f -- "${config_backup}"
+  if ! docker restart "${containers[@]}" >/dev/null; then
+    echo "原配置已恢复，但 VBas 重启失败，需要人工核验" >&2
+    return 2
+  fi
+  for port in "${ports[@]}"; do
+    healthy=0
+    for _ in $(seq 1 180); do
+      if curl --fail --silent --max-time 2 \
+        "http://127.0.0.1:${port}/AE/Health" >/dev/null; then
+        healthy=1
+        break
+      fi
+      sleep 1
+    done
+    if [[ "${healthy}" -ne 1 ]]; then
+      echo "恢复原配置后 VBas 未就绪: ${port}" >&2
+      return 2
+    fi
+  done
+  return "${original_status}"
 }
 trap restore_config EXIT
 trap 'exit 130' INT
