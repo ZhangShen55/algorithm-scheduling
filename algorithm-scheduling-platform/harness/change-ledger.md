@@ -1,5 +1,21 @@
 # Change Ledger
 
+## 2026-09-08 - `support-multi-host-gpu-observability` 真实远程算子补充验收
+
+- 在 `192.168.29.12` 的 GPU 0 部署 `vbas-29-12-gpu0:28981`，GPU 1 部署
+  `screen-det-29-12-gpu1:28880`；两个实例均 healthy，Control Service 最终返回 23/23
+  ONLINE，并按 `host_id + gpu_index` 精确关联。
+- `.11` 仅向 `.12` 导出 `/data/course`、`/data/result`，`.12` 以 NFS 4.2 持久挂载同名路径；
+  双向 fsync、原子 rename、可见性、删除和结果目录保护检查均通过。
+- Control Service 只增加两个精确可信 URL。Vision Orchestrator 和 Online Gateway 均可跨机
+  访问；Gateway 已实际取得并释放两个远端实例的租约，ScreenDet 单图与 VBas 学生/教师真实
+  推理通过，远端容器写入的结果文件可由平台主机读取。
+- GPU 2 的 Qwen 容器 ID、设备绑定、启动时间和重启次数在部署前后保持不变；没有重启 Docker
+  daemon、执行 prune、删除卷或触碰用户的 `text_analysis` 改动。
+- Control Service `25 passed`，注册客户端与 Compose 专项 `34 passed`；多机 Compose、OpenSpec
+  strict 和 diff 检查通过。最终截图及完整命令证据见
+  `harness/scenarios/multi-host-gpu-observability-20260908.md`。
+
 ## 2026-09-08 - `support-multi-host-gpu-observability` 双主机发布与验收
 
 - 两台真实 GPU 主机分别以 `192.168.29.11`、`192.168.29.12` 作为 `host_id` 运行只读

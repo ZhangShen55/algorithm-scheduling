@@ -74,12 +74,18 @@ def test_default_control_config_authorizes_the_exact_operator_matrix() -> None:
 
     settings = ControlSettings.load(SERVICE_ROOT / "config.toml")
 
-    assert len(settings.operator_registry.trusted_service_urls) == 21
+    assert len(settings.operator_registry.trusted_service_urls) == 23
     assert settings.operator_registry.trusted_service_urls["vbas-gpu0"] == (
         "http://vbas-gpu0:8981"
     )
     assert settings.operator_registry.trusted_service_urls["ppt-slice-cpu2"] == (
         "http://ppt-slice-cpu2:9001"
+    )
+    assert settings.operator_registry.trusted_service_urls["vbas-29-12-gpu0"] == (
+        "http://192.168.29.12:28981"
+    )
+    assert settings.operator_registry.trusted_service_urls["screen-det-29-12-gpu1"] == (
+        "http://192.168.29.12:28880"
     )
     assert not any(
         instance_id.startswith("text-analysis-")

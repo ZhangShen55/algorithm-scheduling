@@ -89,6 +89,9 @@ screen-det-gpu2 = "http://screen-det-gpu2:8880"
 ppt-slice-cpu0 = "http://ppt-slice-cpu0:9001"
 ppt-slice-cpu1 = "http://ppt-slice-cpu1:9001"
 ppt-slice-cpu2 = "http://ppt-slice-cpu2:9001"
+# 192.168.29.12 的远程算子使用跨主机可达地址，必须与注册值完全一致。
+vbas-29-12-gpu0 = "http://192.168.29.12:28981"
+screen-det-29-12-gpu1 = "http://192.168.29.12:28880"
 
 [features]
 # 本次交付允许 A 服务提交的离线任务类型；动态可用性仍由算子注册状态决定。

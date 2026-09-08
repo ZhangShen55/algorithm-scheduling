@@ -9,23 +9,25 @@
 /data/result
 ```
 
-GPU 主机 `192.168.29.12` 通过 `root@192.168.29.12:22` 执行部署。该主机当前还有媒体源 `5555/5556`，GPU Exporter 默认使用 `9400`，不得停止或覆盖媒体源容器。
+GPU 主机 `192.168.29.12` 通过 `root@192.168.29.12:22` 执行部署。该主机现有媒体文件服务使用 `5555`，Qwen 服务独占 GPU 2 和端口 `8866`，GPU Exporter 使用 `9400`；远程算子不得停止、覆盖或占用这些既有资源。
 
 ## 身份与地址
 
 每个算子实例必须同时具备：
 
 ```text
-PLATFORM_INSTANCE_ID=asr-offline-29-12-gpu0
+PLATFORM_INSTANCE_ID=vbas-29-12-gpu0
 PLATFORM_HOST_ID=192.168.29.12
 PLATFORM_GPU_ID=0
-PLATFORM_SERVICE_URL=http://192.168.29.12:28083
+PLATFORM_SERVICE_URL=http://192.168.29.12:28981
 PLATFORM_INSTANCE_LABELS={"host_id":"192.168.29.12","gpu":"0"}
 ```
 
 `PLATFORM_INSTANCE_LABELS` 显式配置时优先级最高，必须同时包含 `host_id` 和 `gpu`。如果没有显式 labels，注册客户端使用 `PLATFORM_HOST_ID` 与 `PLATFORM_GPU_ID` 生成默认 labels。
 
 Control Service 的 `[operator_registry.trusted_service_urls]` 必须为每个远程实例配置同一个跨机可达 URL，不能使用 Docker 单机网络内的服务名。
+
+当前远程部署在 GPU 0 运行 VBas（`28981`），在 GPU 1 运行 ScreenDet（`28880`）。由于该主机 Docker NAT 链不可用，示例使用 host 网络直接监听宿主机端口；GPU 设备预留仍分别固定为 `0`、`1`，GPU 2 保留给既有 Qwen 服务。
 
 ## GPU Exporter
 
@@ -49,6 +51,11 @@ curl -fsS http://192.168.29.12:9400/gpu
 Control Service 同步加载 `templates/multi-host-trusted-service-urls.toml.example` 中的可信地址。
 
 ## NFS 预检
+
+平台主机使用 `templates/multi-host-nfs.exports.example` 作为受控导出配置，远程 GPU 主机将
+`templates/multi-host-nfs.fstab.example` 中的两项合并到 `/etc/fstab` 后执行 `mount -a`。当前
+算子容器以 root 运行，因此导出使用 `no_root_squash`；若后续改为固定非 root UID/GID，应同步
+收紧目录属主和导出权限。
 
 远程主机把 NFS 挂载到宿主机 `/data/course`、`/data/result`，再以相同路径映射进容器。两台主机分别执行：
 

@@ -1,0 +1,3 @@
+# 平台主机只向指定 GPU 主机开放课程输入与持久结果目录。
+/data/course 192.168.29.12(rw,sync,no_subtree_check,no_root_squash)
+/data/result 192.168.29.12(rw,sync,no_subtree_check,no_root_squash)

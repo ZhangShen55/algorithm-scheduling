@@ -2,16 +2,18 @@
 
 ## 范围与结论
 
-- 本记录对应 OpenSpec `support-multi-host-gpu-observability`，基线提交为
-  `12aea48`，目标主机为 `192.168.29.11` 和 `192.168.29.12`。
+- 本记录对应 OpenSpec `support-multi-host-gpu-observability`，初始基线为 `12aea48`；在
+  benchmark 提交 `9927df6` 后继续完成真实远程算子验收，目标主机为 `192.168.29.11` 和
+  `192.168.29.12`。
 - 两台主机各运行一个只读 NVML GPU Exporter，均显式返回自身固定内网 IP；控制台并行展示
   两台主机的 6 张 GPU，并仅以 `host_id + gpu_index` 关联算子实例。
-- `192.168.29.11` 的 21 个现役算子已滚动注入拓扑标签并全部恢复 ONLINE；
-  `192.168.29.12` 按约定只部署 Exporter，不部署算子，三张 GPU 正确显示“未部署算子”。
-- 本次没有修改 Control Service、Online Gateway、A 服务接口、算子 HTTP/WebSocket 契约、
-  Kafka envelope、数据库结构、Redis Key 或容量租约语义。
-- 本记录不把空算子主机观测扩大为远程算子端到端证据。NFS 真实跨主机挂载、远程算子注册、
-  租约、调用、输入读取和结果回写仍是后续验收项。
+- `192.168.29.11` 的 21 个现役算子保持 ONLINE；`192.168.29.12` 的 GPU 0 新增 VBas、
+  GPU 1 新增 ScreenDet，最终 Control Service 返回 23/23 ONLINE，GPU 2 继续由既有 Qwen 独占。
+- Control Service 仅增加两个精确 `trusted_service_urls`，没有修改业务源码。Online Gateway、
+  A 服务接口、算子 HTTP/WebSocket 契约、Kafka envelope、数据库结构、Redis Key 和容量租约
+  语义均未改变。
+- 生产 NFS、远程注册、真实租约、跨机调用、输入读取、结果回写与页面 GPU 关联均已实测，
+  OpenSpec 任务 7.4 已补齐。
 
 ## 本地门禁
 
@@ -45,8 +47,11 @@ git diff --check
 已将权威配置改为 `MaxConcurrentOfflineBatches=2`。其 `KeyError` 在本变更前已存在，不回退
 benchmark 配置；本次新增的 21 实例标签专项测试独立通过。
 
-临时目录预检通过创建、写入、读取、fsync、原子 rename、删除和 `/data/result` 清理保护标记。
-该结果只证明预检工具行为，不是生产 NFS 跨主机挂载证据。
+初始临时目录预检只证明工具行为。后续已在真实 NFS 挂载上再次通过创建、写入、读取、fsync、
+原子 rename、删除、跨机可见性与 `/data/result` 清理保护检查。
+
+真实远程算子阶段追加执行并通过：Control Service 全量 `25 passed`；注册客户端与 Compose 专项
+`34 passed`；多机 Compose 渲染、OpenSpec strict 与 `git diff --check` 通过。
 
 ## 远端发布身份
 
@@ -66,7 +71,8 @@ benchmark 配置；本次新增的 21 实例标签专项测试独立通过。
   运行 release 原样复制并校验摘要，没有被本地旧配置覆盖。
 
 三个历史 Text Analysis orphan 只产生 Compose 提示，未启动、删除或纳入当前平台。
-注册令牌与 Mongo 配置只在远端进程环境中从运行容器读取，没有输出、落盘或写入 Harness。
+注册令牌未输出或写入仓库/Harness；真实远程算子阶段只在 `.12` 的 root 专用配置目录保存
+`0600` 环境文件供 Compose 使用。
 
 ### 192.168.29.12
 
@@ -79,6 +85,13 @@ GPU Exporter 容器为 `algorithm-gpu-metrics-exporter-29-12`，镜像
 既有 `fileserver:5555` 和 `campaign-slow-media:5556`，Exporter 使用 host 网络监听 `9400`；
 两个媒体容器在发布、故障注入和恢复后始终为 running。Exporter 未挂载 Docker Socket。
 
+真实算子补充阶段的最终运行身份如下，两个算子同样使用 host 网络以绕开异常 NAT 链：
+
+| 实例 | GPU | 监听地址 | 镜像 ID | 容器 ID | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| `vbas-29-12-gpu0` | 0 | `192.168.29.12:28981` | `sha256:c3261f111088249c387e5cc2ed47ac781c136fbac5dd139aae8339cfe1062c68` | `ecce3747c0b21820336a5fe15b495893990eb0544143db5798a8810434de086b` | healthy |
+| `screen-det-29-12-gpu1` | 1 | `192.168.29.12:28880` | `sha256:268c849235a2d101c967b968e41c394915ef8dcece68da6929e728943b65ac10` | `ebc75218daeb1ae35001be10b8fbdec28a9957c6917aeb938c31512647a2b128` | healthy |
+
 ## 接口与注册证据
 
 - `GET 192.168.29.11:9400/health` 返回 `host_id=192.168.29.11`，`/gpu` 返回两张
@@ -89,23 +102,45 @@ GPU Exporter 容器为 `algorithm-gpu-metrics-exporter-29-12`，镜像
   `status=ok` 且响应身份分别与配置 IP 一致。
 - 两个 `/gpu` 对控制台 Origin 的 OPTIONS 均返回 HTTP 204、
   `Access-Control-Allow-Origin: *` 和 `GET, OPTIONS`。
-- Control Service `/ops/operator-instances` 返回 21 个 ONLINE 实例；21 个均有
-  `labels.host_id=192.168.29.11`，18 个 GPU 实例另有准确的 `labels.gpu=0/1/2`，
-  三个 PPT CPU 实例不伪造 GPU 标签。
+- Control Service `/ops/operator-instances` 最终返回 23 个 ONLINE 实例；`.11` 的 21 个实例
+  保持原标签，新增实例分别上报 `192.168.29.12+0` 和 `192.168.29.12+1`。两个注册地址与
+  `trusted_service_urls` 精确一致。
+- Vision Orchestrator 容器成功访问远端 VBas 的 `/ops/health` 与 `/ops/metadata`；Online
+  Gateway 容器成功访问远端 VBas 和 ScreenDet，证明跨机地址不依赖单机 Docker DNS。
+- Online Gateway 对 `detect_all` 的真实请求取得 `screen-det-29-12-gpu1` 租约并在约 350 ms
+  完成，租约 acquired/released 和请求延迟指标均带该实例 ID。
+- Online Gateway 对 `student_behavior` 的四次轮转请求中两次取得 `vbas-29-12-gpu0` 租约，
+  两次均成功调用并释放，实例指标计数为 2。
+
+## NFS 与真实推理
+
+- `.11` 将本地 ext4 的 `/data/course`、`/data/result` 仅导出给 `.12`；`.12` 以 NFS 4.2
+  持久挂载到相同路径。防火墙只允许来源 `192.168.29.12` 的 `nfs`、`mountd`、`rpc-bind`。
+- 两端真实预检均通过 UID/GID、读写、fsync、原子 rename、删除和结果目录保护；`.11` 创建的
+  course 探针可由 `.12` 校验删除，`.12` 创建的 result 探针可由 `.11` 校验删除。
+- VBas 容器通过 NFS 绝对路径读取 fixture；文件 SHA-256 在 `.11`、`.12` 和容器内均为
+  `3c9c37ee3a1d8b82cd3a2310871867aa41e6099bfdd7fd46d5221ddcbb61edf6`。
+- 学生和教师推理均返回状态码 0 与 1 项结果，两个稳定业务路径均未变化。
+- VBas 容器经写入、fsync 和原子替换生成
+  `/data/result/_harness/multi-host-gpu-observability/vbas-29-12-gpu0.json`；`.11` 读取 SHA-256
+  `30652949309a42bd2d3c2718c95b26d44e9b9b028177d861a19d7da080c346be`，证明结果回写可见。
 
 ## 浏览器验收
 
 真实入口为 `http://192.168.29.11:5174/`。浏览器验证结果：
 
-- 总览显示 `21/21` 在线实例和 `6 张显卡`；两台主机各三张卡独立分组。
-- `.11` 每张 GPU 关联 ASR Offline、ASR Online、FaceRec、OCR、ScreenDet 和 VBas
-  对应卡实例；`.12` 每张卡显示“未部署算子”。
-- 实例清单包含服务器和 GPU 列。选择服务器 `192.168.29.12` 后，上方只保留第二主机分组，
-  表格显示 `0/21`，`.11` 分组同步隐藏。
+- 总览最终显示 `23/23` 在线实例和 `6 张显卡`；两台主机各三张卡独立分组。
+- `.11` 每张 GPU 继续关联原有六类 GPU 算子；`.12` 的 GPU 0 关联
+  `vbas-29-12-gpu0`，GPU 1 关联 `screen-det-29-12-gpu1`，GPU 2 显示“未部署算子”。
+- 实例清单包含服务器和 GPU 列，新增两个实例均按显式标签显示在 `.12` 对应显卡，不解析
+  `instance_id`、容器名或 URL。
 - GPU 刷新设为 1 秒后连续采样 5 次，主机数始终为 2、GPU 卡数始终为 6，GPU 区域
   `top=1170`、`height=511` 均不变化；最近成功时间持续推进，没有刷新提示引起的跳动。
 - 截图见 `../evidence/multi-host-gpu-observability/overview-two-hosts.png`。桌面
   `1440x2200` 画面中两主机、6 张卡、实例关联和空主机状态均可见，无文本重叠。
+- 真实算子部署后的截图见
+  `../evidence/multi-host-gpu-observability/overview-remote-operators.png`，SHA-256 为
+  `2c1d9352e66638afa1efc3b63d3ec5ceb6acbbbe57d2a92f00883f9bbe7595d6`。
 
 ## 局部故障与恢复
 
@@ -118,12 +153,13 @@ GPU Exporter 容器为 `algorithm-gpu-metrics-exporter-29-12`，镜像
 重新启动 Exporter 后 `/health` 恢复，控制台约 3 秒内自动清除错误并更新最近成功时间。
 该过程同时验证运行回滚/恢复；没有执行 Docker daemon 重启、prune、卷或数据清理。
 
-## 兼容与未完成边界
+## 兼容与完成边界
 
-Git 变更复核确认 `control_service/`、`online_gateway_service/`、迁移目录及 A 服务契约没有改动。
-Control Service 继续使用既有 `labels` 字段，调度服务继续使用租约中的 `service_url`；注册客户端
-只增加环境变量标签默认值，显式 `PLATFORM_INSTANCE_LABELS` 仍优先。
+Control Service 只修改部署可信地址配置和对应配置测试，继续使用既有 `labels` 字段；
+Online Gateway、数据库迁移目录及 A 服务契约没有改动。调度服务继续使用租约中的
+`service_url`，显式 `PLATFORM_INSTANCE_LABELS` 仍优先。
 
-本次为满足“第二台 GPU 服务器不部署算子”的明确范围，没有执行真实远程算子、NFS 输入和结果
-回写。因此 OpenSpec 任务 7.4 保持未完成，不能用 Exporter 空主机证据替代。前端旧 `v0.4`、
-`v0.5`、`v0.6`、`v0.7`、`v0.8` 镜像在后继版本健康后精确删除；旧数据、模型、卷和历史 release 未删除。
+OpenSpec 任务 7.4 已用真实远程算子证据完成。`.12` 的 Qwen 容器 ID
+`93a844e1b2a308f588eab6fa5859f745ccf85feab3890ce0239e0cc2ebdeb9fa`、GPU 2 绑定、启动时间和
+重启次数在部署前后完全一致；没有重启 Docker daemon、执行 prune、删除卷、旧数据、模型或
+历史 release。

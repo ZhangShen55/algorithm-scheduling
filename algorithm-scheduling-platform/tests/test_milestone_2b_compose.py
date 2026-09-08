@@ -8,6 +8,7 @@ import yaml  # type: ignore[import-untyped]
 PLATFORM_ROOT = Path(__file__).resolve().parents[1]
 COMPOSE_PATH = PLATFORM_ROOT / "deploy/docker-compose.operators.yml"
 PLATFORM_COMPOSE_PATH = PLATFORM_ROOT / "deploy/docker-compose.platform.yml"
+REMOTE_COMPOSE_PATH = PLATFORM_ROOT / "deploy/docker-compose.multi-host.example.yml"
 REQUIRED_REGISTRY_TOKEN_EXPRESSION = (
     "${OPERATOR_REGISTRY_TOKEN:?OPERATOR_REGISTRY_TOKEN is required}"
 )
@@ -45,6 +46,13 @@ TOML_OWNED_ENVIRONMENT = {
 def load_operator_compose() -> dict[str, Any]:
     return cast(
         dict[str, Any], yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
+    )
+
+
+def load_remote_operator_compose() -> dict[str, Any]:
+    return cast(
+        dict[str, Any],
+        yaml.safe_load(REMOTE_COMPOSE_PATH.read_text(encoding="utf-8")),
     )
 
 
@@ -225,6 +233,46 @@ def test_operator_compose_declares_explicit_multihost_labels() -> None:
             ]
         )
         assert labels == {"host_id": expected_host_id}
+
+
+def test_remote_compose_reserves_gpu_zero_and_one_without_using_gpu_two() -> None:
+    services = load_remote_operator_compose()["services"]
+    expected = {
+        "vbas-29-12-gpu0": ("0", "http://192.168.29.12:28981"),
+        "screen-det-29-12-gpu1": ("1", "http://192.168.29.12:28880"),
+    }
+
+    assert set(services) == {*expected, "gpu-metrics-exporter"}
+    for instance_id, (gpu_index, service_url) in expected.items():
+        service = services[instance_id]
+        environment = service["environment"]
+        devices = service["deploy"]["resources"]["reservations"]["devices"]
+        labels = json.loads(environment["PLATFORM_INSTANCE_LABELS"])
+
+        assert service["network_mode"] == "host"
+        assert service["extra_hosts"] == ["control-service:192.168.29.11"]
+        assert service["security_opt"] == ["label=disable"]
+        assert environment["PLATFORM_INSTANCE_ID"] == instance_id
+        assert environment["PLATFORM_SERVICE_URL"] == service_url
+        assert environment["PLATFORM_GPU_ID"] == gpu_index
+        assert environment["NVIDIA_VISIBLE_DEVICES"] == gpu_index
+        assert labels == {"host_id": "192.168.29.12", "gpu": gpu_index}
+        assert devices == [
+            {
+                "driver": "nvidia",
+                "device_ids": [gpu_index],
+                "capabilities": ["gpu"],
+            }
+        ]
+        volumes = _volume_sources(service)
+        assert volumes["/data/course"][0] == "${COURSE_ROOT:-/data/course}"
+        assert volumes["/data/result"][0] == "${RESULT_ROOT:-/data/result}"
+
+    assert all(
+        service["environment"]["PLATFORM_GPU_ID"] != "2"
+        for name, service in services.items()
+        if name != "gpu-metrics-exporter"
+    )
 
 
 def test_platform_compose_requires_explicit_operator_registry_token() -> None:
