@@ -23,7 +23,7 @@ app = FastAPI(
 worker_controller = BatchAdmissionController(
     instance_id=str(getattr(settings, "InstanceId", "tias-8981")),
     base_url=str(getattr(settings, "BaseUrl", "http://127.0.0.1:8981")),
-    max_concurrent_offline_batches=int(getattr(settings, "MaxConcurrentOfflineBatches", 1)),
+    max_concurrent_offline_batches=int(getattr(settings, "MaxConcurrentOfflineBatches", 2)),
     max_concurrent_online_requests=int(getattr(settings, "MaxConcurrentOnlineRequests", 24)),
     max_queue_online_size=int(getattr(settings, "MaxQueueOnlineSize", 24)),
 )
@@ -77,7 +77,7 @@ install_operator_runtime(
     heartbeat_interval_seconds=operator_deployment.platform.heartbeat_interval_seconds,
     max_concurrent_requests=operator_deployment.platform.max_concurrent_requests,
     capacity_pools={
-        "offline": int(getattr(settings, "MaxConcurrentOfflineBatches", 1)),
+        "offline": int(getattr(settings, "MaxConcurrentOfflineBatches", 2)),
         "online": int(getattr(settings, "MaxConcurrentOnlineRequests", 24)),
     },
     inflight_provider=lambda: int(worker_controller.snapshot()["running_offline_batches"])

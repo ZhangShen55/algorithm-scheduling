@@ -92,7 +92,7 @@ class FFmpegFrameExtractor:
         ffmpeg_binary: str = "ffmpeg",
         ffprobe_binary: str = "ffprobe",
         command_timeout_seconds: float = 60.0,
-        max_concurrent_processes: int = 2,
+        max_concurrent_processes: int = 4,
         batch_extraction_enabled: bool = True,
         metrics: VisionPipelineMetrics | None = None,
         stage_observer: MediaStageObserver | None = None,

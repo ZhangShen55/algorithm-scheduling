@@ -69,7 +69,7 @@ class LeaseRenewalConfig(BaseModel):
 
 
 class WorkerConfig(BaseModel):
-    concurrency: int = 2
+    concurrency: int = 16
     poll_interval_seconds: float = 1.0
     shutdown_timeout_seconds: float = 30.0
 
@@ -100,7 +100,7 @@ class MediaConfig(BaseModel):
     ffmpeg_binary: str = "ffmpeg"
     ffprobe_binary: str = "ffprobe"
     command_timeout_seconds: float = 60.0
-    max_concurrent_processes: Annotated[StrictInt, Field(gt=0)] = 2
+    max_concurrent_processes: Annotated[StrictInt, Field(gt=0)] = 4
     batch_extraction_enabled: bool = True
 
 

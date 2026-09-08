@@ -88,7 +88,7 @@ acquire_retry_interval_seconds = 0.2
 
 [worker]
 # 课程级视觉命令在途上限；不等于 ffmpeg 进程数或 VBas batch 并发。
-concurrency = 2
+concurrency = 16
 # 工作进程轮询间隔秒数。
 poll_interval_seconds = 1.0
 # 工作进程优雅停止超时秒数。
@@ -132,7 +132,7 @@ ffprobe_binary = "ffprobe"
 # 单条视频命令的硬超时秒数。
 command_timeout_seconds = 60.0
 # 单容器 ffmpeg/ffprobe 进程硬上限；固定 worker 和公平排队避免长课程一次占满等待队列。
-max_concurrent_processes = 2
+max_concurrent_processes = 4
 # 是否将同一批等间隔时间点合并为一次 ffmpeg 连续解码；不同课程和批次仍按进程上限并行。
 batch_extraction_enabled = true
 

@@ -121,7 +121,7 @@ CleanupAfterLoad = true
         self.assertEqual(config["Teacher_Behavior_Thresd"]["PostureConflictDefault"], "stand")
         self.assertTrue(config["Teacher_Behavior_Thresd"]["ForcePostureWhenMissing"])
         self.assertEqual(config["platform"]["max_concurrent_requests"], 1024)
-        self.assertEqual(config["TIAS"]["MaxConcurrentOfflineBatches"], 1)
+        self.assertEqual(config["TIAS"]["MaxConcurrentOfflineBatches"], 2)
         self.assertEqual(config["TIAS"]["MaxConcurrentOnlineRequests"], 24)
         self.assertEqual(config["TIAS"]["MaxQueueOnlineSize"], 24)
         self.assertEqual(
@@ -144,7 +144,7 @@ CleanupAfterLoad = true
         self.assertIn("ModelProtection", config)
         self.assertFalse(config["ModelProtection"]["Enabled"])
         self.assertEqual(config["platform"]["max_concurrent_requests"], 1024)
-        self.assertEqual(config["TIAS"]["MaxConcurrentOfflineBatches"], 1)
+        self.assertEqual(config["TIAS"]["MaxConcurrentOfflineBatches"], 2)
         self.assertEqual(config["TIAS"]["MaxConcurrentOnlineRequests"], 24)
         self.assertEqual(config["TIAS"]["MaxQueueOnlineSize"], 24)
         self.assertTrue(config["Inference"]["StudentModelsSequential"])

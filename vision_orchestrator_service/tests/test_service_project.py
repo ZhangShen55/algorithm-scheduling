@@ -79,7 +79,8 @@ def test_config_has_only_the_required_top_level_sections() -> None:
     lowered = raw.lower()
     assert "redis" not in lowered
     assert "mysql" not in lowered
-    assert parsed["media"]["max_concurrent_processes"] == 2
+    assert parsed["worker"]["concurrency"] == 16
+    assert parsed["media"]["max_concurrent_processes"] == 4
 
 
 def test_service_code_does_not_depend_on_the_shared_registry_module() -> None:

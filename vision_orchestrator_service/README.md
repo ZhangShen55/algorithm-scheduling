@@ -80,7 +80,7 @@ Kafka offset。租约申请对容量不足、Control 建连/连接超时和 HTTP
 
 Vision 不再使用固定 VBas 批次并发。它按短周期读取 Control 的算子快照，只统计 `ONLINE`、
 模型就绪 VBas 实例的 `capacity_pools.offline`，全部课程共享的有效批次并发为这些离线容量之和。
-在三实例且每实例 `MaxConcurrentOfflineBatches=1` 时，有效并发就是 `3`；等待批次不会提前
+在三实例且每实例 `MaxConcurrentOfflineBatches=2` 时，有效并发就是 `6`；等待批次不会提前
 申请租约或调用 VBas。快照只负责本地门控，实例选择和最终并发准入仍以 Control 原子租约为准。
 
 学生分析优先只执行一次全画面 VBas 推理，并使用响应 `ObjectPostList` 中的稳定人员框中心点

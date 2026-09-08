@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     InstanceId: str = "tias-8981"
     BaseUrl: str = "http://127.0.0.1:8981"
     AiQualityBaseUrl: str = "http://127.0.0.1:9000"
-    MaxConcurrentOfflineBatches: int = 1
+    MaxConcurrentOfflineBatches: int = 2
     MaxConcurrentOnlineRequests: int = 24
     MaxQueueOnlineSize: int = 24
     HeartbeatIntervalSeconds: int = 5
@@ -89,7 +89,7 @@ _cfg = {
     "InstanceId": str(_tias_config.get("InstanceId", "tias-8981")),
     "BaseUrl": str(_tias_config.get("BaseUrl", "http://127.0.0.1:8981")),
     "AiQualityBaseUrl": str(_tias_config.get("AiQualityBaseUrl", "http://127.0.0.1:9000")),
-    "MaxConcurrentOfflineBatches": int(_tias_config.get("MaxConcurrentOfflineBatches", 1)),
+    "MaxConcurrentOfflineBatches": int(_tias_config.get("MaxConcurrentOfflineBatches", 2)),
     "MaxConcurrentOnlineRequests": int(_tias_config.get("MaxConcurrentOnlineRequests", 24)),
     "MaxQueueOnlineSize": int(_tias_config.get("MaxQueueOnlineSize", 24)),
     "HeartbeatIntervalSeconds": int(_tias_config.get("HeartbeatIntervalSeconds", 5)),

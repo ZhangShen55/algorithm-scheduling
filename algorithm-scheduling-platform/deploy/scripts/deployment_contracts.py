@@ -279,9 +279,9 @@ def validate_operator_toml_contract(service_name: str, config_path: Path) -> Non
         tias = config.get("TIAS")
         if not isinstance(tias, Mapping):
             raise DeploymentContractError(f"{service_name} mounted TOML requires [TIAS]")
-        if tias.get("MaxConcurrentOfflineBatches") != 1:
+        if tias.get("MaxConcurrentOfflineBatches") != 2:
             raise DeploymentContractError(
-                f"{service_name} TIAS.MaxConcurrentOfflineBatches must be 1"
+                f"{service_name} TIAS.MaxConcurrentOfflineBatches must be 2"
             )
         if tias.get("MaxConcurrentOnlineRequests") != 24:
             raise DeploymentContractError(

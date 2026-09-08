@@ -40,7 +40,7 @@ VBas；既有其他算子现场结果只代表旧首次适配路由基线，必�
 
 VBas 部署通过独立的 `offline`、`online` 容量池注册实际准入值。Vision Orchestrator 使用
 `max_batch_size=8`，并把所有可调度 VBas 实例上报的 `capacity_pools.offline` 求和作为全部课程
-共享的动态 batch 并发；当前三实例各 `MaxConcurrentOfflineBatches=1` 时并发为 3。
+共享的动态 batch 并发；当前三实例各 `MaxConcurrentOfflineBatches=2` 时并发为 6。
 Kafka 消费按 partition 只提交连续完成的 offset，停止时未完成消息保留为可重放。上述调整
 不改变 A 服务的课程提交/查询路径、字段、整数状态、响应结构或异步语义。
 
