@@ -1,40 +1,56 @@
-# Python
+# Python 与本地环境
 __pycache__/
 *.py[cod]
-*$py.class
 *.so
-.Python
-
-# Virtual Environment
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.venv/
 venv/
 ENV/
 env/
 
-# IDEs
+# 编辑器和系统文件
 .vscode/
 .idea/
 *.swp
+.DS_Store
 
-# Logs
-logs/
-*.log
-
-# Media files
-media/person_photos/
-media/detections/
-
-# AI Models
-ai_models/*.onnx
-ai_models/*.dat
-
-# Temporary files
+# 嵌套仓库、临时文件与部署包
+.git/
+.agents/
+.codex/
+openspec/
 tmp/
 *.tmp
 *.bak
+*.tar
+.msc
+deploy/
 
-# OS
-.DS_Store
+# 模型二进制由外置可信目录交付
+*.onnx
+*.dat
 
-# Testing
-.pytest_cache/
-.coverage
+# 运行数据只保留目录占位
+logs/*
+!logs/.gitkeep
+media/person_photos/*
+!media/person_photos/.gitkeep
+media/detections/*
+!media/detections/.gitignore
+
+# 真实人脸 fixture 仅由受控工作区提供，不提交独立上游仓库
+tests/data/*
+
+# 本地凭据和环境覆盖
+.env
+*.pem
+*.key
+*.p12
+*.pfx
+
+# 本地 wheel 只允许平台 registry client 0.2.0
+wheel/*.whl
+!wheel/algorithm_operator_registry_client-0.2.0-py3-none-any.whl

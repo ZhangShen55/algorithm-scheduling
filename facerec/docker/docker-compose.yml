@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   facerecapi:
     build:
@@ -12,13 +10,13 @@ services:
     volumes:
       - ../config.toml:/app/config.toml:ro
       - ../logs:/app/logs
-      - ../uploaded_faces:/app/uploaded_faces
+      - ../media:/app/media
       - ../ai_models:/app/ai_models:ro
     environment:
-      - WORKERS=4
-      - HOST=0.0.0.0
+      - GPU_PROCESS_NAME=facerec
+      - UVICORN_WORKERS=1
       - PORT=8000
-      - LOG_LEVEL=info
+      - CONFIG_PATH=/app/config.toml
     deploy:
       resources:
         reservations:
@@ -29,7 +27,7 @@ services:
     networks:
       - facerecapi-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/ops/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ops/health', timeout=3)"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -38,5 +36,3 @@ services:
 networks:
   facerecapi-network:
     driver: bridge
-
-# docker-compose up --scale api=N

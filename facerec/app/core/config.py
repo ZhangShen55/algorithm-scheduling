@@ -1,11 +1,11 @@
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 import tomli
-from pydantic import BaseModel, ConfigDict, computed_field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 from packages.operator_registry_client import load_operator_deployment_settings
 
 logger = logging.getLogger(__name__)
@@ -20,6 +20,13 @@ def resolve_config_path(config_path: str | Path | None = None) -> Path:
         if config_path is not None
         else os.environ.get("CONFIG_PATH", PROJECT_ROOT / "config.toml")
     ).expanduser()
+    if not selected.is_absolute():
+        selected = PROJECT_ROOT / selected
+    return selected.resolve()
+
+
+def resolve_project_path(path: str | Path) -> Path:
+    selected = Path(path).expanduser()
     if not selected.is_absolute():
         selected = PROJECT_ROOT / selected
     return selected.resolve()
@@ -63,6 +70,36 @@ class FaceSettings(BaseModel):
     threshold: float
     candidate_threshold: float
     rec_min_face_hw: int
+
+
+class InsightFaceSettings(BaseModel):
+    model_name: str = "buffalo_l"
+    model_path: str = "ai_models"
+    det_size: int = 320
+    det_thresh: float = 0.75
+
+    @field_validator("det_size")
+    @classmethod
+    def validate_det_size(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("det_size must be positive")
+        return value
+
+    @field_validator("det_thresh")
+    @classmethod
+    def validate_det_thresh(cls, value: float) -> float:
+        if not 0.0 < value <= 1.0:
+            raise ValueError("det_thresh must be in (0, 1]")
+        return value
+
+    @property
+    def resolved_model_path(self) -> Path:
+        return resolve_project_path(self.model_path)
+
+
+class FaceDetectionSettings(BaseModel):
+    detector: Literal["dlib", "insightface"] = "insightface"
+    insightface: InsightFaceSettings = Field(default_factory=InsightFaceSettings)
 
 class ThreadSettings(BaseModel):
     max_workers: int
@@ -113,6 +150,7 @@ class StatsSettings(BaseModel):
 class Settings(BaseModel):
     db: DBSettings
     face: FaceSettings
+    face_detection: FaceDetectionSettings = Field(default_factory=FaceDetectionSettings)
     thread: ThreadSettings
     gpu: GpuSettings
     frontlogin: FrontLoginSettings
@@ -138,6 +176,7 @@ def load_config():
     return Settings(
         db=DBSettings(**apply_db_environment(config_data["db"])),
         face=FaceSettings(**config_data["face"]),
+        face_detection=FaceDetectionSettings(**config_data.get("face_detection", {})),
         thread=ThreadSettings(**config_data["threading"]),
         gpu=GpuSettings(**config_data["gpu"]),
         frontlogin=FrontLoginSettings(**config_data["frontlogin"]),

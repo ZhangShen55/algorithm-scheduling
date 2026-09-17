@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, Dict, Any
 from pydantic import Field
 from bson import ObjectId
@@ -8,11 +8,9 @@ class PersonBase(BaseModel):
     number: Optional[str] = None
 
 class Person(PersonBase):
+    model_config = ConfigDict(json_encoders={ObjectId: str})
+
     id: Optional[str]  # 使用字符串类型存储 MongoDB 的 ObjectId
-    class Config:
-        json_encoders = {
-            ObjectId: str
-        }
 
 
 
@@ -75,4 +73,3 @@ class Person(PersonBase):
 #         "match": None,
 #         "message": f"匹配失败，检测相似度:{best_sim * 100:.2f}% < 阈值{threshold * 100:.2f}%",
 #     }
-

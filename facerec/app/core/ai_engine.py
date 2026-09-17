@@ -1,108 +1,116 @@
-# app/ai_engine.py
 import asyncio
+import threading
+from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import fastdeploy as fd
 import numpy as np
 
 from app.core import dlib_worker
-from app.core.config import settings
+from app.core.config import PROJECT_ROOT, settings
 from app.core.embedding_matching import filter_candidate_embeddings
 from app.core.logger import get_logger
 from app.core.runtime_device import configure_runtime_option
 
 logger = get_logger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _SHAPE_PREDICTOR_PATH = str(
     PROJECT_ROOT / "ai_models" / "shape_predictor_68_face_landmarks.dat"
 )
+_ARCFACE_MODEL_PATH = PROJECT_ROOT / "ai_models" / "ms1mv3_arcface_r100.onnx"
 
-# embadding模型全局加载加载
-option = fd.RuntimeOption()
-configure_runtime_option(option, settings.gpu.device, fastdeploy_module=fd)
-embedding_model = fd.vision.faceid.ArcFace(
-    str(PROJECT_ROOT / "ai_models" / "ms1mv3_arcface_r100.onnx"),
-    runtime_option=option,
-)
-
-# 定义全局变量，会被main.py初始化
 GLOBAL_PROCESS_POOL: ProcessPoolExecutor | None = None
-
-_init_dlib_worker = dlib_worker.init_worker
-_collect_dlib_worker_status = dlib_worker.collect_startup_status
-_dlib_worker_self_check = dlib_worker.self_check
-_dlib_task_implementation = dlib_worker.detect_and_align
+embedding_model: Any | None = None
+_embedding_model_lock = threading.Lock()
+_embedding_model_error: str | None = None
 
 
-async def detect_and_extract_face(image: np.ndarray):
-    """
-    主程序调用的入口。
-    它会检查 GLOBAL_PROCESS_POOL 是否已被 main.py 初始化。
-    """
-    loop = asyncio.get_running_loop()
+def load_embedding_model() -> Any:
+    global embedding_model, _embedding_model_error
+    if embedding_model is not None:
+        return embedding_model
+    with _embedding_model_lock:
+        if embedding_model is not None:
+            return embedding_model
+        if not _ARCFACE_MODEL_PATH.is_file() or _ARCFACE_MODEL_PATH.stat().st_size == 0:
+            _embedding_model_error = (
+                "ArcFace 模型缺失或为空: ai_models/ms1mv3_arcface_r100.onnx"
+            )
+            raise RuntimeError(_embedding_model_error)
+        try:
+            option = fd.RuntimeOption()
+            configure_runtime_option(option, settings.gpu.device, fastdeploy_module=fd)
+            model = fd.vision.faceid.ArcFace(
+                str(_ARCFACE_MODEL_PATH),
+                runtime_option=option,
+            )
+            if getattr(model, "initialized", True) is False:
+                raise RuntimeError("ArcFace 模型初始化失败")
+            embedding_model = model
+            _embedding_model_error = None
+            return model
+        except Exception as exc:
+            _embedding_model_error = str(exc)
+            raise
 
+
+def embedding_status() -> dict[str, Any]:
+    return {
+        "ready": embedding_model is not None
+        and getattr(embedding_model, "initialized", True) is not False,
+        "device": settings.gpu.device,
+        "error": _embedding_model_error,
+    }
+
+
+async def detect_and_extract_face(
+    image: np.ndarray,
+) -> tuple[np.ndarray | None, dict[str, int] | None, str | None]:
+    return await _run_detector(dlib_worker.detect_and_align, image)
+
+
+async def detect_and_extract_all_faces(
+    image: np.ndarray,
+) -> list[tuple[np.ndarray, dict[str, int], str]]:
+    return await _run_detector(dlib_worker.detect_and_align_all, image)
+
+
+async def _run_detector(function: Any, image: np.ndarray) -> Any:
     if GLOBAL_PROCESS_POOL is None:
-        # 如果池子没初始化（比如直接运行此脚本测试），降级为同步或报错
-        raise RuntimeError("全局进程池未初始化，请检查main.py是否正确启动")
-
-    try:
-        # 提交给进程池
-        return await loop.run_in_executor(
-            GLOBAL_PROCESS_POOL,
-            dlib_worker.detect_and_align,
-            image
-        )
-    except Exception as e:
-        print(f"Process Pool Error: {e}")
-        return None, None, None
+        raise RuntimeError("全局检测进程池未初始化，请检查 app.main lifespan")
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(GLOBAL_PROCESS_POOL, function, image)
 
 
-# 异步获取特征向量
 async def get_embedding(face_aligned: np.ndarray) -> np.ndarray:
-    """
-    异步提取 512d 单位化向量（float32, L2norm==1）
-    :param face_aligned: 对齐后的 112x112 人脸图像
-    :return: 归一化后的 512维特征向量
-    """
-    # return await asyncio.to_thread(get_embedding_sync, face_aligned)
-    emb =  await asyncio.to_thread(get_embedding_sync, face_aligned)
-    # 归一化 方便点积计算
-    emb_q = emb / (np.linalg.norm(emb) + 1e-12)
-    return emb_q
+    embedding = await asyncio.to_thread(get_embedding_sync, face_aligned)
+    norm = np.linalg.norm(embedding)
+    if not np.isfinite(norm) or norm <= 1e-12:
+        raise RuntimeError("ArcFace 返回了无效 embedding")
+    return np.asarray(embedding / norm, dtype=np.float32)
+
 
 def get_embedding_sync(face_aligned: np.ndarray) -> np.ndarray:
-    """同步获取特征向量的方法"""
-    result = embedding_model.predict(face_aligned)
-    emb = np.asarray(result.embedding, dtype=np.float32)
-    # 再做一次归一化
-    n = np.linalg.norm(emb) + 1e-12
-    emb = emb / n
-    return emb
+    model = load_embedding_model()
+    result = model.predict(face_aligned)
+    embedding = np.asarray(result.embedding, dtype=np.float32).reshape(-1)
+    if embedding.size != 512 or not np.isfinite(embedding).all():
+        raise RuntimeError("ArcFace embedding 必须是有限的 512 维向量")
+    return embedding
+
 
 def find_best_match_embedding(
     emb_q: np.ndarray,
     candidate_docs: list[dict],
 ) -> tuple[float, dict | None]:
-    """
-    在候选文档列表中寻找最大相似度
-    返回: (最佳相似度, 最佳匹配文档)
-    """
-    db_vecs, valid_docs, rejections = filter_candidate_embeddings(candidate_docs)
-    for rejection in rejections:
-        logger.warning("[embedding] skip invalid candidate: %s", rejection)
-
+    db_vecs, valid_docs = _valid_candidates(candidate_docs)
     if not db_vecs:
         return 0.0, None
-
-    # 批量计算点积 (余弦相似度)
-    # emb_q 假设已经归一化
-    sims = np.dot(db_vecs, emb_q)
-    best_idx = int(np.argmax(sims))
-    best_sim = float(sims[best_idx])
-
-    return best_sim, valid_docs[best_idx]
+    similarities = np.dot(db_vecs, emb_q)
+    best_index = int(np.argmax(similarities))
+    return float(similarities[best_index]), valid_docs[best_index]
 
 
 def find_top_matches(
@@ -110,41 +118,28 @@ def find_top_matches(
     candidate_docs: list[dict],
     top_k: int = 3,
     min_threshold: float = 0.0,
-):
-    """
-    在候选文档列表中寻找相似度最高的 top_k 个匹配
-
-    参数:
-        emb_q: 查询 embedding（已归一化）
-        candidate_docs: 候选文档列表
-        top_k: 返回的最大数量
-        min_threshold: 最小相似度阈值
-
-    返回: List[(相似度, 文档)]，按相似度降序排列
-    """
-    db_vecs, valid_docs, rejections = filter_candidate_embeddings(candidate_docs)
-    for rejection in rejections:
-        logger.warning("[embedding] skip invalid candidate: %s", rejection)
-
+) -> list[tuple[float, dict]]:
+    db_vecs, valid_docs = _valid_candidates(candidate_docs)
     if not db_vecs:
         return []
+    similarities = np.dot(db_vecs, emb_q)
+    valid_indices = np.where(similarities >= min_threshold)[0]
+    sorted_indices = valid_indices[np.argsort(-similarities[valid_indices])]
+    return [
+        (float(similarities[index]), valid_docs[index])
+        for index in sorted_indices[:top_k]
+    ]
 
-    # 批量计算点积 (余弦相似度)
-    sims = np.dot(db_vecs, emb_q)
 
-    # 找到所有大于等于阈值的索引
-    valid_indices = np.where(sims >= min_threshold)[0]
-
-    if len(valid_indices) == 0:
-        return []
-
-    # 按相似度降序排序
-    sorted_indices = valid_indices[np.argsort(-sims[valid_indices])]
-
-    # 取前 top_k 个
-    top_indices = sorted_indices[:top_k]
-
-    # 返回 (相似度, 文档) 列表
-    results = [(float(sims[idx]), valid_docs[idx]) for idx in top_indices]
-
-    return results
+def _valid_candidates(
+    candidate_docs: list[dict],
+) -> tuple[list[np.ndarray], list[dict]]:
+    db_vecs, valid_docs, rejections = filter_candidate_embeddings(candidate_docs)
+    if rejections:
+        reasons = Counter(rejection["reason"] for rejection in rejections)
+        logger.warning(
+            "[embedding] 跳过损坏候选 count=%s reasons=%s",
+            len(rejections),
+            dict(reasons),
+        )
+    return db_vecs, valid_docs

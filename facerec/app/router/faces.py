@@ -21,6 +21,31 @@ THRESHOLD = settings.face.threshold
 CANDIDATE_THRESHOLD = settings.face.candidate_threshold
 REC_MIN_FACE_HW = int(settings.face.rec_min_face_hw)
 
+
+def _merge_matches(
+    destination: dict[str, tuple[float, dict, bool]],
+    matches: list[tuple[float, dict]],
+    *,
+    is_target: bool,
+) -> None:
+    for similarity, document in matches:
+        number = document.get("number")
+        if not number:
+            continue
+        previous = destination.get(number)
+        if previous is None:
+            destination[number] = (similarity, document, is_target)
+            continue
+        best_similarity, best_document, was_target = previous
+        if similarity > best_similarity:
+            best_similarity = similarity
+            best_document = document
+        destination[number] = (
+            best_similarity,
+            best_document,
+            was_target or is_target,
+        )
+
 @router.post("/recognize", response_model=ApiResponse)
 async def recognize_face_api(request: PersonRecognizeRequest = Body(..., description="人脸识别请求")):
     import time
@@ -64,159 +89,157 @@ async def recognize_face_api(request: PersonRecognizeRequest = Body(..., descrip
             message="未接收到有效图片数据或图像数据存在异常"
         )
 
-    # 3. 检测人脸
+    # 单图识别处理整图内所有有效人脸；公共请求模型不引入上游 points/ROI。
     t_step = time.time()
     try:
-        face_image, bbox, _ = await ai_engine.detect_and_extract_face(image_data)
+        detected_faces = await ai_engine.detect_and_extract_all_faces(image_data)
     except Exception as e:
-        logger.error(f"[recognize] 人脸检测服务内部错误: {e}")
+        logger.error("[recognize] 人脸检测服务内部错误: %s", e)
         return ApiResponse.error(
             status_code=StatusCode.FACE_DETECTION_ERROR,
-            message=f"人脸检测服务内部错误: {str(e)}"
+            message=f"人脸检测服务内部错误: {e}",
         )
-    logger.info(f"[性能] 人脸检测总耗时(含进程通信): {(time.time()-t_step)*1000:.2f}ms")
+    logger.info(
+        "[性能] 多人脸检测耗时 %.2fms faces=%s",
+        (time.time() - t_step) * 1000,
+        len(detected_faces),
+    )
 
-    if face_image is None:
-        logger.info(f"[recognize] 未检测到有效人脸")
-        logger.info(f"[性能] 总请求耗时: {(time.time()-t_total_start)*1000:.2f}ms")
+    if not detected_faces:
+        logger.info("[recognize] 未检测到有效人脸")
         return ApiResponse.error(
             status_code=StatusCode.NO_FACE_DETECTED,
-            message="图像中未检测到人脸，请重新捕捉人脸"
+            message="图像中未检测到人脸，请重新捕捉人脸",
         )
 
-    # 4. 验证人脸尺寸
-    if face_image.shape[0] < REC_MIN_FACE_HW or face_image.shape[1] < REC_MIN_FACE_HW:
-        logger.info(f"[recognize] 检测到的人脸过小: {face_image.shape[0]}x{face_image.shape[1]}px，小于{REC_MIN_FACE_HW}*{REC_MIN_FACE_HW}px")
+    primary_face = max(
+        detected_faces,
+        key=lambda item: item[1]["w"] * item[1]["h"],
+    )
+    primary_bbox = primary_face[1]
+    valid_faces = [
+        item
+        for item in detected_faces
+        if item[1]["w"] >= REC_MIN_FACE_HW and item[1]["h"] >= REC_MIN_FACE_HW
+    ]
+    if not valid_faces:
+        message = f"人脸像素过小，宽高必须至少为 {REC_MIN_FACE_HW}px"
         return ApiResponse.error(
             status_code=StatusCode.FACE_TOO_SMALL,
-            message=f"人脸像素过小({face_image.shape[0]}x{face_image.shape[1]}px)，无法识别",
+            message=message,
             data={
                 "has_face": True,
-                "bbox": BBox(**bbox).model_dump() if bbox else None,
+                "bbox": BBox(**primary_bbox).model_dump(),
                 "threshold": threshold,
                 "match": None,
-                "message": f"人脸像素过小({face_image.shape[0]}x{face_image.shape[1]}px)，无法识别"
-            }
+                "message": message,
+            },
         )
 
-    # 5. 预加载数据库数据（只有检测到人脸后才查询数据库，避免浪费）
-    # logger.info("[recognize] 预加载数据库数据...")
     all_docs = await person.get_embeddings_for_match(db)
-
     if not all_docs:
-        logger.info("[recognize] 数据库中没有有效人脸特征")
+        message = "数据库为空，请先录入人员信息"
         return ApiResponse.error(
             status_code=StatusCode.DB_EMPTY,
-            message="数据库为空，请先录入人员信息",
+            message=message,
             data={
                 "has_face": True,
-                "bbox": BBox(**bbox).model_dump() if bbox else None,
+                "bbox": BBox(**primary_bbox).model_dump(),
                 "threshold": threshold,
                 "match": None,
-                "message": "数据库为空，请先录入人员信息"
-            }
+                "message": message,
+            },
         )
 
-    target_docs = []
-    if targets:
-        target_docs = await person.get_targets_embeddings(db, targets)
-        logger.info(f"[recognize] targets 查询到 {len(target_docs)} 个候选人")
-
-    # 6. 提取特征
+    target_docs = await person.get_targets_embeddings(db, targets) if targets else []
+    match_dict: dict[str, tuple[float, dict, bool]] = {}
+    global_count = 0
+    target_count = 0
     try:
-        emb_q = await ai_engine.get_embedding(face_image)
+        for face_image, _, _ in valid_faces:
+            emb_q = await ai_engine.get_embedding(face_image)
+            global_results = ai_engine.find_top_matches(
+                emb_q,
+                all_docs,
+                top_k=3,
+                min_threshold=threshold,
+            )
+            target_results = (
+                ai_engine.find_top_matches(
+                    emb_q,
+                    target_docs,
+                    top_k=len(target_docs),
+                    min_threshold=CANDIDATE_THRESHOLD,
+                )
+                if target_docs
+                else []
+            )
+            global_count += len(global_results)
+            target_count += len(target_results)
+            _merge_matches(match_dict, global_results, is_target=False)
+            _merge_matches(match_dict, target_results, is_target=True)
     except Exception as e:
-        logger.error(f"[recognize] 人脸特征提取失败: {e}")
+        logger.error("[recognize] 人脸特征提取失败: %s", e)
         return ApiResponse.error(
             status_code=StatusCode.FEATURE_EXTRACT_ERROR,
-            message=f"人脸特征提取失败: {str(e)}"
+            message=f"人脸特征提取失败: {e}",
         )
 
-    # 7. 全局比对：找 similarity >= threshold 的前 3 人
-    logger.info("[recognize] 开始全局比对...")
-
-    # 使用新函数找 top3 且 >= threshold 的人
-    result_A = ai_engine.find_top_matches(emb_q, all_docs, top_k=3, min_threshold=threshold)
-    logger.info(f"[recognize] 全局比对找到 {len(result_A)} 个 >= 阈值 {threshold} 的匹配")
-
-    # 8. 如果有 targets，进行 targets 比对
-    result_B = []
-    if target_docs:
-        # targets 使用宽松阈值 threshold/2
-        target_threshold = threshold / 2
-        result_B = ai_engine.find_top_matches(
-            emb_q, target_docs, top_k=len(target_docs), min_threshold=target_threshold
-        )
-        logger.info(f"[recognize] targets 比对找到 {len(result_B)} 个 >= 阈值 {target_threshold} 的匹配")
-
-    # 9. 合并去重：按 number 去重，优先保留 is_target=True 的
-    match_dict = {}  # key: number, value: (similarity, doc, is_target)
-
-    # 先添加 result_A（is_target=False）
-    for sim, doc in result_A:
-        number = doc.get("number")
-        if number:
-            match_dict[number] = (sim, doc, False)
-
-    # 再添加 result_B（is_target=True），会覆盖 result_A 中相同 number 的项
-    for sim, doc in result_B:
-        number = doc.get("number")
-        if number:
-            match_dict[number] = (sim, doc, True)
-
-    # 10. 按相似度降序排序
-    final_matches = sorted(match_dict.values(), key=lambda x: x[0], reverse=True)
-
-    # 11. 构建响应
+    final_matches = sorted(match_dict.values(), key=lambda item: item[0], reverse=True)
     if not final_matches:
-        logger.info("[recognize] 未找到任何匹配")
+        message = "未找到匹配的人物（相似度低于阈值）"
         return ApiResponse.error(
             status_code=StatusCode.NO_MATCH_FOUND,
-            message="未找到匹配的人物（相似度低于阈值）",
+            message=message,
             data={
                 "has_face": True,
-                "bbox": BBox(**bbox).model_dump() if bbox else None,
+                "bbox": BBox(**primary_bbox).model_dump(),
                 "threshold": threshold,
                 "match": None,
-                "message": "未找到匹配的人物（相似度低于阈值）"
-            }
+                "message": message,
+            },
         )
 
-    # 12. 构建 match 列表
-    match_items = []
-    global_count = len(result_A)
-    target_count = len(result_B)
-
-    for sim, doc, is_target in final_matches:
-        match_items.append(MatchItem(
+    match_items = [
+        MatchItem(
             id=str(doc["_id"]),
             name=doc.get("name"),
             number=doc.get("number"),
-            similarity=f"{sim * 100:.2f}%",
-            is_target=is_target
-        ))
-
-    # 13. 构建消息
+            similarity=f"{similarity * 100:.2f}%",
+            is_target=is_target,
+        )
+        for similarity, doc, is_target in final_matches
+    ]
     best_match = final_matches[0]
     best_name = best_match[1].get("name")
     best_number = best_match[1].get("number")
-
     if targets:
-        message = f"匹配成功，≥阈值{threshold*100:.2f}%有{global_count}位，targets命中{target_count}位，最相似的是{best_name}_{best_number}"
+        message = (
+            f"匹配成功，处理{len(valid_faces)}张人脸，≥阈值{threshold*100:.2f}%"
+            f"有{global_count}项，targets命中{target_count}项，最相似的是"
+            f"{best_name}_{best_number}"
+        )
     else:
-        message = f"匹配成功，≥阈值{threshold*100:.2f}%有{len(final_matches)}位，最相似的是{best_name}_{best_number}"
-
-    logger.info(f"[recognize] {message}")
-
+        message = (
+            f"匹配成功，处理{len(valid_faces)}张人脸，找到{len(final_matches)}位，"
+            f"最相似的是{best_name}_{best_number}"
+        )
+    logger.info(
+        "[recognize] 识别完成 faces=%s matches=%s target_matches=%s duration_ms=%.2f",
+        len(valid_faces),
+        len(final_matches),
+        target_count,
+        (time.time() - t_total_start) * 1000,
+    )
     return ApiResponse.success(
         data={
             "has_face": True,
-            "bbox": BBox(**bbox).model_dump() if bbox else None,
+            "bbox": BBox(**primary_bbox).model_dump(),
             "threshold": threshold,
-            "match": [m.model_dump() for m in match_items],
-            "message": message
+            "match": [item.model_dump() for item in match_items],
+            "message": message,
         },
-        message="识别成功"
+        message="识别成功",
     )
 
 
@@ -297,8 +320,8 @@ async def recognize_batch_api(request: BatchRecognizeRequest = Body(..., descrip
             frame_result['bbox'] = BBox(**bbox) if bbox else None
 
             # 验证人脸尺寸
-            if face_image.shape[0] < REC_MIN_FACE_HW or face_image.shape[1] < REC_MIN_FACE_HW:
-                frame_result['error'] = f"人脸过小({face_image.shape[0]}x{face_image.shape[1]}px)"
+            if bbox and (bbox["w"] < REC_MIN_FACE_HW or bbox["h"] < REC_MIN_FACE_HW):
+                frame_result['error'] = f"人脸过小({bbox['w']}x{bbox['h']}px)"
                 frames_results.append(frame_result)
                 logger.info(f"[recognize/batch] 第{idx}帧: 人脸过小")
                 continue
@@ -313,9 +336,11 @@ async def recognize_batch_api(request: BatchRecognizeRequest = Body(..., descrip
             # targets 比对
             result_B = []
             if target_docs:
-                target_threshold = threshold / 2
                 result_B = ai_engine.find_top_matches(
-                    emb_q, target_docs, top_k=len(target_docs), min_threshold=target_threshold
+                    emb_q,
+                    target_docs,
+                    top_k=len(target_docs),
+                    min_threshold=CANDIDATE_THRESHOLD,
                 )
 
             # 合并去重（该帧的结果）
@@ -462,7 +487,15 @@ async def recognize_batch_api(request: BatchRecognizeRequest = Body(..., descrip
     else:
         message = f"识别成功，使用{valid_frame_count}帧有效图片，找到{len(final_matches)}位候选人，最相似的是{best_name}_{best_number}（出现{best_count}次）"
 
-    logger.info(f"[recognize/batch] {message}，最高相似度: {best_similarity * 100:.2f}%")
+    logger.info(
+        "[recognize/batch] 识别完成 frames=%s valid_frames=%s matches=%s "
+        "target_matches=%s best_similarity=%.2f%%",
+        len(request.photos),
+        valid_frame_count,
+        len(final_matches),
+        target_count if targets else 0,
+        best_similarity * 100,
+    )
 
     return ApiResponse.success(
         data={

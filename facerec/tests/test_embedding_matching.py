@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import pytest
 
@@ -113,3 +115,20 @@ def test_find_top_matches_excludes_invalid_candidates_from_ranking() -> None:
 
     assert [document["person_id"] for _, document in matches] == ["best", "second"]
     assert [similarity for similarity, _ in matches] == pytest.approx([1.0, 0.6])
+
+
+def test_invalid_candidate_log_does_not_expose_record_identity(caplog) -> None:
+    from app.core.ai_engine import find_top_matches
+
+    query = np.ones(512, dtype=np.float32)
+    sensitive_identity = "never-log-person-001"
+
+    with caplog.at_level(logging.WARNING, logger="app.core.ai_engine"):
+        assert find_top_matches(
+            query,
+            [{"person_id": sensitive_identity, "embedding": b"bad"}],
+            min_threshold=0.0,
+        ) == []
+
+    assert "跳过损坏候选" in caplog.text
+    assert sensitive_identity not in caplog.text

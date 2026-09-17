@@ -35,6 +35,7 @@ class APIStatsMiddleware(BaseHTTPMiddleware):
 
     # 排除统计的路径前缀
     EXCLUDED_PATHS = [
+        "/ops/",
         "/static/",
         "/media/",
         "/favicon.ico",
@@ -50,11 +51,6 @@ class APIStatsMiddleware(BaseHTTPMiddleware):
         """
         拦截并处理每个请求
         """
-        # 确保索引已创建（只在第一次请求时创建）
-        if not self._indexes_created:
-            await self._ensure_indexes()
-            self._indexes_created = True
-
         # 生成请求 ID
         request_id = str(uuid.uuid4())
         request.state.request_id = request_id
@@ -62,6 +58,11 @@ class APIStatsMiddleware(BaseHTTPMiddleware):
         # 检查是否需要统计
         if self._should_exclude(request.url.path):
             return await call_next(request)
+
+        # 统计端点以外的首个业务请求才初始化索引，避免运维接口被数据库建索引阻塞。
+        if not self._indexes_created:
+            await self._ensure_indexes()
+            self._indexes_created = True
 
         # 记录请求开始时间
         start_time = time.time()
@@ -234,4 +235,3 @@ class APIStatsMiddleware(BaseHTTPMiddleware):
         )
 
         logger.debug(f"[APIStats] Recorded: {method} {path} - {status_code} - {duration_ms:.2f}ms")
-

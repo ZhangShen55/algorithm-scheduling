@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-09-17T19:48:47+08:00",
+  "change": "upgrade-facerec-to-v1-3",
+  "workspace_branch": "codex/milestone-2b-three-gpu-deployment",
+  "workspace_git_revision": "685faeaf702d72c68b72fd21222c6a0548828aeb",
+  "facerec_tracked_tree_sha256": "62f7abbea91924f78d4e9e5036099a09853cd741a73b480e90d9c77b84be2725",
+  "facerec_worktree_content_sha256": "97bc53b022337232ac37d5b66aaa2a5a56d7e6de17cc95a5494696b2b36a5b9b",
+  "facerec_user_changes": [],
+  "protected_workspace_changes": [
+    ".gitignore",
+    "asr_online/README.md",
+    "asr_online/app/api/routes/ws_online.py",
+    "asr_online/app/core/config.py",
+    "asr_online/app/core/models.py",
+    "asr_online/tests/test_v1_0_2_protocol.py",
+    "openspec/changes/add-asr-online-v1-0-2-revision/",
+    "text_analysis/README.md"
+  ],
+  "legacy_test_baseline": {
+    "command": "conda run -n facerecapi python -m pytest -q tests",
+    "result": "1 failed, 53 passed, 1 warning",
+    "known_external_failure": "tests/test_dlib_worker_startup.py requires MongoDB at 10.80.5.25:27017; the local sandbox denied that network connection"
+  },
+  "legacy_openapi": {
+    "response_model_fields": ["data", "message", "status_code"],
+    "paths": {
+      "/": ["get"],
+      "/ops/drain": ["post"],
+      "/ops/health": ["get"],
+      "/ops/metadata": ["get"],
+      "/ops/metrics": ["get"],
+      "/ops/stats/api-calls": ["get"],
+      "/ops/stats/hourly": ["get"],
+      "/ops/stats/summary": ["get"],
+      "/ops/status": ["get"],
+      "/persons": ["get", "post"],
+      "/persons/batch": ["post"],
+      "/persons/delete": ["delete"],
+      "/persons/search": ["post"],
+      "/recognize": ["post"],
+      "/recognize/batch": ["post"]
+    }
+  },
+  "upstream": {
+    "remote": "git@github.com:ZhangShen55/FaceRec.git",
+    "branch": "v1.3",
+    "revision": "980e81b7a0bf9bffc07cd5c338a3f91eef1a019d",
+    "temporary_directory": "facerec_v1.3",
+    "lfs_policy": "retain pointer for excluded deploy tar; inject runtime models from the approved external model directory"
+  },
+  "upstream_difference_summary": {
+    "inference": "upstream adds InsightFace, buffalo_l, ROI and multi-face paths; current platform version isolates Dlib workers and validates embeddings",
+    "contract": "upstream uses statusCode/hasFace/bboxs; current platform contract uses status_code/has_face/bbox",
+    "storage": "upstream includes Redis embedding cache; platform boundary requires FaceRec to use MongoDB without direct Redis access",
+    "runtime": "current version owns registry, readiness, strict device validation, root paths and shared JSON Lines logging",
+    "packaging": "upstream runtime modules are repository-root folders; workspace requires a real app package and app.main:app",
+    "deployment": "upstream has standalone Docker assets; final deployment must retain algorithm-facerec and facerec-gpu0/1/2 platform identities"
+  },
+  "model_source": {
+    "path": "/Volumes/Data55/算子功能部署/facerec/ai_models",
+    "required_binary_count": 7,
+    "total_size": "677M",
+    "copy_verification": "source and facerec_v1.3 relative-file SHA-256 lists are identical"
+  }
+}

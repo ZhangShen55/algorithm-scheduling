@@ -12,6 +12,15 @@ threshold = 0.4  # 人脸识别阈值
 candidate_threshold = 0.2  # 候选人脸阈值
 rec_min_face_hw = 50  # 识别阶段允许的最小人脸宽高
 
+[face_detection]
+detector = "insightface"  # 可选 insightface 或 dlib
+
+[face_detection.insightface]
+model_name = "buffalo_l"  # 随项目交付的检测模型包
+model_path = "ai_models"  # 相对路径从项目根解析
+det_size = 320  # 检测输入尺寸
+det_thresh = 0.75  # 检测置信度阈值
+
 [gpu]
 device = "cpu"  # 可选 cpu 或 cuda:N，例如 cuda:0
 
@@ -30,7 +39,7 @@ max_concurrent_requests = 128
 require_gpu = false
 
 [threading]
-max_workers = 2  # Dlib 人脸检测进程数
+max_workers = 1  # 所选检测器的隔离进程数
 
 [frontlogin]
 username = "admin"  # 内置管理页面用户名

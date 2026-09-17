@@ -1,51 +1,58 @@
 # FaceRec Docker 部署
 
-所有命令都从 `facerec/` 项目根目录执行，Docker 构建上下文必须为项目根目录 `.`。镜像内
-已经包含应用和 `ai_models/`；配置、日志及可变人员图片在运行时挂载。
+所有构建命令都从 FaceRec 项目根执行，构建上下文为 `.`。镜像入口固定为
+`python -m uvicorn app.main:app`，容器内端口为 `8000`，Uvicorn worker 必须为 1。
 
-## 构建镜像
+## 构建
 
 ```bash
-docker build \
+DOCKER_BUILDKIT=1 docker build \
   -f docker/Dockerfile \
   -t algorithm-facerec:local \
   .
 ```
 
-## 准备运行目录
+构建上下文必须包含七个 `ai_models/` 模型和 `wheel/` 中的共享 registry client wheel；
+`.dockerignore` 会排除 `.git`、日志、媒体、测试 cache、部署 tar 和凭据。构建复用默认
+BuildKit layer cache，不使用 `--no-cache`，不执行任何 Docker prune。
 
-```text
-/opt/algorithm-operators/facerec/
-├── config.toml
-├── logs/
-└── uploaded_faces/
-```
-
-`config.toml` 必须包含可连接的 MongoDB 配置。GPU 部署时将 `[gpu].device` 设为
-`cuda:0`，并将 `[runtime].require_gpu` 设为 `true`。容器内服务端口固定为 `8000`，下面
-单独部署示例将其映射到项目约定的宿主机端口 `8003`。
-
-## 启动容器
+使用受控 HTTP 内网缓存提供 FastDeploy wheel 时，同时显式指定可信主机：
 
 ```bash
-docker run -d \
-  --name facerec-gpu0 \
-  --restart unless-stopped \
-  --gpus '"device=0"' \
+DOCKER_BUILDKIT=1 docker build \
+  --build-arg FASTDEPLOY_FIND_LINKS=http://172.17.0.1:18765/ \
+  --build-arg FASTDEPLOY_TRUSTED_HOST=172.17.0.1 \
+  -f docker/Dockerfile \
+  -t algorithm-facerec:local \
+  .
+```
+
+Dockerfile 会先从该 `find-links` 以 `--no-index` 单独安装固定版本的 FastDeploy，
+避免同版本的公网 wheel 覆盖内网缓存。`FASTDEPLOY_TRUSTED_HOST` 只用于明确受控的
+HTTP 缓存；默认 HTTPS wheel 索引不需要该参数。
+
+## 本地 CPU 容器
+
+准备一个 `gpu.device="cpu"`、`runtime.require_gpu=false` 且可访问 MongoDB 的配置：
+
+```bash
+docker run --rm \
+  --name facerec-local \
   -p 8003:8000 \
-  -v /opt/algorithm-operators/facerec/config.toml:/config/config.toml:ro \
-  -v /opt/algorithm-operators/facerec/logs:/app/logs \
-  -v /opt/algorithm-operators/facerec/uploaded_faces:/app/uploaded_faces \
-  -e CONFIG_PATH=/config/config.toml \
+  -v "$PWD/config.toml:/app/config.toml:ro" \
+  -v "$PWD/logs:/app/logs" \
+  -v "$PWD/media:/app/media" \
+  -e CONFIG_PATH=/app/config.toml \
+  -e PLATFORM_INSTANCE_ID=facerec-local \
   -e PORT=8000 \
   -e UVICORN_WORKERS=1 \
   algorithm-facerec:local
 ```
 
-本地 CPU 配置可以删除 `--gpus` 参数，并保持 `gpu.device="cpu"` 和
-`runtime.require_gpu=false`。
+## 严格 GPU 容器
 
-接入调度平台时，还要加入平台网络并提供实例注册信息：
+GPU 配置必须设置 `gpu.device="cuda:0"` 与 `runtime.require_gpu=true`。容器内只暴露目标
+物理卡，因此三个实例都使用逻辑 `cuda:0`，物理卡身份由 Docker 和平台 label 指定。
 
 ```bash
 docker run -d \
@@ -54,19 +61,37 @@ docker run -d \
   --network algorithm-platform \
   --gpus '"device=0"' \
   -p 127.0.0.1:18003:8000 \
-  -v /opt/algorithm-operators/facerec/config.toml:/config/config.toml:ro \
+  -v /opt/algorithm-operators/facerec/config.toml:/app/config.toml:ro \
   -v /opt/algorithm-operators/facerec/logs:/app/logs \
-  -v /opt/algorithm-operators/facerec/uploaded_faces:/app/uploaded_faces \
-  -e CONFIG_PATH=/config/config.toml \
-  -e PORT=8000 \
-  -e UVICORN_WORKERS=1 \
+  -v /opt/algorithm-operators/facerec/media:/app/media \
+  -e CONFIG_PATH=/app/config.toml \
   -e PLATFORM_INSTANCE_ID=facerec-gpu0 \
   -e PLATFORM_SERVICE_URL=http://facerec-gpu0:8000 \
   -e PLATFORM_GPU_ID=0 \
-  -e PLATFORM_OPERATOR_REGISTRY_TOKEN=REPLACE_WITH_TOKEN \
+  -e PLATFORM_OPERATOR_REGISTRY_TOKEN=REPLACE_AT_RUNTIME \
+  -e PORT=8000 \
+  -e UVICORN_WORKERS=1 \
   algorithm-facerec:local
 ```
 
-平台模式使用的 TOML 需要启用注册，并把 `platform.control_service_url` 指向同一 Docker
-网络中的 Control Service。FaceRec 仍然只启动一个 Uvicorn worker；
-`threading.max_workers` 只控制算子内部 Dlib 进程池。
+生产配置需要启用 `[platform].registration_enabled=true`，并将
+`control_service_url` 指向同一平台网络中的 Control Service。FaceRec 不配置或连接 Redis。
+
+## 验证
+
+```bash
+curl http://127.0.0.1:18003/ops/health
+curl http://127.0.0.1:18003/ops/metadata
+curl http://127.0.0.1:18003/ops/status
+docker inspect facerec-gpu0 --format '{{json .State.Health}}'
+docker exec facerec-gpu0 nvidia-smi
+```
+
+验收必须确认 InsightFace worker provider 和 ArcFace 配置设备均为 CUDA，MongoDB ready，
+`operator_code=facerec`、`capabilities=["recognize"]`、声明容量和实例 label 正确，并完成真实
+录入与识别。任一后端落到 CPU 时不得把实例标记为 ready。
+
+正式平台固定使用镜像 repository `algorithm-facerec` 和实例名 `facerec-gpu0/1/2`。
+新三实例、注册、真实租约、Online Gateway 路由和清理前 Smoke 全部通过后，才可按预先
+记录的完整 ID 精确删除被替换的旧 FaceRec 容器和镜像。不得删除卷、模型、BuildKit cache、
+平台中间件或其他算子资产。

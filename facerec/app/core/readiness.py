@@ -49,6 +49,12 @@ class FaceRecReadiness:
     def embedding_model_ready(self) -> bool:
         return self._embedding_model_ready
 
+    def set_embedding_model(self, embedding_model: Any | None) -> None:
+        self._embedding_model = embedding_model
+        if embedding_model is None:
+            self._embedding_model_ready = False
+            self._ready = False
+
     def set_dlib_workers_ready(self, ready: bool) -> None:
         self._dlib_workers_ready = ready
         if not ready:

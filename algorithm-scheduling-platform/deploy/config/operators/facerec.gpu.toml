@@ -25,10 +25,20 @@ limit = 5000 # 限制返回结果条数
 threshold = 0.4 # 人脸识别阈值
 candidate_threshold = 0.2 # 候选人脸阈值
 rec_min_face_hw = 50 # （识别阶段）最小人脸高度和宽度
+
+[face_detection]
+detector = "insightface"  # 三卡正式部署使用 v1.3 的 InsightFace 检测器
+
+[face_detection.insightface]
+model_name = "buffalo_l"  # 模型由平台外置资产清单交付
+model_path = "ai_models"  # 相对路径从 FaceRec 项目根解析
+det_size = 320  # 与候选 GPU 验收一致的检测输入尺寸
+det_thresh = 0.75  # 过滤低置信度检测框
+
 [gpu]
 device = "cuda:0"  # 容器内只暴露一张卡，统一使用 cuda:0
 [threading]
-max_workers = 2  # dlib 但是实例的进程数
+max_workers = 1  # 单实例 detector worker 数量，与平台声明容量独立
 [frontlogin]
 username = "admin"  # 前端登录用户名
 password = "admin"  # 前端登录密码

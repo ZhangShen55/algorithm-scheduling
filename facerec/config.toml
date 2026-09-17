@@ -1,64 +1,68 @@
+[db]
+username = "change-me"  # MongoDB 用户名，可由 FACEREC_MONGO_USERNAME 覆盖
+password = "change-me"  # MongoDB 密码，可由 FACEREC_MONGO_PASSWORD 覆盖
+host = "127.0.0.1"  # MongoDB 地址
+port = "27017"  # MongoDB 端口
+database = "facerecapi"  # 人脸库数据库名
+auth_source = "admin"  # MongoDB 认证库
+limit = 5000  # 人脸库查询最大返回条数
+
+[face]
+threshold = 0.4  # 人脸识别阈值
+candidate_threshold = 0.2  # 候选人脸阈值
+rec_min_face_hw = 50  # 识别阶段允许的最小人脸宽高
+
+[face_detection]
+detector = "insightface"  # 可选 insightface 或 dlib
+
+[face_detection.insightface]
+model_name = "buffalo_l"  # 随项目交付的检测模型包
+model_path = "ai_models"  # 相对路径从项目根解析
+det_size = 320  # 检测输入尺寸
+det_thresh = 0.75  # 检测置信度阈值
+
+[gpu]
+device = "cpu"  # 同时控制 ArcFace 与 InsightFace，可选 cpu 或 cuda:N
+
 [platform]
-# 本地默认不主动向调度平台注册
-registration_enabled = false
+registration_enabled = false  # 本地默认不向调度平台注册
 control_service_url = ""  # 启用注册时填写 Control Service 地址
-heartbeat_interval_seconds = 5  # 注册心跳间隔秒数，必须为有限正数
-# 平台允许同时分发到本实例的人脸请求数；不覆盖 Dlib 进程池
-max_concurrent_requests = 128
+heartbeat_interval_seconds = 5  # 注册心跳间隔秒数
+max_concurrent_requests = 128  # 平台请求容量，不等同于检测 worker 数量
 
 [runtime]
-# 本地默认允许 CPU；GPU 部署配置显式设为 true
-require_gpu = false
+require_gpu = false  # GPU 部署必须显式设为 true
 
-[db]
-username = "root"  # 数据库用户名
-password = "root"  # 数据库密码
-host = "10.80.5.25"  # 数据库地址
-port = "27017"  # 数据库端口
-database = "facerecapi" # 数据库名称
-auth_source = "admin" # 数据库认证源
-limit = 5000 # 限制返回结果条数
-[face]
-threshold = 0.4 # 人脸识别阈值
-candidate_threshold = 0.2 # 候选人脸阈值
-rec_min_face_hw = 50 # （识别阶段）最小人脸高度和宽度
-[gpu]
-device = "cpu"  # 可选 cpu 或 cuda:N，例如 cuda:0
 [threading]
-max_workers = 2  # dlib 但是实例的进程数
+max_workers = 1  # 所选检测器的隔离进程数
+
 [frontlogin]
-username = "admin"  # 前端登录用户名
-password = "admin"  # 前端登录密码
+username = "admin"  # 内置管理页面用户名
+password = "change-me"  # 内置管理页面密码
+
 [image]
-max_feature_image_width_px = 9999  # 最大特征图片宽度 （以下都是为了控制像素大小）
-max_feature_image_height_px = 9999  # 最大特征图片高度
-min_feature_image_width_px = 80     # 最小特征图片宽度
-min_feature_image_height_px = 80    # 最小特征图片高度
-max_feature_image_size_m = 10 # 最大特征图片大小（MB）
-max_face_hw = 999  # （提取特征阶段）最大人脸高度和宽度
-min_face_hw = 50  # 最小人脸高度和宽度
-save_person_photo = false  # false 时只保存 embedding，不保存裁剪后的人脸图片
+max_feature_image_width_px = 9999  # 特征录入图片最大宽度
+max_feature_image_height_px = 9999  # 特征录入图片最大高度
+min_feature_image_width_px = 80  # 特征录入图片最小宽度
+min_feature_image_height_px = 80  # 特征录入图片最小高度
+max_feature_image_size_m = 10  # 特征录入图片最大体积，单位 MB
+max_face_hw = 999  # 特征提取阶段最大人脸宽高
+min_face_hw = 50  # 特征提取阶段最小人脸宽高
+save_person_photo = false  # 默认不保存录入人脸原图
+
 [logger]
-level = "INFO"  # 兼容旧字段；新部署使用 [logging]
+level = "INFO"  # 兼容旧字段；运行时优先使用 [logging]
 log_path = "./logs/facere_service.log"  # 兼容旧日志路径
 
 [logging]
-# 日志级别。
-level = "INFO"
-# 相对项目根的日志目录；未挂载时写入容器内该目录。
-directory = "logs"
-# 当前实例日志文件名。
-file_name = "application.log"
-# 单个日志文件最大大小，单位 MiB。
-max_file_size_mib = 100
-# 归档日志保留天数。
-retention_days = 7
-# 是否输出到 stdout。
-stdout_enabled = true
-# 是否写入文件。
-file_enabled = true
+level = "INFO"  # 统一日志级别
+directory = "logs"  # 相对项目根的日志目录
+file_name = "application.log"  # 当前实例日志文件名
+max_file_size_mib = 100  # 单个日志文件最大 MiB
+retention_days = 7  # 归档保留天数
+stdout_enabled = true  # 同时输出 stdout
+file_enabled = true  # 写入实例日志文件
 
 [stats]
-# 统计数据保留天数（自动清理超过该天数的数据）
-retention_days = 7  # 保留7天的详细日志
-hourly_retention_days = 30  # 保留30天的按小时聚合数据
+retention_days = 7  # API 详细统计保留天数
+hourly_retention_days = 30  # 小时聚合统计保留天数

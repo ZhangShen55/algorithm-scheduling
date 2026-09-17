@@ -240,6 +240,9 @@ async def get_targets_embeddings(db, targets: List[str]) -> List[dict]:
     if missing:
         from app.core.logger import get_logger
         logger = get_logger(__name__)
-        logger.warning("[get_targets_embeddings] 以下编号未在数据库中找到: %s", missing)
+        logger.warning(
+            "[get_targets_embeddings] 部分目标编号未找到 count=%s",
+            len(missing),
+        )
 
     return docs

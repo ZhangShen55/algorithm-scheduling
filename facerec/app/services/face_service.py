@@ -110,7 +110,7 @@ class FaceRecognitionService:
                 best_sim, best_doc = ai_engine.find_best_match_embedding(embedding, candidate_docs)
 
                 if best_sim > self.candidate_threshold:
-                    logger.info(f"[FaceService] 优先比对命中: {best_doc.get('name')} (Sim: {best_sim})")
+                    logger.info("[FaceService] 优先比对命中 similarity=%.4f", best_sim)
                     return {
                         "has_face": True,
                         "bbox": bbox,
@@ -142,7 +142,7 @@ class FaceRecognitionService:
         best_sim, best_doc = ai_engine.find_best_match_embedding(embedding, all_docs)
         threshold = custom_threshold if custom_threshold else self.threshold
 
-        logger.info(f"[FaceService] 全局匹配结果: {best_doc.get('name')} (Sim: {best_sim})")
+        logger.info("[FaceService] 全局匹配完成 similarity=%.4f", best_sim)
 
         return {
             "has_face": True,

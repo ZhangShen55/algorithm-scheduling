@@ -8,7 +8,6 @@ from app.core import ai_engine, dlib_worker
 from app.main import MAX_WORKERS, _begin_dlib_shutdown, app, lifespan
 from app.router import ops
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 from packages.operator_registry_client.runtime import _wrap_lifespan
 
@@ -22,9 +21,12 @@ class StatusQueue:
 
 
 def test_dlib_worker_initializer_reports_and_raises_model_load_failure(
-    monkeypatch,
+    monkeypatch, tmp_path,
 ) -> None:
     status_queue = StatusQueue()
+    predictor_path = tmp_path / "predictor.dat"
+    predictor_path.write_bytes(b"invalid")
+    monkeypatch.setattr(dlib_worker.settings.face_detection, "detector", "dlib")
     monkeypatch.setattr(dlib_worker.dlib, "get_frontal_face_detector", lambda: object())
 
     def fail_to_load(_: str) -> object:
@@ -33,7 +35,7 @@ def test_dlib_worker_initializer_reports_and_raises_model_load_failure(
     monkeypatch.setattr(dlib_worker.dlib, "shape_predictor", fail_to_load)
 
     with pytest.raises(RuntimeError, match="shape predictor 损坏"):
-        dlib_worker.init_worker(status_queue, object(), "predictor.dat")
+        dlib_worker.init_worker(status_queue, object(), str(predictor_path))
 
     assert len(status_queue.messages) == 1
     assert status_queue.messages[0][1:3] == (False, "shape predictor 损坏")
@@ -69,15 +71,18 @@ def test_collect_dlib_worker_status_rejects_any_failed_worker() -> None:
 
 
 def test_lifespan_prewarms_all_real_workers_and_cleans_up() -> None:
-    with TestClient(app) as client:
-        health = client.get("/ops/health")
-        status = client.get("/ops/status")
+    async def exercise() -> None:
+        async with lifespan(app):
+            assert ai_engine.GLOBAL_PROCESS_POOL is not None
+            assert ops.readiness.dlib_workers_ready() is True
+            assert ops.readiness.embedding_model_ready() is True
+            assert len(ops.detector_worker_statuses) == MAX_WORKERS
+            assert all(
+                status["detector"] == "insightface"
+                for status in ops.detector_worker_statuses
+            )
 
-        assert health.status_code == 200
-        assert health.json()["status"] == "healthy"
-        assert health.json()["components"]["dlib_workers"]["status"] == "up"
-        assert status.json()["model_ready"] is True
-        assert ai_engine.GLOBAL_PROCESS_POOL is not None
+    asyncio.run(exercise())
 
     assert ai_engine.GLOBAL_PROCESS_POOL is None
     assert ops.readiness.dlib_workers_ready() is False

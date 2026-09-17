@@ -24,7 +24,8 @@ from app.services import ops_stats
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/ops", tags=["Operations & Monitoring"])
-readiness = FaceRecReadiness(db, ai_engine.embedding_model)
+readiness = FaceRecReadiness(db, None)
+detector_worker_statuses: list[dict] = []
 
 
 @router.get("/health", response_model=HealthCheckResponse)
@@ -54,11 +55,19 @@ async def health_check():
             "error": str(e)
         }
 
+    embedding_status = ai_engine.embedding_status()
     components["arcface"] = {
-        "status": "up" if readiness.embedding_model_ready() else "down"
+        "status": "up" if readiness.embedding_model_ready() else "down",
+        "device": embedding_status["device"],
     }
     components["dlib_workers"] = {
         "status": "up" if readiness.dlib_workers_ready() else "down"
+    }
+    components["detector"] = {
+        "status": "up" if readiness.dlib_workers_ready() else "down",
+        "type": ai_engine.settings.face_detection.detector,
+        "device": ai_engine.settings.gpu.device,
+        "workers": detector_worker_statuses,
     }
 
     # 2. 检查存储空间

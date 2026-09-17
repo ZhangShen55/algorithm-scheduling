@@ -1,6 +1,7 @@
 import asyncio
 
 from app.core.readiness import FaceRecReadiness
+from app.main import MAX_WORKERS, app as main_app
 from app.router import ops
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -45,6 +46,17 @@ def _client(monkeypatch, *, ready: bool) -> TestClient:
         FakeReadiness(database=ready, arcface=ready, dlib=ready),
     )
     monkeypatch.setattr(ops, "db", FakeDatabase())
+    monkeypatch.setattr(
+        ops,
+        "detector_worker_statuses",
+        [
+            {
+                "detector": "insightface",
+                "device": "cpu",
+                "providers": [["CPUExecutionProvider"]],
+            }
+        ],
+    )
     app = FastAPI()
     app.include_router(ops.router)
     return TestClient(app)
@@ -55,6 +67,19 @@ def test_ops_health_returns_http_200_when_healthy(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "healthy"
+    assert response.json()["components"]["arcface"]["device"] == "cpu"
+    assert response.json()["components"]["detector"] == {
+        "status": "up",
+        "type": "insightface",
+        "device": "cpu",
+        "workers": [
+            {
+                "detector": "insightface",
+                "device": "cpu",
+                "providers": [["CPUExecutionProvider"]],
+            }
+        ],
+    }
 
 
 def test_ops_health_returns_http_200_when_degraded(monkeypatch) -> None:
@@ -116,3 +141,16 @@ def test_operator_status_reports_model_not_ready_when_dlib_workers_failed() -> N
 
     assert response.status_code == 200
     assert response.json()["model_ready"] is False
+
+
+def test_main_app_exposes_facerec_registry_contract() -> None:
+    client = TestClient(main_app)
+
+    metadata = client.get("/ops/metadata").json()
+    status = client.get("/ops/status").json()
+
+    assert metadata["operator_code"] == "facerec"
+    assert metadata["capabilities"] == ["recognize"]
+    assert status["declared_capacity"] == 128
+    assert MAX_WORKERS == 1
+    assert status["declared_capacity"] != MAX_WORKERS

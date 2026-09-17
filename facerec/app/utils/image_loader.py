@@ -32,7 +32,7 @@ async def _raw_photo(
         logger.info(f"接收到图片 URL 或 base64")
         return photo
     # 否则是
-    logger.info(f"接收到图片文件: {photo.filename}")
+    logger.info("接收到图片文件")
     return await photo.read()
 
 # 将base64字符串转为图片矩阵
@@ -70,9 +70,9 @@ async def get_photo_mat(raw: Union[str, bytes, UploadFile] = Depends(_raw_photo)
             try:
                 resp = httpx.get(raw, timeout=10, follow_redirects=True)
                 resp.raise_for_status()
-                logger.info(f"通过url下载图片成功: {raw}")
+                logger.info("通过 URL 下载图片成功")
             except Exception as e:
-                logger.error(f"通过url下载图片失败，url: {raw}, 错误信息: {e}")
+                logger.error("通过 URL 下载图片失败 error_type=%s", type(e).__name__)
                 raise HTTPException(400, f"通过url下载图片失败，url: {raw}, 错误信息: {e}")
             # 返回 URL 和图片数据
             return _decode(resp.content), raw
@@ -98,10 +98,10 @@ async def get_photo_mat(raw: Union[str, bytes, UploadFile] = Depends(_raw_photo)
     elif isinstance(raw, UploadFile):
         # 1. 读取文件内容
         contents = await raw.read()
-        logger.info(f"接收到图片文件: {raw.filename}")
+        logger.info("接收到图片文件")
         # 检查文件是否为空
         if len(contents) == 0:
-            logger.error(f"上传的文件 '{raw.filename}' 是空的 (0KB)，请检查文件是否损坏")
+            logger.error("上传的图片文件为空")
             raise HTTPException(
                 400,
                 f"上传的文件 '{raw.filename}' 是空的 (0KB)，请检查文件是否损坏"
@@ -109,7 +109,7 @@ async def get_photo_mat(raw: Union[str, bytes, UploadFile] = Depends(_raw_photo)
         # 限制文件大小 默认10MB
         MAX_IMAGE_SIZE = MAX_IMAGE_SIZE_M * 1024 * 1024
         if len(contents) > MAX_IMAGE_SIZE:
-            logger.error(f"上传的文件 '{raw.filename}' 大小超过 {MAX_IMAGE_SIZE_M}MB，请上传小于 {MAX_IMAGE_SIZE_M}MB 的文件")
+            logger.error("上传图片文件过大 limit_mib=%s", MAX_IMAGE_SIZE_M)
             raise HTTPException(400, "上传文件图像过大，请上传小于 10MB 的文件")
         return _decode(contents), raw.filename  # 返回图片数据和文件名
 

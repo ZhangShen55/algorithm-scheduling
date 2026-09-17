@@ -64,10 +64,12 @@ async def lifespan(app: FastAPI):
     # ================= 启动 (Startup) =================
     logger.info("System Startup: Initializing resources...")
 
-    # 2. Dlib 进程池初始化 (注入到 ai_engine)
-    # 确保 max_workers 设置合理 (建议 1 或 2，防止内存爆炸)
-    # 当前 settings.thread.max_workers 建议设置为 2
-    logger.info(f"Initializing Dlib Process Pool with {MAX_WORKERS} workers...")
+    logger.info(
+        "初始化检测进程池 detector=%s workers=%s device=%s",
+        settings.face_detection.detector,
+        MAX_WORKERS,
+        settings.gpu.device,
+    )
     pool = None
     startup_gate = None
     try:
@@ -78,7 +80,12 @@ async def lifespan(app: FastAPI):
             max_workers=MAX_WORKERS,
             mp_context=process_context,
             initializer=dlib_worker.init_worker,
-            initargs=(status_queue, startup_gate, ai_engine._SHAPE_PREDICTOR_PATH),
+            initargs=(
+                status_queue,
+                startup_gate,
+                ai_engine._SHAPE_PREDICTOR_PATH,
+                settings.face_detection.detector,
+            ),
         )
         self_checks = [
             pool.submit(dlib_worker.self_check)
@@ -88,7 +95,7 @@ async def lifespan(app: FastAPI):
             dlib_worker.collect_startup_status,
             status_queue,
             expected_workers=MAX_WORKERS,
-            timeout_seconds=30.0,
+            timeout_seconds=120.0,
         )
         startup_gate.set()
         await asyncio.gather(*(asyncio.wrap_future(check) for check in self_checks))
@@ -96,13 +103,15 @@ async def lifespan(app: FastAPI):
             status["fastdeploy_loaded"] or status["ai_engine_loaded"]
             for status in worker_statuses
         ):
-            raise RuntimeError("Dlib worker 错误加载了 ArcFace 运行时")
+            raise RuntimeError("检测 worker 错误加载了 ArcFace 运行时")
         ai_engine.GLOBAL_PROCESS_POOL = pool
         ops.readiness.set_dlib_workers_ready(True)
-        logger.info("全部 Dlib worker 预热完成")
+        ops.detector_worker_statuses = worker_statuses
+        logger.info("全部检测 worker 预热完成")
     except Exception as e:
-        logger.exception("Dlib worker 预热失败: %s", e)
+        logger.exception("检测 worker 预热失败: %s", e)
         ops.readiness.set_dlib_workers_ready(False)
+        ops.detector_worker_statuses = []
         ai_engine.GLOBAL_PROCESS_POOL = None
         if startup_gate is not None:
             startup_gate.set()
@@ -110,8 +119,16 @@ async def lifespan(app: FastAPI):
             _shutdown_process_pool(pool, timeout_seconds=10.0)
             pool = None
 
+    try:
+        embedding_model = await asyncio.to_thread(ai_engine.load_embedding_model)
+        ops.readiness.set_embedding_model(embedding_model)
+        logger.info("ArcFace 模型预热完成 device=%s", settings.gpu.device)
+    except Exception as exc:
+        ops.readiness.set_embedding_model(None)
+        logger.exception("ArcFace 模型预热失败: %s", exc)
+
     if not await ops.readiness.check():
-        logger.error("MongoDB、ArcFace 或 Dlib worker 未就绪")
+        logger.error("MongoDB、ArcFace 或检测 worker 未就绪")
 
     try:
         yield
@@ -124,7 +141,7 @@ async def lifespan(app: FastAPI):
                 pool,
                 timeout_seconds=10.0,
             )
-        logger.info("Dlib 进程池关闭成功.")
+        logger.info("检测进程池关闭成功")
 
 
 # ---------------- App 初始化 ----------------

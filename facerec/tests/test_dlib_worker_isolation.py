@@ -42,7 +42,7 @@ def test_spawned_dlib_workers_do_not_load_arcface_runtime() -> None:
         max_workers=2,
         mp_context=context,
         initializer=worker.init_worker,
-        initargs=(status_queue, startup_gate, predictor_path),
+        initargs=(status_queue, startup_gate, predictor_path, "dlib"),
     ) as pool:
         checks = [pool.submit(worker.self_check) for _ in range(2)]
         statuses = worker.collect_startup_status(
