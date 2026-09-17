@@ -2670,3 +2670,22 @@
 - 远端最终保留 `offline=2/media=4/worker=16`，基准阶段日志已恢复关闭；Vision revision
   `e3ed85a` 和 VBas revision `61b5fdc` 均 healthy。完整证据及未通过口径见
   `scenarios/vbas-throughput-sufficient-feed-20260907.md`。
+
+## 2026-09-18 - FaceRec v1.3 多人脸升级与正式三卡替换
+
+- 最终提交 `37d8e1ecb0972e0e7c803c4a3277a0738b3f2a36` 将固定上游 v1.3 的 InsightFace
+  `buffalo_l`、多人脸处理和当前平台运行时合并到唯一 `facerec/`；API 字段、MongoDB 事实源、
+  `app.main:app`、平台注册、日志和 `save_person_photo=false` 保持兼容，未引入 Redis cache。
+- 本地 FaceRec 全量 `81 passed, 2 skipped, 1 warning`，真实单人/多人推理通过；平台聚焦回归
+  `64 passed`。七模型与外置来源一致且未进入 Git。
+- `192.168.29.11` 复用 BuildKit cache 构建镜像
+  `sha256:68e3f880d7ec340095f899ad41e7dd8e9c53827d42b8a5417b3f7e355a7cc88c`；三实例新容器完整
+  ID 为 `005213f7...edd842`、`a50d6874...079bf1`、`865ead3a...7d2539`，均 healthy、ONLINE、
+  CUDA ready、容量 128，真实直连和 Gateway 租约识别通过。
+- Gateway 管理接口完成录入、查询和删除，`photo_path` 为空、媒体文件为 0；三实例共享
+  MongoDB 观察一致，日志 JSON Lines 与脱敏检查通过。
+- 三个旧正式容器、旧正式镜像、旧候选镜像和五个隔离容器按 dry-run 完整 ID 精确删除；
+  卷与无关容器清单摘要未变，BuildKit cache 清理后为 `109.2GB`，未执行 prune。
+- 远端 `0600`、单硬链接、write-once 证据绑定最终 SHA。首份推理证据的 fixture SHA 转录错误
+  原样保留，并由更正文件及重新执行的权威推理证据闭环。完整记录见
+  `scenarios/facerec-v1-3-upgrade-20260917.md`。

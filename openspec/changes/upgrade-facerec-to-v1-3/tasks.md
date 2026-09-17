@@ -74,20 +74,20 @@
 - [x] 7.5 更新受影响的平台 Compose、构建清单、验证脚本和路径文档，保持 `algorithm-facerec`、`facerec-gpu0/1/2`、默认端口、平台注册和 Online Gateway 路由合同，不残留活动 `facerec_v1.3` 名称。平台 GPU 配置已显式选择 InsightFace `buffalo_l` 和单 detector worker，模型资产清单补齐五个 ONNX；现有 Compose、镜像 repository、三实例、端口和 Gateway 路由名称无需改名，相关聚焦回归 `64 passed`。
 - [x] 7.6 检查父仓库 diff，确认最终 FaceRec 是普通受管文件、不含 gitlink或大模型，且 ASR Online、Text Analysis 与其他无关修改未被改写。暂存对象审计无 `160000` mode、无大模型或禁止资产，`git diff --cached --check` 通过；用户的 `.gitignore`、ASR Online、Text Analysis 和另一 change 均保持未暂存。
 - [x] 7.7 在最终 `facerec/` 路径重新执行 compileall、导入、`pip check`、全量测试、uvicorn、health/readiness、真实单人/多人推理和 OpenAPI 对比。2026-09-18 最终路径 compileall、导入和 `pip check` 通过，全量为 `81 passed, 2 skipped, 1 warning in 39.49s`，显式真实单人/多人推理为 `1 passed in 13.48s`；Uvicorn 正常预热并关闭，ArcFace/InsightFace worker 为 `up`，本机未运行 MongoDB 时 readiness 按合同为 false，OpenAPI 仍为 `POST /recognize`、请求字段 `photo/targets/threshold`、响应字段 `data/message/status_code`。本轮 116 行日志全部为 JSON Lines 且脱敏扫描通过，生成日志与 cache 已清理。
-- [ ] 7.8 使用中文 Conventional Commit 提交并推送最终目录替换、平台定义与验证代码，记录远端分支和完整提交 SHA。
-- [ ] 7.9 在 `192.168.29.11` 拉取最终提交，保留 BuildKit cache 重建 `algorithm-facerec`，以正式 `facerec-gpu0/1/2` 滚动替换并验证三实例 GPU、health/readiness、注册和共享 MongoDB。
-- [ ] 7.10 通过 Control Service 与 Online Gateway 执行真实租约识别、管理接口、日志脱敏、`save_person_photo=false` 和清理前 Smoke，确认最终命名与平台合同无误。
-- [ ] 7.11 生成旧 FaceRec 容器/镜像完整 ID、Compose 身份、revision 和引用状态的精确清理 dry-run；现场身份漂移或新版本任一门禁失败时禁止删除。
-- [ ] 7.12 审核通过后只删除 dry-run 中被替换的旧 FaceRec 容器和镜像，不删除缓存、卷、模型、中间件、其他算子或无关镜像，并执行清理后 Smoke。
-- [ ] 7.13 若最终路径或远端平台任一门禁失败，只回退本 change 对 FaceRec 的精确修改并保留失败证据，不执行仓库级 reset/clean，不触碰其他项目修改。
+- [x] 7.8 使用中文 Conventional Commit 提交并推送最终目录替换、平台定义与验证代码，记录远端分支和完整提交 SHA。中文 Conventional Commit 为 `feat(facerec): 升级并替换为 v1.3 多人脸版本`，已推送至 `origin/codex/milestone-2b-three-gpu-deployment`，完整提交为 `37d8e1ecb0972e0e7c803c4a3277a0738b3f2a36`。
+- [x] 7.9 在 `192.168.29.11` 拉取最终提交，保留 BuildKit cache 重建 `algorithm-facerec`，以正式 `facerec-gpu0/1/2` 滚动替换并验证三实例 GPU、health/readiness、注册和共享 MongoDB。2026-09-18 最终提交 `37d8e1ecb0972e0e7c803c4a3277a0738b3f2a36` 构建为 `algorithm-facerec:v1.3_37d8e1e`，镜像 ID `sha256:68e3f880d7ec340095f899ad41e7dd8e9c53827d42b8a5417b3f7e355a7cc88c`；三实例按 gpu0、gpu1、gpu2 滚动替换后均为 healthy、`ONLINE`、`model_ready=true`、容量 `128`，并分别绑定物理 GPU 0/1/2，ArcFace 与 InsightFace 均使用 CUDA。构建后 BuildKit cache 由基线 `96.72GB` 增至 `109.2GB`，未禁用或清理缓存。
+- [x] 7.10 通过 Control Service 与 Online Gateway 执行真实租约识别、管理接口、日志脱敏、`save_person_photo=false` 和清理前 Smoke，确认最终命名与平台合同无误。正式 Gateway 完成人员录入、查询、真实租约识别和删除，录入返回空 `photo_path`，三实例真实图片识别均命中且删除后共享 MongoDB 均不可再查；清理前 Control Service、Online Gateway 和三实例 Smoke 通过，正式日志敏感模式命中为 0、JSON Lines 校验通过且三个容器媒体文件数均为 0。
+- [x] 7.11 生成旧 FaceRec 容器/镜像完整 ID、Compose 身份、revision 和引用状态的精确清理 dry-run；现场身份漂移或新版本任一门禁失败时禁止删除。dry-run 确认旧容器完整 ID 为 `bcafafb42cc07f50e6c11ff4b00992de733c4a161129a81464ccab04af56d84e`、`047d4ce7edb8bdad04cc94022f13974b3cef879b1d55e10402c5540d7371a685`、`ad57a8176305be66ffadf05b3b4301eabb4f4b8431f549a5ea9b6652505ff860`，均属于 `algorithm-operators` 的 `facerec-gpu0/1/2` 且只引用旧镜像 `sha256:49352c58c2a3cc39b3c37a52d7d6dbb8951de3db45c5661835a9a2dbc689d5cd`（revision `d19e5e46b9cb0c78d775727e1cf33a75a4321df8`），现场身份无漂移。
+- [x] 7.12 审核通过后只删除 dry-run 中被替换的旧 FaceRec 容器和镜像，不删除缓存、卷、模型、中间件、其他算子或无关镜像，并执行清理后 Smoke。三个旧正式容器在滚动阶段按完整 ID 停止并删除，旧正式镜像及无引用的隔离候选镜像已按完整 ID 删除；隔离候选五个容器也按完整 ID 删除。清理后卷清单摘要和无关容器清单摘要与基线一致，BuildKit cache 为 `109.2GB`，三实例、Control Service、Online Gateway 和真实租约识别再次通过。
+- [x] 7.13 若最终路径或远端平台任一门禁失败，只回退本 change 对 FaceRec 的精确修改并保留失败证据，不执行仓库级 reset/clean，不触碰其他项目修改。本次最终门禁全部通过，未触发回退；全程未执行仓库级 reset/clean、Docker prune、卷删除或无关项目修改。
 
 ## 8. 清理与完成证据
 
-- [ ] 8.1 确认改名后不存在 `facerec_v1.3/` 或嵌套 Git 元数据，工作区只保留最终 `facerec/`、本 change 工件和用户原有修改，不删除或修改外置模型来源。
-- [ ] 8.2 新增 `algorithm-scheduling-platform/harness/scenarios/facerec-v1-3-upgrade-20260917.md`，记录本地层级和 `192.168.29.11` 远端平台、构建缓存、三实例、真实租约与清理前后证据。
-- [ ] 8.3 同步 `algorithm-scheduling-platform/harness/verification.md` 和 `harness/change-ledger.md`，明确实际测试 Git SHA、镜像 revision、验证层级、遗留限制和登录凭据未进入普通证据。
-- [ ] 8.4 将远端原始证据按 release/SHA 写入受控报告目录，使用 `0600`、单硬链接、write-once 和脱敏检查，禁止改写历史 release。
-- [ ] 8.5 确认远端只保留最终正式 FaceRec 活动资产和必要回滚策略，不存在活动 `facerec_v1.3` 容器、service、repository 或项目目录，BuildKit cache 保持存在。
-- [ ] 8.6 在 `tasks.md` 逐项登记实际完成状态，并保存提交基线、验证日期、测试汇总、路由兼容结论和已知资源容量限制。
+- [x] 8.1 确认改名后不存在 `facerec_v1.3/` 或嵌套 Git 元数据，工作区只保留最终 `facerec/`、本 change 工件和用户原有修改，不删除或修改外置模型来源。2026-09-18 复核无 `facerec_v1.3/`、嵌套 `.git` 或 `.msc`，父仓库不跟踪模型二进制；最终目录七模型与 `/Volumes/Data55/算子功能部署/facerec/ai_models` 逐文件一致，外置来源保持七个模型且未被修改。
+- [x] 8.2 新增 `algorithm-scheduling-platform/harness/scenarios/facerec-v1-3-upgrade-20260917.md`，记录本地层级和 `192.168.29.11` 远端平台、构建缓存、三实例、真实租约与清理前后证据。场景已记录最终 SHA、镜像与新旧容器完整 ID、三卡 CUDA、注册、Gateway 管理/租约、日志、无落图、dry-run、精确清理、缓存保留、命令修正和证据更正链。
+- [x] 8.3 同步 `algorithm-scheduling-platform/harness/verification.md` 和 `harness/change-ledger.md`，明确实际测试 Git SHA、镜像 revision、验证层级、遗留限制和登录凭据未进入普通证据。两份 Harness 索引已绑定最终实现 SHA `37d8e1ecb0972e0e7c803c4a3277a0738b3f2a36` 与镜像 revision，并明确本次未新增峰值压测、历史未引用回滚镜像不在清理范围；新增文档和远端证据的凭据/Base64 扫描通过。
+- [x] 8.4 将远端原始证据按 release/SHA 写入受控报告目录，使用 `0600`、单硬链接、write-once 和脱敏检查，禁止改写历史 release。证据根为 `/root/workspace/algorithm-scheduling-facerec-37d8e1e/algorithm-scheduling-platform/deploy/reports/facerec-v1-3-upgrade-20260917/releases/37d8e1ecb0972e0e7c803c4a3277a0738b3f2a36`；所有文件权限 `0600`、硬链接数 1，主 manifest 和 supplemental manifest 校验通过，脱敏扫描通过。首份推理证据的 fixture SHA 手工转录错误未被改写，已由独立更正文件和重新执行的权威推理证据透明纠正。
+- [x] 8.5 确认远端只保留最终正式 FaceRec 活动资产和必要回滚策略，不存在活动 `facerec_v1.3` 容器、service、repository 或项目目录，BuildKit cache 保持存在。活动资产仅为 `algorithm-facerec:v1.3_37d8e1e` 和正式 `facerec-gpu0/1/2`；隔离候选五个容器、候选目录、临时 Git bundle 和 wheel HTTP 服务已精确清理，wheel cache、最终 release checkout、历史未引用回滚镜像和 BuildKit cache 保留。
+- [x] 8.6 在 `tasks.md` 逐项登记实际完成状态，并保存提交基线、验证日期、测试汇总、路由兼容结论和已知资源容量限制。已逐项登记 2026-09-18 的本地与远端结果、提交与镜像 SHA、OpenAPI 兼容、容量 `128` 保留依据，并明确未执行新的峰值吞吐压测。
 - [ ] 8.7 使用中文 Conventional Commit 提交并推送 Harness 与 OpenSpec 收口记录，提交不得包含密码、模型、人脸原图或其他用户修改。
-- [ ] 8.8 运行 Harness consistency、相关平台回归、OpenSpec strict 和 `git diff --check`，确认所有工件、Requirement、Scenario、证据引用和任务均完整可追溯。
+- [x] 8.8 运行 Harness consistency、相关平台回归、OpenSpec strict 和 `git diff --check`，确认所有工件、Requirement、Scenario、证据引用和任务均完整可追溯。2026-09-18 最终结果为 Harness consistency `5 passed`、平台 FaceRec/部署/日志/模型/布局聚焦回归 `72 passed`、`openspec validate upgrade-facerec-to-v1-3 --strict` valid、`git diff --check` 零输出，新增 Harness/OpenSpec 脱敏扫描通过。

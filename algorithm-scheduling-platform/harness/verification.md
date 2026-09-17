@@ -2453,3 +2453,51 @@ git diff --check
 `0c6186cbb374db07f3a3b1a1b0be749de75a80b9` 已在 `192.168.29.11` 完成新镜像发布，
 新容器 `healthy`，全部 readiness 依赖就绪，旧容器和旧镜像已精确清理。当前证据仍不包含
 真实课程回归；该门禁完成前不得把历史 `test_all_0903_11` 失败改写为通过。
+
+## 2026-09-18 FaceRec v1.3 最终替换验证
+
+本节对应
+[`scenarios/facerec-v1-3-upgrade-20260917.md`](scenarios/facerec-v1-3-upgrade-20260917.md)
+和 OpenSpec `upgrade-facerec-to-v1-3`。最终实现提交为
+`37d8e1ecb0972e0e7c803c4a3277a0738b3f2a36`。
+
+本地最终目录执行：
+
+```bash
+cd facerec
+conda run -n facerecapi python -m compileall -q app
+conda run -n facerecapi python -c 'from app.main import app; print(app.title)'
+conda run -n facerecapi python -m pip check
+conda run -n facerecapi python -m pytest -q tests
+conda run -n facerecapi python -m pytest -q \
+  tests/test_real_inference.py tests/test_multiface_real_inference.py
+
+cd ..
+PYTHONPATH="$PWD/algorithm-scheduling-platform:$PWD" \
+  algorithm-scheduling-platform/.venv/bin/python -m pytest -q \
+  algorithm-scheduling-platform/tests/test_operator_deployment_integration.py \
+  algorithm-scheduling-platform/tests/test_logging_config_contract.py \
+  algorithm-scheduling-platform/tests/test_milestone_2b_model_assets.py \
+  algorithm-scheduling-platform/tests/test_repository_layout.py \
+  algorithm-scheduling-platform/tests/test_milestone_2b_operator_configs.py
+openspec validate upgrade-facerec-to-v1-3 --strict
+git diff --check
+```
+
+本地结果为 FaceRec `81 passed, 2 skipped, 1 warning`，显式真实单人/多人推理
+`1 passed`，实现阶段平台聚焦回归 `64 passed`，收口时按上方命令复跑为
+`72 passed in 3.19s`；compile/import、`pip check`、OpenAPI 对比和 JSON Lines 脱敏检查通过。
+收口首轮误写了两个仓库中不存在的测试文件名，pytest 以退出码 4 返回且未执行测试；上方实际
+路径复跑全部通过，不把命令路径错误描述为产品失败。
+
+`192.168.29.11` 使用最终镜像
+`sha256:68e3f880d7ec340095f899ad41e7dd8e9c53827d42b8a5417b3f7e355a7cc88c` 完成正式
+`facerec-gpu0/1/2` 滚动替换。三实例均 healthy、`ONLINE`、`model_ready=true`、容量 128，
+分别绑定 GPU 0/1/2；ArcFace 与 InsightFace CUDA、共享 MongoDB、Gateway 管理接口和真实租约
+识别通过。录入时 `photo_path` 为空且媒体文件数为 0，删除后三实例均不可再查询测试记录。
+
+构建复用缓存，BuildKit cache 从 `96.72GB` 增至 `109.2GB`；没有执行 `--no-cache`、prune、
+卷删除或无关容器清理。三个旧容器、旧正式镜像和隔离候选资产按完整 ID 精确删除，清理后
+Control、Gateway、三实例和真实租约 Smoke 再次通过。远端原始证据绑定同一 SHA，权限均为
+`0600`、硬链接数 1，主/补充 manifest 和脱敏检查通过；权威推理文件为
+`42-real-inference-rerun.json`，首份手工摘要错误由独立更正记录保留追溯。
