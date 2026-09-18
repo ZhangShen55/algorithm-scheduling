@@ -2501,3 +2501,54 @@ git diff --check
 Control、Gateway、三实例和真实租约 Smoke 再次通过。远端原始证据绑定同一 SHA，权限均为
 `0600`、硬链接数 1，主/补充 manifest 和脱敏检查通过；权威推理文件为
 `42-real-inference-rerun.json`，首份手工摘要错误由独立更正记录保留追溯。
+
+### FaceRec GPU 进程名增量复验
+
+本地与目标 Linux 入口测试：
+
+```bash
+cd algorithm-scheduling-platform
+.venv/bin/python -m pytest -q \
+  tests/test_milestone_2b_entrypoints.py tests/test_harness_consistency.py
+
+cd ../facerec
+conda run -n facerecapi python -m compileall -q app
+conda run -n facerecapi python -c 'from app.main import app; print(app.title)'
+conda run -n facerecapi python -m pip check
+conda run -n facerecapi python -m pytest -q tests
+
+# 在 192.168.29.11 的 release checkout 中，使用平台主 checkout 的 .venv
+cd algorithm-scheduling-platform
+/root/workspace/algorithm-scheduling/algorithm-scheduling-platform/.venv/bin/python \
+  -m pytest -q tests/test_milestone_2b_entrypoints.py
+```
+
+远端缓存构建、运行验收与真实 Smoke 的关键命令形态：
+
+```bash
+docker build --network host \
+  --build-arg FASTDEPLOY_FIND_LINKS=http://127.0.0.1:18765/ \
+  --build-arg FASTDEPLOY_TRUSTED_HOST=127.0.0.1 \
+  --label org.opencontainers.image.revision=cc3c78dbcd608f77461d7d39bc5c5c6d156d6276 \
+  -f facerec/docker/Dockerfile \
+  -t algorithm-facerec:v1.3_cc3c78d facerec
+
+docker compose --project-directory algorithm-scheduling-platform/deploy \
+  -f algorithm-scheduling-platform/deploy/docker-compose.operators.yml \
+  --profile gpu0 up -d --no-build --no-deps --force-recreate \
+  --wait --wait-timeout 300 facerec-gpu0
+nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory \
+  --format=csv,noheader
+deploy/scripts/run-operator-smoke \
+  --release-tag v1.3_cc3c78d \
+  --git-sha cc3c78dbcd608f77461d7d39bc5c5c6d156d6276 \
+  --cases facerec --run-id process-name-20260918 \
+  <受控报告、fixture、endpoint 和 result 参数>
+```
+
+macOS 结果为 FaceRec `81 passed, 2 skipped, 1 warning`、入口与 Harness consistency
+`14 passed, 1 skipped`；`/proc` 动态断言只在 Linux 执行，目标主机结果为 `10 passed`。
+最终镜像为 `sha256:482f4c48fb3b511b165f17609df5d3199f95c1e127048d772b80ffb59daca119`；
+三实例 healthy、ONLINE、CUDA ready，六个 FaceRec CUDA PID 进程名均精确为 `facerec`，
+PID/cgroup 分别映射唯一 gpu0/1/2 容器。真实三实例、共享 MongoDB 闭环和 Gateway 租约通过；
+旧容器与零引用旧镜像按完整 ID 删除，BuildKit cache 和卷保留。

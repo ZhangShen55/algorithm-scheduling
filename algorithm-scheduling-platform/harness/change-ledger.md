@@ -2689,3 +2689,21 @@
 - 远端 `0600`、单硬链接、write-once 证据绑定最终 SHA。首份推理证据的 fixture SHA 转录错误
   原样保留，并由更正文件及重新执行的权威推理证据闭环。完整记录见
   `scenarios/facerec-v1-3-upgrade-20260917.md`。
+
+## 2026-09-18 - FaceRec GPU 子进程名称规范化
+
+- 提交 `48070e6a12d84f1f716a1d8b24fa9af22e844ee1` 移除 `/run/operator-python` 软链接，入口
+  以 `exec -a facerec` 统一 Uvicorn 与 spawn worker 的 `argv[0]`；`cc3c78d` 修正 Linux
+  `/proc` 动态测试的 shebang 竞态，目标主机入口测试为 `10 passed`。
+- `192.168.29.11` 保留 BuildKit cache 构建镜像
+  `sha256:482f4c48fb3b511b165f17609df5d3199f95c1e127048d772b80ffb59daca119`。第一次命令遗漏
+  `--network host` 未产出镜像，修正后依赖层命中 cache；未使用 `--no-cache` 或 prune。
+- 新容器 `f5dd3e...111fd1`、`426fa6...31d3b`、`fe96de...d10aa4` 均 healthy、ONLINE、
+  `model_ready=true`、容量 128。GPU 0/1/2 的六个主/worker CUDA PID 均显示 `facerec`，
+  cgroup 与容器完整 ID 一一对应。
+- `INF-FACEREC` 新增、跨实例识别、共享 MongoDB 查询、删除闭环通过；三实例直连和 Online
+  Gateway 租约识别均为 HTTP/业务 200，`has_face=true`，没有记录图片或人员字段。
+- 旧三个容器和零引用旧镜像 `sha256:68e3f8...5a7cc88c` 按完整 ID 删除；卷摘要保持
+  `2ae7a8...c8c56`，BuildKit private cache 为 `109.9GB`，模型、中间件和无关资产保持不变。
+- 受控证据绑定 `cc3c78dbcd608f77461d7d39bc5c5c6d156d6276`，8 个文件均为 `0600`、单硬链接，
+  manifest 与脱敏扫描通过；完整记录见 `scenarios/facerec-v1-3-upgrade-20260917.md`。
