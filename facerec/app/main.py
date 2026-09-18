@@ -1,6 +1,7 @@
 # app/main.py
 import asyncio
 import multiprocessing
+import os
 import threading
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -27,6 +28,20 @@ APP_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = APP_DIR.parent
 MAX_WORKERS = settings.thread.max_workers
 ensure_runtime_directories(PROJECT_ROOT)
+
+
+def _spawn_process_context() -> multiprocessing.context.BaseContext:
+    spawn_executable = os.getenv("FACEREC_SPAWN_EXECUTABLE")
+    if spawn_executable:
+        executable_path = Path(spawn_executable)
+        if (
+            not executable_path.is_absolute()
+            or not executable_path.is_file()
+            or not os.access(executable_path, os.X_OK)
+        ):
+            raise RuntimeError("FACEREC_SPAWN_EXECUTABLE 必须是可执行的绝对文件路径")
+        multiprocessing.set_executable(str(executable_path))
+    return multiprocessing.get_context("spawn")
 
 
 def _shutdown_process_pool(pool: ProcessPoolExecutor, *, timeout_seconds: float) -> None:
@@ -73,7 +88,7 @@ async def lifespan(app: FastAPI):
     pool = None
     startup_gate = None
     try:
-        process_context = multiprocessing.get_context("spawn")
+        process_context = _spawn_process_context()
         status_queue = process_context.Queue()
         startup_gate = process_context.Event()
         pool = ProcessPoolExecutor(

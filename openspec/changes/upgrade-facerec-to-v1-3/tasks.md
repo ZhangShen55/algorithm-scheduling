@@ -91,3 +91,14 @@
 - [x] 8.6 在 `tasks.md` 逐项登记实际完成状态，并保存提交基线、验证日期、测试汇总、路由兼容结论和已知资源容量限制。已逐项登记 2026-09-18 的本地与远端结果、提交与镜像 SHA、OpenAPI 兼容、容量 `128` 保留依据，并明确未执行新的峰值吞吐压测。
 - [x] 8.7 使用中文 Conventional Commit 提交并推送 Harness 与 OpenSpec 收口记录，提交不得包含密码、模型、人脸原图或其他用户修改。中文 Conventional Commit 为 `docs(harness): 收口 FaceRec v1.3 远端验收证据`，已推送至 `origin/codex/milestone-2b-three-gpu-deployment`，完整提交为 `edec3d419cb7a6fbc2e7ce5056835a012243efb6`；暂存范围与脱敏扫描均通过，仅包含本 change 的四个 Harness/OpenSpec 文件。
 - [x] 8.8 运行 Harness consistency、相关平台回归、OpenSpec strict 和 `git diff --check`，确认所有工件、Requirement、Scenario、证据引用和任务均完整可追溯。2026-09-18 最终结果为 Harness consistency `5 passed`、平台 FaceRec/部署/日志/模型/布局聚焦回归 `72 passed`、`openspec validate upgrade-facerec-to-v1-3 --strict` valid、`git diff --check` 零输出，新增 Harness/OpenSpec 脱敏扫描通过。
+
+## 9. GPU 进程命名修正
+
+- [x] 9.1 在 `192.168.29.11` 以 PID、PPID、完整命令行、cgroup 和容器完整 ID 核对 `3551110` 与 `3551304` 的归属，确认二者分别是 `facerec-gpu0` 的 ArcFace 主进程和 InsightFace spawn worker；不规范路径来自 worker 继承的绝对 `sys.executable`。
+- [x] 9.2 移除 `/run/operator-python/facerec` 软链接方案，让容器入口同时作为 `multiprocessing` spawn executable，以 `exec -a facerec` 统一主进程和检测 worker 的 `argv[0]`，且继续保持 spawn 隔离。入口脚本不再创建 `/run/operator-python`，主进程和 spawn 子进程均通过同一可执行入口设置短 `argv[0]`；应用仅接受可执行的绝对 spawn 入口路径。
+- [x] 9.3 增加入口包装器真实 spawn 测试及静态合同测试，运行 FaceRec 全量测试、平台入口聚焦回归、compileall、导入、依赖检查、OpenSpec strict 和 `git diff --check`。macOS 结果为 FaceRec `81 passed, 2 skipped, 1 warning`、平台入口与 Harness consistency `15 passed`，compileall、导入、`pip check`、OpenSpec strict 和 `git diff --check` 均通过；依赖 `/proc` 的动态进程名断言明确留待目标 Linux 主机执行。
+- [ ] 9.4 使用中文 Conventional Commit 提交并推送进程命名实现，不混入 ASR Online、Text Analysis 或其他用户修改。
+- [ ] 9.5 在 `192.168.29.11` 拉取实现提交，不禁用或清理 BuildKit cache，重建正式 `algorithm-facerec` 镜像并滚动替换 `facerec-gpu0/1/2`。
+- [ ] 9.6 对三实例分别执行 health/readiness、平台 ONLINE、真实识别和宿主 GPU PID 取证，确认所有 FaceRec CUDA 进程名均精确为 `facerec`，且 PID/cgroup 映射正确。
+- [ ] 9.7 新实例全部通过后按完整 ID 精确删除本次被替换的旧 FaceRec 容器和镜像，保留 BuildKit cache、卷、模型、中间件、其他算子和无关镜像，并执行清理后 Smoke。
+- [ ] 9.8 补充 Harness 场景、验证索引、变更账本和远端受控证据，使用中文 Conventional Commit 提交推送，最终运行 Harness consistency、相关平台回归、OpenSpec strict 和 `git diff --check`。

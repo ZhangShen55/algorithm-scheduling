@@ -1,7 +1,9 @@
 # FaceRec Docker 部署
 
-所有构建命令都从 FaceRec 项目根执行，构建上下文为 `.`。镜像入口固定为
+所有构建命令都从 FaceRec 项目根执行，构建上下文为 `.`。镜像入口包装器固定启动
 `python -m uvicorn app.main:app`，容器内端口为 `8000`，Uvicorn worker 必须为 1。
+同一包装器也是 `multiprocessing` 的 spawn executable，使主进程和 InsightFace 检测
+worker 在 NVML 中都显示为 `facerec`，同时继续保持进程隔离。
 
 ## 构建
 
@@ -89,7 +91,9 @@ docker exec facerec-gpu0 nvidia-smi
 
 验收必须确认 InsightFace worker provider 和 ArcFace 配置设备均为 CUDA，MongoDB ready，
 `operator_code=facerec`、`capabilities=["recognize"]`、声明容量和实例 label 正确，并完成真实
-录入与识别。任一后端落到 CPU 时不得把实例标记为 ready。
+录入与识别。宿主机 `nvidia-smi --query-compute-apps=pid,process_name` 中，映射到 FaceRec
+容器的所有 CUDA PID 都必须精确显示 `facerec`，不得显示 Python 或内部解释器绝对路径。
+任一后端落到 CPU 时不得把实例标记为 ready。
 
 正式平台固定使用镜像 repository `algorithm-facerec` 和实例名 `facerec-gpu0/1/2`。
 新三实例、注册、真实租约、Online Gateway 路由和清理前 Smoke 全部通过后，才可按预先

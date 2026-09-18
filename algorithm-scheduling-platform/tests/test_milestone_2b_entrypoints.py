@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 GPU_ENTRYPOINTS = {
     "asr_offline/docker/start.sh": ("asr_offline", "8083"),
@@ -54,48 +56,46 @@ def test_gpu_entrypoints_set_process_name_one_worker_and_stable_port() -> None:
         assert 'WORKERS="${UVICORN_WORKERS:-' in source, relative
         assert default_port in source, relative
         if relative == "facerec/docker/entrypoint.sh":
-            assert 'exec "$PROCESS_NAME" -m uvicorn' in source, relative
-            assert 'exec -a "$PROCESS_NAME"' not in source, relative
+            assert 'exec -a "$PROCESS_NAME" "$PYTHON_EXECUTABLE" -m uvicorn' in source, relative
         else:
             assert 'exec -a "$PROCESS_NAME"' in source, relative
         assert "--workers 1" in source, relative
 
 
-def test_facerec_entrypoint_uses_a_resolvable_named_python_for_spawn(
+def test_facerec_entrypoint_normalizes_spawned_python_process_name(
     tmp_path: Path,
 ) -> None:
-    source = (ROOT / "facerec/docker/entrypoint.sh").read_text(encoding="utf-8")
+    entrypoint = ROOT / "facerec/docker/entrypoint.sh"
+    source = entrypoint.read_text(encoding="utf-8")
 
     assert 'PYTHON_EXECUTABLE="$(command -v python3)"' in source
-    assert 'NAMED_PYTHON_DIR="/run/operator-python"' in source
-    assert 'NAMED_PYTHON="$NAMED_PYTHON_DIR/$PROCESS_NAME"' in source
     assert '[[ -x "$PYTHON_EXECUTABLE" && -f "$PYTHON_EXECUTABLE" ]]' in source
-    assert 'ln -sfnT "$PYTHON_EXECUTABLE" "$NAMED_PYTHON"' in source
-    assert 'readlink -f "$NAMED_PYTHON"' in source
-    assert 'export PATH="$NAMED_PYTHON_DIR:$PATH"' in source
+    assert 'export FACEREC_SPAWN_EXECUTABLE=' in source
+    assert 'exec -a "$PROCESS_NAME" "$PYTHON_EXECUTABLE" "$@"' in source
+    assert "/run/operator-python" not in source
+    if not Path("/proc/self/cmdline").is_file():
+        pytest.skip("动态进程名断言需要 Linux /proc")
 
-    named_python = tmp_path / "facerec"
+    named_python = tmp_path / "python3"
     named_python.symlink_to(sys.executable)
     probe = (
-        "import json,multiprocessing,os,pathlib,subprocess,sys;"
-        "proc=pathlib.Path('/proc/self/cmdline');"
-        "argv0=(proc.read_bytes().split(b'\\0',1)[0].decode() if proc.exists() "
-        "else subprocess.check_output(['ps','-o','command=','-p',str(os.getpid())],"
-        "text=True).split()[0]);"
+        "import json,multiprocessing,os,pathlib,time;"
+        "multiprocessing.set_executable(os.environ['FACEREC_SPAWN_EXECUTABLE']);"
         "context=multiprocessing.get_context('spawn');queue=context.Queue();"
-        "child=context.Process(target=queue.put,args=('spawn-ok',));"
-        "child.start();child.join(10);value=queue.get(timeout=2);"
-        "print(json.dumps({'executable':sys.executable,'argv0':argv0,"
-        "'child_exitcode':child.exitcode,'child_value':value}));"
+        "child=context.Process(target=time.sleep,args=(30,));child.start();"
+        "proc=pathlib.Path('/proc')/str(child.pid)/'cmdline';"
+        "argv0=proc.read_bytes().split(b'\\0',1)[0].decode();"
+        "child.terminate();child.join(10);"
+        "print(json.dumps({'argv0':argv0,'child_exitcode':child.exitcode}));"
         "queue.close();queue.join_thread()"
     )
     completed = subprocess.run(
-        ["bash", "-c", 'exec "$PROCESS_NAME" -c "$PYTHON_PROBE"'],
+        ["bash", str(entrypoint), "-c", probe],
         env={
             **os.environ,
             "PATH": f"{tmp_path}:{os.environ['PATH']}",
-            "PROCESS_NAME": "facerec",
-            "PYTHON_PROBE": probe,
+            "GPU_PROCESS_NAME": "facerec",
+            "UVICORN_WORKERS": "1",
         },
         text=True,
         capture_output=True,
@@ -105,10 +105,16 @@ def test_facerec_entrypoint_uses_a_resolvable_named_python_for_spawn(
 
     assert completed.returncode == 0, completed.stderr
     payload = json.loads(completed.stdout)
-    assert Path(payload["executable"]).name == "facerec"
     assert payload["argv0"] == "facerec"
-    assert payload["child_exitcode"] == 0
-    assert payload["child_value"] == "spawn-ok"
+    assert payload["child_exitcode"] is not None
+
+
+def test_facerec_main_configures_the_spawn_entrypoint() -> None:
+    source = (ROOT / "facerec/app/main.py").read_text(encoding="utf-8")
+
+    assert 'os.getenv("FACEREC_SPAWN_EXECUTABLE")' in source
+    assert "multiprocessing.set_executable(str(executable_path))" in source
+    assert "process_context = _spawn_process_context()" in source
 
 
 def test_facerec_entrypoint_rejects_unsafe_process_names(tmp_path: Path) -> None:

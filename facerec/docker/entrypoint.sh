@@ -11,25 +11,19 @@ if [[ ! "$PROCESS_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
 fi
 
 PYTHON_EXECUTABLE="$(command -v python3)"
-NAMED_PYTHON_DIR="/run/operator-python"
-NAMED_PYTHON="$NAMED_PYTHON_DIR/$PROCESS_NAME"
 [[ -x "$PYTHON_EXECUTABLE" && -f "$PYTHON_EXECUTABLE" ]] || {
   echo "[ERROR] python3 does not resolve to an executable file" >&2
   exit 1
 }
-install -d -m 0755 "$NAMED_PYTHON_DIR"
-if [[ ( -e "$NAMED_PYTHON" || -L "$NAMED_PYTHON" ) && ! -L "$NAMED_PYTHON" ]]; then
-  echo "[ERROR] named Python path already exists and is not a symbolic link" >&2
-  exit 1
-fi
-ln -sfnT "$PYTHON_EXECUTABLE" "$NAMED_PYTHON"
-[[ "$(readlink -f "$NAMED_PYTHON")" == "$(readlink -f "$PYTHON_EXECUTABLE")" ]] || {
-  echo "[ERROR] named Python link does not resolve to python3" >&2
-  exit 1
-}
-export PATH="$NAMED_PYTHON_DIR:$PATH"
+ENTRYPOINT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+export FACEREC_SPAWN_EXECUTABLE="$ENTRYPOINT_DIR/$(basename -- "${BASH_SOURCE[0]}")"
 
-exec "$PROCESS_NAME" -m uvicorn app.main:app \
+# multiprocessing spawn 会用该入口重新执行 Python；统一 argv[0]，避免 NVML 暴露解释器绝对路径。
+if (( $# > 0 )); then
+  exec -a "$PROCESS_NAME" "$PYTHON_EXECUTABLE" "$@"
+fi
+
+exec -a "$PROCESS_NAME" "$PYTHON_EXECUTABLE" -m uvicorn app.main:app \
   --host 0.0.0.0 \
   --port "$PORT" \
   --workers 1

@@ -87,3 +87,10 @@ FaceRec 的最终平台适配和验收 MUST 在 `192.168.29.11` 的既有算子�
 #### Scenario: 只有本地验证结果
 - **WHEN** 源码测试、本地 CPU 推理或非指定主机 GPU 推理通过但 `192.168.29.11` 尚无成功证据
 - **THEN** 平台适配状态保持未完成，不得宣称 FaceRec v1.3 已完成最终替换
+
+### Requirement: GPU 进程名必须使用 FaceRec 正式短名
+FaceRec 主进程和所有建立 CUDA context 的 InsightFace 检测 worker MUST 在 NVML / `nvidia-smi` 中显示正式短名 `facerec`，MUST NOT 显示 `python`、`python3`、`/run/operator-python/facerec` 或其他内部解释器绝对路径。实现 MUST 继续使用 `multiprocessing` spawn 隔离检测 worker，不得为进程命名改回 `fork`。
+
+#### Scenario: 三实例完成真实推理后的进程盘点
+- **WHEN** 在 `192.168.29.11` 分别触发 `facerec-gpu0/1/2` 真实推理并查询宿主机 CUDA compute 进程
+- **THEN** 每个映射到 FaceRec 容器的 CUDA PID 进程名均精确为 `facerec`，父子 PID 和 cgroup 仍能证明其属于对应实例

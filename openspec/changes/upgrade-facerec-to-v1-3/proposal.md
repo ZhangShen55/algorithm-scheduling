@@ -12,6 +12,7 @@
 - 移植并保留当前 `facerec` 的平台注册与容量、统一 JSON Lines 日志、运行目录、MongoDB 配置覆盖、就绪检查、Dlib 进程隔离、严格 GPU 校验和人脸原图默认不持久化等平台能力。
 - 保持既有 HTTP 路径、方法、请求字段、响应字段、业务状态码和默认端口；不把上游 `statusCode`、`hasFace` 等驼峰字段作为替代合同。
 - 补齐 InsightFace 运行依赖、根配置、Docker 构建和部署说明，并保证严格 GPU 部署不会静默回退 CPU。
+- 统一 FaceRec 主进程和 InsightFace 检测 worker 的 GPU 进程名为 `facerec`，不得在 `nvidia-smi` 中暴露内部 Python 解释器绝对路径。
 - 在 `facerec_v1.3/` 中完成静态检查、单元/契约测试、启动与健康检查、模型就绪检查、学生与教师场景无关的 FaceRec 真实图片推理及路由兼容性验证。
 - 平台适配、三实例 GPU 部署、真实租约调用和最终验收 MUST 在 `192.168.29.11` 完成，使用工作区已批准的固定登录合同，登录凭据不得进入 Harness 普通证据。
 - 远端 Docker build MUST 复用并保留既有 BuildKit cache，不使用 `--no-cache`，不执行 builder、buildx 或 system prune。

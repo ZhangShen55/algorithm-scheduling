@@ -84,6 +84,12 @@
 
 实现按可验证阶段形成中文 Conventional Commit，提交只包含本 change 拥有的文件并推送到选定集成分支。Harness 新增 `harness/scenarios/facerec-v1-3-upgrade-20260917.md`，同步 `harness/verification.md` 与 `harness/change-ledger.md`；远端原始证据使用 release 目录、`0600`、单硬链接和 write-once 规则，并绑定实际测试 Git SHA 与镜像 revision。文档后续提交不得冒充先前镜像 SHA；需要时以新的 SHA 重建并重新验证。
 
+### 11. 使用同一入口包装 multiprocessing spawn 的进程名
+
+FaceRec 的 ArcFace 主进程和 InsightFace 检测 worker 都会建立 CUDA context。入口脚本 SHALL 以 `exec -a facerec` 启动主进程，并作为 `multiprocessing` 的显式 spawn executable，把子进程 `argv[0]` 同样规范为 `facerec`。这样继续使用 `spawn` 保持检测 worker 与 ArcFace 运行时隔离，同时避免 NVML 从子进程命令行读取到 `/run/operator-python/facerec` 等内部解释器路径。
+
+不使用 `prctl` 只改 Linux `comm`，因为现场 `comm` 已是 `facerec`，而 NVML 展示的是命令行解释器路径；也不改为 `fork`，避免继承已导入的推理运行时或 CUDA 状态。
+
 ## 风险与权衡
 
 - [InsightFace 与旧 Dlib 对齐产生的 embedding 分布不同，可能降低旧库命中率] → 使用同一 ArcFace 模型对现有 fixture 和新录入人员执行跨版本识别对比；不自动重写数据库，阈值变化必须有量化证据和单独批准。
