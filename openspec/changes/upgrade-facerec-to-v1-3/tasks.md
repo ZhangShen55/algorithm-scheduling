@@ -96,7 +96,7 @@
 
 - [x] 9.1 在 `192.168.29.11` 以 PID、PPID、完整命令行、cgroup 和容器完整 ID 核对 `3551110` 与 `3551304` 的归属，确认二者分别是 `facerec-gpu0` 的 ArcFace 主进程和 InsightFace spawn worker；不规范路径来自 worker 继承的绝对 `sys.executable`。
 - [x] 9.2 移除 `/run/operator-python/facerec` 软链接方案，让容器入口同时作为 `multiprocessing` spawn executable，以 `exec -a facerec` 统一主进程和检测 worker 的 `argv[0]`，且继续保持 spawn 隔离。入口脚本不再创建 `/run/operator-python`，主进程和 spawn 子进程均通过同一可执行入口设置短 `argv[0]`；应用仅接受可执行的绝对 spawn 入口路径。
-- [x] 9.3 增加入口包装器真实 spawn 测试及静态合同测试，运行 FaceRec 全量测试、平台入口聚焦回归、compileall、导入、依赖检查、OpenSpec strict 和 `git diff --check`。macOS 结果为 FaceRec `81 passed, 2 skipped, 1 warning`、平台入口与 Harness consistency `15 passed`，compileall、导入、`pip check`、OpenSpec strict 和 `git diff --check` 均通过；依赖 `/proc` 的动态进程名断言明确留待目标 Linux 主机执行。
+- [ ] 9.3 增加入口包装器真实 spawn 测试及静态合同测试，运行 FaceRec 全量测试、平台入口聚焦回归、compileall、导入、依赖检查、OpenSpec strict 和 `git diff --check`。macOS 结果为 FaceRec `81 passed, 2 skipped, 1 warning`、平台入口与 Harness consistency `14 passed, 1 skipped`，compileall、导入、`pip check`、OpenSpec strict 和 `git diff --check` 均通过。目标 Linux 首次动态探针因在 shebang `/usr/bin/env` 过渡阶段只读取一次 `/proc` 而失败，已改为有界轮询最终 `argv[0]`，等待复测。
 - [ ] 9.4 使用中文 Conventional Commit 提交并推送进程命名实现，不混入 ASR Online、Text Analysis 或其他用户修改。
 - [ ] 9.5 在 `192.168.29.11` 拉取实现提交，不禁用或清理 BuildKit cache，重建正式 `algorithm-facerec` 镜像并滚动替换 `facerec-gpu0/1/2`。
 - [ ] 9.6 对三实例分别执行 health/readiness、平台 ONLINE、真实识别和宿主 GPU PID 取证，确认所有 FaceRec CUDA 进程名均精确为 `facerec`，且 PID/cgroup 映射正确。

@@ -79,15 +79,24 @@ def test_facerec_entrypoint_normalizes_spawned_python_process_name(
     named_python = tmp_path / "python3"
     named_python.symlink_to(sys.executable)
     probe = (
-        "import json,multiprocessing,os,pathlib,time;"
-        "multiprocessing.set_executable(os.environ['FACEREC_SPAWN_EXECUTABLE']);"
-        "context=multiprocessing.get_context('spawn');queue=context.Queue();"
-        "child=context.Process(target=time.sleep,args=(30,));child.start();"
-        "proc=pathlib.Path('/proc')/str(child.pid)/'cmdline';"
-        "argv0=proc.read_bytes().split(b'\\0',1)[0].decode();"
-        "child.terminate();child.join(10);"
-        "print(json.dumps({'argv0':argv0,'child_exitcode':child.exitcode}));"
-        "queue.close();queue.join_thread()"
+        "import json,multiprocessing,os,pathlib,time\n"
+        "multiprocessing.set_executable(os.environ['FACEREC_SPAWN_EXECUTABLE'])\n"
+        "context=multiprocessing.get_context('spawn')\n"
+        "child=context.Process(target=time.sleep,args=(30,))\n"
+        "child.start()\n"
+        "argv0=''\n"
+        "try:\n"
+        "    proc=pathlib.Path('/proc')/str(child.pid)/'cmdline'\n"
+        "    deadline=time.monotonic()+5\n"
+        "    while time.monotonic()<deadline:\n"
+        "        argv0=proc.read_bytes().split(b'\\0',1)[0].decode()\n"
+        "        if argv0=='facerec':\n"
+        "            break\n"
+        "        time.sleep(0.02)\n"
+        "finally:\n"
+        "    child.terminate()\n"
+        "    child.join(10)\n"
+        "print(json.dumps({'argv0':argv0,'child_exitcode':child.exitcode}))\n"
     )
     completed = subprocess.run(
         ["bash", str(entrypoint), "-c", probe],
