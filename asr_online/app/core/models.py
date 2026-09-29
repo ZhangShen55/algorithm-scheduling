@@ -9,6 +9,9 @@ from app.core.model_assets import prepare_decrypted_model_dir
 
 _model_online = None
 _punct_pipeline = None
+_model_vad = None
+_model_correction = None
+_model_sensevoice = None
 _model_lock = asyncio.Lock()
 
 
@@ -43,7 +46,8 @@ def device() -> torch.device:
 
 
 async def load_models_if_needed():
-    global _model_online, _punct_pipeline
+    global _model_online, _punct_pipeline, _model_vad, _model_correction
+    global _model_sensevoice
 
     async with _model_lock:
         resolve_runtime_device()
@@ -65,6 +69,33 @@ async def load_models_if_needed():
                 device=settings.device,
             )
 
+        if settings.vad_model_dir and _model_vad is None:
+            _model_vad = AutoModel(
+                model=prepare_decrypted_model_dir(settings.vad_model_dir),
+                device=settings.device,
+                ngpu=settings.ngpu,
+                disable_update=True,
+                disable_pbar=True,
+            )
+
+        if settings.correction_model_dir and _model_correction is None:
+            _model_correction = AutoModel(
+                model=prepare_decrypted_model_dir(settings.correction_model_dir),
+                device=settings.device,
+                ngpu=settings.ngpu,
+                disable_update=True,
+                disable_pbar=True,
+            )
+
+        if settings.sensevoice_model_dir and _model_sensevoice is None:
+            _model_sensevoice = AutoModel(
+                model=prepare_decrypted_model_dir(settings.sensevoice_model_dir),
+                device=settings.device,
+                ngpu=settings.ngpu,
+                disable_update=True,
+                disable_pbar=True,
+            )
+
 
 def get_online_model():
     return _model_online
@@ -72,3 +103,15 @@ def get_online_model():
 
 def get_punct_pipeline():
     return _punct_pipeline
+
+
+def get_vad_model():
+    return _model_vad
+
+
+def get_correction_model():
+    return _model_correction
+
+
+def get_sensevoice_model():
+    return _model_sensevoice

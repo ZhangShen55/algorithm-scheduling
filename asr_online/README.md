@@ -106,6 +106,44 @@ log_path = "./asr_online_service.log"
 
 识别逻辑要点：连续静音达到阈值或文本过长时触发标点并可能返回 `finished: true`；连接断开后更新在线会话统计。
 
+### WebSocket v1.0.2（实验接口）
+
+- **路径**：`/v1.0.2/seacraft_asr_online`
+- **直连地址**：`ws://<host>:8084/v1.0.2/seacraft_asr_online`
+- **上行和基础响应字段**：与 v1.0.1 相同。
+- **当前范围**：只在 `asr_online` 算子内开发和验证，`online_gateway_service` 暂不转发此路径。
+- **结果语义**：同一语音段使用稳定 `key`；`finished=false` 是临时文本，`finished=true` 是可以覆盖临时文本的最终文本。
+
+v1.0.2 的 FSMN-VAD 和句末二遍识别模型放在项目根目录的 `model/` 下，并通过
+`config.toml` 的 `[model_paths]` 配置：
+
+```toml
+[model_paths]
+vad_model_dir = "model/speech_fsmn_vad_zh-cn-16k-common-pytorch"
+asr_online_correction_model_dir = "model/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
+```
+
+这两个模型不再读取 `ASR_ONLINE_VAD_MODEL_DIR` 和
+`ASR_ONLINE_CORRECTION_MODEL_DIR` 环境变量。
+
+未配置纠正模型时，v1.0.2 会在句末使用 fresh cache 对完整语音段再次调用在线模型，作为可运行的回放兜底。
+
+### WebSocket v1.0.3（SenseVoice 实验接口）
+
+- **路径**：`/v1.0.3/seacraft_asr_online`
+- **直连地址**：`ws://<host>:8084/v1.0.3/seacraft_asr_online`
+- **上行和基础响应字段**：与 v1.0.2 相同。
+- **临时结果**：继续使用在线 Paraformer，保持低延迟更新。
+- **最终结果**：VAD 断句后，将完整 PCM 送入 SenseVoiceSmall，并执行富文本标签清理。
+- **标点语义**：使用 SenseVoiceSmall 自带标点，不调用独立 PUNC 模型。
+
+SenseVoice 模型通过 `config.toml` 配置并从项目内加载：
+
+```toml
+[model_paths]
+sensevoice_model_dir = "model/SenseVoiceSmall"
+```
+
 ### HTTP 状态
 
 | 方法 | 路径 | 说明 |

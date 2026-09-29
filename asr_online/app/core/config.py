@@ -84,6 +84,27 @@ class Settings:
             os.path.join(DEFAULT_MODEL_BASE_DIR, DEFAULT_PUNC_MODEL_NAME),
         )
 
+    def _optional_model_path(self, config_key: str) -> str | None:
+        configured = self._cfg.get("model_paths", {}).get(config_key)
+        if not configured:
+            return None
+        path = Path(configured).expanduser()
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        return str(path.resolve())
+
+    @property
+    def vad_model_dir(self) -> str | None:
+        return self._optional_model_path("vad_model_dir")
+
+    @property
+    def correction_model_dir(self) -> str | None:
+        return self._optional_model_path("asr_online_correction_model_dir")
+
+    @property
+    def sensevoice_model_dir(self) -> str | None:
+        return self._optional_model_path("sensevoice_model_dir")
+
 
 settings = Settings()
 operator_deployment = load_operator_deployment_settings(
