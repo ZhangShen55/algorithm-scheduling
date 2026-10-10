@@ -70,6 +70,7 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.dict("os.environ", {}, clear=True),
+            patch.object(self.models, "require_gpu_enabled", return_value=False),
             self._settings_config_patch(),
         ):
             resolved = self.models.resolve_runtime_device()
@@ -89,6 +90,7 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.models._punct_pipeline = object()
 
         with (
+            patch.object(self.models, "require_gpu_enabled", return_value=False),
             self._settings_config_patch(),
             patch.object(
                 self.models, "prepare_decrypted_model_dir", return_value="/model/sensevoice"
@@ -116,6 +118,7 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.models._punct_pipeline = object()
 
         with (
+            patch.object(self.models, "require_gpu_enabled", return_value=False),
             self._settings_config_patch(),
             patch.object(
                 self.models, "prepare_decrypted_model_dir", return_value="/model/sensevoice"
