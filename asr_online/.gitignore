@@ -22,6 +22,7 @@ test/
 !test/
 test/*
 !test/benchmark_correction_model.py
+!test/benchmark_v1_0_3_concurrency.py
 !test/run_vad_three_way_comparison.py
 !test/test_api_ws_client.py
 !test/test_full_teacher_abc.py

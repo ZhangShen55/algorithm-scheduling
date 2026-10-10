@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from contextlib import ExitStack
 from unittest.mock import patch
@@ -76,6 +77,50 @@ class RecordingCorrectionModel(FakeCorrectionModel):
     def generate(self, **kwargs):
         self.calls.append(kwargs)
         return [{"text": f"纠正{len(self.calls)}"}]
+
+
+class StableOnlineModel(FakeOnlineModel):
+    def __init__(self, texts=None):
+        super().__init__()
+        self.texts = list(texts or ["在线文本"])
+
+    def generate(self, **kwargs):
+        self.calls.append(kwargs)
+        if kwargs.get("is_final"):
+            return [{"text": "在线最终"}]
+        index = min(len(self.calls) - 1, len(self.texts) - 1)
+        return [{"text": self.texts[index]}]
+
+
+class ImmediateCorrectionScheduler:
+    def __init__(self, text="中间纠正。", return_results=True):
+        self.text = text
+        self.return_results = return_results
+        self.submissions = []
+        self.queues = {}
+        self.unregistered = []
+
+    async def register_session(self, connection_id):
+        queue = asyncio.Queue()
+        self.queues[connection_id] = queue
+        return queue
+
+    async def unregister_session(self, connection_id):
+        self.unregistered.append(connection_id)
+        self.queues.pop(connection_id, None)
+
+    async def submit(self, snapshot):
+        self.submissions.append(snapshot)
+        if self.return_results:
+            self.queues[snapshot.connection_id].put_nowait(
+                ws_online.CorrectionResult(
+                    snapshot=snapshot,
+                    text=self.text,
+                    queue_seconds=0.001,
+                    inference_seconds=0.01,
+                )
+            )
+        return True
 
 
 class V1_0_2ProtocolTests(unittest.TestCase):
@@ -544,6 +589,170 @@ class V1_0_2ProtocolTests(unittest.TestCase):
         self.assertTrue(final["finished"])
         self.assertEqual(final["text"], "功能调度。")
         self.assertEqual(len(sensevoice.calls), 1)
+
+    def test_v3_vad_candidate_emits_intermediate_and_reuses_it_for_final(self):
+        online = StableOnlineModel()
+        vad = ScriptedVadModel([[[0, -1]], [[-1, 400]], []])
+        scheduler = ImmediateCorrectionScheduler(text="候选纠正。")
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(ws_online, "get_online_model", return_value=online))
+            stack.enter_context(patch.object(ws_online, "get_vad_model", return_value=vad))
+            stack.enter_context(patch.object(ws_online, "get_sensevoice_model", return_value=None))
+            stack.enter_context(
+                patch.object(ws_online, "get_correction_scheduler", return_value=scheduler)
+            )
+            with TestClient(self.app) as client:
+                with client.websocket_connect("/v1.0.3/seacraft_asr_online") as websocket:
+                    websocket.send_bytes(b"\x01\x00" * 7680)
+                    first = websocket.receive_json()
+                    websocket.send_bytes(b"\x01\x00" * 7680)
+                    websocket.receive_json()
+                    websocket.send_bytes(b"\x01\x00" * 7680)
+                    intermediate = websocket.receive_json()
+                    final = websocket.receive_json()
+                    websocket.receive_json()
+
+        self.assertFalse(intermediate["finished"])
+        self.assertEqual(intermediate["text"], "候选纠正。")
+        self.assertTrue(final["finished"])
+        self.assertEqual(first["key"], intermediate["key"])
+        self.assertEqual(intermediate["key"], final["key"])
+        self.assertEqual(final["text"], "候选纠正。")
+        self.assertEqual([item.kind for item in scheduler.submissions], ["intermediate"])
+        self.assertEqual([item.trigger for item in scheduler.submissions], ["vad_candidate_end"])
+        self.assertEqual(len(scheduler.unregistered), 1)
+
+    def test_v3_can_disable_intermediate_correction_but_keeps_final(self):
+        online = StableOnlineModel()
+        vad = ScriptedVadModel([[[0, -1]], [[-1, 400]], []])
+        scheduler = ImmediateCorrectionScheduler(text="最终纠正。")
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(ws_online, "get_online_model", return_value=online))
+            stack.enter_context(patch.object(ws_online, "get_vad_model", return_value=vad))
+            stack.enter_context(patch.object(ws_online, "get_sensevoice_model", return_value=None))
+            stack.enter_context(
+                patch.object(ws_online, "get_correction_scheduler", return_value=scheduler)
+            )
+            stack.enter_context(
+                patch.object(ws_online, "_PROGRESSIVE_CORRECTION_ENABLED", False)
+            )
+            with TestClient(self.app) as client:
+                with client.websocket_connect("/v1.0.3/seacraft_asr_online") as websocket:
+                    for _ in range(2):
+                        websocket.send_bytes(b"\x01\x00" * 7680)
+                        websocket.receive_json()
+                    websocket.send_bytes(b"\x01\x00" * 7680)
+                    final = websocket.receive_json()
+                    websocket.receive_json()
+
+        self.assertTrue(final["finished"])
+        self.assertEqual(final["text"], "最终纠正。")
+        self.assertEqual([item.kind for item in scheduler.submissions], ["final"])
+
+    def test_v3_stable_eight_characters_trigger_progressive_correction_after_cooldown(self):
+        online = StableOnlineModel(["一二三四", "一二三四五六七八"])
+        vad = NoEndVadModel()
+        scheduler = ImmediateCorrectionScheduler(text="八字纠正。")
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(ws_online, "get_online_model", return_value=online))
+            stack.enter_context(patch.object(ws_online, "get_vad_model", return_value=vad))
+            stack.enter_context(patch.object(ws_online, "get_sensevoice_model", return_value=None))
+            stack.enter_context(
+                patch.object(ws_online, "get_correction_scheduler", return_value=scheduler)
+            )
+            stack.enter_context(
+                patch.object(ws_online, "_PROGRESSIVE_CORRECTION_CHARS", 8)
+            )
+            stack.enter_context(
+                patch.object(
+                    ws_online,
+                    "_PROGRESSIVE_CORRECTION_COOLDOWN_SAMPLES",
+                    int(2 * 16000),
+                )
+            )
+            stack.enter_context(
+                patch.object(ws_online, "_PROGRESSIVE_CORRECTION_AUDIO_SAMPLES", 16000 * 60)
+            )
+            with TestClient(self.app) as client:
+                with client.websocket_connect("/v1.0.3/seacraft_asr_online") as websocket:
+                    for _ in range(5):
+                        websocket.send_bytes(b"\x01\x00" * 7680)
+                        websocket.receive_json()
+                    websocket.send_bytes(b"\x01\x00" * 7680)
+                    correction = websocket.receive_json()
+                    websocket.receive_json()
+
+        self.assertEqual(correction["text"], "八字纠正。")
+        self.assertFalse(correction["finished"])
+        self.assertEqual(len(scheduler.submissions), 1)
+        self.assertEqual(scheduler.submissions[0].trigger, "stable_chars")
+        self.assertEqual(scheduler.submissions[0].end_sample, 5 * 7680)
+
+    def test_v3_audio_interval_triggers_when_text_grows_slowly(self):
+        online = StableOnlineModel(["是"])
+        vad = NoEndVadModel()
+        scheduler = ImmediateCorrectionScheduler(text="时长纠正。")
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(ws_online, "get_online_model", return_value=online))
+            stack.enter_context(patch.object(ws_online, "get_vad_model", return_value=vad))
+            stack.enter_context(patch.object(ws_online, "get_sensevoice_model", return_value=None))
+            stack.enter_context(
+                patch.object(ws_online, "get_correction_scheduler", return_value=scheduler)
+            )
+            stack.enter_context(
+                patch.object(ws_online, "_PROGRESSIVE_CORRECTION_CHARS", 999)
+            )
+            stack.enter_context(
+                patch.object(ws_online, "_PROGRESSIVE_CORRECTION_AUDIO_SAMPLES", 3 * 7680)
+            )
+            stack.enter_context(
+                patch.object(ws_online, "_PROGRESSIVE_CORRECTION_COOLDOWN_SAMPLES", 2 * 7680)
+            )
+            with TestClient(self.app) as client:
+                with client.websocket_connect("/v1.0.3/seacraft_asr_online") as websocket:
+                    for _ in range(3):
+                        websocket.send_bytes(b"\x01\x00" * 7680)
+                        websocket.receive_json()
+                    websocket.send_bytes(b"\x01\x00" * 7680)
+                    correction = websocket.receive_json()
+                    websocket.receive_json()
+
+        self.assertEqual(correction["text"], "时长纠正。")
+        self.assertEqual(len(scheduler.submissions), 1)
+        self.assertEqual(scheduler.submissions[0].trigger, "audio_interval")
+
+    def test_v3_final_timeout_falls_back_without_duplicate_finished(self):
+        online = StableOnlineModel()
+        vad = ScriptedVadModel([[[0, -1]], [[-1, 400]], []])
+        scheduler = ImmediateCorrectionScheduler(return_results=False)
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(ws_online, "get_online_model", return_value=online))
+            stack.enter_context(patch.object(ws_online, "get_vad_model", return_value=vad))
+            stack.enter_context(patch.object(ws_online, "get_sensevoice_model", return_value=None))
+            stack.enter_context(
+                patch.object(ws_online, "get_correction_scheduler", return_value=scheduler)
+            )
+            stack.enter_context(
+                patch.object(ws_online, "_CORRECTION_TASK_TIMEOUT_SECONDS", 0.01)
+            )
+            with TestClient(self.app) as client:
+                with client.websocket_connect("/v1.0.3/seacraft_asr_online") as websocket:
+                    for _ in range(2):
+                        websocket.send_bytes(b"\x01\x00" * 7680)
+                        websocket.receive_json()
+                    websocket.send_bytes(b"\x01\x00" * 7680)
+                    final = websocket.receive_json()
+                    websocket.receive_json()
+
+        self.assertTrue(final["finished"])
+        self.assertEqual(final["text"], "在线文本")
+        self.assertEqual(len(scheduler.submissions), 1)
+        self.assertEqual(scheduler.submissions[0].kind, "intermediate")
 
 
 if __name__ == "__main__":

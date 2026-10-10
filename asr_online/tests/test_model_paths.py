@@ -69,6 +69,49 @@ class ModelPathConfigTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 _ = settings.vad_merge_max_gap_ms
 
+    def test_progressive_correction_defaults(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text("", encoding="utf-8")
+            settings = Settings(config_path=str(config_path))
+
+            self.assertTrue(settings.progressive_correction_enabled)
+            self.assertEqual(settings.progressive_correction_chars, 8)
+            self.assertEqual(settings.progressive_correction_audio_ms, 4800)
+            self.assertEqual(settings.progressive_correction_cooldown_ms, 2000)
+            self.assertEqual(settings.sensevoice_correction_workers, 1)
+            self.assertEqual(settings.correction_queue_capacity, 16)
+            self.assertEqual(settings.correction_task_timeout_ms, 5000)
+
+    def test_progressive_correction_configuration_is_validated(self):
+        invalid_configs = (
+            "progressive_correction_enabled = 1\n",
+            "progressive_correction_chars = 0\n",
+            "progressive_correction_audio_ms = 0\n",
+            "progressive_correction_cooldown_ms = 0\n",
+            "sensevoice_correction_workers = 0\n",
+            "sensevoice_correction_workers = 65\n",
+            "sensevoice_correction_workers = 2\ncorrection_queue_capacity = 1\n",
+            "correction_task_timeout_ms = 0\n",
+        )
+        properties = (
+            "progressive_correction_enabled",
+            "progressive_correction_chars",
+            "progressive_correction_audio_ms",
+            "progressive_correction_cooldown_ms",
+            "sensevoice_correction_workers",
+            "sensevoice_correction_workers",
+            "correction_queue_capacity",
+            "correction_task_timeout_ms",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            for content, property_name in zip(invalid_configs, properties):
+                config_path.write_text(content, encoding="utf-8")
+                settings = Settings(config_path=str(config_path))
+                with self.subTest(content=content), self.assertRaises(ValueError):
+                    getattr(settings, property_name)
+
 
 if __name__ == "__main__":
     unittest.main()

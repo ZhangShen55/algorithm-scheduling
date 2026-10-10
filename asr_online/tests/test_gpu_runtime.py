@@ -10,6 +10,15 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.config = {"device": "cuda:0", "ngpu": 1}
         models._model_online = None
         models._punct_pipeline = None
+        models._model_vad = None
+        models._model_correction = None
+        models._model_sensevoice = None
+        models._sensevoice_models = []
+        models._correction_scheduler = None
+
+    async def asyncTearDown(self) -> None:
+        if self.models._correction_scheduler is not None:
+            await self.models.shutdown_models()
 
     def _settings_config_patch(self):
         return patch.object(
@@ -66,6 +75,62 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
             resolved = self.models.resolve_runtime_device()
 
         self.assertEqual(str(resolved), "cpu")
+
+    async def test_each_correction_worker_loads_an_independent_model(self) -> None:
+        self.config.update(
+            device="cpu",
+            ngpu=0,
+            sensevoice_correction_workers=2,
+            correction_queue_capacity=4,
+            correction_task_timeout_ms=1000,
+            model_paths={"sensevoice_model_dir": "model/SenseVoiceSmall"},
+        )
+        self.models._model_online = object()
+        self.models._punct_pipeline = object()
+
+        with (
+            self._settings_config_patch(),
+            patch.object(
+                self.models, "prepare_decrypted_model_dir", return_value="/model/sensevoice"
+            ),
+            patch.object(self.models, "AutoModel", side_effect=[object(), object()]) as auto_model,
+        ):
+            await self.models.load_models_if_needed()
+
+        self.assertEqual(auto_model.call_count, 2)
+        self.assertEqual(self.models.get_correction_scheduler().worker_count, 2)
+        self.assertIsNot(
+            self.models._sensevoice_models[0], self.models._sensevoice_models[1]
+        )
+
+    async def test_correction_worker_load_failure_does_not_silently_reduce_workers(self) -> None:
+        self.config.update(
+            device="cpu",
+            ngpu=0,
+            sensevoice_correction_workers=2,
+            correction_queue_capacity=4,
+            correction_task_timeout_ms=1000,
+            model_paths={"sensevoice_model_dir": "model/SenseVoiceSmall"},
+        )
+        self.models._model_online = object()
+        self.models._punct_pipeline = object()
+
+        with (
+            self._settings_config_patch(),
+            patch.object(
+                self.models, "prepare_decrypted_model_dir", return_value="/model/sensevoice"
+            ),
+            patch.object(
+                self.models,
+                "AutoModel",
+                side_effect=[object(), RuntimeError("CUDA out of memory")],
+            ),
+            self.assertRaisesRegex(RuntimeError, "out of memory"),
+        ):
+            await self.models.load_models_if_needed()
+
+        self.assertIsNone(self.models.get_correction_scheduler())
+        self.assertEqual(self.models._sensevoice_models, [])
 
 
 if __name__ == "__main__":
