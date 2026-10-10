@@ -5,6 +5,7 @@ from modelscope.pipelines import pipeline
 from modelscope.utils.constant import Tasks
 
 from app.core.config import operator_deployment, settings
+from app.core.correction_scheduler import CorrectionScheduler
 from app.core.model_assets import prepare_decrypted_model_dir
 
 _model_online = None
@@ -12,6 +13,8 @@ _punct_pipeline = None
 _model_vad = None
 _model_correction = None
 _model_sensevoice = None
+_sensevoice_models = []
+_correction_scheduler = None
 _model_lock = asyncio.Lock()
 
 
@@ -47,7 +50,7 @@ def device() -> torch.device:
 
 async def load_models_if_needed():
     global _model_online, _punct_pipeline, _model_vad, _model_correction
-    global _model_sensevoice
+    global _model_sensevoice, _sensevoice_models, _correction_scheduler
 
     async with _model_lock:
         resolve_runtime_device()
@@ -87,14 +90,45 @@ async def load_models_if_needed():
                 disable_pbar=True,
             )
 
-        if settings.sensevoice_model_dir and _model_sensevoice is None:
-            _model_sensevoice = AutoModel(
-                model=prepare_decrypted_model_dir(settings.sensevoice_model_dir),
-                device=settings.device,
-                ngpu=settings.ngpu,
-                disable_update=True,
-                disable_pbar=True,
-            )
+        if settings.sensevoice_model_dir and _correction_scheduler is None:
+            model_dir = prepare_decrypted_model_dir(settings.sensevoice_model_dir)
+            loaded_models = []
+            try:
+                for _ in range(settings.sensevoice_correction_workers):
+                    loaded_models.append(
+                        AutoModel(
+                            model=model_dir,
+                            device=settings.device,
+                            ngpu=settings.ngpu,
+                            disable_update=True,
+                            disable_pbar=True,
+                        )
+                    )
+                scheduler = CorrectionScheduler(
+                    loaded_models,
+                    queue_capacity=settings.correction_queue_capacity,
+                    submit_timeout_seconds=settings.correction_task_timeout_ms / 1000,
+                )
+                await scheduler.start()
+            except Exception:
+                loaded_models.clear()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                raise
+            _sensevoice_models = loaded_models
+            _model_sensevoice = loaded_models[0]
+            _correction_scheduler = scheduler
+
+
+async def shutdown_models():
+    global _model_sensevoice, _sensevoice_models, _correction_scheduler
+    if _correction_scheduler is not None:
+        await _correction_scheduler.close()
+    _correction_scheduler = None
+    _model_sensevoice = None
+    _sensevoice_models = []
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def get_online_model():
@@ -115,3 +149,7 @@ def get_correction_model():
 
 def get_sensevoice_model():
     return _model_sensevoice
+
+
+def get_correction_scheduler():
+    return _correction_scheduler

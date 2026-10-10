@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import operator_deployment, settings
 from app.core.logging import setup_logging
-from app.core.models import load_models_if_needed
+from app.core.models import load_models_if_needed, shutdown_models
 from app.api.routes.ws_online import router as ws_router
 from app.api.routes.status import router as status_router
 from app.utils.asr_stats import reset_stats
@@ -19,7 +19,10 @@ async def lifespan(app: FastAPI):
     reset_stats()
     app.state.run_start_time = datetime.utcnow()
     await load_models_if_needed()
-    yield
+    try:
+        yield
+    finally:
+        await shutdown_models()
 
 
 def create_app() -> FastAPI:

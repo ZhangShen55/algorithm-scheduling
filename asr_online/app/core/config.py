@@ -83,6 +83,49 @@ class Settings:
             raise ValueError("vad_merge_max_gap_ms 必须为正整数")
         return value
 
+    @property
+    def progressive_correction_enabled(self) -> bool:
+        value = self._cfg.get("progressive_correction_enabled", True)
+        if not isinstance(value, bool):
+            raise ValueError("progressive_correction_enabled 必须为布尔值")
+        return value
+
+    def _positive_int(self, key: str, default: int) -> int:
+        value = int(self._cfg.get(key, default))
+        if value <= 0:
+            raise ValueError(f"{key} 必须为正整数")
+        return value
+
+    @property
+    def progressive_correction_chars(self) -> int:
+        return self._positive_int("progressive_correction_chars", 8)
+
+    @property
+    def progressive_correction_audio_ms(self) -> int:
+        return self._positive_int("progressive_correction_audio_ms", 4800)
+
+    @property
+    def progressive_correction_cooldown_ms(self) -> int:
+        return self._positive_int("progressive_correction_cooldown_ms", 2000)
+
+    @property
+    def sensevoice_correction_workers(self) -> int:
+        value = self._positive_int("sensevoice_correction_workers", 1)
+        if value > 64:
+            raise ValueError("sensevoice_correction_workers 不能大于 64")
+        return value
+
+    @property
+    def correction_queue_capacity(self) -> int:
+        value = self._positive_int("correction_queue_capacity", 16)
+        if value < self.sensevoice_correction_workers:
+            raise ValueError("correction_queue_capacity 不能小于 correction worker 数")
+        return value
+
+    @property
+    def correction_task_timeout_ms(self) -> int:
+        return self._positive_int("correction_task_timeout_ms", 5000)
+
     # 在线模型路径
     @property
     def asr_online_model_dir(self) -> str:

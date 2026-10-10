@@ -11,6 +11,16 @@ ngpu = 0
 vad_max_end_silence_ms = 1000
 # VAD end 后等待短间隔新语音并合并到同一字幕段的最大间隔（毫秒）。
 vad_merge_max_gap_ms = 720
+# v1.0.3 在 finished=true 前启用 SenseVoice 中间纠正。
+progressive_correction_enabled = true
+# 稳定文本新增字符数、无纠正最大音频时长和两次提交的最短冷却时间。
+progressive_correction_chars = 8
+progressive_correction_audio_ms = 4800
+progressive_correction_cooldown_ms = 2000
+# SenseVoice 纠正 worker，不是 Uvicorn worker；每个 worker 独占一个模型实例。
+sensevoice_correction_workers = 1
+correction_queue_capacity = 16
+correction_task_timeout_ms = 5000
 
 [logging]
 # 日志级别。

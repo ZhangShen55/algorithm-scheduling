@@ -28,6 +28,7 @@ asr_online/
 │   └── status.py           # /get_status、/clear_tasks_list
 ├── core/
 │   ├── config.py           # 读取 TOML 配置
+│   ├── correction_scheduler.py # v1.0.3 有界 SenseVoice 纠正 worker 池
 │   ├── models.py           # FunASR / ModelScope 模型加载
 │   └── logging.py
 ├── utils/
@@ -142,9 +143,36 @@ v1.0.2 和 v1.0.3 在同一 WebSocket 会话中连续复用 VAD cache，并将 V
 - **路径**：`/v1.0.3/seacraft_asr_online`
 - **直连地址**：`ws://<host>:8084/v1.0.3/seacraft_asr_online`
 - **上行和基础响应字段**：与 v1.0.2 相同。
-- **临时结果**：继续使用在线 Paraformer，保持低延迟更新。
-- **最终结果**：VAD 断句后，将完整 PCM 送入 SenseVoiceSmall，并执行富文本标签清理。
+- **临时结果**：继续使用在线 Paraformer；VAD 候选 end、稳定新增 8 字或累计新增
+  4.8 秒音频时，会异步提交当前完整语句给 SenseVoiceSmall。纠正结果仍使用原 `key`
+  并返回 `finished=false`。
+- **最终结果**：VAD 断句确认后复用相同边界的 SenseVoice 结果；没有可复用结果时提交
+  final 任务。超时或模型失败时使用当前可见文本有界完成，不让字幕永久停在
+  `finished=false`。
 - **标点语义**：使用 SenseVoiceSmall 自带标点，不调用独立 PUNC 模型。
+
+中间纠正与字幕完成状态相互独立。`finished=true` 仍只表示该字幕段真正结束，不会因为
+一次中间纠正或一次尚未确认的 VAD end 提前发送。每个会话最多有一个纠正任务在途，
+后续快照采用 latest-only；连接、`key`、revision、文本版本或样本边界不匹配的旧结果会
+被丢弃。
+
+```toml
+# 是否在最终断句前执行中间纠正；false 时仍保留句末 SenseVoice 纠正。
+progressive_correction_enabled = true
+progressive_correction_chars = 8
+progressive_correction_audio_ms = 4800
+progressive_correction_cooldown_ms = 2000
+
+# 这是 SenseVoice correction worker，不是 Uvicorn worker。
+# 每个 worker 独占一个模型实例，增加该值会线性增加模型显存需求。
+sensevoice_correction_workers = 1
+correction_queue_capacity = 16
+correction_task_timeout_ms = 5000
+```
+
+Uvicorn 必须继续使用 `--workers 1`。`sensevoice_correction_workers` 可单独测试
+`1/2/4/6`；任一模型实例加载失败或 CUDA OOM 时服务会启动失败，不会静默减少 worker
+数量。队列满时允许合并或跳过中间纠正，但 final 会有界等待并保证完成语义。
 
 SenseVoice 模型通过 `config.toml` 配置并从项目内加载：
 
