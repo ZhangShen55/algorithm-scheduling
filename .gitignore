@@ -25,6 +25,8 @@ Thumbs.db
 **/build/
 **/dist/
 
+**/text_analysis/**
+
 # Logs and runtime state
 *.log
 *.log.*

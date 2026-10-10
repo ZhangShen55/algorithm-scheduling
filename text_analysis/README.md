@@ -40,6 +40,15 @@ Compose 继续管理实例 ID、服务 URL、注册 Token、`CONFIG_PATH`、端�
 `/v1/extract_keywords` 两项能力，二者共享 `256`。各接口内部的 LLM 分片、并发、重试和
 `mt_max_concurrency` 仍是本地处理约束，不派生或拆分平台注册容量。
 
+## Docker
+
+镜像构建、配置挂载、单独启动和接入平台的容器命令见
+[`docker/README.md`](docker/README.md)。以下命令从项目根目录构建镜像：
+
+```bash
+docker build -f docker/Dockerfile -t algorithm-text-analysis:local .
+```
+
 ## 不走代理
 ```bash
 NO_PROXY=10.80.5.130,localhost,127.0.0.1 \
