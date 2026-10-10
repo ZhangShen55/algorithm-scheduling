@@ -295,10 +295,4 @@ class CorrectionScheduler:
             ),
             **fields,
         }
-        logger.info(
-            json.dumps(telemetry, ensure_ascii=True, separators=(",", ":")),
-            extra={
-                "event": event,
-                **telemetry,
-            },
-        )
+        logger.info(json.dumps(telemetry, ensure_ascii=True, separators=(",", ":")))

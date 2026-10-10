@@ -5,6 +5,7 @@ import tempfile
 import unittest
 import wave
 from pathlib import Path
+from unittest.mock import patch
 
 import websockets
 
@@ -16,6 +17,22 @@ SPEC.loader.exec_module(benchmark)
 
 
 class ConcurrencyBenchmarkTests(unittest.IsolatedAsyncioTestCase):
+    def test_service_streams_conda_output_to_log(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = argparse.Namespace(
+                config=benchmark.PROJECT_ROOT / "config.toml",
+                conda="conda",
+                conda_env="asr",
+                port=8084,
+            )
+            with patch.object(benchmark.subprocess, "Popen") as popen:
+                _, output, _ = benchmark.start_service(args, 1, root)
+                command = popen.call_args.args[0]
+                output.close()
+
+        self.assertIn("--no-capture-output", command)
+
     def test_worker_config_is_rewritten_and_parsed(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "config.toml"

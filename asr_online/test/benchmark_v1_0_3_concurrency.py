@@ -561,6 +561,7 @@ def start_service(args, workers, worker_dir):
     command = [
         args.conda,
         "run",
+        "--no-capture-output",
         "-n",
         args.conda_env,
         "python",

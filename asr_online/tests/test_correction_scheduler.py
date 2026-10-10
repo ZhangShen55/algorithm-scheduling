@@ -1,4 +1,5 @@
 import asyncio
+import json
 import threading
 import unittest
 
@@ -57,6 +58,16 @@ def snapshot(
 
 
 class CorrectionSchedulerTests(unittest.IsolatedAsyncioTestCase):
+    def test_structured_telemetry_avoids_reserved_log_record_fields(self):
+        scheduler = CorrectionScheduler([RecordingModel()], 1, 0.1)
+
+        with self.assertLogs("app.core.correction_scheduler", level="INFO") as captured:
+            scheduler._log("correction_submitted", snapshot("session", 1, 1))
+
+        payload = json.loads(captured.records[0].getMessage())
+        self.assertEqual(payload["name"], "correction_submitted")
+        self.assertEqual(payload["connection_id"], "session")
+
     async def test_latest_only_keeps_one_active_and_newest_pending(self):
         model = BlockingModel()
         scheduler = CorrectionScheduler([model], 4, 0.2)
