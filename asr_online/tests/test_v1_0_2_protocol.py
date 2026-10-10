@@ -623,6 +623,42 @@ class V1_0_2ProtocolTests(unittest.TestCase):
         self.assertEqual([item.trigger for item in scheduler.submissions], ["vad_candidate_end"])
         self.assertEqual(len(scheduler.unregistered), 1)
 
+    def test_v3_resubmits_final_when_text_advances_after_candidate_correction(self):
+        online = StableOnlineModel(["一", "一二", "一二三", "一二四"])
+        vad = ScriptedVadModel([[[0, -1]], [[-1, 1000]], [], []])
+        scheduler = ImmediateCorrectionScheduler(text="更新纠正。")
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(ws_online, "get_online_model", return_value=online))
+            stack.enter_context(patch.object(ws_online, "get_vad_model", return_value=vad))
+            stack.enter_context(patch.object(ws_online, "get_sensevoice_model", return_value=None))
+            stack.enter_context(
+                patch.object(ws_online, "get_correction_scheduler", return_value=scheduler)
+            )
+            with TestClient(self.app) as client:
+                with client.websocket_connect("/v1.0.3/seacraft_asr_online") as websocket:
+                    for _ in range(2):
+                        websocket.send_bytes(b"\x01\x00" * 7680)
+                        websocket.receive_json()
+                    websocket.send_bytes(b"\x01\x00" * 7680)
+                    intermediate = websocket.receive_json()
+                    websocket.receive_json()
+                    websocket.send_bytes(b"\x01\x00" * 7680)
+                    final = websocket.receive_json()
+                    websocket.receive_json()
+
+        self.assertFalse(intermediate["finished"])
+        self.assertTrue(final["finished"])
+        self.assertEqual(final["text"], "更新纠正。")
+        self.assertEqual(
+            [item.kind for item in scheduler.submissions],
+            ["intermediate", "final"],
+        )
+        self.assertGreater(
+            scheduler.submissions[1].text_version,
+            scheduler.submissions[0].text_version,
+        )
+
     def test_v3_can_disable_intermediate_correction_but_keeps_final(self):
         online = StableOnlineModel()
         vad = ScriptedVadModel([[[0, -1]], [[-1, 400]], []])

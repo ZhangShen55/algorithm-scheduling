@@ -968,7 +968,11 @@ async def _run_progressive_session(ws: WebSocket):
             await drain_correction_results(send_intermediate=False)
             final_text = cached_correction(end_sample)
             submitted = submitted_corrections.get(end_sample)
-            revision_id = submitted[0] if submitted is not None else None
+            revision_id = (
+                submitted[0]
+                if submitted is not None and submitted[1] == text_version
+                else None
+            )
             if not final_text and revision_id is None:
                 revision_id = await submit_correction(
                     end_sample, "final", "segment_finalize"
