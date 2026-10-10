@@ -658,6 +658,8 @@ class V1_0_2ProtocolTests(unittest.TestCase):
             scheduler.submissions[1].text_version,
             scheduler.submissions[0].text_version,
         )
+        self.assertTrue(vad.calls)
+        self.assertTrue(all(call["chunk_size"] == 240 for call in vad.calls))
 
     def test_v3_can_disable_intermediate_correction_but_keeps_final(self):
         online = StableOnlineModel()

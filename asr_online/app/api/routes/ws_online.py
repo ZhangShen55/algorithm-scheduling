@@ -650,7 +650,10 @@ async def _run_progressive_session(ws: WebSocket):
     chunk_size = [4, 8, 4]
     encoder_chunk_look_back = 4
     decoder_chunk_look_back = 1
-    vad_chunk_ms = 200
+    # 480 ms input splits exactly into two windows. This keeps FunASR's
+    # streaming state while preventing its remainder buffer from reprocessing
+    # already-consumed samples when the window does not divide the input block.
+    vad_chunk_ms = 240
     segment_seq = 0
     segment_key = None
     segment_text = ""
