@@ -128,6 +128,15 @@ asr_online_correction_model_dir = "model/speech_seaco_paraformer_large_asr_nat-z
 
 未配置纠正模型时，v1.0.2 会在句末使用 fresh cache 对完整语音段再次调用在线模型，作为可运行的回放兜底。
 
+v1.0.2 和 v1.0.3 在同一 WebSocket 会话中连续复用 VAD cache，并将 VAD 的毫秒级
+起止时间换算为会话绝对样本位置。自然断点后的 PCM 继续保留到 pending buffer；
+确认下一句起点后，纠正输入向前保留 150 ms pre-roll，但响应 `bg` 仍使用真实 VAD
+起点。单段达到 42 个块（约 20.16 秒）时会强制完成，空闲 pending PCM 最多保留
+6 秒。`vad_max_end_silence_ms` 默认是 1000，可在项目根 `config.toml` 调整；每个自然
+断点先进入候选状态；候选结束后若在 `vad_merge_max_gap_ms`（默认 720 ms）内检测到新
+语音，则继续复用原 `key` 合并识别，否则发送一次对应的 `finished=true`。达到最大段长时
+仍立即保护切段，请求和响应格式保持不变。
+
 ### WebSocket v1.0.3（SenseVoice 实验接口）
 
 - **路径**：`/v1.0.3/seacraft_asr_online`

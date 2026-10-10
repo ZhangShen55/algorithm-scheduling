@@ -1,4 +1,5 @@
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -45,6 +46,28 @@ class ModelPathConfigTests(unittest.TestCase):
                 / "model"
                 / "speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
             )
+
+    def test_vad_end_silence_is_configurable_and_must_be_positive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text("vad_max_end_silence_ms = 1200\n", encoding="utf-8")
+            settings = Settings(config_path=str(config_path))
+            self.assertEqual(settings.vad_max_end_silence_ms, 1200)
+
+            config_path.write_text("vad_max_end_silence_ms = 0\n", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                _ = settings.vad_max_end_silence_ms
+
+    def test_vad_merge_gap_is_configurable_and_must_be_positive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text("vad_merge_max_gap_ms = 900\n", encoding="utf-8")
+            settings = Settings(config_path=str(config_path))
+            self.assertEqual(settings.vad_merge_max_gap_ms, 900)
+
+            config_path.write_text("vad_merge_max_gap_ms = 0\n", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                _ = settings.vad_merge_max_gap_ms
 
 
 if __name__ == "__main__":

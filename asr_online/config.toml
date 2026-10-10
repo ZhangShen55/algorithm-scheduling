@@ -7,10 +7,14 @@ version = "seacraft-asr-online-v1.0.0"
 device = "cpu"
 # 使用gpu数量的参数，1：表示使用1张GPU，如果使用GPU，默认为1，CPU为0
 ngpu = 0
+# v1.0.2/v1.0.3 VAD 确认话段结束所需的尾部静音时长（毫秒）。
+vad_max_end_silence_ms = 1000
+# VAD end 后等待短间隔新语音并合并到同一字幕段的最大间隔（毫秒）。
+vad_merge_max_gap_ms = 720
 
 [logging]
 # 日志级别。
-level = "DEBUG"
+level = "INFO"
 # 相对项目根的日志目录；未挂载时写入容器内该目录。
 directory = "logs"
 # 当前实例日志文件名。

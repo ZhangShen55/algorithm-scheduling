@@ -69,6 +69,20 @@ class Settings:
     def ngpu(self) -> int:
         return int(self._cfg.get("ngpu", 1))
 
+    @property
+    def vad_max_end_silence_ms(self) -> int:
+        value = int(self._cfg.get("vad_max_end_silence_ms", 1000))
+        if value <= 0:
+            raise ValueError("vad_max_end_silence_ms 必须为正整数")
+        return value
+
+    @property
+    def vad_merge_max_gap_ms(self) -> int:
+        value = int(self._cfg.get("vad_merge_max_gap_ms", 720))
+        if value <= 0:
+            raise ValueError("vad_merge_max_gap_ms 必须为正整数")
+        return value
+
     # 在线模型路径
     @property
     def asr_online_model_dir(self) -> str:
