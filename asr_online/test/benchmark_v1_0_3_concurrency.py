@@ -191,9 +191,14 @@ async def run_client(
                         continue
                     if set(response) != EXPECTED_FIELDS:
                         state.protocol_errors.append("response_fields")
-                    latency = response_latency(state, float(response.get("ed", 0)), received_at)
+                    response_ed = float(response.get("ed", 0))
+                    advances_partial_timeline = (
+                        response.get("finished") is not True
+                        and response_ed > state.last_response_ed
+                    )
+                    latency = response_latency(state, response_ed, received_at)
                     state.last_response_ed = max(
-                        state.last_response_ed, float(response.get("ed", 0))
+                        state.last_response_ed, response_ed
                     )
                     if state.observe_backlog(received_at):
                         state.failure = "audio_backlog_over_60s_for_30s"
@@ -214,7 +219,7 @@ async def run_client(
                             state.timestamp_overlaps += 1
                         state.previous_finished_bg = bg
                         state.previous_finished_ed = ed
-                    elif latency is not None:
+                    elif advances_partial_timeline and latency is not None:
                         state.partial_latencies.append(latency)
                     await writer.write(
                         {
@@ -361,6 +366,7 @@ def summarize_service_events(events, raw_text, audio_seconds, concurrency):
     for item in events:
         by_event.setdefault(item.get("event"), []).append(item)
     correction_visible = by_event.get("correction_visible", [])
+    finished_visible = by_event.get("finished_visible", [])
     correction_completed = by_event.get("correction_completed", [])
     model_events = by_event.get("v3_model_inference", [])
     online = [item for item in model_events if item.get("model_name") == "online"]
@@ -373,6 +379,9 @@ def summarize_service_events(events, raw_text, audio_seconds, concurrency):
     return {
         "correction_visible": distribution(
             [float(item["visible_ms"]) / 1000 for item in correction_visible if "visible_ms" in item]
+        ),
+        "finished_visible": distribution(
+            [float(item["visible_ms"]) / 1000 for item in finished_visible if "visible_ms" in item]
         ),
         "correction_queue": distribution(
             [float(item["queue_ms"]) / 1000 for item in correction_completed if "queue_ms" in item]
@@ -456,7 +465,9 @@ async def run_point(args, process=None, process_group=None, service_log=None):
         events, raw_service_text, audio_seconds, args.concurrency
     )
     partial_latencies = [value for state in states for value in state.partial_latencies]
-    finished_latencies = [value for state in states for value in state.finished_latencies]
+    finished_end_to_end_latencies = [
+        value for state in states for value in state.finished_latencies
+    ]
     complete_clients = sum(state.sent_chunks == len(chunks) for state in states)
     failed_clients = sum(state.failure is not None for state in states)
     protocol_errors = sum(len(state.protocol_errors) for state in states)
@@ -465,7 +476,12 @@ async def run_point(args, process=None, process_group=None, service_log=None):
         for state in states
     )
     partial = distribution(partial_latencies)
-    finished = distribution(finished_latencies)
+    finished_end_to_end = distribution(finished_end_to_end_latencies)
+    finished = (
+        service["finished_visible"]
+        if service["finished_visible"]["count"]
+        else finished_end_to_end
+    )
     correction = service["correction_visible"]
     realtime_failures = []
     if complete_clients != args.concurrency:
@@ -499,6 +515,7 @@ async def run_point(args, process=None, process_group=None, service_log=None):
         "finished": sum(state.finished for state in states),
         "partial_latency": partial,
         "finished_latency": finished,
+        "finished_end_to_end_latency": finished_end_to_end,
         "service": service,
         "protocol_errors": protocol_errors,
         "timestamp_errors": timestamp_errors,

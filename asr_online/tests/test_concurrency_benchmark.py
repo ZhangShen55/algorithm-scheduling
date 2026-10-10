@@ -50,11 +50,13 @@ class ConcurrencyBenchmarkTests(unittest.IsolatedAsyncioTestCase):
             {"event": "v3_model_inference", "model_name": "vad", "inference_ms": 50},
             {"event": "correction_completed", "inference_ms": 200, "queue_ms": 20},
             {"event": "correction_visible", "visible_ms": 250},
+            {"event": "finished_visible", "visible_ms": 300},
             {"event": "correction_stale"},
         ]
         summary = benchmark.summarize_service_events(events, "", 10, 1)
 
         self.assertEqual(summary["correction_visible"]["p95"], 0.25)
+        self.assertEqual(summary["finished_visible"]["p95"], 0.3)
         self.assertEqual(summary["stale"], 1)
         self.assertEqual(summary["compute_rtf"], 0.035)
 
@@ -82,18 +84,16 @@ class ConcurrencyBenchmarkTests(unittest.IsolatedAsyncioTestCase):
             try:
                 async for _ in websocket:
                     index += 1
-                    await websocket.send(
-                        json.dumps(
-                            {
-                                "key": "segment-000001",
-                                "text": "测试",
-                                "finished": False,
-                                "bg": 0.0,
-                                "ed": round(index * benchmark.CHUNK_SECONDS, 2),
-                            },
-                            ensure_ascii=False,
-                        )
-                    )
+                    response = {
+                        "key": "segment-000001",
+                        "text": "测试",
+                        "finished": False,
+                        "bg": 0.0,
+                        "ed": round(index * benchmark.CHUNK_SECONDS, 2),
+                    }
+                    await websocket.send(json.dumps(response, ensure_ascii=False))
+                    response["text"] = "测试。"
+                    await websocket.send(json.dumps(response, ensure_ascii=False))
             except websockets.ConnectionClosed:
                 pass
 
@@ -124,7 +124,8 @@ class ConcurrencyBenchmarkTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(summary["complete_clients"], 2)
             self.assertEqual(summary["failed_clients"], 0)
-            self.assertEqual(summary["responses"], 4)
+            self.assertEqual(summary["responses"], 8)
+            self.assertEqual(summary["partial_latency"]["count"], 4)
             self.assertEqual(summary["protocol_errors"], 0)
         finally:
             server.close()

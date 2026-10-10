@@ -951,6 +951,7 @@ async def _run_progressive_session(ws: WebSocket):
         nonlocal segment_key, segment_text, last_finished_ed
         if segment_key is None or segment_audio_start_sample is None:
             return True
+        finalize_started_at = time.monotonic()
         end_sample = max(
             segment_audio_start_sample,
             min(received_samples, end_sample),
@@ -1025,6 +1026,14 @@ async def _run_progressive_session(ws: WebSocket):
         )
         if sent:
             last_finished_ed = final_ed
+            _log_telemetry(
+                logging.INFO,
+                "finished_visible",
+                connection_id=connection_id,
+                segment_key=segment_key,
+                end_sample=end_sample,
+                visible_ms=round((time.monotonic() - finalize_started_at) * 1000, 3),
+            )
         trim_pcm_before(max(0, end_sample - _PRE_ROLL_SAMPLES))
         reset_segment()
         if force_vad_reset:
