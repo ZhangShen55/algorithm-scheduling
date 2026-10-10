@@ -5,7 +5,7 @@ import tempfile
 import unittest
 import wave
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import websockets
 
@@ -44,21 +44,73 @@ class ConcurrencyBenchmarkTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("sensevoice_correction_workers = 6", content)
         self.assertEqual(content.count("sensevoice_correction_workers ="), 1)
 
+    def test_listener_pids_only_returns_port_owners(self):
+        completed = benchmark.subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                'LISTEN 0 2048 127.0.0.1:8084 0.0.0.0:* '
+                'users:(("python",pid=1234,fd=59),("python",pid=5678,fd=60))\n'
+            ),
+            stderr="",
+        )
+        with patch.object(benchmark.subprocess, "run", return_value=completed):
+            pids = benchmark.listener_pids(8084)
+
+        self.assertEqual(pids, {1234, 5678})
+
+    async def test_wait_ready_ignores_listener_outside_new_process_group(self):
+        process = Mock()
+        process.poll.return_value = None
+        response = Mock(status=200)
+        with (
+            patch.object(benchmark.urllib.request, "urlopen", return_value=response),
+            patch.object(
+                benchmark,
+                "process_group_stats",
+                return_value={"pids": [1234]},
+            ),
+            patch.object(
+                benchmark,
+                "listener_pids",
+                side_effect=[{9999}, {1234}, {1234}],
+            ) as listeners,
+            patch.object(benchmark.asyncio, "sleep", return_value=None),
+        ):
+            ready, reason = await benchmark.wait_ready(
+                process,
+                1234,
+                "ws://127.0.0.1:8084/v1.0.3/seacraft_asr_online",
+                5,
+            )
+
+        self.assertTrue(ready)
+        self.assertIsNone(reason)
+        self.assertEqual(listeners.call_count, 3)
+
     def test_service_event_summary_calculates_correction_and_rtf_metrics(self):
         events = [
             {"event": "v3_model_inference", "model_name": "online", "inference_ms": 100},
             {"event": "v3_model_inference", "model_name": "vad", "inference_ms": 50},
-            {"event": "correction_completed", "inference_ms": 200, "queue_ms": 20},
+            {
+                "event": "correction_completed",
+                "inference_ms": 200,
+                "queue_ms": 20,
+                "queue_depth": 2,
+                "inflight": 3,
+            },
             {"event": "correction_visible", "visible_ms": 250},
             {"event": "finished_visible", "visible_ms": 300},
             {"event": "correction_stale"},
         ]
-        summary = benchmark.summarize_service_events(events, "", 10, 1)
+        summary = benchmark.summarize_service_events(events, "", 10)
 
         self.assertEqual(summary["correction_visible"]["p95"], 0.25)
         self.assertEqual(summary["finished_visible"]["p95"], 0.3)
         self.assertEqual(summary["stale"], 1)
         self.assertEqual(summary["compute_rtf"], 0.035)
+        self.assertEqual(summary["queue_depth_average"], 2.0)
+        self.assertEqual(summary["inflight_average"], 3.0)
 
     def test_service_event_reader_decodes_telemetry_from_installed_formatter(self):
         telemetry = {

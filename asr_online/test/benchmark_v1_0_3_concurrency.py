@@ -3,6 +3,7 @@ import asyncio
 import json
 import math
 import os
+import re
 import signal
 import subprocess
 import time
@@ -11,6 +12,7 @@ import urllib.request
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 import websockets
 from websockets.exceptions import ConnectionClosed
@@ -288,6 +290,18 @@ def process_group_stats(process_group: int | None):
     return {"rss_kib": rss, "cpu_percent": round(cpu, 3), "pids": pids}
 
 
+def listener_pids(port: int):
+    result = subprocess.run(
+        ["ss", "-ltnp", f"sport = :{port}"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return set()
+    return {int(value) for value in re.findall(r"pid=(\d+)", result.stdout)}
+
+
 def gpu_stats():
     try:
         gpu = subprocess.run(
@@ -363,7 +377,7 @@ def read_service_events(path: Path | None, offset: int):
     return events, raw_text
 
 
-def summarize_service_events(events, raw_text, audio_seconds, concurrency):
+def summarize_service_events(events, raw_text, total_audio_seconds):
     by_event = {}
     for item in events:
         by_event.setdefault(item.get("event"), []).append(item)
@@ -377,7 +391,9 @@ def summarize_service_events(events, raw_text, audio_seconds, concurrency):
         float(item.get("inference_ms", 0)) / 1000
         for item in model_events + correction_completed
     )
-    total_audio = max(audio_seconds * concurrency, 0.001)
+    queue_depths = [int(item["queue_depth"]) for item in events if "queue_depth" in item]
+    inflight_counts = [int(item["inflight"]) for item in events if "inflight" in item]
+    total_audio = max(total_audio_seconds, 0.001)
     return {
         "correction_visible": distribution(
             [float(item["visible_ms"]) / 1000 for item in correction_visible if "visible_ms" in item]
@@ -398,10 +414,18 @@ def summarize_service_events(events, raw_text, audio_seconds, concurrency):
             [float(item["queue_ms"]) / 1000 for item in vad if "queue_ms" in item]
         ),
         "queue_depth_max": max(
-            (int(item.get("queue_depth", 0)) for item in events), default=0
+            queue_depths, default=0
+        ),
+        "queue_depth_average": (
+            round(sum(queue_depths) / len(queue_depths), 6) if queue_depths else 0.0
         ),
         "inflight_max": max(
-            (int(item.get("inflight", 0)) for item in events), default=0
+            inflight_counts, default=0
+        ),
+        "inflight_average": (
+            round(sum(inflight_counts) / len(inflight_counts), 6)
+            if inflight_counts
+            else 0.0
         ),
         "stale": len(by_event.get("correction_stale", [])),
         "degraded": len(by_event.get("correction_degraded", [])),
@@ -463,9 +487,8 @@ async def run_point(args, process=None, process_group=None, service_log=None):
         writer.close()
 
     events, raw_service_text = read_service_events(service_log, service_offset)
-    service = summarize_service_events(
-        events, raw_service_text, audio_seconds, args.concurrency
-    )
+    sent_audio_seconds = sum(state.sent_chunks for state in states) * CHUNK_SECONDS
+    service = summarize_service_events(events, raw_service_text, sent_audio_seconds)
     partial_latencies = [value for state in states for value in state.partial_latencies]
     finished_end_to_end_latencies = [
         value for state in states for value in state.finished_latencies
@@ -605,18 +628,26 @@ def start_service(args, workers, worker_dir):
     return process, output, service_log
 
 
-async def wait_ready(process, url, timeout):
+async def wait_ready(process, process_group, url, timeout):
     deadline = time.monotonic() + timeout
     status_url = url.replace("ws://", "http://").split("/v1.0.3", 1)[0] + "/get_status"
+    port = urlparse(url).port or 80
+    consecutive_ready = 0
     while time.monotonic() < deadline:
         if process.poll() is not None:
             return False, f"service_exit:{process.returncode}"
         try:
             response = await asyncio.to_thread(urllib.request.urlopen, status_url, timeout=2)
-            if response.status == 200:
-                return True, None
+            group_pids = set(process_group_stats(process_group)["pids"])
+            owns_listener = bool(listener_pids(port) & group_pids)
+            if response.status == 200 and owns_listener:
+                consecutive_ready += 1
+                if consecutive_ready >= 2:
+                    return True, None
+            else:
+                consecutive_ready = 0
         except Exception:
-            pass
+            consecutive_ready = 0
         await asyncio.sleep(2)
     return False, "startup_timeout"
 
@@ -703,7 +734,13 @@ async def run_matrix(args):
         worker_dir.mkdir(parents=True, exist_ok=True)
         process, output, service_log = start_service(args, workers, worker_dir)
         try:
-            ready, reason = await wait_ready(process, args.url, args.startup_timeout)
+            process_group = os.getpgid(process.pid)
+            ready, reason = await wait_ready(
+                process,
+                process_group,
+                args.url,
+                args.startup_timeout,
+            )
             if not ready:
                 for concurrency in concurrency_values:
                     matrix["points"].append(
@@ -715,7 +752,6 @@ async def run_matrix(args):
                         }
                     )
                 continue
-            process_group = os.getpgid(process.pid)
             worker_points = []
             for concurrency in concurrency_values:
                 point_args = argparse.Namespace(**vars(args))
