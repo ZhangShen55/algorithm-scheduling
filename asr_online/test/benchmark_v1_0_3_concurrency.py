@@ -196,6 +196,8 @@ async def run_client(
                         response.get("finished") is not True
                         and response_ed > state.last_response_ed
                     )
+                    if response_ed < state.last_response_ed:
+                        state.timestamp_backwards += 1
                     latency = response_latency(state, response_ed, received_at)
                     state.last_response_ed = max(
                         state.last_response_ed, response_ed

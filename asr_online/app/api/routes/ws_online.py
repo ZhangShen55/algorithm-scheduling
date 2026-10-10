@@ -665,6 +665,7 @@ async def _run_progressive_session(ws: WebSocket):
     pcm_buffer_start_sample = 0
     received_samples = 0
     last_finished_ed = 0.0
+    last_sent_ed = 0.0
     connection_closed = False
 
     correction_revision = 0
@@ -699,10 +700,11 @@ async def _run_progressive_session(ws: WebSocket):
         return result
 
     async def send_result(text: str, finished: bool, bg: float, ed: float, key: str):
-        nonlocal connection_closed
+        nonlocal connection_closed, last_sent_ed
         if connection_closed or ws.client_state.name != "CONNECTED":
             connection_closed = True
             return False
+        ed = max(last_sent_ed, ed)
         try:
             await ws.send_json(
                 {
@@ -716,6 +718,7 @@ async def _run_progressive_session(ws: WebSocket):
         except (RuntimeError, WebSocketDisconnect):
             connection_closed = True
             return False
+        last_sent_ed = ed
         return True
 
     def reset_segment():
@@ -1161,31 +1164,6 @@ async def _run_progressive_session(ws: WebSocket):
                 if text_changed:
                     text_version += 1
 
-            bg = round(
-                segment_vad_start_sample / _SAMPLE_RATE
-                if segment_vad_start_sample is not None
-                else chunk_start_sample / _SAMPLE_RATE,
-                2,
-            )
-            ed = round(chunk_end_sample / _SAMPLE_RATE, 2)
-            if segment_key is None:
-                sent = await send_result(
-                    "", False, ed, ed, f"segment-{segment_seq + 1:06d}"
-                )
-            else:
-                visible_text = (
-                    segment_text
-                    if text_changed
-                    else last_visible_text or segment_text
-                )
-                sent = await send_result(
-                    visible_text, False, bg, ed, segment_key
-                )
-                if sent and text_changed:
-                    last_visible_text = segment_text
-            if not sent:
-                break
-
             if valid_end_samples and segment_key is not None:
                 valid_end_samples = [
                     sample
@@ -1214,6 +1192,36 @@ async def _run_progressive_session(ws: WebSocket):
                         "intermediate",
                         "vad_candidate_end",
                     )
+
+            bg = round(
+                segment_vad_start_sample / _SAMPLE_RATE
+                if segment_vad_start_sample is not None
+                else chunk_start_sample / _SAMPLE_RATE,
+                2,
+            )
+            display_end_sample = (
+                candidate_end_sample
+                if candidate_end_sample is not None
+                else chunk_end_sample
+            )
+            ed = round(display_end_sample / _SAMPLE_RATE, 2)
+            if segment_key is None:
+                sent = await send_result(
+                    "", False, ed, ed, f"segment-{segment_seq + 1:06d}"
+                )
+            else:
+                visible_text = (
+                    segment_text
+                    if text_changed
+                    else last_visible_text or segment_text
+                )
+                sent = await send_result(
+                    visible_text, False, bg, ed, segment_key
+                )
+                if sent and text_changed:
+                    last_visible_text = segment_text
+            if not sent:
+                break
 
             if (
                 scheduler is not None

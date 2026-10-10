@@ -637,15 +637,16 @@ class V1_0_2ProtocolTests(unittest.TestCase):
             )
             with TestClient(self.app) as client:
                 with client.websocket_connect("/v1.0.3/seacraft_asr_online") as websocket:
+                    responses = []
                     for _ in range(2):
                         websocket.send_bytes(b"\x01\x00" * 7680)
-                        websocket.receive_json()
+                        responses.append(websocket.receive_json())
                     websocket.send_bytes(b"\x01\x00" * 7680)
                     intermediate = websocket.receive_json()
-                    websocket.receive_json()
+                    responses.extend([intermediate, websocket.receive_json()])
                     websocket.send_bytes(b"\x01\x00" * 7680)
                     final = websocket.receive_json()
-                    websocket.receive_json()
+                    responses.extend([final, websocket.receive_json()])
 
         self.assertFalse(intermediate["finished"])
         self.assertTrue(final["finished"])
@@ -660,6 +661,10 @@ class V1_0_2ProtocolTests(unittest.TestCase):
         )
         self.assertTrue(vad.calls)
         self.assertTrue(all(call["chunk_size"] == 240 for call in vad.calls))
+        self.assertEqual(
+            [response["ed"] for response in responses],
+            sorted(response["ed"] for response in responses),
+        )
 
     def test_v3_can_disable_intermediate_correction_but_keeps_final(self):
         online = StableOnlineModel()
