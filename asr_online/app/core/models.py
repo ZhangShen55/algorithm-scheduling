@@ -22,26 +22,52 @@ def require_gpu_enabled() -> bool:
     return operator_deployment.runtime.require_gpu
 
 
-def resolve_runtime_device() -> torch.device:
-    configured = settings.device.strip().lower()
+def _resolve_device(
+    configured: str,
+    ngpu: int,
+    *,
+    label: str,
+    require_gpu: bool,
+) -> torch.device:
+    configured = configured.strip().lower()
     if configured == "cpu":
-        if require_gpu_enabled():
-            raise RuntimeError("部署要求使用 GPU，但算子配置不是 cuda:<index>")
+        if require_gpu:
+            raise RuntimeError(f"部署要求使用 GPU，但{label}配置不是 cuda:<index>")
         return torch.device("cpu")
     if not configured.startswith("cuda:") or not configured[5:].isdigit():
-        raise RuntimeError("在线 ASR device 必须是 cpu 或 cuda:<index>")
+        raise RuntimeError(f"{label} device 必须是 cpu 或 cuda:<index>")
 
     index = int(configured[5:])
-    if settings.ngpu != 1:
-        raise RuntimeError("在线 ASR 使用 CUDA 时 ngpu 必须为 1")
+    if ngpu != 1:
+        raise RuntimeError(f"{label}使用 CUDA 时 ngpu 必须为 1")
     if not torch.cuda.is_available():
-        raise RuntimeError(f"算子要求使用 GPU {configured}，但 CUDA 不可用")
+        raise RuntimeError(f"{label}要求使用 GPU {configured}，但 CUDA 不可用")
     visible_count = torch.cuda.device_count()
     if index >= visible_count:
         raise RuntimeError(
-            f"GPU 设备 {configured} 索引越界，可见 CUDA 设备数量为 {visible_count}"
+            f"{label}设备 {configured} 索引越界，可见 CUDA 设备数量为 {visible_count}"
         )
     return torch.device(configured)
+
+
+def resolve_runtime_device() -> torch.device:
+    return _resolve_device(
+        settings.device,
+        settings.ngpu,
+        label="在线 ASR",
+        require_gpu=require_gpu_enabled(),
+    )
+
+
+def resolve_sensevoice_device() -> torch.device:
+    configured = settings.sensevoice_correction_device
+    correction_ngpu = 0 if configured == "cpu" else 1
+    return _resolve_device(
+        configured,
+        correction_ngpu,
+        label="SenseVoice 纠正",
+        require_gpu=require_gpu_enabled(),
+    )
 
 
 def device() -> torch.device:
@@ -53,53 +79,55 @@ async def load_models_if_needed():
     global _model_sensevoice, _sensevoice_models, _correction_scheduler
 
     async with _model_lock:
-        resolve_runtime_device()
+        try:
+            resolve_runtime_device()
 
-        if _model_online is None:
-            _model_online = AutoModel(
-                model=prepare_decrypted_model_dir(settings.asr_online_model_dir),
-                device=settings.device,
-                ngpu=settings.ngpu,
-                disable_update=True,
-                disable_pbar=True,
-            )
+            if _model_online is None:
+                _model_online = AutoModel(
+                    model=prepare_decrypted_model_dir(settings.asr_online_model_dir),
+                    device=settings.device,
+                    ngpu=settings.ngpu,
+                    disable_update=True,
+                    disable_pbar=True,
+                )
 
-        if _punct_pipeline is None:
-            _punct_pipeline = pipeline(
-                task=Tasks.punctuation,
-                model=prepare_decrypted_model_dir(settings.asr_online_punc_model_dir),
-                disable_update=True,
-                device=settings.device,
-            )
+            if _punct_pipeline is None:
+                _punct_pipeline = pipeline(
+                    task=Tasks.punctuation,
+                    model=prepare_decrypted_model_dir(settings.asr_online_punc_model_dir),
+                    disable_update=True,
+                    device=settings.device,
+                )
 
-        if settings.vad_model_dir and _model_vad is None:
-            _model_vad = AutoModel(
-                model=prepare_decrypted_model_dir(settings.vad_model_dir),
-                device=settings.device,
-                ngpu=settings.ngpu,
-                disable_update=True,
-                disable_pbar=True,
-            )
+            if settings.vad_model_dir and _model_vad is None:
+                _model_vad = AutoModel(
+                    model=prepare_decrypted_model_dir(settings.vad_model_dir),
+                    device=settings.device,
+                    ngpu=settings.ngpu,
+                    disable_update=True,
+                    disable_pbar=True,
+                )
 
-        if settings.correction_model_dir and _model_correction is None:
-            _model_correction = AutoModel(
-                model=prepare_decrypted_model_dir(settings.correction_model_dir),
-                device=settings.device,
-                ngpu=settings.ngpu,
-                disable_update=True,
-                disable_pbar=True,
-            )
+            if settings.correction_model_dir and _model_correction is None:
+                _model_correction = AutoModel(
+                    model=prepare_decrypted_model_dir(settings.correction_model_dir),
+                    device=settings.device,
+                    ngpu=settings.ngpu,
+                    disable_update=True,
+                    disable_pbar=True,
+                )
 
-        if settings.sensevoice_model_dir and _correction_scheduler is None:
-            model_dir = prepare_decrypted_model_dir(settings.sensevoice_model_dir)
-            loaded_models = []
-            try:
+            if settings.sensevoice_model_dir and _correction_scheduler is None:
+                correction_device = str(resolve_sensevoice_device())
+                correction_ngpu = 0 if correction_device == "cpu" else 1
+                model_dir = prepare_decrypted_model_dir(settings.sensevoice_model_dir)
+                loaded_models = []
                 for _ in range(settings.sensevoice_correction_workers):
                     loaded_models.append(
                         AutoModel(
                             model=model_dir,
-                            device=settings.device,
-                            ngpu=settings.ngpu,
+                            device=correction_device,
+                            ngpu=correction_ngpu,
                             disable_update=True,
                             disable_pbar=True,
                         )
@@ -110,25 +138,33 @@ async def load_models_if_needed():
                     submit_timeout_seconds=settings.correction_task_timeout_ms / 1000,
                 )
                 await scheduler.start()
-            except Exception:
-                loaded_models.clear()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                raise
-            _sensevoice_models = loaded_models
-            _model_sensevoice = loaded_models[0]
-            _correction_scheduler = scheduler
+                _sensevoice_models = loaded_models
+                _model_sensevoice = loaded_models[0]
+                _correction_scheduler = scheduler
+        except Exception:
+            await _release_models()
+            raise
 
 
-async def shutdown_models():
+async def _release_models():
+    global _model_online, _punct_pipeline, _model_vad, _model_correction
     global _model_sensevoice, _sensevoice_models, _correction_scheduler
     if _correction_scheduler is not None:
         await _correction_scheduler.close()
     _correction_scheduler = None
     _model_sensevoice = None
     _sensevoice_models = []
+    _model_online = None
+    _punct_pipeline = None
+    _model_vad = None
+    _model_correction = None
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+
+
+async def shutdown_models():
+    async with _model_lock:
+        await _release_models()
 
 
 def get_online_model():

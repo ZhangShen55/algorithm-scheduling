@@ -82,6 +82,12 @@ class ModelPathConfigTests(unittest.TestCase):
             self.assertEqual(settings.sensevoice_correction_workers, 1)
             self.assertEqual(settings.correction_queue_capacity, 16)
             self.assertEqual(settings.correction_task_timeout_ms, 5000)
+            self.assertEqual(settings.sensevoice_correction_device, "cuda:0")
+            self.assertEqual(settings.v4_final_budget_ms, 100)
+            self.assertEqual(settings.v4_max_segment_seconds, 20)
+            self.assertEqual(settings.v4_partial_punctuation_chars, 8)
+            self.assertEqual(settings.v4_partial_punctuation_interval_ms, 2000)
+            self.assertEqual(settings.v4_correction_queue_capacity, 8)
 
     def test_progressive_correction_configuration_is_validated(self):
         invalid_configs = (
@@ -111,6 +117,48 @@ class ModelPathConfigTests(unittest.TestCase):
                 settings = Settings(config_path=str(config_path))
                 with self.subTest(content=content), self.assertRaises(ValueError):
                     getattr(settings, property_name)
+
+    def test_v4_configuration_is_validated(self):
+        invalid_configs = (
+            "v4_final_budget_ms = 0\n",
+            "v4_final_budget_ms = 101\n",
+            "v4_max_segment_seconds = 0\n",
+            "v4_max_segment_seconds = 121\n",
+            "v4_partial_punctuation_chars = 0\n",
+            "v4_partial_punctuation_interval_ms = 0\n",
+            "v4_correction_queue_capacity = 0\n",
+            "correction_queue_capacity = 4\nv4_correction_queue_capacity = 5\n",
+            'sensevoice_correction_device = ""\n',
+        )
+        properties = (
+            "v4_final_budget_ms",
+            "v4_final_budget_ms",
+            "v4_max_segment_seconds",
+            "v4_max_segment_seconds",
+            "v4_partial_punctuation_chars",
+            "v4_partial_punctuation_interval_ms",
+            "v4_correction_queue_capacity",
+            "v4_correction_queue_capacity",
+            "sensevoice_correction_device",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            for content, property_name in zip(invalid_configs, properties):
+                config_path.write_text(content, encoding="utf-8")
+                settings = Settings(config_path=str(config_path))
+                with self.subTest(content=content), self.assertRaises(ValueError):
+                    getattr(settings, property_name)
+
+    def test_sensevoice_device_can_be_independent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(
+                'device = "cuda:0"\nngpu = 1\nsensevoice_correction_device = "cuda:1"\n',
+                encoding="utf-8",
+            )
+            settings = Settings(config_path=str(config_path))
+            self.assertEqual(settings.device, "cuda:0")
+            self.assertEqual(settings.sensevoice_correction_device, "cuda:1")
 
 
 if __name__ == "__main__":

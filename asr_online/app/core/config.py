@@ -126,6 +126,44 @@ class Settings:
     def correction_task_timeout_ms(self) -> int:
         return self._positive_int("correction_task_timeout_ms", 5000)
 
+    @property
+    def sensevoice_correction_device(self) -> str:
+        value = str(self._cfg.get("sensevoice_correction_device", self.device))
+        if not value.strip():
+            raise ValueError("sensevoice_correction_device 不能为空")
+        return value.strip().lower()
+
+    @property
+    def v4_final_budget_ms(self) -> int:
+        value = self._positive_int("v4_final_budget_ms", 100)
+        if value > 100:
+            raise ValueError("v4_final_budget_ms 不能大于 100")
+        return value
+
+    @property
+    def v4_max_segment_seconds(self) -> int:
+        value = self._positive_int("v4_max_segment_seconds", 20)
+        if value > 120:
+            raise ValueError("v4_max_segment_seconds 不能大于 120")
+        return value
+
+    @property
+    def v4_partial_punctuation_chars(self) -> int:
+        return self._positive_int("v4_partial_punctuation_chars", 8)
+
+    @property
+    def v4_partial_punctuation_interval_ms(self) -> int:
+        return self._positive_int("v4_partial_punctuation_interval_ms", 2000)
+
+    @property
+    def v4_correction_queue_capacity(self) -> int:
+        value = self._positive_int("v4_correction_queue_capacity", 8)
+        if value > self.correction_queue_capacity:
+            raise ValueError(
+                "v4_correction_queue_capacity 不能大于 correction_queue_capacity"
+            )
+        return value
+
     # 在线模型路径
     @property
     def asr_online_model_dir(self) -> str:

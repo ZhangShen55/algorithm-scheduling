@@ -77,6 +77,33 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(str(resolved), "cpu")
 
+    def test_sensevoice_can_use_an_independent_gpu(self) -> None:
+        self.config.update(
+            device="cuda:0",
+            ngpu=1,
+            sensevoice_correction_device="cuda:1",
+        )
+
+        with (
+            patch.object(self.models, "require_gpu_enabled", return_value=True),
+            self._settings_config_patch(),
+            patch.object(self.models.torch.cuda, "is_available", return_value=True),
+            patch.object(self.models.torch.cuda, "device_count", return_value=3),
+        ):
+            resolved = self.models.resolve_sensevoice_device()
+
+        self.assertEqual(str(resolved), "cuda:1")
+
+    def test_required_gpu_rejects_cpu_sensevoice_device(self) -> None:
+        self.config.update(sensevoice_correction_device="cpu")
+
+        with (
+            patch.object(self.models, "require_gpu_enabled", return_value=True),
+            self._settings_config_patch(),
+            self.assertRaisesRegex(RuntimeError, "SenseVoice 纠正配置不是 cuda"),
+        ):
+            self.models.resolve_sensevoice_device()
+
     async def test_each_correction_worker_loads_an_independent_model(self) -> None:
         self.config.update(
             device="cpu",
@@ -104,6 +131,34 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNot(
             self.models._sensevoice_models[0], self.models._sensevoice_models[1]
         )
+
+    async def test_correction_models_load_on_the_configured_device(self) -> None:
+        self.config.update(
+            device="cuda:0",
+            ngpu=1,
+            sensevoice_correction_device="cuda:1",
+            sensevoice_correction_workers=1,
+            correction_queue_capacity=4,
+            correction_task_timeout_ms=1000,
+            model_paths={"sensevoice_model_dir": "model/SenseVoiceSmall"},
+        )
+        self.models._model_online = object()
+        self.models._punct_pipeline = object()
+
+        with (
+            patch.object(self.models, "require_gpu_enabled", return_value=True),
+            self._settings_config_patch(),
+            patch.object(self.models.torch.cuda, "is_available", return_value=True),
+            patch.object(self.models.torch.cuda, "device_count", return_value=3),
+            patch.object(
+                self.models, "prepare_decrypted_model_dir", return_value="/model/sensevoice"
+            ),
+            patch.object(self.models, "AutoModel", return_value=object()) as auto_model,
+        ):
+            await self.models.load_models_if_needed()
+
+        self.assertEqual(auto_model.call_args.kwargs["device"], "cuda:1")
+        self.assertEqual(auto_model.call_args.kwargs["ngpu"], 1)
 
     async def test_correction_worker_load_failure_does_not_silently_reduce_workers(self) -> None:
         self.config.update(
@@ -134,6 +189,31 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(self.models.get_correction_scheduler())
         self.assertEqual(self.models._sensevoice_models, [])
+
+    async def test_partial_startup_failure_releases_already_loaded_models(self) -> None:
+        self.config.update(device="cpu", ngpu=0, model_paths={})
+        online_model = object()
+
+        with (
+            patch.object(self.models, "require_gpu_enabled", return_value=False),
+            self._settings_config_patch(),
+            patch.object(
+                self.models, "prepare_decrypted_model_dir", return_value="/model"
+            ),
+            patch.object(self.models, "AutoModel", return_value=online_model),
+            patch.object(
+                self.models,
+                "pipeline",
+                side_effect=RuntimeError("punctuation load failed"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "punctuation load failed"):
+                await self.models.load_models_if_needed()
+
+        self.assertIsNone(self.models.get_online_model())
+        self.assertIsNone(self.models.get_punct_pipeline())
+        self.assertIsNone(self.models.get_vad_model())
+        self.assertIsNone(self.models.get_correction_model())
 
 
 if __name__ == "__main__":

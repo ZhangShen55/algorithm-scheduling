@@ -96,6 +96,8 @@ class ClientState:
     finished_keys: set[str] = field(default_factory=set)
     previous_finished_bg: float | None = None
     previous_finished_ed: float | None = None
+    last_partial_by_key: dict[str, str] = field(default_factory=dict)
+    finished_records: list[dict] = field(default_factory=list)
 
     def observe_backlog(self, now: float) -> bool:
         backlog = max(0.0, self.sent_chunks * CHUNK_SECONDS - self.last_response_ed)
@@ -223,8 +225,22 @@ async def run_client(
                             state.timestamp_overlaps += 1
                         state.previous_finished_bg = bg
                         state.previous_finished_ed = ed
-                    elif advances_partial_timeline and latency is not None:
-                        state.partial_latencies.append(latency)
+                        state.finished_records.append(
+                            {
+                                "client_id": state.client_id,
+                                "key": key,
+                                "bg": bg,
+                                "ed": ed,
+                                "online_candidate": state.last_partial_by_key.get(key, ""),
+                                "final_text": str(response.get("text", "")),
+                            }
+                        )
+                    else:
+                        state.last_partial_by_key[str(response.get("key", ""))] = str(
+                            response.get("text", "")
+                        )
+                        if advances_partial_timeline and latency is not None:
+                            state.partial_latencies.append(latency)
                     await writer.write(
                         {
                             "type": "response",
@@ -315,13 +331,35 @@ def gpu_stats():
             check=False,
         )
     except OSError:
-        return {"memory_mib": None, "utilization_percent": None}
+        return {
+            "memory_mib": None,
+            "utilization_percent": None,
+            "gpu_devices": [],
+        }
     if gpu.returncode != 0 or not gpu.stdout.strip():
-        return {"memory_mib": None, "utilization_percent": None}
-    first = gpu.stdout.splitlines()[0].split(",")
+        return {
+            "memory_mib": None,
+            "utilization_percent": None,
+            "gpu_devices": [],
+        }
+    devices = []
+    for index, line in enumerate(gpu.stdout.splitlines()):
+        fields = line.split(",")
+        if len(fields) < 2:
+            continue
+        devices.append(
+            {
+                "index": index,
+                "memory_mib": int(fields[0].strip()),
+                "utilization_percent": int(fields[1].strip()),
+            }
+        )
     return {
-        "memory_mib": int(first[0].strip()),
-        "utilization_percent": int(first[1].strip()),
+        "memory_mib": sum(item["memory_mib"] for item in devices),
+        "utilization_percent": max(
+            (item["utilization_percent"] for item in devices), default=0
+        ),
+        "gpu_devices": devices,
     }
 
 
@@ -384,7 +422,10 @@ def summarize_service_events(events, raw_text, total_audio_seconds):
     correction_visible = by_event.get("correction_visible", [])
     finished_visible = by_event.get("finished_visible", [])
     correction_completed = by_event.get("correction_completed", [])
-    model_events = by_event.get("v3_model_inference", [])
+    model_events = (
+        by_event.get("v3_model_inference", [])
+        + by_event.get("v4_model_inference", [])
+    )
     online = [item for item in model_events if item.get("model_name") == "online"]
     vad = [item for item in model_events if item.get("model_name") == "vad"]
     inference_seconds = sum(
@@ -394,6 +435,21 @@ def summarize_service_events(events, raw_text, total_audio_seconds):
     queue_depths = [int(item["queue_depth"]) for item in events if "queue_depth" in item]
     inflight_counts = [int(item["inflight"]) for item in events if "inflight" in item]
     total_audio = max(total_audio_seconds, 0.001)
+    v4_counts = {
+        name: len(by_event.get(f"v4_correction_{name}", []))
+        for name in (
+            "eligible",
+            "submitted",
+            "applied",
+            "fallback",
+            "skipped",
+            "stale",
+            "failed",
+        )
+    }
+    v4_counts["coverage"] = round(
+        v4_counts["applied"] / max(v4_counts["eligible"], 1), 6
+    )
     return {
         "correction_visible": distribution(
             [float(item["visible_ms"]) / 1000 for item in correction_visible if "visible_ms" in item]
@@ -431,9 +487,36 @@ def summarize_service_events(events, raw_text, total_audio_seconds):
         "degraded": len(by_event.get("correction_degraded", [])),
         "queue_full": len(by_event.get("correction_queue_full", [])),
         "final_timeout": len(by_event.get("correction_final_timeout", [])),
+        "v4_correction": v4_counts,
         "compute_rtf": round(inference_seconds / total_audio, 6),
         "cuda_oom": "out of memory" in raw_text.lower(),
     }
+
+
+def v4_correction_positions(events, states):
+    if len(states) != 1:
+        return []
+    applied_keys = {
+        str(item.get("segment_key", ""))
+        for item in events
+        if item.get("event") == "v4_correction_applied"
+    }
+    return [
+        record
+        for record in states[0].finished_records
+        if record["key"] in applied_keys
+    ]
+
+
+def endpoint_tag(url: str) -> str:
+    path = urlparse(url).path.strip("/")
+    version = path.split("/", 1)[0] if path else "unknown"
+    return version.replace(".", "_")
+
+
+def boundary_retest_duration(args) -> float:
+    requested = getattr(args, "retest_duration_seconds", None)
+    return max(600.0, float(requested or 600.0))
 
 
 async def run_point(args, process=None, process_group=None, service_log=None):
@@ -442,7 +525,10 @@ async def run_point(args, process=None, process_group=None, service_log=None):
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     suffix = f"_{args.run_label}" if getattr(args, "run_label", "") else ""
-    stem = f"w{args.correction_workers}_c{args.concurrency}_{int(audio_seconds)}s{suffix}"
+    stem = (
+        f"{endpoint_tag(args.url)}_w{args.correction_workers}_"
+        f"c{args.concurrency}_{int(audio_seconds)}s{suffix}"
+    )
     raw_path = output_dir / f"{stem}.jsonl"
     summary_path = output_dir / f"{stem}.summary.json"
     writer = JsonlWriter(raw_path)
@@ -525,10 +611,15 @@ async def run_point(args, process=None, process_group=None, service_log=None):
         realtime_failures.append("protocol_or_timestamp")
     if service["cuda_oom"]:
         realtime_failures.append("cuda_oom")
-    if service["queue_full"] or service["final_timeout"]:
+    if service["final_timeout"] or (
+        service["queue_full"] and "/v1.0.4/" not in args.url
+    ):
         realtime_failures.append("queue_overload")
 
+    elapsed_seconds = round(time.monotonic() - started_at, 3)
     summary = {
+        "url": args.url,
+        "endpoint": endpoint_tag(args.url),
         "workers": args.correction_workers,
         "concurrency": args.concurrency,
         "audio_seconds_per_client": audio_seconds,
@@ -544,13 +635,16 @@ async def run_point(args, process=None, process_group=None, service_log=None):
         "service": service,
         "protocol_errors": protocol_errors,
         "timestamp_errors": timestamp_errors,
-        "elapsed_seconds": round(time.monotonic() - started_at, 3),
+        "elapsed_seconds": elapsed_seconds,
+        "stream_wall_ratio": round(elapsed_seconds / max(audio_seconds, 0.001), 6),
+        "v4_correction_positions": v4_correction_positions(events, states),
         "resources": {
             "samples": len(resources),
             "max_rss_kib": max((item.get("rss_kib") or 0 for item in resources), default=0),
             "max_cpu_percent": max((item.get("cpu_percent") or 0 for item in resources), default=0),
             "max_gpu_memory_mib": max((item.get("memory_mib") or 0 for item in resources), default=0),
             "max_gpu_utilization_percent": max((item.get("utilization_percent") or 0 for item in resources), default=0),
+            "last_gpu_devices": resources[-1].get("gpu_devices", []) if resources else [],
         },
         "realtime_pass": not realtime_failures,
         "realtime_failures": realtime_failures,
@@ -630,8 +724,11 @@ def start_service(args, workers, worker_dir):
 
 async def wait_ready(process, process_group, url, timeout):
     deadline = time.monotonic() + timeout
-    status_url = url.replace("ws://", "http://").split("/v1.0.3", 1)[0] + "/get_status"
-    port = urlparse(url).port or 80
+    parsed = urlparse(url)
+    scheme = "https" if parsed.scheme == "wss" else "http"
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if parsed.scheme == "wss" else 80)
+    status_url = f"{scheme}://{host}:{port}/get_status"
     consecutive_ready = 0
     while time.monotonic() < deadline:
         if process.poll() is not None:
@@ -665,13 +762,31 @@ def stop_service(process, output):
         output.close()
 
 
+def wait_service_stopped(port, process_group, timeout=30):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        listener_released = not listener_pids(port)
+        group_released = not process_group_stats(process_group)["pids"]
+        if listener_released and group_released:
+            return {
+                "port_released": True,
+                "process_group_released": True,
+            }
+        time.sleep(0.2)
+    return {
+        "port_released": not listener_pids(port),
+        "process_group_released": not process_group_stats(process_group)["pids"],
+    }
+
+
 def markdown_report(matrix):
+    label = matrix.get("endpoint", "ASR")
     lines = [
-        "# v1.0.3 渐进纠正并发报告",
+        f"# {label} 实时并发报告",
         "",
         f"生成时间：{time.strftime('%Y-%m-%d %H:%M:%S')}",
         "",
-        "| correction worker | 并发 | 状态 | partial p95 | 纠正 p95 | finished p95 | RTF | GPU MiB | 失败原因 |",
+        "| correction worker | 并发 | 状态 | partial p95 | v4纠正覆盖率 | finished p95 | RTF | GPU MiB | 失败原因 |",
         "| ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for item in matrix["points"]:
@@ -687,7 +802,7 @@ def markdown_report(matrix):
                 concurrency=item["concurrency"],
                 status="实时通过" if item["realtime_pass"] else "未通过",
                 partial=item["partial_latency"]["p95"],
-                correction=item["service"]["correction_visible"]["p95"],
+                correction=item["service"]["v4_correction"]["coverage"],
                 finished=item["finished_latency"]["p95"],
                 rtf=item["service"]["compute_rtf"],
                 gpu=item["resources"]["max_gpu_memory_mib"],
@@ -727,12 +842,19 @@ def markdown_report(matrix):
 async def run_matrix(args):
     workers_values = [int(value) for value in args.workers.split(",")]
     concurrency_values = [int(value) for value in args.concurrencies.split(",")]
-    matrix = {"workers": workers_values, "concurrencies": concurrency_values, "points": []}
+    matrix = {
+        "endpoint": endpoint_tag(args.url),
+        "url": args.url,
+        "workers": workers_values,
+        "concurrencies": concurrency_values,
+        "points": [],
+    }
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for workers in workers_values:
         worker_dir = args.output_dir / f"worker-{workers}"
         worker_dir.mkdir(parents=True, exist_ok=True)
         process, output, service_log = start_service(args, workers, worker_dir)
+        process_group = None
         try:
             process_group = os.getpgid(process.pid)
             ready, reason = await wait_ready(
@@ -803,6 +925,7 @@ async def run_matrix(args):
                     point_args.concurrency = concurrency
                     point_args.output_dir = worker_dir
                     point_args.run_label = f"retest-{boundary}"
+                    point_args.duration_seconds = boundary_retest_duration(args)
                     summary = await run_point(
                         point_args,
                         process=process,
@@ -814,6 +937,10 @@ async def run_matrix(args):
                     )
         finally:
             stop_service(process, output)
+            cleanup = wait_service_stopped(args.port, process_group)
+            matrix.setdefault("shutdown", []).append(
+                {"workers": workers, **cleanup}
+            )
         matrix_path = args.output_dir / "matrix-summary.json"
         matrix_path.write_text(
             json.dumps(matrix, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -851,6 +978,7 @@ def main():
     matrix.add_argument("--conda-env", default="asr")
     matrix.add_argument("--port", type=int, default=8084)
     matrix.add_argument("--startup-timeout", type=float, default=600)
+    matrix.add_argument("--retest-duration-seconds", type=float, default=None)
     matrix.add_argument("--report", type=Path, required=True)
     matrix.add_argument(
         "--retest-boundaries",

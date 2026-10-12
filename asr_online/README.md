@@ -8,6 +8,7 @@
 |------|------|
 | 流式 ASR | Paraformer 在线模型，低延迟增量输出 |
 | 实时标点 | ModelScope 标点模型，按静音/长度触发 |
+| 句末纠正 | v1.0.4 可在不阻塞实时主链路的前提下尝试 SenseVoice 纠正 |
 | 实例路由 | 每个容器只运行一个 Uvicorn 端点，由算法调度平台按 WebSocket 会话选实例 |
 | 状态接口 | 运行时长、会话统计、任务列表查询与清理 |
 
@@ -46,6 +47,9 @@ asr_online/
    ▼
 Uvicorn :8084  (app.main:app, workers=1)
    ├── WebSocket /v1.0.1/seacraft_asr_online
+   ├── WebSocket /v1.0.2/seacraft_asr_online
+   ├── WebSocket /v1.0.3/seacraft_asr_online
+   ├── WebSocket /v1.0.4/seacraft_asr_online
    └── HTTP /get_status 等
 ```
 
@@ -180,6 +184,40 @@ SenseVoice 模型通过 `config.toml` 配置并从项目内加载：
 [model_paths]
 sensevoice_model_dir = "model/SenseVoiceSmall"
 ```
+
+### WebSocket v1.0.4（实时优先句末纠正接口）
+
+- **路径**：`/v1.0.4/seacraft_asr_online`
+- **直连地址**：`ws://<host>:8084/v1.0.4/seacraft_asr_online`
+- **协议**：上行仍是 16 kHz、单声道、int16 PCM；下行字段严格保持
+  `key/text/finished/bg/ed`。
+- **断句**：沿用 v1.0.1 的连续两个在线空结果规则，不运行 FSMN-VAD。第一次空结果
+  冻结当前段 PCM 并非阻塞提交一次 SenseVoice，第二次空结果才发送唯一的
+  `finished=true`。
+- **实时降级**：纠正已就绪时采用 SenseVoice 自带标点的结果；在线已有积压、队列已满、
+  模型失败或最多 100 ms 内未完成时，立即使用在线文本和最终标点完成字幕。迟到结果不会
+  改写已经完成的字幕段。
+- **字幕标识**：同一段的 partial 和最终响应使用稳定 `key`，新段生成新 `key`。
+
+v1.0.4 只在稳定文本新增达到阈值或到达时间阈值时重新执行 partial 标点。单段 PCM、纠正
+队列和单会话在途任务均有硬上限；过载时允许降低纠正覆盖率，但不能阻塞在线响应。
+
+```toml
+# 未配置 sensevoice_correction_device 时继承主 device。
+device = "cuda:0"
+ngpu = 1
+sensevoice_correction_device = "cuda:1"
+
+v4_final_budget_ms = 100
+v4_max_segment_seconds = 20
+v4_partial_punctuation_chars = 8
+v4_partial_punctuation_interval_ms = 2000
+v4_correction_queue_capacity = 8
+```
+
+Mac CPU 验证可同时把两个 device 设为 `cpu`。server12 验证时建议将在线 ASR 放在
+`cuda:0`、SenseVoice 放在 `cuda:1`，仍只启动一个 Uvicorn worker。压测客户端应在
+server12 本机连接 `127.0.0.1:8084`，避免把 Mac 到服务器的网络波动计入模型延迟。
 
 ### HTTP 状态
 

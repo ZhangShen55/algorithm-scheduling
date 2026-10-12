@@ -59,6 +59,26 @@ class ConcurrencyBenchmarkTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(pids, {1234, 5678})
 
+    def test_wait_service_stopped_confirms_listener_and_process_group_release(self):
+        with (
+            patch.object(benchmark, "listener_pids", side_effect=[{1234}, set()]),
+            patch.object(
+                benchmark,
+                "process_group_stats",
+                side_effect=[
+                    {"pids": [1234]},
+                    {"pids": []},
+                ],
+            ),
+            patch.object(benchmark.time, "sleep", return_value=None),
+        ):
+            status = benchmark.wait_service_stopped(8084, 1234, timeout=1)
+
+        self.assertEqual(
+            status,
+            {"port_released": True, "process_group_released": True},
+        )
+
     async def test_wait_ready_ignores_listener_outside_new_process_group(self):
         process = Mock()
         process.poll.return_value = None
@@ -88,6 +108,36 @@ class ConcurrencyBenchmarkTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(reason)
         self.assertEqual(listeners.call_count, 3)
 
+    async def test_wait_ready_builds_status_url_for_v1_and_v4(self):
+        for version in ("v1.0.1", "v1.0.4"):
+            process = Mock()
+            process.poll.return_value = None
+            response = Mock(status=200)
+            with (
+                self.subTest(version=version),
+                patch.object(
+                    benchmark.urllib.request, "urlopen", return_value=response
+                ) as urlopen,
+                patch.object(
+                    benchmark,
+                    "process_group_stats",
+                    return_value={"pids": [1234]},
+                ),
+                patch.object(benchmark, "listener_pids", return_value={1234}),
+                patch.object(benchmark.asyncio, "sleep", return_value=None),
+            ):
+                ready, _ = await benchmark.wait_ready(
+                    process,
+                    1234,
+                    f"ws://127.0.0.1:8084/{version}/seacraft_asr_online",
+                    5,
+                )
+
+            self.assertTrue(ready)
+            self.assertEqual(
+                urlopen.call_args.args[0], "http://127.0.0.1:8084/get_status"
+            )
+
     def test_service_event_summary_calculates_correction_and_rtf_metrics(self):
         events = [
             {"event": "v3_model_inference", "model_name": "online", "inference_ms": 100},
@@ -111,6 +161,94 @@ class ConcurrencyBenchmarkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary["compute_rtf"], 0.035)
         self.assertEqual(summary["queue_depth_average"], 2.0)
         self.assertEqual(summary["inflight_average"], 3.0)
+
+    def test_service_event_summary_includes_v4_correction_coverage(self):
+        events = [
+            {
+                "event": "v4_model_inference",
+                "model_name": "online",
+                "queue_ms": 5,
+                "inference_ms": 80,
+            },
+            {"event": "v4_correction_eligible"},
+            {"event": "v4_correction_eligible"},
+            {"event": "v4_correction_submitted"},
+            {"event": "v4_correction_applied"},
+            {"event": "v4_correction_fallback"},
+            {"event": "v4_correction_skipped"},
+            {"event": "v4_correction_stale"},
+            {"event": "v4_correction_failed"},
+        ]
+
+        summary = benchmark.summarize_service_events(events, "", 1)
+
+        self.assertEqual(
+            summary["v4_correction"],
+            {
+                "eligible": 2,
+                "submitted": 1,
+                "applied": 1,
+                "fallback": 1,
+                "skipped": 1,
+                "stale": 1,
+                "failed": 1,
+                "coverage": 0.5,
+            },
+        )
+        self.assertEqual(summary["online_queue"]["count"], 1)
+
+    def test_single_client_correction_positions_include_before_and_after_text(self):
+        state = benchmark.ClientState(client_id=0)
+        state.finished_records.append(
+            {
+                "client_id": 0,
+                "key": "segment-000001",
+                "bg": 1.0,
+                "ed": 2.0,
+                "online_candidate": "在线文本",
+                "final_text": "纠正文本。",
+            }
+        )
+        events = [
+            {
+                "event": "v4_correction_applied",
+                "segment_key": "segment-000001",
+            }
+        ]
+
+        positions = benchmark.v4_correction_positions(events, [state])
+
+        self.assertEqual(len(positions), 1)
+        self.assertEqual(positions[0]["online_candidate"], "在线文本")
+        self.assertEqual(positions[0]["final_text"], "纠正文本。")
+
+    def test_gpu_stats_reports_each_visible_device(self):
+        completed = benchmark.subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="1024, 20\n2048, 80\n512, 10\n",
+            stderr="",
+        )
+        with patch.object(benchmark.subprocess, "run", return_value=completed):
+            stats = benchmark.gpu_stats()
+
+        self.assertEqual(stats["memory_mib"], 3584)
+        self.assertEqual(stats["utilization_percent"], 80)
+        self.assertEqual([item["index"] for item in stats["gpu_devices"]], [0, 1, 2])
+
+    def test_boundary_retest_is_never_shorter_than_ten_minutes(self):
+        self.assertEqual(
+            benchmark.boundary_retest_duration(
+                argparse.Namespace(retest_duration_seconds=None)
+            ),
+            600.0,
+        )
+        self.assertEqual(
+            benchmark.boundary_retest_duration(
+                argparse.Namespace(retest_duration_seconds=30)
+            ),
+            600.0,
+        )
 
     def test_service_event_reader_decodes_telemetry_from_installed_formatter(self):
         telemetry = {

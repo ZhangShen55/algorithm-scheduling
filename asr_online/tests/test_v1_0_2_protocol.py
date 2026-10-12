@@ -92,6 +92,26 @@ class StableOnlineModel(FakeOnlineModel):
         return [{"text": self.texts[index]}]
 
 
+class LegacyScriptedOnlineModel(FakeOnlineModel):
+    def __init__(self, texts):
+        super().__init__()
+        self.texts = list(texts)
+
+    def generate(self, **kwargs):
+        self.calls.append(kwargs)
+        index = min(len(self.calls) - 1, len(self.texts) - 1)
+        return [{"text": self.texts[index]}]
+
+
+class RecordingPunctuation:
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, text, cache):
+        self.calls.append((text, cache))
+        return [{"text": text}]
+
+
 class ImmediateCorrectionScheduler:
     def __init__(self, text="中间纠正。", return_results=True):
         self.text = text
@@ -128,11 +148,26 @@ class V1_0_2ProtocolTests(unittest.TestCase):
         self.app = FastAPI()
         self.app.include_router(ws_online.router)
 
-    def test_routes_include_v1_v2_and_v3(self):
+    def test_routes_include_v1_v2_v3_and_v4(self):
         paths = {route.path for route in ws_online.router.routes}
         self.assertIn("/v1.0.1/seacraft_asr_online", paths)
         self.assertIn("/v1.0.2/seacraft_asr_online", paths)
         self.assertIn("/v1.0.3/seacraft_asr_online", paths)
+        self.assertIn("/v1.0.4/seacraft_asr_online", paths)
+
+        endpoints = {route.path: route.endpoint for route in ws_online.router.routes}
+        self.assertIs(
+            endpoints["/v1.0.1/seacraft_asr_online"],
+            ws_online.websocket_endpoint_v1,
+        )
+        self.assertIs(
+            endpoints["/v1.0.2/seacraft_asr_online"],
+            ws_online.websocket_endpoint_v2,
+        )
+        self.assertIs(
+            endpoints["/v1.0.3/seacraft_asr_online"],
+            ws_online.websocket_endpoint_v3,
+        )
 
     def test_v1_0_1_keeps_legacy_response_shape(self):
         online = FakeOnlineModel()
@@ -154,6 +189,37 @@ class V1_0_2ProtocolTests(unittest.TestCase):
         self.assertIsInstance(response["key"], str)
         self.assertIsInstance(response["text"], str)
         self.assertIsInstance(response["finished"], bool)
+
+    def test_v1_0_1_keeps_random_keys_two_empty_cut_and_repeated_punctuation(self):
+        online = LegacyScriptedOnlineModel(["功能调度", "继续", "", ""])
+        punctuation = RecordingPunctuation()
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(ws_online, "get_online_model", return_value=online))
+            stack.enter_context(
+                patch.object(ws_online, "get_punct_pipeline", return_value=punctuation)
+            )
+            stack.enter_context(
+                patch.object(
+                    ws_online.random,
+                    "choices",
+                    side_effect=[list(value * 12) for value in "ABCD"],
+                )
+            )
+            with TestClient(self.app) as client:
+                with client.websocket_connect("/v1.0.1/seacraft_asr_online") as websocket:
+                    responses = []
+                    for _ in range(4):
+                        websocket.send_bytes(b"\x01\x00" * 7680)
+                        responses.append(websocket.receive_json())
+
+        self.assertEqual([item["finished"] for item in responses], [False, False, False, True])
+        self.assertEqual(
+            [item["key"] for item in responses],
+            [f"rand_key_{value * 12}" for value in "ABCD"],
+        )
+        self.assertEqual(len(punctuation.calls), 4)
+        self.assertEqual(punctuation.calls[-1][0], responses[-1]["text"])
 
     def test_merge_streaming_text_removes_lookback_overlap(self):
         self.assertEqual(
