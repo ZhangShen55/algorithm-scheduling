@@ -6,7 +6,7 @@ from modelscope.utils.constant import Tasks
 
 from app.core.config import operator_deployment, settings
 from app.core.correction_scheduler import CorrectionScheduler
-from app.core.model_assets import prepare_decrypted_model_dir
+from app.core.model_assets import cleanup_prepared_model_dirs, prepare_decrypted_model_dir
 
 _model_online = None
 _punct_pipeline = None
@@ -158,6 +158,7 @@ async def _release_models():
     _punct_pipeline = None
     _model_vad = None
     _model_correction = None
+    cleanup_prepared_model_dirs()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 

@@ -10,6 +10,7 @@ ENCRYPTION_KEY = base64.b64decode(
     "yldDq0ZHcN1vRYM3C1gDkFbOqD9uFuHN2aNnC2cGuX8="
 )
 CHUNK_SIZE = 1024 * 1024
+_RUNTIME_MODEL_DIRS: set[Path] = set()
 
 
 def _keystream(length: int, counter: int) -> tuple[bytes, int]:
@@ -52,6 +53,7 @@ def prepare_decrypted_model_dir(model_dir: str) -> str:
         raise FileNotFoundError(f"missing model.pt or model.pt.enc in {source_dir}")
 
     runtime_dir = Path(tempfile.mkdtemp(prefix=f"{source_dir.name}_", dir="/tmp"))
+    _RUNTIME_MODEL_DIRS.add(runtime_dir)
     for item in source_dir.iterdir():
         if item.name in {"model.pt", "model.pt.enc"}:
             continue
@@ -62,3 +64,10 @@ def prepare_decrypted_model_dir(model_dir: str) -> str:
             shutil.copy2(item, target)
     _xor_model_file(encrypted_model, runtime_dir / "model.pt")
     return str(runtime_dir)
+
+
+def cleanup_prepared_model_dirs() -> None:
+    """Remove only temporary model directories created by this process."""
+    for runtime_dir in tuple(_RUNTIME_MODEL_DIRS):
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+    _RUNTIME_MODEL_DIRS.clear()

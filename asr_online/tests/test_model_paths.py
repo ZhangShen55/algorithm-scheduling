@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.core.config import PROJECT_ROOT, Settings
+from app.core import model_assets
 
 
 class ModelPathConfigTests(unittest.TestCase):
@@ -159,6 +160,19 @@ class ModelPathConfigTests(unittest.TestCase):
             settings = Settings(config_path=str(config_path))
             self.assertEqual(settings.device, "cuda:0")
             self.assertEqual(settings.sensevoice_correction_device, "cuda:1")
+
+    def test_prepared_model_directories_are_cleaned_by_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "encrypted-model"
+            source.mkdir()
+            (source / "model.pt.enc").write_bytes(b"encrypted")
+            with patch.object(model_assets, "_xor_model_file") as decrypt:
+                runtime = Path(model_assets.prepare_decrypted_model_dir(str(source)))
+
+            self.assertTrue(runtime.exists())
+            model_assets.cleanup_prepared_model_dirs()
+            self.assertFalse(runtime.exists())
+            decrypt.assert_called_once()
 
 
 if __name__ == "__main__":
