@@ -17,6 +17,8 @@ class TeacherBehaviorModelRuleTest(unittest.TestCase):
                 "stand": 0.4,
                 "bbwriting": 0.25,
                 "teach": 0.25,
+                "usephone": 0.25,
+                "mic": 0.25,
                 "KeepOnlyMainSubject": True,
                 "MainSubjectStrategy": "posture_confidence",
                 "SubjectClusterIoU": 0.45,
@@ -64,9 +66,33 @@ class TeacherBehaviorModelRuleTest(unittest.TestCase):
         self.assertTrue(results["standing"][0].SuspectedSitting)
         self.assertFalse(results["standing"][0].PostureFallback)
 
-    def test_new_teacher_behavior_object_types_map_sit_to_201_and_stand_to_202(self):
+    def test_teacher_behavior_object_types_include_all_model_labels(self):
         self.assertEqual(self.service.TEACHER_BEHAVIOR_OBJECT_TYPES["sitting"], 201)
         self.assertEqual(self.service.TEACHER_BEHAVIOR_OBJECT_TYPES["standing"], 202)
+        self.assertEqual(self.service.TEACHER_BEHAVIOR_OBJECT_TYPES["using_phone"], 205)
+        self.assertEqual(self.service.TEACHER_BEHAVIOR_OBJECT_TYPES["holding_mic"], 206)
+        self.assertEqual(self.service.TEACHER_BEHAVIOR_LABEL_TO_KEY["usephone"], "using_phone")
+        self.assertEqual(self.service.TEACHER_BEHAVIOR_LABEL_TO_KEY["mic"], "holding_mic")
+
+    def test_collects_usephone_and_mic_for_the_selected_teacher(self):
+        names = {1: "stand", 4: "usephone", 5: "mic"}
+        detections = [
+            [10, 10, 110, 210, 0.90, 1],
+            [11, 11, 111, 211, 0.72, 4],
+            [12, 12, 112, 212, 0.68, 5],
+        ]
+
+        results = self.service.collect_teacher_behavior_results(
+            detections,
+            names,
+            offset=(0, 0),
+            merge_iou=0.8,
+        )
+
+        self.assertEqual(len(results["using_phone"]), 1)
+        self.assertEqual(results["using_phone"][0].Confidence, 0.72)
+        self.assertEqual(len(results["holding_mic"]), 1)
+        self.assertEqual(results["holding_mic"][0].Confidence, 0.68)
 
     def test_old_teacher_behavior_entry_points_are_removed(self):
         self.assertFalse(hasattr(self.service, "TEACHER_OBJECT_TYPES"))
@@ -85,6 +111,8 @@ class TeacherBehaviorModelRuleTest(unittest.TestCase):
             "sitting": [position],
             "writing": [],
             "teaching": [],
+            "using_phone": [position],
+            "holding_mic": [position],
         }
 
         result_list = self.service.build_teacher_result_list(
@@ -92,9 +120,11 @@ class TeacherBehaviorModelRuleTest(unittest.TestCase):
             self.service.TEACHER_BEHAVIOR_OBJECT_TYPES,
         )
 
-        self.assertEqual([item.ObjectType for item in result_list], [100, 201, 202, 203, 204])
+        self.assertEqual([item.ObjectType for item in result_list], [100, 201, 202, 203, 204, 205, 206])
         self.assertEqual(result_list[1].ObjectPostList[0], position)
         self.assertEqual(result_list[2].ObjectPostList[0], position)
+        self.assertEqual(result_list[5].ObjectPostList[0], position)
+        self.assertEqual(result_list[6].ObjectPostList[0], position)
 
     def test_topmost_strategy_can_keep_topmost_subject_only(self):
         self.service.settings.Teacher_Behavior_Thresd["MainSubjectStrategy"] = "topmost"

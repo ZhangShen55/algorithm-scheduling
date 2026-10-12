@@ -4,7 +4,7 @@
 
 ## 模型与标签
 
-老师行为接口只使用 `teacher_behavior.pt`。模型标签映射如下：
+老师行为接口只使用 `teacher_behavior.pt`。后处理支持的模型标签映射如下；实际可检测类别取决于该文件包含的类别：
 
 | 模型标签 | 内部行为键 | ObjectType | 含义 |
 | --- | --- | --- | --- |
@@ -12,12 +12,14 @@
 | `stand` | `standing` | `202` | 站立 |
 | `bbwriting` | `writing` | `203` | 板书 |
 | `teach` | `teaching` | `204` | 讲授 |
+| `usephone` | `using_phone` | `205` | 使用手机 |
+| `mic` | `holding_mic` | `206` | 手持麦克风 |
 
 接口还会输出 `ObjectType=100`，表示检测到老师主体。主体框来自最终选中主体中的代表框。
 
 ## 配置项
 
-相关配置位于 `app/config.toml` 的 `[Teacher_Behavior_Thresd]`：
+相关配置位于根目录 `config.toml` 的 `[Teacher_Behavior_Thresd]`：
 
 | 配置项 | 默认值 | 作用 |
 | --- | --- | --- |
@@ -26,6 +28,8 @@
 | `stand` | `0.4` | `stand` 输出阈值，可被请求体临时覆盖 |
 | `bbwriting` | `0.25` | `bbwriting` 输出阈值，可被请求体临时覆盖 |
 | `teach` | `0.25` | `teach` 输出阈值，可被请求体临时覆盖 |
+| `usephone` | `0.25` | `usephone` 输出阈值，可被请求体临时覆盖 |
+| `mic` | `0.25` | `mic` 输出阈值，可被请求体临时覆盖 |
 | `SubjectClusterIoU` | `0.45` | 同一主体聚类 IoU 阈值 |
 | `MergeIoU` | `0.8` | `SubjectClusterIoU <= 0` 时的兼容兜底值 |
 | `KeepOnlyMainSubject` | `true` | 是否只保留一个主老师主体 |
@@ -34,7 +38,7 @@
 | `PostureConflictDefault` | `stand` | 姿态冲突不明显或缺失时的默认姿态 |
 | `ForcePostureWhenMissing` | `true` | 主体存在但姿态未过阈值时是否强制输出默认姿态 |
 
-请求体中的 `Teacher_Behavior_Thresd` 可以临时覆盖 `sit`、`stand`、`bbwriting`、`teach` 四个类别阈值。未传的类别继续使用 `config.toml` 默认值。
+请求体中的 `Teacher_Behavior_Thresd` 可以临时覆盖六个模型类别的阈值。未传的类别继续使用 `config.toml` 默认值。
 
 ## 头部姿态开关
 
@@ -60,10 +64,10 @@ Enabled = false
 
 ### 1. 模型推理阈值
 
-推理时的 `conf` 使用四个类别有效阈值中的最小值：
+推理时的 `conf` 使用六个类别有效阈值中的最小值：
 
 ```text
-predict_conf = min(sit, stand, bbwriting, teach)
+predict_conf = min(sit, stand, bbwriting, teach, usephone, mic)
 ```
 
 当前默认值下为 `0.25`。这样做的目的是保留低于 `sit/stand=0.4` 但仍可能有助于确认老师主体的姿态候选框。
@@ -73,7 +77,7 @@ predict_conf = min(sit, stand, bbwriting, teach)
 每个检测框会先经过基础过滤：
 
 1. 检测行字段完整，至少包含 `x1, y1, x2, y2, conf, cls`。
-2. 类别必须属于 `sit`、`stand`、`bbwriting`、`teach`。
+2. 类别必须属于 `sit`、`stand`、`bbwriting`、`teach`、`usephone`、`mic`。
 3. 置信度必须大于等于 `predict_conf`。
 
 注意：这里不是按各类别最终输出阈值过滤，而是按 `predict_conf` 过滤。最终是否输出某个标签，会在后面再按对应类别阈值判断。
@@ -122,7 +126,7 @@ predict_conf = min(sit, stand, bbwriting, teach)
 
 其中：
 
-- `bbwriting` 和 `teach` 是授课行为，可以同时输出，也可以都不输出。
+- `bbwriting`、`teach`、`usephone` 和 `mic` 是非姿态行为，分别独立输出。
 - `sit` 和 `stand` 是姿态，最终必须互斥处理。
 - `ObjectType=100` 只要存在主体组就输出，置信度为该主体组内最高检测置信度。
 
@@ -204,12 +208,12 @@ PostureFallback = true
 | `SuspectedSitting` | 仅姿态输出使用；当 `sit/stand` 冲突不明显且默认输出 `stand` 时为 `true` |
 | `PostureFallback` | 仅姿态输出使用；当主体存在但姿态未过阈值，强制输出默认姿态时为 `true` |
 
-非姿态行为如 `bbwriting`、`teach` 一般只使用 `Confidence`，不会设置 `SuspectedSitting` 和 `PostureFallback`。
+非姿态行为如 `bbwriting`、`teach`、`usephone`、`mic` 一般只使用 `Confidence`，不会设置 `SuspectedSitting` 和 `PostureFallback`。
 
 ## 关键约束
 
 1. 老师行为接口当前只使用 `teacher_behavior.pt`，旧 `teacher.pt` 姿态规则已移除。
 2. 一个最终主体最多输出一个姿态：`sit` 和 `stand` 不会同时作为最终结果输出。
-3. `bbwriting` 和 `teach` 可以同时输出，因为它们是授课行为，不是互斥姿态。
+3. `bbwriting`、`teach`、`usephone` 和 `mic` 分别独立输出，不参与坐站互斥判断。
 4. 默认只保留一个主老师主体。
 5. 默认情况下，只要识别到主体，最终就会有一个姿态输出；证明不了坐，就按站处理，并通过 `PostureFallback` 标记兜底来源。

@@ -92,6 +92,8 @@ sit = 0.4
 stand = 0.4
 bbwriting = 0.25
 teach = 0.25
+usephone = 0.25
+mic = 0.25
 
 # 是否只保留一个主老师主体。
 KeepOnlyMainSubject = true

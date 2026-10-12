@@ -16,6 +16,8 @@ class StuTeaBehaviorSchemaTest(unittest.TestCase):
             Teacher_Behavior_Thresd={
                 "sit": 0.7,
                 "stand": 0.6,
+                "usephone": 0.55,
+                "mic": 0.5,
             },
         )
 
@@ -23,6 +25,8 @@ class StuTeaBehaviorSchemaTest(unittest.TestCase):
         self.assertEqual(request.Teacher_Behavior_Thresd.stand, 0.6)
         self.assertIsNone(request.Teacher_Behavior_Thresd.bbwriting)
         self.assertIsNone(request.Teacher_Behavior_Thresd.teach)
+        self.assertEqual(request.Teacher_Behavior_Thresd.usephone, 0.55)
+        self.assertEqual(request.Teacher_Behavior_Thresd.mic, 0.5)
 
     def test_teacher_request_can_enable_head_pose(self):
         request = TeacherBehaviorRequest(

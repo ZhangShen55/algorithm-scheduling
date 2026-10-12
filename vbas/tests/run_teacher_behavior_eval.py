@@ -63,6 +63,16 @@ def result_items(behavior_results):
             "ObjectCount": len(behavior_results["teaching"]),
             "ObjectPostList": [point_dump(p) for p in behavior_results["teaching"]],
         },
+        {
+            "ObjectType": TEACHER_BEHAVIOR_OBJECT_TYPES["using_phone"],
+            "ObjectCount": len(behavior_results["using_phone"]),
+            "ObjectPostList": [point_dump(p) for p in behavior_results["using_phone"]],
+        },
+        {
+            "ObjectType": TEACHER_BEHAVIOR_OBJECT_TYPES["holding_mic"],
+            "ObjectCount": len(behavior_results["holding_mic"]),
+            "ObjectPostList": [point_dump(p) for p in behavior_results["holding_mic"]],
+        },
     ]
 
 
@@ -97,6 +107,8 @@ def main():
                 "sitting_count": 0,
                 "writing_count": 0,
                 "teaching_count": 0,
+                "using_phone_count": 0,
+                "holding_mic_count": 0,
             })
             continue
 
@@ -136,6 +148,8 @@ def main():
             "sitting_count": len(behavior_results["sitting"]),
             "writing_count": len(behavior_results["writing"]),
             "teaching_count": len(behavior_results["teaching"]),
+            "using_phone_count": len(behavior_results["using_phone"]),
+            "holding_mic_count": len(behavior_results["holding_mic"]),
         })
         response_results.append({
             "ImageId": image_path.name,
@@ -155,6 +169,8 @@ def main():
             "sitting_count",
             "writing_count",
             "teaching_count",
+            "using_phone_count",
+            "holding_mic_count",
         ])
         writer.writeheader()
         writer.writerows(summary_rows)

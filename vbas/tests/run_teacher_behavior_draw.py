@@ -40,6 +40,8 @@ OBJECT_TYPE_LABELS = {
     TEACHER_BEHAVIOR_OBJECT_TYPES["standing"]: "站立",
     TEACHER_BEHAVIOR_OBJECT_TYPES["writing"]: "板书",
     TEACHER_BEHAVIOR_OBJECT_TYPES["teaching"]: "讲授",
+    TEACHER_BEHAVIOR_OBJECT_TYPES["using_phone"]: "使用手机",
+    TEACHER_BEHAVIOR_OBJECT_TYPES["holding_mic"]: "手持麦",
 }
 BEHAVIOR_LABEL_ORDER = (
     ("platform_person", TEACHER_BEHAVIOR_OBJECT_TYPES["platform_person"]),
@@ -47,6 +49,8 @@ BEHAVIOR_LABEL_ORDER = (
     ("standing", TEACHER_BEHAVIOR_OBJECT_TYPES["standing"]),
     ("writing", TEACHER_BEHAVIOR_OBJECT_TYPES["writing"]),
     ("teaching", TEACHER_BEHAVIOR_OBJECT_TYPES["teaching"]),
+    ("using_phone", TEACHER_BEHAVIOR_OBJECT_TYPES["using_phone"]),
+    ("holding_mic", TEACHER_BEHAVIOR_OBJECT_TYPES["holding_mic"]),
 )
 
 
@@ -195,6 +199,8 @@ def main():
                 "sitting_count": 0,
                 "writing_count": 0,
                 "teaching_count": 0,
+                "using_phone_count": 0,
+                "holding_mic_count": 0,
             })
             continue
 
@@ -241,6 +247,8 @@ def main():
             "sitting_count": count_result(behavior_results, "sitting"),
             "writing_count": count_result(behavior_results, "writing"),
             "teaching_count": count_result(behavior_results, "teaching"),
+            "using_phone_count": count_result(behavior_results, "using_phone"),
+            "holding_mic_count": count_result(behavior_results, "holding_mic"),
         })
 
         if index % 50 == 0:
@@ -256,6 +264,8 @@ def main():
             "sitting_count",
             "writing_count",
             "teaching_count",
+            "using_phone_count",
+            "holding_mic_count",
         ])
         writer.writeheader()
         writer.writerows(rows)
@@ -305,6 +315,8 @@ def main():
         "- 202 站立",
         "- 203 板书",
         "- 204 讲授",
+        "- 205 使用手机",
+        "- 206 手持麦",
     ]
     (output_dir / "report.md").write_text("\n".join(report_lines) + "\n", encoding="utf-8")
 

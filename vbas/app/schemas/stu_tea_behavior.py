@@ -17,6 +17,8 @@ class TeacherBehaviorThresholds(BaseModel):
     stand: Optional[float] = None
     bbwriting: Optional[float] = None
     teach: Optional[float] = None
+    usephone: Optional[float] = None
+    mic: Optional[float] = None
 
 class StudentBehaviorThresholds(BaseModel):
     phone: Optional[float] = Field(default=None, ge=0.0, le=1.0)

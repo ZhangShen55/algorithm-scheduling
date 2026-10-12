@@ -37,12 +37,16 @@ LABEL_CN = {
     "stand": "站立",
     "bbwriting": "板书",
     "teach": "讲授",
+    "usephone": "使用手机",
+    "mic": "手持麦",
 }
 COLORS = {
     "sit": (40, 120, 255),
     "stand": (40, 220, 40),
     "bbwriting": (255, 80, 60),
     "teach": (230, 80, 230),
+    "usephone": (70, 180, 255),
+    "mic": (80, 220, 120),
 }
 FONT_CANDIDATES = [
     Path("/System/Library/Fonts/STHeiti Medium.ttc"),

@@ -54,6 +54,8 @@ TEACHER_BEHAVIOR_OBJECT_TYPES = {
     'standing': 202,  # stand
     'writing': 203,  # bbwriting
     'teaching': 204,  # teach
+    'using_phone': 205,  # usephone
+    'holding_mic': 206,  # mic
 }
 
 TEACHER_BEHAVIOR_LABEL_TO_KEY = {
@@ -61,6 +63,8 @@ TEACHER_BEHAVIOR_LABEL_TO_KEY = {
     'sit': 'sitting',
     'bbwriting': 'writing',
     'teach': 'teaching',
+    'usephone': 'using_phone',
+    'mic': 'holding_mic',
 }
 TEACHER_BEHAVIOR_MERGE_IOU_KEY = "MergeIoU"
 DEFAULT_TEACHER_BEHAVIOR_MERGE_IOU = 0.8
@@ -477,7 +481,7 @@ def collect_teacher_behavior_group_details(
         }
         best_by_behavior = {}
 
-        for behavior_key in ("writing", "teaching"):
+        for behavior_key in ("writing", "teaching", "using_phone", "holding_mic"):
             row = accepted_by_behavior.get(behavior_key)
             if row is None:
                 continue
@@ -523,13 +527,7 @@ def collect_teacher_behavior_results(
         offset: Tuple[int, int],
         merge_iou: float,
         threshold_overrides: Optional[Any] = None):
-    behavior_results = {
-        'platform_person': [],
-        'standing': [],
-        'sitting': [],
-        'writing': [],
-        'teaching': []
-    }
+    behavior_results = empty_teacher_behavior_results()
 
     details = collect_teacher_behavior_group_details(
         detections,
@@ -550,11 +548,8 @@ def collect_teacher_behavior_results(
 
 def empty_teacher_behavior_results() -> Dict[str, List[ObjectPosition]]:
     return {
-        'platform_person': [],
-        'standing': [],
-        'sitting': [],
-        'writing': [],
-        'teaching': []
+        behavior_key: []
+        for behavior_key in TEACHER_BEHAVIOR_OBJECT_TYPES
     }
 
 
@@ -599,7 +594,9 @@ def process_teacher_behavior_model_detection_with_details(
     logger.info(
         f"[新老师行为模型] 主体:{len(behavior_results['platform_person'])} "
         f"站立:{len(behavior_results['standing'])} 坐着:{len(behavior_results['sitting'])} "
-        f"板书:{len(behavior_results['writing'])} 讲授:{len(behavior_results['teaching'])}")
+        f"板书:{len(behavior_results['writing'])} 讲授:{len(behavior_results['teaching'])} "
+        f"使用手机:{len(behavior_results['using_phone'])} "
+        f"手持麦:{len(behavior_results['holding_mic'])}")
     return behavior_results, details
 
 
@@ -642,10 +639,8 @@ def load_behavior_image(image_item):
 
 def build_teacher_result_list(behavior_results: Dict[str, List[ObjectPosition]], object_types: Dict[str, int]):
     result_list = []
-    behavior_keys = ['platform_person', 'sitting', 'standing', 'writing', 'teaching']
-
-    for behavior_key in sorted(behavior_keys, key=lambda key: object_types[key]):
-        positions = behavior_results[behavior_key]
+    for behavior_key in sorted(object_types, key=lambda key: object_types[key]):
+        positions = behavior_results.get(behavior_key, [])
         result_list.append(ResultItem(
             ObjectType=object_types[behavior_key],
             ObjectCount=len(positions),
@@ -656,7 +651,7 @@ def build_teacher_result_list(behavior_results: Dict[str, List[ObjectPosition]],
 
 async def analyze_teacher_behavior_by_model(request: TeacherBehaviorRequest) -> TeacherBehaviorResponse:
     """
-    老师行为分析主函数：使用 teacher_behavior.pt 输出站/坐/板书/讲授。
+    老师行为分析主函数：使用 teacher_behavior.pt 输出站/坐/板书/讲授/使用手机/手持麦。
     当 Teacher_Head_Pose.Enabled=true 且 ReturnHeadPose=true 时，追加头部方向检测。
     """
     start_time = time.time()
@@ -669,11 +664,8 @@ async def analyze_teacher_behavior_by_model(request: TeacherBehaviorRequest) -> 
     processed_image_ids = []
     data_list = []
     total_stats = {
-        'platform_person': 0,
-        'standing': 0,
-        'sitting': 0,
-        'writing': 0,
-        'teaching': 0
+        behavior_key: 0
+        for behavior_key in TEACHER_BEHAVIOR_OBJECT_TYPES
     }
 
     for image_item in request.ImageList:
@@ -701,7 +693,7 @@ async def analyze_teacher_behavior_by_model(request: TeacherBehaviorRequest) -> 
             log_cuda_memory(logger, "teacher_behavior")
             result_list = build_teacher_result_list(behavior_results, TEACHER_BEHAVIOR_OBJECT_TYPES)
             for stat_key in total_stats:
-                total_stats[stat_key] += len(behavior_results[stat_key])
+                total_stats[stat_key] += len(behavior_results.get(stat_key, []))
 
             head_pose_result = None
             return_head_pose = getattr(request, "ReturnHeadPose", False)
@@ -770,7 +762,8 @@ async def analyze_teacher_behavior_by_model(request: TeacherBehaviorRequest) -> 
     logger.info(
         f"[老师行为模型最终统计] 主体:{total_stats['platform_person']} "
         f"站立:{total_stats['standing']} 坐着:{total_stats['sitting']} "
-        f"板书:{total_stats['writing']} 讲授:{total_stats['teaching']} | "
+        f"板书:{total_stats['writing']} 讲授:{total_stats['teaching']} "
+        f"使用手机:{total_stats['using_phone']} 手持麦:{total_stats['holding_mic']} | "
         f"耗时:{use_time_ms}ms 图片:{len(processed_image_ids)}张 "
         f"ReturnHeadPose:{getattr(request, 'ReturnHeadPose', False)} "
         f"HeadPoseEnabled:{get_teacher_head_pose_enabled()}")

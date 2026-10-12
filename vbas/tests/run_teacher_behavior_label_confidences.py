@@ -23,8 +23,18 @@ LABEL_MAP = {
     "standing": ("202", "站立"),
     "writing": ("203", "板书"),
     "teaching": ("204", "讲授"),
+    "using_phone": ("205", "使用手机"),
+    "holding_mic": ("206", "手持麦"),
 }
-LABEL_ORDER = ["platform_person", "sitting", "standing", "writing", "teaching"]
+LABEL_ORDER = [
+    "platform_person",
+    "sitting",
+    "standing",
+    "writing",
+    "teaching",
+    "using_phone",
+    "holding_mic",
+]
 
 
 def parse_args():

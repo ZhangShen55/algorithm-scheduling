@@ -36,6 +36,8 @@ class Settings(BaseSettings):
         "stand": 0.4,
         "bbwriting": 0.25,
         "teach": 0.25,
+        "usephone": 0.25,
+        "mic": 0.25,
         "KeepOnlyMainSubject": True,
         "MainSubjectStrategy": "posture_confidence",
         "SubjectClusterIoU": 0.45,
