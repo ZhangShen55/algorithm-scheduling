@@ -821,6 +821,12 @@ def markdown_report(matrix):
     if matrix.get("retests"):
         lines.extend(["", "## 边界复验", ""])
         for item in matrix["retests"]:
+            if item.get("unavailable"):
+                lines.append(
+                    f"- worker={item['workers']}、并发={item['concurrency']}、"
+                    f"边界={item['boundary']}：不可用（{item['reason']}）。"
+                )
+                continue
             lines.append(
                 f"- worker={item['workers']}、并发={item['concurrency']}、"
                 f"边界={item['boundary']}："
@@ -853,6 +859,8 @@ async def run_matrix(args):
     for workers in workers_values:
         worker_dir = args.output_dir / f"worker-{workers}"
         worker_dir.mkdir(parents=True, exist_ok=True)
+        worker_points = []
+        quick_ready = False
         process, output, service_log = start_service(args, workers, worker_dir)
         process_group = None
         try:
@@ -873,53 +881,85 @@ async def run_matrix(args):
                             "reason": reason,
                         }
                     )
-                continue
-            worker_points = []
-            for concurrency in concurrency_values:
-                point_args = argparse.Namespace(**vars(args))
-                point_args.correction_workers = workers
-                point_args.concurrency = concurrency
-                point_args.output_dir = worker_dir
-                summary = await run_point(
-                    point_args,
-                    process=process,
-                    process_group=process_group,
-                    service_log=service_log,
-                )
-                matrix["points"].append(summary)
-                worker_points.append(summary)
-                if process.poll() is not None:
-                    remaining = concurrency_values[concurrency_values.index(concurrency) + 1 :]
-                    for unavailable in remaining:
-                        matrix["points"].append(
+            else:
+                quick_ready = True
+                for concurrency in concurrency_values:
+                    point_args = argparse.Namespace(**vars(args))
+                    point_args.correction_workers = workers
+                    point_args.concurrency = concurrency
+                    point_args.output_dir = worker_dir
+                    summary = await run_point(
+                        point_args,
+                        process=process,
+                        process_group=process_group,
+                        service_log=service_log,
+                    )
+                    matrix["points"].append(summary)
+                    worker_points.append(summary)
+                    if process.poll() is not None:
+                        remaining = concurrency_values[
+                            concurrency_values.index(concurrency) + 1 :
+                        ]
+                        for unavailable in remaining:
+                            matrix["points"].append(
+                                {
+                                    "workers": workers,
+                                    "concurrency": unavailable,
+                                    "unavailable": True,
+                                    "reason": f"service_exit:{process.returncode}",
+                                }
+                            )
+                        break
+        finally:
+            stop_service(process, output)
+            cleanup = wait_service_stopped(args.port, process_group)
+            matrix.setdefault("shutdown", []).append(
+                {"workers": workers, "phase": "quick_matrix", **cleanup}
+            )
+
+        if args.retest_boundaries and quick_ready:
+            passed = [
+                item["concurrency"]
+                for item in worker_points
+                if item.get("realtime_pass")
+            ]
+            maximum = max(passed) if passed else None
+            failed = [
+                item["concurrency"]
+                for item in worker_points
+                if not item.get("realtime_pass")
+                and (maximum is None or item["concurrency"] > maximum)
+            ]
+            boundaries = []
+            if maximum is not None:
+                boundaries.append(("maximum_pass", maximum))
+            if failed:
+                boundaries.append(("first_failure", min(failed)))
+            matrix.setdefault("retests", [])
+            for boundary, concurrency in boundaries:
+                service_dir = worker_dir / f"service-{boundary}-c{concurrency}"
+                service_dir.mkdir(parents=True, exist_ok=True)
+                process, output, service_log = start_service(args, workers, service_dir)
+                process_group = None
+                try:
+                    process_group = os.getpgid(process.pid)
+                    ready, reason = await wait_ready(
+                        process,
+                        process_group,
+                        args.url,
+                        args.startup_timeout,
+                    )
+                    if not ready:
+                        matrix["retests"].append(
                             {
+                                "boundary": boundary,
                                 "workers": workers,
-                                "concurrency": unavailable,
+                                "concurrency": concurrency,
                                 "unavailable": True,
-                                "reason": f"service_exit:{process.returncode}",
+                                "reason": reason,
                             }
                         )
-                    break
-            if args.retest_boundaries and process.poll() is None:
-                passed = [
-                    item["concurrency"]
-                    for item in worker_points
-                    if item.get("realtime_pass")
-                ]
-                maximum = max(passed) if passed else None
-                failed = [
-                    item["concurrency"]
-                    for item in worker_points
-                    if not item.get("realtime_pass")
-                    and (maximum is None or item["concurrency"] > maximum)
-                ]
-                boundaries = []
-                if maximum is not None:
-                    boundaries.append(("maximum_pass", maximum))
-                if failed:
-                    boundaries.append(("first_failure", min(failed)))
-                matrix.setdefault("retests", [])
-                for boundary, concurrency in boundaries:
+                        continue
                     point_args = argparse.Namespace(**vars(args))
                     point_args.correction_workers = workers
                     point_args.concurrency = concurrency
@@ -935,12 +975,17 @@ async def run_matrix(args):
                     matrix["retests"].append(
                         {"boundary": boundary, **summary}
                     )
-        finally:
-            stop_service(process, output)
-            cleanup = wait_service_stopped(args.port, process_group)
-            matrix.setdefault("shutdown", []).append(
-                {"workers": workers, **cleanup}
-            )
+                finally:
+                    stop_service(process, output)
+                    cleanup = wait_service_stopped(args.port, process_group)
+                    matrix.setdefault("shutdown", []).append(
+                        {
+                            "workers": workers,
+                            "phase": f"retest_{boundary}",
+                            "concurrency": concurrency,
+                            **cleanup,
+                        }
+                    )
         matrix_path = args.output_dir / "matrix-summary.json"
         matrix_path.write_text(
             json.dumps(matrix, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

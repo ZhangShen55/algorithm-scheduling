@@ -250,6 +250,75 @@ class ConcurrencyBenchmarkTests(unittest.IsolatedAsyncioTestCase):
             600.0,
         )
 
+    async def test_boundary_retests_each_use_a_fresh_service(self):
+        def point_summary(point_args, **_):
+            passed = point_args.concurrency == 1
+            return {
+                "workers": point_args.correction_workers,
+                "concurrency": point_args.concurrency,
+                "partial_latency": {"p95": 0.1 if passed else 2.0},
+                "finished_latency": {"p95": 0.2 if passed else 3.0},
+                "service": {
+                    "v4_correction": {"coverage": 0.0},
+                    "compute_rtf": 0.1,
+                },
+                "resources": {"max_gpu_memory_mib": 100},
+                "realtime_pass": passed,
+                "realtime_failures": [] if passed else ["partial_p95"],
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = argparse.Namespace(
+                workers="1",
+                concurrencies="1,2",
+                url="ws://127.0.0.1:8084/v1.0.4/seacraft_asr_online",
+                output_dir=root / "output",
+                report=root / "report.md",
+                duration_seconds=30,
+                retest_duration_seconds=600,
+                retest_boundaries=True,
+                startup_timeout=300,
+                port=8084,
+            )
+            processes = []
+
+            def start_service(*_):
+                process = Mock(pid=1000 + len(processes))
+                process.poll.return_value = None
+                processes.append(process)
+                return process, Mock(), root / f"service-{len(processes)}.log"
+
+            with (
+                patch.object(benchmark, "start_service", side_effect=start_service) as start,
+                patch.object(benchmark, "stop_service") as stop,
+                patch.object(
+                    benchmark,
+                    "wait_service_stopped",
+                    return_value={
+                        "port_released": True,
+                        "process_group_released": True,
+                    },
+                ),
+                patch.object(benchmark.os, "getpgid", side_effect=lambda pid: pid),
+                patch.object(benchmark, "wait_ready", return_value=(True, None)),
+                patch.object(
+                    benchmark, "run_point", side_effect=point_summary
+                ) as run_point,
+            ):
+                matrix = await benchmark.run_matrix(args)
+
+        self.assertEqual(start.call_count, 3)
+        self.assertEqual(stop.call_count, 3)
+        self.assertEqual(
+            [call.args[0].duration_seconds for call in run_point.call_args_list],
+            [30, 30, 600.0, 600.0],
+        )
+        self.assertEqual(
+            [item["phase"] for item in matrix["shutdown"]],
+            ["quick_matrix", "retest_maximum_pass", "retest_first_failure"],
+        )
+
     def test_service_event_reader_decodes_telemetry_from_installed_formatter(self):
         telemetry = {
             "name": "correction_visible",
