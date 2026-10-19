@@ -23,12 +23,16 @@ correction_queue_capacity = 16
 correction_task_timeout_ms = 5000
 # SenseVoice 可单独放到另一张 GPU；删除本配置项时继承主 device。
 sensevoice_correction_device = "cpu"
-# v1.0.4 只做句末单次候选纠正，实时链路优先。
+# v1.0.4 周期累计 Paraformer 纠正，句末独立限时收尾。
 v4_final_budget_ms = 100
 v4_max_segment_seconds = 20
 v4_partial_punctuation_chars = 8
 v4_partial_punctuation_interval_ms = 2000
 v4_correction_queue_capacity = 8
+v4_correction_workers = 1
+v4_correction_interval_ms = 4000
+v4_correction_device = "cpu"
+v4_punctuation_device = "cpu"
 
 [logging]
 # 日志级别。
@@ -66,3 +70,4 @@ vad_model_dir = "model/speech_fsmn_vad_zh-cn-16k-common-pytorch"
 asr_online_correction_model_dir = "model/speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
 # v1.0.3 使用 SenseVoice 自带标点，不调用独立标点模型。
 sensevoice_model_dir = "model/SenseVoiceSmall"
+v4_correction_model_dir = "model/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"

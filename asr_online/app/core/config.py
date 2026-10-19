@@ -157,12 +157,30 @@ class Settings:
 
     @property
     def v4_correction_queue_capacity(self) -> int:
-        value = self._positive_int("v4_correction_queue_capacity", 8)
-        if value > self.correction_queue_capacity:
-            raise ValueError(
-                "v4_correction_queue_capacity 不能大于 correction_queue_capacity"
-            )
+        return self._positive_int("v4_correction_queue_capacity", 8)
+
+    @property
+    def v4_correction_workers(self) -> int:
+        value = self._positive_int("v4_correction_workers", 1)
+        if value > 8:
+            raise ValueError("v4_correction_workers 不能大于 8")
         return value
+
+    @property
+    def v4_correction_interval_ms(self) -> int:
+        return self._positive_int("v4_correction_interval_ms", 4000)
+
+    @property
+    def v4_correction_device(self) -> str:
+        return str(self._cfg.get("v4_correction_device", self.device)).strip().lower()
+
+    @property
+    def v4_punctuation_device(self) -> str:
+        return str(self._cfg.get("v4_punctuation_device", self.v4_correction_device)).strip().lower()
+
+    @property
+    def v4_correction_model_dir(self) -> str | None:
+        return self._optional_model_path("v4_correction_model_dir")
 
     # 在线模型路径
     @property

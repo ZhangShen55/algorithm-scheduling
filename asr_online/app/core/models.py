@@ -7,6 +7,7 @@ from modelscope.utils.constant import Tasks
 from app.core.config import operator_deployment, settings
 from app.core.correction_scheduler import CorrectionScheduler
 from app.core.model_assets import cleanup_prepared_model_dirs, prepare_decrypted_model_dir
+from app.core.v4_correction import V4CorrectionScheduler, V4Punctuation
 
 _model_online = None
 _punct_pipeline = None
@@ -15,6 +16,8 @@ _model_correction = None
 _model_sensevoice = None
 _sensevoice_models = []
 _correction_scheduler = None
+_v4_scheduler = None
+_v4_punctuation = None
 _model_lock = asyncio.Lock()
 
 
@@ -77,6 +80,7 @@ def device() -> torch.device:
 async def load_models_if_needed():
     global _model_online, _punct_pipeline, _model_vad, _model_correction
     global _model_sensevoice, _sensevoice_models, _correction_scheduler
+    global _v4_scheduler, _v4_punctuation
 
     async with _model_lock:
         try:
@@ -141,6 +145,33 @@ async def load_models_if_needed():
                 _sensevoice_models = loaded_models
                 _model_sensevoice = loaded_models[0]
                 _correction_scheduler = scheduler
+            if settings.v4_correction_model_dir and _v4_scheduler is None:
+                from pathlib import Path
+
+                model_path = settings.v4_correction_model_dir
+                if not Path(model_path).is_dir():
+                    raise RuntimeError("v4 Paraformer model directory is missing")
+                asr_device, punc_device = settings.v4_correction_device, settings.v4_punctuation_device
+                for label, configured in (("v4 correction", asr_device), ("v4 punctuation", punc_device)):
+                    _resolve_device(configured, 0 if configured == "cpu" else 1,
+                                    label=label, require_gpu=require_gpu_enabled())
+                settings.v4_correction_interval_ms
+                correction_models = [AutoModel(
+                    model=prepare_decrypted_model_dir(model_path), device=asr_device,
+                    ngpu=0 if asr_device == "cpu" else 1,
+                    disable_update=True, disable_pbar=True,
+                ) for _ in range(settings.v4_correction_workers)]
+                _v4_punctuation = V4Punctuation(pipeline(
+                    task=Tasks.punctuation,
+                    model=prepare_decrypted_model_dir(settings.asr_online_punc_model_dir),
+                    device=punc_device, disable_update=True,
+                ))
+                _v4_scheduler = V4CorrectionScheduler(
+                    correction_models, _v4_punctuation,
+                    capacity=settings.v4_correction_queue_capacity,
+                    max_samples=(settings.v4_max_segment_seconds + 20) * 16000,
+                )
+                await _v4_scheduler.start()
         except Exception:
             await _release_models()
             raise
@@ -149,6 +180,11 @@ async def load_models_if_needed():
 async def _release_models():
     global _model_online, _punct_pipeline, _model_vad, _model_correction
     global _model_sensevoice, _sensevoice_models, _correction_scheduler
+    global _v4_scheduler, _v4_punctuation
+    if _v4_scheduler is not None:
+        await _v4_scheduler.close()
+    _v4_scheduler = None
+    _v4_punctuation = None
     if _correction_scheduler is not None:
         await _correction_scheduler.close()
     _correction_scheduler = None
@@ -190,3 +226,11 @@ def get_sensevoice_model():
 
 def get_correction_scheduler():
     return _correction_scheduler
+
+
+def get_v4_scheduler():
+    return _v4_scheduler
+
+
+def get_v4_punctuation():
+    return _v4_punctuation

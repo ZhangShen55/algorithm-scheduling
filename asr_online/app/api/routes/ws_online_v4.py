@@ -1,573 +1,303 @@
 import asyncio
-import json
-import logging
 import time
 import uuid
-from typing import Any
+from dataclasses import dataclass, field
 
 import numpy as np
 from fastapi import WebSocket, WebSocketDisconnect
 
 from app.core.config import settings
-from app.core.correction_scheduler import CorrectionResult, CorrectionSnapshot
-from app.core.models import (
-    get_correction_scheduler,
-    get_online_model,
-    get_punct_pipeline,
-)
+from app.core.cumulative_text import CumulativeText
+from app.core.models import get_online_model, get_v4_punctuation, get_v4_scheduler
+from app.core.v4_correction import Request, Snapshot, SerialRunner, extract_text, telemetry
 from app.utils.asr_stats import update_stat
-from app.utils.character_utils import (
-    count_chinese_and_words,
-    normalize_punct_by_context,
-    safe_concat,
-)
+from app.utils.character_utils import count_chinese_and_words, safe_concat
 
 
-logger = logging.getLogger(__name__)
 _SAMPLE_RATE = 16000
 _SILENCE_CHUNKS = 2
-_MAX_TEXT_UNITS = 200
-_FINAL_BUDGET_SECONDS = settings.v4_final_budget_ms / 1000
 _MAX_SEGMENT_SAMPLES = settings.v4_max_segment_seconds * _SAMPLE_RATE
+_INTERVAL_SAMPLES = settings.v4_correction_interval_ms * 16
+_FINAL_BUDGET_SECONDS = settings.v4_final_budget_ms / 1000
 _PARTIAL_PUNCTUATION_UNITS = settings.v4_partial_punctuation_chars
-_PARTIAL_PUNCTUATION_SAMPLES = int(
-    settings.v4_partial_punctuation_interval_ms * _SAMPLE_RATE / 1000
-)
-_CORRECTION_QUEUE_CAPACITY = settings.v4_correction_queue_capacity
+_PARTIAL_PUNCTUATION_SAMPLES = settings.v4_partial_punctuation_interval_ms * 16
+_MAX_BUFFER_SAMPLES = 20 * _SAMPLE_RATE
+_ONLINE_RUNNER = SerialRunner()
 
 
-def _extract_text(result: Any) -> str:
-    if isinstance(result, list) and result and isinstance(result[0], dict):
-        return str(result[0].get("text", "") or "")
-    if isinstance(result, dict):
-        return str(result.get("text", "") or "")
-    return ""
-
-
-def _merge_streaming_text(previous: str, current: str) -> str:
-    if not previous:
-        return current or ""
-    if not current:
-        return previous
-    if current.startswith(previous):
-        return current
-    if previous.endswith(current):
-        return previous
-    for overlap in range(min(len(previous), len(current)), 0, -1):
-        if previous[-overlap:] == current[:overlap]:
-            return previous + current[overlap:]
-    return safe_concat(previous, current)
-
-
-def _telemetry(level: int, event: str, **fields: Any) -> None:
-    payload = {"name": event, **fields}
-    logger.log(
-        level,
-        json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
-        extra={"event": event, **fields},
-    )
-
-
-class _SerialModelRunner:
-    """Run one shared model at a time without blocking the event loop."""
-
-    def __init__(self) -> None:
-        self._loop = None
-        self._lock = None
-        self._pending = 0
-
-    def _lock_for_current_loop(self) -> asyncio.Lock:
-        loop = asyncio.get_running_loop()
-        if self._loop is not loop:
-            if self._pending:
-                raise RuntimeError("模型执行入口不能在运行中切换事件循环")
-            self._loop = loop
-            self._lock = asyncio.Lock()
-        return self._lock
+@dataclass
+class Segment:
+    generation: int
+    start: int
+    text: CumulativeText = field(default_factory=CumulativeText)
+    pcm: list = field(default_factory=list)
+    end: int = 0
+    state: str = 'OPEN'
+    revision: int = 0
+    last_admitted: int = 0
+    last_watermark: int = 0
+    retry_at: int = 0
+    pending: bool = False
+    deferred: object = None
+    punctuation_source: str = ''
+    punctuation_text: str = ''
+    punctuation_end: int = 0
+    silence: int = 0
 
     @property
-    def has_backlog(self) -> bool:
-        return self._pending > 0
-
-    async def run(self, function, *args, **kwargs):
-        lock = self._lock_for_current_loop()
-        queued_at = time.monotonic()
-        self._pending += 1
-        try:
-            async with lock:
-                started_at = time.monotonic()
-                result = await asyncio.to_thread(function, *args, **kwargs)
-            return result, started_at - queued_at, time.monotonic() - started_at
-        finally:
-            self._pending -= 1
-
-
-_ONLINE_RUNNER = _SerialModelRunner()
-_PUNCTUATION_RUNNER = _SerialModelRunner()
+    def key(self):
+        return f'segment-{self.generation:06d}'
 
 
 async def run_v4_session(ws: WebSocket) -> None:
     await ws.accept()
-    model_online = get_online_model()
-    punctuation = get_punct_pipeline()
-    scheduler = get_correction_scheduler()
-    connection_id = uuid.uuid4().hex
-    result_queue = (
-        await scheduler.register_session(connection_id)
-        if scheduler is not None
-        else None
-    )
+    model = get_online_model()
+    scheduler, punctuation = get_v4_scheduler(), get_v4_punctuation()
+    if scheduler is None or punctuation is None:
+        await ws.close(code=1011, reason='v4 correction model is not configured')
+        return
+    cid = uuid.uuid4().hex
+    results = scheduler.register(cid)
+    inputs = asyncio.Queue(maxsize=64)
+    buffered = 0
+    receive_error = None
+    disconnected = False
+    cache = {}
+    received = 0
+    sequence = 0
+    segment = None
+    pre_pcm = []
+    pre_empty = 0
+    last_ed = 0.0
+    last_finished = 0.0
+    response_sequence = 0
+    applied_since_emit = []
 
-    chunk_size = [4, 8, 4]
-    encoder_chunk_look_back = 4
-    decoder_chunk_look_back = 1
-
-    online_cache = {}
-    received_samples = 0
-    segment_seq = 0
-    segment_key = None
-    segment_text = ""
-    segment_visible_text = ""
-    segment_start_sample = None
-    segment_pcm: list[np.ndarray] = []
-    pre_segment_pcm: list[np.ndarray] = []
-    silence_chunks = 0
-    text_version = 0
-    correction_revision = 0
-    correction_attempted = False
-    candidate_snapshot = None
-    candidate_result = None
-    candidate_end_sample = None
-    last_punctuation_source = ""
-    last_punctuation_text = ""
-    last_punctuation_units = 0
-    last_punctuation_sample = 0
-    last_sent_ed = 0.0
-    last_finished_ed = 0.0
-    connection_closed = False
-
-    async def send_result(
-        text: str,
-        finished: bool,
-        bg: float,
-        ed: float,
-        key: str,
-    ) -> bool:
-        nonlocal connection_closed, last_sent_ed
-        if connection_closed or ws.client_state.name != "CONNECTED":
-            connection_closed = True
-            return False
-        ed = max(last_sent_ed, ed)
+    async def receive():
+        nonlocal buffered, receive_error, disconnected
         try:
-            await ws.send_json(
-                {
-                    "key": key,
-                    "text": text,
-                    "finished": finished,
-                    "bg": bg,
-                    "ed": ed,
-                }
-            )
-        except (RuntimeError, WebSocketDisconnect):
-            connection_closed = True
-            return False
-        last_sent_ed = ed
-        return True
-
-    def segment_audio(end_sample: int) -> np.ndarray:
-        if segment_start_sample is None or not segment_pcm:
-            return np.empty(0, dtype=np.float32)
-        audio = np.concatenate(segment_pcm)
-        length = max(0, min(audio.size, end_sample - segment_start_sample))
-        return audio[:length].copy()
-
-    def reset_segment() -> None:
-        nonlocal online_cache, segment_key, segment_text, segment_visible_text
-        nonlocal segment_start_sample, segment_pcm, pre_segment_pcm
-        nonlocal silence_chunks, text_version
-        nonlocal correction_attempted, candidate_snapshot, candidate_result
-        nonlocal candidate_end_sample, last_punctuation_source
-        nonlocal last_punctuation_text, last_punctuation_units
-        nonlocal last_punctuation_sample
-        online_cache.clear()
-        online_cache = {}
-        segment_key = None
-        segment_text = ""
-        segment_visible_text = ""
-        segment_start_sample = None
-        segment_pcm = []
-        pre_segment_pcm = []
-        silence_chunks = 0
-        text_version = 0
-        correction_attempted = False
-        candidate_snapshot = None
-        candidate_result = None
-        candidate_end_sample = None
-        last_punctuation_source = ""
-        last_punctuation_text = ""
-        last_punctuation_units = 0
-        last_punctuation_sample = received_samples
-
-    def correction_matches(result: CorrectionResult) -> bool:
-        snapshot = result.snapshot
-        return bool(
-            segment_key is not None
-            and candidate_snapshot is not None
-            and snapshot.connection_id == connection_id
-            and snapshot.segment_key == segment_key
-            and snapshot.revision_id == candidate_snapshot.revision_id
-            and snapshot.text_version == text_version
-            and snapshot.start_sample == segment_start_sample
-            and snapshot.end_sample == candidate_end_sample
-        )
-
-    def accept_correction_result(result: CorrectionResult) -> None:
-        nonlocal candidate_result
-        snapshot = result.snapshot
-        if not correction_matches(result):
-            _telemetry(
-                logging.INFO,
-                "v4_correction_stale",
-                connection_id=connection_id,
-                segment_key=snapshot.segment_key,
-                revision_id=snapshot.revision_id,
-                start_sample=snapshot.start_sample,
-                end_sample=snapshot.end_sample,
-                stale_reason="state_mismatch",
-            )
-            return
-        if result.error or not result.text:
-            _telemetry(
-                logging.WARNING,
-                "v4_correction_failed",
-                connection_id=connection_id,
-                segment_key=snapshot.segment_key,
-                revision_id=snapshot.revision_id,
-                start_sample=snapshot.start_sample,
-                end_sample=snapshot.end_sample,
-                error_type=(
-                    "empty_result"
-                    if not result.error
-                    else result.error.split(":", 1)[0]
-                ),
-            )
-            return
-        candidate_result = result
-
-    def drain_results() -> None:
-        if result_queue is None:
-            return
-        while True:
-            try:
-                result = result_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                return
-            accept_correction_result(result)
-
-    async def submit_candidate(end_sample: int, trigger: str) -> bool:
-        nonlocal correction_attempted, correction_revision
-        nonlocal candidate_snapshot, candidate_end_sample
-        if correction_attempted:
-            return candidate_snapshot is not None
-        correction_attempted = True
-        candidate_end_sample = end_sample
-        audio = segment_audio(end_sample)
-        _telemetry(
-            logging.INFO,
-            "v4_correction_eligible",
-            connection_id=connection_id,
-            segment_key=segment_key,
-            start_sample=segment_start_sample,
-            end_sample=end_sample,
-            trigger=trigger,
-        )
-        if (
-            scheduler is None
-            or segment_key is None
-            or segment_start_sample is None
-            or not audio.size
-            or not np.any(audio)
-        ):
-            _telemetry(
-                logging.INFO,
-                "v4_correction_skipped",
-                connection_id=connection_id,
-                segment_key=segment_key,
-                start_sample=segment_start_sample,
-                end_sample=end_sample,
-                skip_reason="scheduler_or_audio_unavailable",
-            )
-            return False
-        metrics = scheduler.metrics_snapshot()
-        if metrics["queue_depth"] >= _CORRECTION_QUEUE_CAPACITY:
-            _telemetry(
-                logging.INFO,
-                "v4_correction_skipped",
-                connection_id=connection_id,
-                segment_key=segment_key,
-                start_sample=segment_start_sample,
-                end_sample=end_sample,
-                skip_reason="v4_queue_limit",
-                queue_depth=metrics["queue_depth"],
-                inflight=metrics["inflight"],
-            )
-            return False
-        correction_revision += 1
-        candidate_snapshot = CorrectionSnapshot(
-            connection_id=connection_id,
-            segment_key=segment_key,
-            revision_id=correction_revision,
-            text_version=text_version,
-            start_sample=segment_start_sample,
-            end_sample=end_sample,
-            audio=audio,
-            kind="intermediate",
-            trigger=trigger,
-        )
-        if not await scheduler.submit(candidate_snapshot):
-            candidate_snapshot = None
-            _telemetry(
-                logging.INFO,
-                "v4_correction_skipped",
-                connection_id=connection_id,
-                segment_key=segment_key,
-                start_sample=segment_start_sample,
-                end_sample=end_sample,
-                skip_reason="scheduler_queue_full",
-            )
-            return False
-        _telemetry(
-            logging.INFO,
-            "v4_correction_submitted",
-            connection_id=connection_id,
-            segment_key=segment_key,
-            revision_id=candidate_snapshot.revision_id,
-            start_sample=segment_start_sample,
-            end_sample=end_sample,
-            queue_depth=scheduler.metrics_snapshot()["queue_depth"],
-            trigger=trigger,
-        )
-        return True
-
-    async def wait_for_candidate() -> None:
-        if (
-            result_queue is None
-            or candidate_snapshot is None
-            or candidate_result is not None
-            or _ONLINE_RUNNER.has_backlog
-        ):
-            return
-        deadline = time.monotonic() + _FINAL_BUDGET_SECONDS
-        while candidate_result is None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return
-            try:
-                result = await asyncio.wait_for(result_queue.get(), timeout=remaining)
-            except asyncio.TimeoutError:
-                return
-            accept_correction_result(result)
-
-    async def punctuate(text: str) -> str:
-        if not text or punctuation is None:
-            return text
-        result, _, _ = await _PUNCTUATION_RUNNER.run(punctuation, text, cache={})
-        return normalize_punct_by_context(_extract_text(result)) or text
-
-    async def visible_partial(end_sample: int) -> str:
-        nonlocal last_punctuation_source, last_punctuation_text
-        nonlocal last_punctuation_units, last_punctuation_sample
-        units = count_chinese_and_words(segment_text)
-        should_punctuate = units > 3 and (
-            units - last_punctuation_units >= _PARTIAL_PUNCTUATION_UNITS
-            or end_sample - last_punctuation_sample >= _PARTIAL_PUNCTUATION_SAMPLES
-        )
-        if should_punctuate:
-            last_punctuation_source = segment_text
-            last_punctuation_text = await punctuate(segment_text)
-            last_punctuation_units = units
-            last_punctuation_sample = end_sample
-            return last_punctuation_text
-        if last_punctuation_source and segment_text.startswith(last_punctuation_source):
-            return safe_concat(
-                last_punctuation_text,
-                segment_text[len(last_punctuation_source) :],
-            )
-        return segment_text
-
-    async def finalize_segment(end_sample: int, trigger: str) -> bool:
-        nonlocal last_finished_ed
-        if segment_key is None or segment_start_sample is None or not segment_text:
-            reset_segment()
-            return True
-        if not correction_attempted:
-            await submit_candidate(end_sample, trigger)
-        drain_results()
-        await wait_for_candidate()
-        drain_results()
-
-        correction = candidate_result if candidate_result is not None else None
-        if correction is not None and correction_matches(correction):
-            final_text = correction.text
-            _telemetry(
-                logging.INFO,
-                "v4_correction_applied",
-                connection_id=connection_id,
-                segment_key=segment_key,
-                revision_id=correction.snapshot.revision_id,
-                start_sample=segment_start_sample,
-                end_sample=end_sample,
-                queue_ms=round(correction.queue_seconds * 1000, 3),
-                inference_ms=round(correction.inference_seconds * 1000, 3),
-            )
-        else:
-            final_text = await punctuate(segment_text)
-            reason = (
-                "not_submitted"
-                if candidate_snapshot is None
-                else "not_ready_within_budget"
-            )
-            _telemetry(
-                logging.INFO,
-                "v4_correction_fallback",
-                connection_id=connection_id,
-                segment_key=segment_key,
-                start_sample=segment_start_sample,
-                end_sample=end_sample,
-                fallback_reason=reason,
-                online_backlog=_ONLINE_RUNNER.has_backlog,
-            )
-
-        final_bg = max(last_finished_ed, round(segment_start_sample / _SAMPLE_RATE, 2))
-        final_ed = max(last_sent_ed, round(received_samples / _SAMPLE_RATE, 2))
-        sent = await send_result(final_text, True, final_bg, final_ed, segment_key)
-        if sent:
-            last_finished_ed = final_ed
-        reset_segment()
-        return sent
-
-    try:
-        while True:
-            chunk = await ws.receive_bytes()
-            drain_results()
-            speech_np = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
-            if np.any(~np.isfinite(speech_np)):
-                speech_np = np.nan_to_num(speech_np)
-            if not speech_np.size:
-                continue
-
-            chunk_start_sample = received_samples
-            received_samples += speech_np.size
-            chunk_end_sample = received_samples
-            raw, queue_seconds, inference_seconds = await _ONLINE_RUNNER.run(
-                model_online.generate,
-                input=speech_np,
-                cache=online_cache,
-                is_final=False,
-                chunk_size=chunk_size,
-                encoder_chunk_look_back=encoder_chunk_look_back,
-                decoder_chunk_look_back=decoder_chunk_look_back,
-            )
-            _telemetry(
-                logging.INFO,
-                "v4_model_inference",
-                model_name="online",
-                queue_ms=round(queue_seconds * 1000, 3),
-                inference_ms=round(inference_seconds * 1000, 3),
-            )
-            addition = _extract_text(raw)
-
-            if segment_key is None:
-                if not addition:
-                    pre_segment_pcm.append(speech_np.copy())
-                    silence_chunks += 1
-                    placeholder = f"segment-{segment_seq + 1:06d}"
-                    if not await send_result(
-                        "",
-                        False,
-                        round(chunk_end_sample / _SAMPLE_RATE, 2),
-                        round(chunk_end_sample / _SAMPLE_RATE, 2),
-                        placeholder,
-                    ):
-                        break
-                    if silence_chunks >= _SILENCE_CHUNKS:
-                        online_cache.clear()
-                        online_cache = {}
-                        pre_segment_pcm = []
-                        silence_chunks = 0
+            while True:
+                chunk = await ws.receive_bytes()
+                if not chunk:
                     continue
-                segment_seq += 1
-                segment_key = f"segment-{segment_seq:06d}"
-                initial_pcm = [*pre_segment_pcm, speech_np.copy()]
-                pcm_start_sample = chunk_end_sample - sum(
-                    item.size for item in initial_pcm
-                )
-                segment_start_sample = max(
-                    int(round(last_finished_ed * _SAMPLE_RATE)),
-                    pcm_start_sample,
-                )
-                joined_pcm = np.concatenate(initial_pcm)
-                trim_samples = max(0, segment_start_sample - pcm_start_sample)
-                segment_pcm = [joined_pcm[trim_samples:].copy()]
-                pre_segment_pcm = []
-                segment_text = addition
-                text_version = 1
-                silence_chunks = 0
-            else:
-                segment_pcm.append(speech_np.copy())
-                if addition:
-                    if silence_chunks:
-                        candidate_end_sample = None
-                        candidate_result = None
-                        _telemetry(
-                            logging.INFO,
-                            "v4_correction_invalidated",
-                            connection_id=connection_id,
-                            segment_key=segment_key,
-                            invalidation_reason="speech_resumed",
-                        )
-                    silence_chunks = 0
-                    merged = _merge_streaming_text(segment_text, addition)
-                    if merged != segment_text:
-                        segment_text = merged
-                        text_version += 1
-                else:
-                    silence_chunks += 1
-
-            if (
-                received_samples - segment_start_sample >= _MAX_SEGMENT_SAMPLES
-                or count_chinese_and_words(segment_text) > _MAX_TEXT_UNITS
-            ):
-                if not await finalize_segment(chunk_end_sample, "segment_limit"):
+                samples = len(chunk) // 2
+                if len(chunk) % 2 or samples > _MAX_BUFFER_SAMPLES:
+                    receive_error = 'invalid_or_oversize_pcm'
                     break
-                continue
-
-            if silence_chunks == 1:
-                candidate_end_sample = chunk_start_sample
-                await submit_candidate(candidate_end_sample, "first_empty_result")
-
-            if silence_chunks >= _SILENCE_CHUNKS:
-                end_sample = candidate_end_sample or chunk_start_sample
-                if not await finalize_segment(end_sample, "second_empty_result"):
+                if buffered + samples > _MAX_BUFFER_SAMPLES or inputs.full():
+                    receive_error = 'input_backlog_limit'
                     break
-                continue
+                buffered += samples
+                inputs.put_nowait(chunk)
+        except WebSocketDisconnect:
+            disconnected = True
+        finally:
+            if receive_error:
+                telemetry('v4_input_rejected', connection_id=cid, reason=receive_error)
+                await ws.close(code=1013, reason=receive_error)
+                disconnected = True
+            await inputs.put(None)
 
-            segment_visible_text = await visible_partial(chunk_end_sample)
-            if not await send_result(
-                segment_visible_text,
-                False,
-                round(segment_start_sample / _SAMPLE_RATE, 2),
-                round(chunk_end_sample / _SAMPLE_RATE, 2),
-                segment_key,
-            ):
+    async def emit(text, finished=False):
+        nonlocal last_ed, last_finished, response_sequence
+        if disconnected:
+            return
+        end = max(last_ed, round(received / _SAMPLE_RATE, 2))
+        bg = max(last_finished, round(segment.start / _SAMPLE_RATE, 2)) if segment else end
+        await ws.send_json({'key': segment.key if segment else f'segment-{sequence+1:06d}',
+                           'text': text, 'finished': finished, 'bg': bg, 'ed': end})
+        response_sequence += 1
+        for applied in applied_since_emit:
+            telemetry('v4_correction_visible', **applied,
+                      response_sequence=response_sequence, finished=finished)
+        applied_since_emit.clear()
+        last_ed = end
+        if finished:
+            last_finished = end
+
+    def fields(snap):
+        return dict(connection_id=cid, segment_key=f'segment-{snap.generation:06d}',
+                    generation=snap.generation, revision_id=snap.revision,
+                    start_sample=snap.start, end_sample=snap.end,
+                    correction_kind=snap.kind)
+
+    def adopt(result):
+        snap = result.snapshot
+        if segment is None or segment.state == 'FINISHED' or snap.generation != segment.generation:
+            telemetry('v4_correction_stale', **fields(snap), reason='generation')
+            return False
+        if result.error:
+            telemetry('v4_correction_rejected', **fields(snap), reason=result.error)
+            return False
+        full = snap.kind == 'final' and segment.state == 'CLOSING' and snap.end == segment.end
+        reason = segment.text.adopt(result.text, snap.raw, snap.end, snap.revision, final=full)
+        if reason == 'applied':
+            segment.deferred = None
+            segment.punctuation_source = ''
+            applied_since_emit.append(fields(snap))
+            telemetry('v4_correction_applied', **fields(snap),
+                      queue_ms=result.queue_ms, asr_ms=result.asr_ms,
+                      punctuation_ms=result.punctuation_ms, visible_end_sample=received)
+            return True
+        if reason == 'no_unique_suffix_anchor' and segment.state == 'OPEN':
+            if segment.deferred is None or segment.deferred.snapshot.end <= snap.end:
+                segment.deferred = result
+        telemetry('v4_correction_rejected', **fields(snap), reason=reason)
+        return False
+
+    def request(kind, deadline=float('inf')):
+        current = segment
+
+        def freeze():
+            # Freeze only at worker admission; pending holds no PCM copy.
+            current.pending = False
+            current.revision += 1
+            current.last_admitted = current.end
+            current.last_watermark = len(current.text.records)
+            return Snapshot(cid, current.generation, current.revision,
+                            current.start, current.end, current.text.raw,
+                            current.last_watermark, np.concatenate(current.pcm).copy(), kind)
+
+        accepted = scheduler.submit(cid, Request(current.generation, kind, freeze, deadline=deadline))
+        if accepted:
+            current.pending = True
+        else:
+            current.retry_at = received + _SAMPLE_RATE
+            telemetry('v4_correction_skipped', connection_id=cid, segment_key=current.key,
+                      correction_kind=kind, reason='queue_or_health')
+        return accepted
+
+    async def visible():
+        source = segment.text.visible
+        if segment.punctuation_source == source:
+            return segment.punctuation_text
+        growth = count_chinese_and_words(source) - count_chinese_and_words(segment.punctuation_source)
+        due = growth >= _PARTIAL_PUNCTUATION_UNITS or received - segment.punctuation_end >= _PARTIAL_PUNCTUATION_SAMPLES
+        if due and count_chinese_and_words(source) > 3:
+            try:
+                text, _ = await punctuation.apply(source)
+            except Exception as exc:
+                telemetry('v4_punctuation_failed', connection_id=cid, error_type=type(exc).__name__)
+                text = source
+            segment.punctuation_source, segment.punctuation_text = source, text
+            segment.punctuation_end = received
+            return text
+        if segment.punctuation_source and source.startswith(segment.punctuation_source):
+            return safe_concat(segment.punctuation_text, source[len(segment.punctuation_source):])
+        return source
+
+    async def online(audio, final=False):
+        raw, queue, duration = await _ONLINE_RUNNER.run(
+            model.generate, input=audio, cache=cache, is_final=final,
+            chunk_size=[4,8,4], encoder_chunk_look_back=4, decoder_chunk_look_back=1)
+        telemetry('v4_model_inference', model_name='online', queue_ms=queue*1000,
+                  inference_ms=duration*1000, is_final=final)
+        return extract_text(raw)
+
+    async def finish(trigger):
+        nonlocal segment, cache, result_wait
+        segment.state = 'CLOSING'
+        deadline = time.monotonic() + (0 if _ONLINE_RUNNER.has_backlog or not inputs.empty()
+                                      else _FINAL_BUDGET_SECONDS)
+        # Finalize only at a segment boundary. Empty audio flushes cached features.
+        tail = await online(np.empty(0, dtype=np.float32), final=True)
+        segment.text.append(tail, received)
+        request('final', deadline)
+        final_applied = False
+        # The persistent result waiter may already own a result; drain it first.
+        if result_wait.done():
+            result = result_wait.result()
+            applied = adopt(result)
+            final_applied = applied and result.snapshot.kind == 'final'
+            result_wait = asyncio.create_task(results.get())
+        while not final_applied and time.monotonic() < deadline and not disconnected:
+            done, _ = await asyncio.wait({result_wait}, timeout=max(0, deadline-time.monotonic()))
+            if not done:
                 break
+            result = result_wait.result()
+            result_wait = asyncio.create_task(results.get())
+            applied = adopt(result)
+            if applied and result.snapshot.kind == 'final' and result.snapshot.end == segment.end:
+                final_applied = True
+        text = segment.text.visible
+        if segment.punctuation_source == text:
+            text = segment.punctuation_text
+        elif segment.punctuation_source and text.startswith(segment.punctuation_source):
+            text = safe_concat(segment.punctuation_text, text[len(segment.punctuation_source):])
+        if not final_applied:
+            telemetry('v4_correction_fallback', connection_id=cid, segment_key=segment.key,
+                      reason='final_budget', trigger=trigger,
+                      covered_end_sample=segment.text.covered_end)
+        await emit(text, True)
+        segment.state = 'FINISHED'
+        scheduler.cancel_pending(cid, segment.generation)
+        segment = None
+        cache = {}
+
+    receiver = asyncio.create_task(receive())
+    input_wait = asyncio.create_task(inputs.get())
+    result_wait = asyncio.create_task(results.get())
+    try:
+        while not disconnected:
+            if not scheduler.healthy:
+                telemetry('v4_model_stalled', connection_id=cid)
+                await ws.close(code=1011, reason='v4 model stalled; restart required')
+                break
+            done, _ = await asyncio.wait({input_wait, result_wait}, timeout=1,
+                                         return_when=asyncio.FIRST_COMPLETED)
+            if result_wait in done:
+                result = result_wait.result()
+                result_wait = asyncio.create_task(results.get())
+                if adopt(result):
+                    await emit(segment.text.visible)
+            if input_wait not in done:
+                continue
+            chunk = input_wait.result()
+            input_wait = asyncio.create_task(inputs.get())
+            if chunk is None:
+                break
+            audio = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768
+            buffered -= audio.size
+            received += audio.size
+            addition = await online(audio)
+            if segment is None:
+                pre_pcm.append(audio)
+                if not addition:
+                    pre_empty += 1
+                    await emit('')
+                    if pre_empty >= _SILENCE_CHUNKS:
+                        pre_pcm, cache, pre_empty = [], {}, 0
+                    continue
+                sequence += 1
+                start = received - sum(a.size for a in pre_pcm)
+                segment = Segment(sequence, start, pcm=pre_pcm,
+                                  last_admitted=start, punctuation_end=start)
+                pre_pcm, pre_empty = [], 0
+            else:
+                segment.pcm.append(audio)
+            segment.end = received
+            segment.text.append(addition, received)
+            segment.silence = 0 if addition else segment.silence + 1
+            if segment.deferred is not None:
+                adopt(segment.deferred)
+            if (received - segment.start >= _MAX_SEGMENT_SAMPLES
+                    or count_chinese_and_words(segment.text.raw) > 200
+                    or segment.silence >= _SILENCE_CHUNKS):
+                await finish('empty_results' if segment.silence >= _SILENCE_CHUNKS else 'segment_limit')
+                continue
+            if (not segment.pending and received >= segment.retry_at
+                    and received - segment.last_admitted >= _INTERVAL_SAMPLES
+                    and len(segment.text.records) > segment.last_watermark):
+                request('intermediate')
+            await emit(await visible())
     except WebSocketDisconnect:
         pass
     finally:
-        if scheduler is not None:
-            await scheduler.unregister_session(connection_id)
-        online_cache.clear()
-        segment_pcm.clear()
-        update_stat("online")
-        if ws.client_state.name == "CONNECTED":
+        scheduler.unregister(cid)
+        for task in (receiver, input_wait, result_wait):
+            task.cancel()
+        await asyncio.gather(receiver, input_wait, result_wait, return_exceptions=True)
+        cache.clear()
+        update_stat('online')
+        if ws.client_state.name == 'CONNECTED' and ws.application_state.name == 'CONNECTED':
             await ws.close()

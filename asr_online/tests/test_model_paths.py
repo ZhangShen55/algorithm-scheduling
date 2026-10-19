@@ -128,7 +128,7 @@ class ModelPathConfigTests(unittest.TestCase):
             "v4_partial_punctuation_chars = 0\n",
             "v4_partial_punctuation_interval_ms = 0\n",
             "v4_correction_queue_capacity = 0\n",
-            "correction_queue_capacity = 4\nv4_correction_queue_capacity = 5\n",
+            "v4_correction_workers = 9\n",
             'sensevoice_correction_device = ""\n',
         )
         properties = (
@@ -139,7 +139,7 @@ class ModelPathConfigTests(unittest.TestCase):
             "v4_partial_punctuation_chars",
             "v4_partial_punctuation_interval_ms",
             "v4_correction_queue_capacity",
-            "v4_correction_queue_capacity",
+            "v4_correction_workers",
             "sensevoice_correction_device",
         )
         with tempfile.TemporaryDirectory() as directory:

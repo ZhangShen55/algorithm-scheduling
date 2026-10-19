@@ -8,7 +8,7 @@
 |------|------|
 | 流式 ASR | Paraformer 在线模型，低延迟增量输出 |
 | 实时标点 | ModelScope 标点模型，按静音/长度触发 |
-| 句末纠正 | v1.0.4 可在不阻塞实时主链路的前提下尝试 SenseVoice 纠正 |
+| 累计纠正 | v1.0.4 使用普通非流式 Paraformer 周期识别当前段累计音频，并单独补标点 |
 | 实例路由 | 每个容器只运行一个 Uvicorn 端点，由算法调度平台按 WebSocket 会话选实例 |
 | 状态接口 | 运行时长、会话统计、任务列表查询与清理 |
 
@@ -185,39 +185,67 @@ SenseVoice 模型通过 `config.toml` 配置并从项目内加载：
 sensevoice_model_dir = "model/SenseVoiceSmall"
 ```
 
-### WebSocket v1.0.4（实时优先句末纠正接口）
+### WebSocket v1.0.4（累计 Paraformer 纠正接口）
 
 - **路径**：`/v1.0.4/seacraft_asr_online`
 - **直连地址**：`ws://<host>:8084/v1.0.4/seacraft_asr_online`
 - **协议**：上行仍是 16 kHz、单声道、int16 PCM；下行字段严格保持
   `key/text/finished/bg/ed`。
-- **断句**：沿用 v1.0.1 的连续两个在线空结果规则，不运行 FSMN-VAD。第一次空结果
-  冻结当前段 PCM 并非阻塞提交一次 SenseVoice，第二次空结果才发送唯一的
-  `finished=true`。
-- **实时降级**：纠正已就绪时采用 SenseVoice 自带标点的结果；在线已有积压、队列已满、
-  模型失败或最多 100 ms 内未完成时，立即使用在线文本和最终标点完成字幕。迟到结果不会
-  改写已经完成的字幕段。
-- **字幕标识**：同一段的 partial 和最终响应使用稳定 `key`，新段生成新 `key`。
+- **三模型**：Online Paraformer 生成增量初稿；普通非流式 Paraformer-large
+  识别当前段累计 PCM；独立 CT-Transformer 补标点。均使用 PyTorch，v4 不使用 SenseVoice。
+- **句中纠正**：首次累计至少 4 秒，此后每新增至少 4 秒且有新文字允许再次提交。
+  0.48 秒块通常在 4.32、8.64、12.96 秒触发。忙时只保留一个最新待处理水位，
+  执行时冻结最新累计音频，不复制多份 pending PCM；周期纠正始终 `finished=false`。
+- **断句**：保留连续两个在线空结果及 20 秒/200 字保护规则，不增加 VAD。
+  在线空输出不代表真实静音。只在段末 flush 在线缓存，并发送唯一 `finished=true`。
+- **字幕顺序**：仍返回稳定 `key`，但消费者只依赖 `finished` 分段也能使用。
+  单一协调器发送全部响应，旧段结束后不会收到其迟到纠正。
+- **句末预算**：最终完整快照有独立机会。进入收尾后最多等待 100 ms，包括排队和
+  纠正标点；在线 flush 本身必须完成，耗尽预算时不再额外等待。在线积压时不等待。
+  回退保留已纠正前缀和所有在线尾部，不要求最终标点必定就绪。
 
-v1.0.4 只在稳定文本新增达到阈值或到达时间阈值时重新执行 partial 标点。单段 PCM、纠正
-队列和单会话在途任务均有硬上限；过载时允许降低纠正覆盖率，但不能阻塞在线响应。
+前缀衔接使用规范化文字及原始位置映射，数字格式统一后寻找 4～12 个字符的唯一末尾锚点，
+并限制在快照文字水位前后 24 个规范化字符内。这是文本对齐，不是字级时间戳。
+无唯一锚点时暂缓该次，后续在线出字可再次验证，后续累计纠正仍可执行。
+纯标点、长度不足原文 55% 的明显截断、过度扩张和大范围无关替换受到保护；
+最终结果若能定位到遗漏至少 4 字的尾部也会被拒绝。这些规则不保证识别准确率。
+
+每会话一个在途任务、一个 pending 水位，全局 pending 默认最多 8 个（含忙碌会话）。
+接收缓冲最多 20 秒 PCM、64 帧，超限明确关闭连接，不静默丢帧。
+线程超时或会话断开不会释放仍在执行的模型；超过 30 秒的活动纠正会阻止新准入，
+v4 会话记录 `v4_model_stalled` 并关闭，需要检查日志并受控重启。
+标点使用 v4 专属串行入口，旧三个接口的模型和调用分支不变。
+标点重算前移除已有的常见句读、保留小数和时间分隔，避免对纠正基底重复加出 `。，` 等组合。
 
 ```toml
-# 未配置 sensevoice_correction_device 时继承主 device。
 device = "cuda:0"
 ngpu = 1
-sensevoice_correction_device = "cuda:1"
+v4_correction_device = "cuda:1"
+v4_punctuation_device = "cuda:1"
+v4_correction_workers = 1
+v4_correction_interval_ms = 4000
 
 v4_final_budget_ms = 100
 v4_max_segment_seconds = 20
 v4_partial_punctuation_chars = 8
 v4_partial_punctuation_interval_ms = 2000
 v4_correction_queue_capacity = 8
+
+[model_paths]
+v4_correction_model_dir = "model/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
 ```
 
-Mac CPU 验证可同时把两个 device 设为 `cpu`。server12 验证时建议将在线 ASR 放在
-`cuda:0`、SenseVoice 放在 `cuda:1`，仍只启动一个 Uvicorn worker。压测客户端应在
-server12 本机连接 `127.0.0.1:8084`，避免把 Mac 到服务器的网络波动计入模型延迟。
+Mac 的默认配置使用 CPU。server12 项目已迁移到 `/home/zhangs/workspace/asr_online`：
+
+```bash
+conda activate asr
+cd /home/zhangs/workspace/asr_online
+CONFIG_PATH=test/config.server12-v4.toml python -m uvicorn app.main:app --host 0.0.0.0 --port 8084 --workers 1
+```
+
+短片段脚本 `test/validate_cumulative_v4.py` 在服务器本机连接 8084，实时发送教师音频
+98 秒起的 30 秒片段；独立目录保留完整 JSONL、音频及纠正位置，脚本退出时关闭其后端。
+运行方式见脚本说明。此次仅验证短片段功能，准确率与纠正好坏待用户核验，不提供容量结论。
 
 ### HTTP 状态
 
@@ -255,7 +283,7 @@ WebSocket 测试可参考 `test/test_api_ws_client.py`（需自备 16 kHz PCM/WA
 在项目根目录执行，构建上下文仍是项目根目录：
 
 ```bash
-cd /root/workspace/asr_online
+cd /home/zhangs/workspace/asr_online
 
 # 基础构建
 docker build -f docker/Dockerfile -t seacraft-asr-online:latest .

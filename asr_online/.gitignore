@@ -26,6 +26,8 @@ test/*
 !test/run_vad_three_way_comparison.py
 !test/test_api_ws_client.py
 !test/test_full_teacher_abc.py
+!test/probe_cumulative_paraformer.py
+!test/validate_cumulative_v4.py
 *.wav
 *.mp3
 *.m4a
