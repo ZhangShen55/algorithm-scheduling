@@ -270,7 +270,7 @@ python main.py
 # 服务监听 http://0.0.0.0:8084
 ```
 
-WebSocket 测试可参考 `test/test_api_ws_client.py`（需自备 16 kHz PCM/WAV 测试音频）。
+WebSocket 测试可参考 `test/test_api_ws_client.py`（需自备 16 kHz PCM/WAV 测试音频）。默认 `--send-mode fast` 按服务端 `ed` 推进加速发送，最多领先 2.88 秒音频；`--window-seconds` 可在 0.48~9.6 秒内调整，低于服务端 20 秒缓存上限。纠正响应的重复 `ed` 不释放发送额度。实际速度取决于服务端处理能力，加速测试不等同于实时输入下的纠正效果测试；模拟实时输入使用 `--send-mode realtime`，每 0.48 秒发送一块。所有流式及纠正响应独立接收保存。默认音频处理进度 30 秒未推进即退出，可通过 `--response-timeout` 调整；断连会报告关闭码和原因。成功、失败或中断均保存 `.summary.json`，包含发送模式、窗口、发送块数、已发送音频时长（包含末块补齐和尾部静音）、最后响应 `ed` 和退出状态。`--output` 指定 JSONL 路径，重复使用同一路径会覆盖旧结果。
 
 ## Docker 构建与运行
 
