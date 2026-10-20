@@ -182,6 +182,42 @@ class Settings:
     def v4_correction_model_dir(self) -> str | None:
         return self._optional_model_path("v4_correction_model_dir")
 
+    @property
+    def v4_itn_enabled(self) -> bool:
+        value = self._cfg.get("v4_itn_enabled", True)
+        if not isinstance(value, bool):
+            raise ValueError("v4_itn_enabled 必须为布尔值")
+        return value
+
+    @property
+    def v4_itn_failure_mode(self) -> str:
+        value = str(self._cfg.get("v4_itn_failure_mode", "passthrough")).strip().lower()
+        if value != "passthrough":
+            raise ValueError("v4_itn_failure_mode 目前只支持 passthrough")
+        return value
+
+    def _v4_itn_bool(self, key: str, default: bool) -> bool:
+        value = self._cfg.get(key, default)
+        if not isinstance(value, bool):
+            raise ValueError(f"{key} 必须为布尔值")
+        return value
+
+    @property
+    def v4_itn_remove_interjections(self) -> bool:
+        return self._v4_itn_bool("v4_itn_remove_interjections", True)
+
+    @property
+    def v4_itn_enable_standalone_number(self) -> bool:
+        return self._v4_itn_bool("v4_itn_enable_standalone_number", True)
+
+    @property
+    def v4_itn_enable_0_to_9(self) -> bool:
+        return self._v4_itn_bool("v4_itn_enable_0_to_9", False)
+
+    @property
+    def v4_itn_enable_million(self) -> bool:
+        return self._v4_itn_bool("v4_itn_enable_million", False)
+
     # 在线模型路径
     @property
     def asr_online_model_dir(self) -> str:

@@ -8,6 +8,7 @@ from app.core.config import operator_deployment, settings
 from app.core.correction_scheduler import CorrectionScheduler
 from app.core.model_assets import cleanup_prepared_model_dirs, prepare_decrypted_model_dir
 from app.core.v4_correction import V4CorrectionScheduler, V4Punctuation
+from app.core.v4_itn import V4ITN
 
 _model_online = None
 _punct_pipeline = None
@@ -166,10 +167,20 @@ async def load_models_if_needed():
                     model=prepare_decrypted_model_dir(settings.asr_online_punc_model_dir),
                     device=punc_device, disable_update=True,
                 ))
+                v4_itn = V4ITN(
+                    enabled=settings.v4_itn_enabled,
+                    failure_mode=settings.v4_itn_failure_mode,
+                    remove_interjections=settings.v4_itn_remove_interjections,
+                    enable_standalone_number=settings.v4_itn_enable_standalone_number,
+                    enable_0_to_9=settings.v4_itn_enable_0_to_9,
+                    enable_million=settings.v4_itn_enable_million,
+                )
+                await v4_itn.warmup()
                 _v4_scheduler = V4CorrectionScheduler(
                     correction_models, _v4_punctuation,
                     capacity=settings.v4_correction_queue_capacity,
                     max_samples=(settings.v4_max_segment_seconds + 20) * 16000,
+                    itn=v4_itn,
                 )
                 await _v4_scheduler.start()
         except Exception:

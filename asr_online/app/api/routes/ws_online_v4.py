@@ -130,7 +130,10 @@ async def run_v4_session(ws: WebSocket) -> None:
             telemetry('v4_correction_rejected', **fields(snap), reason=result.error)
             return False
         full = snap.kind == 'final' and segment.state == 'CLOSING' and snap.end == segment.end
-        reason = segment.text.adopt(result.text, snap.raw, snap.end, snap.revision, final=full)
+        reason = segment.text.adopt(
+            result.text, snap.raw, snap.end, snap.revision, final=full,
+            alignment_candidate=result.alignment_text or result.text,
+        )
         if reason == 'applied':
             segment.deferred = None
             segment.punctuation_source = ''

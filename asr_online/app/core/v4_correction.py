@@ -10,6 +10,7 @@ from typing import Callable
 import numpy as np
 
 from app.core.cumulative_text import normalized, quality_reason
+from app.core.v4_itn import V4ITN
 from app.utils.character_utils import normalize_punct_by_context
 
 
@@ -95,9 +96,13 @@ class Snapshot:
 class Result:
     snapshot: Snapshot
     text: str = ''
+    alignment_text: str = ''
     error: str | None = None
     queue_ms: float = 0
     asr_ms: float = 0
+    itn_ms: float = 0
+    itn_status: str = 'disabled'
+    itn_error_type: str | None = None
     punctuation_ms: float = 0
 
 
@@ -112,10 +117,11 @@ class Request:
 
 class V4CorrectionScheduler:
     def __init__(self, models, punctuation, capacity=8, max_samples=1927680,
-                 stall_seconds=30):
+                 stall_seconds=30, itn=None):
         if not models or capacity < 1:
             raise ValueError('v4 models and queue capacity required')
         self.models, self.punctuation = models, punctuation
+        self.itn = itn or V4ITN(enabled=False)
         self.capacity, self.max_samples = capacity, max_samples
         self.stall_seconds = stall_seconds
         self.sessions = {}
@@ -202,9 +208,12 @@ class V4CorrectionScheduler:
                     await native
                     raise
                 result.asr_ms = (time.monotonic()-asr_start)*1000
-                result.text = extract_text(raw)
-                result.error = quality_reason(snapshot.raw, result.text)
-                if not result.error and cid in self.sessions and time.monotonic() < request.deadline:
+                result.alignment_text = extract_text(raw)
+                result.text = result.alignment_text
+                result.error = quality_reason(snapshot.raw, result.alignment_text)
+                if not result.error and cid in self.sessions:
+                    result.text, result.itn_ms, result.itn_status, result.itn_error_type = \
+                        await self.itn.apply(result.text)
                     result.text, seconds = await self.punctuation.apply(result.text)
                     result.punctuation_ms = seconds * 1000
             except Exception as exc:
@@ -224,5 +233,7 @@ class V4CorrectionScheduler:
                       generation=snapshot.generation, revision_id=snapshot.revision,
                       start_sample=snapshot.start, end_sample=snapshot.end,
                       correction_kind=snapshot.kind, queue_ms=result.queue_ms,
-                      asr_ms=result.asr_ms, punctuation_ms=result.punctuation_ms,
-                      error_type=result.error, pending=len(self.pending), inflight=len(self.active))
+                      asr_ms=result.asr_ms, itn_ms=result.itn_ms,
+                      itn_status=result.itn_status, itn_error_type=result.itn_error_type,
+                      punctuation_ms=result.punctuation_ms, error_type=result.error,
+                      pending=len(self.pending), inflight=len(self.active))

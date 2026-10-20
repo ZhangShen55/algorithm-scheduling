@@ -43,6 +43,20 @@ class CumulativeTextTests(unittest.TestCase):
                          '这是二十世纪三十年代的故事', 64000, 1), 'applied')
         self.assertEqual(text.visible, '这是20世纪30年代的故事。后面继续')
 
+    def test_itn_display_text_uses_raw_candidate_for_alignment(self):
+        text = CumulativeText(raw='百分之三点五增长然后继续')
+        self.assertEqual(
+            text.adopt(
+                '3.5%增长。',
+                '百分之三点五增长',
+                64000,
+                1,
+                alignment_candidate='百分之三点五增长。',
+            ),
+            'applied',
+        )
+        self.assertEqual(text.visible, '3.5%增长。然后继续')
+
     def test_quality_and_final_tail_protection(self):
         text = CumulativeText(raw='我们今天研究文化历史的发展然后讨论社会变化')
         self.assertEqual(text.adopt('。', text.raw, 64000, 1, final=True), 'no_text')

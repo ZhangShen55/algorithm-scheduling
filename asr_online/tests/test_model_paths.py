@@ -89,6 +89,12 @@ class ModelPathConfigTests(unittest.TestCase):
             self.assertEqual(settings.v4_partial_punctuation_chars, 8)
             self.assertEqual(settings.v4_partial_punctuation_interval_ms, 2000)
             self.assertEqual(settings.v4_correction_queue_capacity, 8)
+            self.assertTrue(settings.v4_itn_enabled)
+            self.assertEqual(settings.v4_itn_failure_mode, "passthrough")
+            self.assertTrue(settings.v4_itn_remove_interjections)
+            self.assertTrue(settings.v4_itn_enable_standalone_number)
+            self.assertFalse(settings.v4_itn_enable_0_to_9)
+            self.assertFalse(settings.v4_itn_enable_million)
 
     def test_progressive_correction_configuration_is_validated(self):
         invalid_configs = (
@@ -130,6 +136,8 @@ class ModelPathConfigTests(unittest.TestCase):
             "v4_correction_queue_capacity = 0\n",
             "v4_correction_workers = 9\n",
             'sensevoice_correction_device = ""\n',
+            'v4_itn_enabled = 1\n',
+            'v4_itn_failure_mode = "raise"\n',
         )
         properties = (
             "v4_final_budget_ms",
@@ -141,6 +149,8 @@ class ModelPathConfigTests(unittest.TestCase):
             "v4_correction_queue_capacity",
             "v4_correction_workers",
             "sensevoice_correction_device",
+            "v4_itn_enabled",
+            "v4_itn_failure_mode",
         )
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.toml"

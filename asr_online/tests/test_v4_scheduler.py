@@ -43,6 +43,46 @@ async def eventually(predicate):
 
 
 class SchedulerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_itn_runs_before_punctuation_and_keeps_alignment_candidate(self):
+        class Model:
+            def generate(self, **kwargs):
+                return [{'text': '百分之三点五增长'}]
+
+        class ITN:
+            async def apply(self, text):
+                self.input = text
+                return '3.5%增长', 1.0, 'applied', None
+
+        itn = ITN()
+        punctuation_inputs = []
+
+        def punctuation(text, cache):
+            punctuation_inputs.append(text)
+            return {'text': text + '。'}
+
+        scheduler = V4CorrectionScheduler(
+            [Model()], V4Punctuation(punctuation), itn=itn,
+        )
+        await scheduler.start()
+        result_queue = scheduler.register('a')
+
+        def freeze():
+            return Snapshot(
+                'a', 1, 1, 0, 64000, '百分之三点五增长', 1,
+                np.zeros(64000, dtype=np.float32), 'intermediate',
+            )
+
+        try:
+            scheduler.submit('a', Request(1, 'intermediate', freeze))
+            result = await asyncio.wait_for(result_queue.get(), 1)
+            self.assertEqual(itn.input, '百分之三点五增长')
+            self.assertEqual(punctuation_inputs, ['3.5%增长'])
+            self.assertEqual(result.text, '3.5%增长。')
+            self.assertEqual(result.alignment_text, '百分之三点五增长')
+            self.assertEqual(result.itn_status, 'applied')
+        finally:
+            await scheduler.close()
+
     async def test_pending_global_bound_final_priority_and_single_inflight(self):
         model = BlockingModel()
         punc = V4Punctuation(lambda text, cache: [{'text':text+'。'}])

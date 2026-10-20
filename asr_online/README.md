@@ -191,8 +191,9 @@ sensevoice_model_dir = "model/SenseVoiceSmall"
 - **直连地址**：`ws://<host>:8084/v1.0.4/seacraft_asr_online`
 - **协议**：上行仍是 16 kHz、单声道、int16 PCM；下行字段严格保持
   `key/text/finished/bg/ed`。
-- **三模型**：Online Paraformer 生成增量初稿；普通非流式 Paraformer-large
-  识别当前段累计 PCM；独立 CT-Transformer 补标点。均使用 PyTorch，v4 不使用 SenseVoice。
+- **处理链**：Online Paraformer 生成增量初稿；普通非流式 Paraformer-large
+  识别当前段累计 PCM；纠正文本依次经过 `WeTextProcessing==1.2.0` ITN 和独立
+  CT-Transformer 补标点。均使用 PyTorch，v4 不使用 SenseVoice 的 `use_itn`。
 - **句中纠正**：首次累计至少 4 秒，此后每新增至少 4 秒且有新文字允许再次提交。
   0.48 秒块通常在 4.32、8.64、12.96 秒触发。忙时只保留一个最新待处理水位，
   执行时冻结最新累计音频，不复制多份 pending PCM；周期纠正始终 `finished=false`。
@@ -230,6 +231,12 @@ v4_max_segment_seconds = 20
 v4_partial_punctuation_chars = 8
 v4_partial_punctuation_interval_ms = 2000
 v4_correction_queue_capacity = 8
+v4_itn_enabled = true
+v4_itn_failure_mode = "passthrough"
+v4_itn_remove_interjections = true
+v4_itn_enable_standalone_number = true
+v4_itn_enable_0_to_9 = false
+v4_itn_enable_million = false
 
 [model_paths]
 v4_correction_model_dir = "model/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
@@ -242,6 +249,20 @@ conda activate asr
 cd /home/zhangs/workspace/asr_online
 CONFIG_PATH=test/config.server12-v4.toml python -m uvicorn app.main:app --host 0.0.0.0 --port 8084 --workers 1
 ```
+
+v1.0.4 的 ITN 依赖为 `WeTextProcessing==1.2.0`，实际 Python 命名空间是 `itn`，底层需要
+`pynini`。Linux GPU 的 `asr` 环境可直接执行 `pip install -r requirements.txt`；Mac
+建议先安装 Conda-forge 二进制依赖，再安装规则包：
+
+```bash
+conda activate asr
+conda install -n asr -c conda-forge pynini=2.1.7 -y
+python -m pip install --no-deps WeTextProcessing==1.2.0 'importlib_resources>=5.0'
+python -c "from itn.chinese.inverse_normalizer import InverseNormalizer; print(InverseNormalizer().normalize('二点五平方电线'))"
+```
+
+ITN 默认开启；依赖不可用或单次处理失败时使用 `passthrough`，继续输出未经过 ITN 的纠正文本。
+ITN 只规范化数字、日期、时间、比例、金额和单位等书面形式，不负责修复同音字、漏字或语义识别错误。
 
 短片段脚本 `test/validate_cumulative_v4.py` 在服务器本机连接 8084，实时发送教师音频
 98 秒起的 30 秒片段；独立目录保留完整 JSONL、音频及纠正位置，脚本退出时关闭其后端。

@@ -113,16 +113,17 @@ class CumulativeText:
         return safe_concat(self.base, self.raw[self.cut:]) if self.base else self.raw
 
     def adopt(self, candidate: str, snapshot_raw: str, end: int, revision: int,
-              *, final: bool = False) -> str:
+              *, final: bool = False, alignment_candidate: str | None = None) -> str:
         if end <= self.covered_end or revision <= self.revision:
             return 'stale'
-        reason = quality_reason(self.raw if final else snapshot_raw, candidate)
+        alignment_candidate = alignment_candidate or candidate
+        reason = quality_reason(self.raw if final else snapshot_raw, alignment_candidate)
         if reason:
             return reason
         if final:
             # A final may fix its last word, but cannot silently omit a long tail.
             old, _ = normalized(self.raw)
-            new, _ = normalized(candidate)
+            new, _ = normalized(alignment_candidate)
             anchor = new[-6:]
             if len(anchor) == 6 and old.count(anchor) == 1:
                 missing = len(old) - (old.index(anchor) + len(anchor))
@@ -130,7 +131,7 @@ class CumulativeText:
                     return 'missing_tail'
             cut = len(self.raw)
         else:
-            cut, reason = align_prefix(self.raw, snapshot_raw, candidate)
+            cut, reason = align_prefix(self.raw, snapshot_raw, alignment_candidate)
             if cut is None:
                 return reason
             if cut < self.cut:

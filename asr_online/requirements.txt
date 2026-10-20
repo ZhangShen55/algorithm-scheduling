@@ -10,3 +10,5 @@ numpy==1.26.4
 websockets==12.0
 simplejson==3.20.1
 tomli
+WeTextProcessing==1.2.0
+importlib_resources>=5.0

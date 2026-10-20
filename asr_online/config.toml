@@ -33,6 +33,13 @@ v4_correction_workers = 1
 v4_correction_interval_ms = 4000
 v4_correction_device = "cpu"
 v4_punctuation_device = "cpu"
+# v1.0.4 Paraformer-large 纠正后的逆文本正则化，再进入标点模型。
+v4_itn_enabled = true
+v4_itn_failure_mode = "passthrough"
+v4_itn_remove_interjections = true
+v4_itn_enable_standalone_number = true
+v4_itn_enable_0_to_9 = false
+v4_itn_enable_million = false
 
 [logging]
 # 日志级别。
