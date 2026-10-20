@@ -46,5 +46,5 @@
 
 - [x] 7.1 检查 diff，仅暂存本变更相关的 `asr_offline`、部署文件、测试、文档和 OpenSpec 工件
 - [x] 7.2 创建中文规范提交，例如 `feat(asr_offline): 接入 WeTextProcessing 规范化离线转写`
-- [ ] 7.3 推送当前分支到 `origin`，记录提交 SHA 和远端验证结果
-- [ ] 7.4 最终复查工作区，确认未提交或推送用户既有的 `asr_online`、其他服务和无关 OpenSpec 改动
+- [x] 7.3 推送当前分支到 `origin`，记录提交 SHA 和远端验证结果
+- [x] 7.4 最终复查工作区，确认未提交或推送用户既有的 `asr_online`、其他服务和无关 OpenSpec 改动
