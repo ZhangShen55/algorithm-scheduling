@@ -4,6 +4,7 @@ schema: spec-driven
 context: |
   OpenSpec 的提案、设计、任务和规范记录使用中文正文。
   服务名、接口路径、字段名、能力标识和 OpenSpec 语法关键字保持原样。
+  Change 名称统一使用 `<项目名>-<YYYY-MM-DD>-<任务名>` 格式，项目名和任务名使用 kebab-case；例如 `asr-offline-2026-10-20-integrate-wetextprocessing-v1-1-8`。
 
 # 各类工件的持久规则。
 rules:
