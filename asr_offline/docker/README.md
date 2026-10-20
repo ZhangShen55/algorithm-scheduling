@@ -1,7 +1,16 @@
 # ASR Offline 镜像构建
 
 构建上下文必须是项目根目录，镜像会包含 `model/` 下的模型文件和
-`wheel/algorithm_operator_registry_client-0.1.0-py3-none-any.whl`。构建前确认两者均存在。
+`wheel/algorithm_operator_registry_client-0.2.0-py3-none-any.whl`。构建前确认两者均存在。
+
+Dockerfile 在 Conda-forge 安装 `pynini=2.1.7` 与 `openfst=1.8.4`，再从
+`requirements-pip.txt` 安装 `WeTextProcessing==1.2.0`；不要让 pip 在 CentOS 7 中源码编译 Pynini。
+镜像构建完成后可检查：
+
+```bash
+docker run --rm --entrypoint python "$IMAGE_REF" -c \
+  'import pynini; from itn.chinese.inverse_normalizer import InverseNormalizer; print(pynini.__version__); InverseNormalizer()'
+```
 
 ```bash
 cd /path/to/asr_offline

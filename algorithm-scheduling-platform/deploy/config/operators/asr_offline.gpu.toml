@@ -66,3 +66,11 @@ open_spk = true
 open_emotion = true
 ban_hotword = true
 open_mul_lang = true
+
+# WeTextProcessing 1.2.0 ITN 配置；异常时保留原始 ASR 文本。
+[itn]
+enabled = true
+enable_standalone_number = true
+enable_0_to_9 = false
+remove_interjections = true
+failure_mode = "passthrough"

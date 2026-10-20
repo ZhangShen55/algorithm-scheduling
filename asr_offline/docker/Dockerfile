@@ -32,6 +32,8 @@ RUN conda create -n asr -y -c conda-forge \
     libsndfile \
     pysoundfile \
     pkg-config \
+    pynini=2.1.7 \
+    openfst=1.8.4 \
     && conda clean -afy
 SHELL ["bash", "-lc"]
 ENV PATH="/opt/conda/envs/asr/bin:$PATH"

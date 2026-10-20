@@ -35,6 +35,7 @@ from app.utils.feature_utils import (
     build_speed_info,
 )
 from app.utils.asr_stats import update_stat, update_fail_task
+from app.utils.itn import ItnConfig, normalize_segments
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,13 @@ EMOTION_LABEL_MAP = {
     "厌恶/disgusted": "思考",
     "恐惧/fearful": "疑问",
 }
+
+
+def _apply_itn(segments: list[dict], language: str) -> tuple[list[dict], str]:
+    """Apply configured ITN after ASR assembly without changing segment metadata."""
+    config = getattr(settings, "itn_config", ItnConfig())
+    normalized, text, _ = normalize_segments(segments, language, config)
+    return normalized, text
 
 
 @dataclass
@@ -244,14 +252,14 @@ async def run_whisper_asr(ctx: AsrContext, model_whisper) -> dict:
         update_fail_task()
         return {"msg": "音频文件为空或未检测到任何人声", "code": 4008}
 
+    speed_info = build_speed_info(output_segments, total_duration=ctx.audio_total_s)
+    output_segments, normalized_text = _apply_itn(output_segments, request.language)
+
     result = {
         "language": request.language,
         "segments": output_segments,
-        "text": " ".join(texts),
-        "speed_info": build_speed_info(
-            output_segments,
-            total_duration=ctx.audio_total_s,
-        ),
+        "text": normalized_text,
+        "speed_info": speed_info,
         "load_audio_time_ms": f"{ctx.load_audio_time_ms:.2f}",
         "gpu_time_ms": f"{gpu_time_ms:.2f}",
     }
@@ -473,11 +481,14 @@ async def run_paraformer_asr(ctx: AsrContext) -> dict:
             update_fail_task()
             return {"msg": "音频文件为空或未检测到任何人声", "code": 4008}
 
+        speed_info = build_speed_info(all_segments, total_duration=audio_total_s)
+        all_segments, normalized_text = _apply_itn(all_segments, request.language)
+
         ret = {
             "language": request.language,
             "segments": all_segments,
-            "text": total_text,
-            "speed_info": build_speed_info(all_segments, total_duration=audio_total_s),
+            "text": normalized_text,
+            "speed_info": speed_info,
             "load_audio_time_ms": f"{load_audio_time_ms:.2f}",
             "gpu_time_ms": f"{gpu_time_ms:.2f}",
         }
@@ -551,11 +562,13 @@ async def run_paraformer_asr(ctx: AsrContext) -> dict:
             if request.showEmotion:
                 item["emotion"] = emotion if emotion is not None else "平淡"
             segments.append(item)
+        speed_info = build_speed_info(segments, total_duration=audio_total_s)
+        segments, normalized_text = _apply_itn(segments, request.language)
         ret = {
             "language": request.language,
             "segments": segments,
-            "text": text,
-            "speed_info": build_speed_info(segments, total_duration=audio_total_s),
+            "text": normalized_text,
+            "speed_info": speed_info,
             "load_audio_time_ms": f"{load_audio_time_ms:.2f}",
             "gpu_time_ms": f"{gpu_time_ms:.2f}"
         }

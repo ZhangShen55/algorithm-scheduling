@@ -151,6 +151,43 @@ class Settings:
     def logging_config(self) -> dict:
         return dict(self._cfg.get("logging", {}))
 
+    @property
+    def itn_enabled(self) -> bool:
+        return bool(self._cfg.get("itn", {}).get("enabled", True))
+
+    @property
+    def itn_enable_standalone_number(self) -> bool:
+        return bool(self._cfg.get("itn", {}).get("enable_standalone_number", True))
+
+    @property
+    def itn_enable_0_to_9(self) -> bool:
+        return bool(self._cfg.get("itn", {}).get("enable_0_to_9", False))
+
+    @property
+    def itn_remove_interjections(self) -> bool:
+        return bool(self._cfg.get("itn", {}).get("remove_interjections", True))
+
+    @property
+    def itn_failure_mode(self) -> str:
+        mode = str(self._cfg.get("itn", {}).get("failure_mode", "passthrough")).strip().lower()
+        if mode not in {"passthrough", "raise"}:
+            raise ValueError(
+                "[itn].failure_mode must be one of: passthrough, raise"
+            )
+        return mode
+
+    @property
+    def itn_config(self):
+        from app.utils.itn import ItnConfig
+
+        return ItnConfig(
+            enabled=self.itn_enabled,
+            enable_standalone_number=self.itn_enable_standalone_number,
+            enable_0_to_9=self.itn_enable_0_to_9,
+            remove_interjections=self.itn_remove_interjections,
+            failure_mode=self.itn_failure_mode,
+        )
+
 
 settings = Settings()
 operator_deployment = load_operator_deployment_settings(

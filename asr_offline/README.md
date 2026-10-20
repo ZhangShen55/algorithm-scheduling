@@ -61,7 +61,8 @@ asr_offline/
 │   └── utils/
 │       ├── audio_utils.py     # 音频处理工具
 │       ├── feature_utils.py   # 特征提取
-│       └── asr_stats.py       # 统计信息
+│       ├── asr_stats.py       # 统计信息
+│       └── itn.py             # WeTextProcessing 1.2.0 ITN 适配与回退
 ├── config.toml               # 配置文件（TOML 格式）
 ├── requirements.txt          # 依赖包
 ├── docker/                   # 容器化部署文件
@@ -83,6 +84,15 @@ asr_offline/
 
 ```bash
 pip install -r requirements.txt
+```
+
+`WeTextProcessing==1.2.0` 依赖 Pynini/OpenFST。推荐在 Conda `asr` 环境中先安装二进制包，
+再安装 Python 规则包，避免从源码编译：
+
+```bash
+conda install -n asr -c conda-forge "pynini=2.1.7" "openfst=1.8.4"
+conda run -n asr python -m pip install -r requirements-pip.txt
+conda run -n asr python -c "import pynini; from itn.chinese.inverse_normalizer import InverseNormalizer; print(pynini.__version__); InverseNormalizer()"
 ```
 
 ### 配置
@@ -116,7 +126,20 @@ open_spk = true            # Paraformer 路径说话人分离
 open_emotion = true        # Paraformer 路径情感识别
 ban_hotword = true         # 禁用热词
 open_mul_lang = true       # 法语 Faster-Whisper 转写
+
+# WeTextProcessing 1.2.0 ITN；只改写文本，不改变 ASR 时间轴。
+[itn]
+enabled = true
+enable_standalone_number = true
+enable_0_to_9 = false
+remove_interjections = true
+failure_mode = "passthrough"
 ```
+
+v1.1.8 在 Paraformer/Whisper 分段完成后执行 ITN，再由规范化后的分段重建顶层 `text`。
+`auto`/`zh` 使用中文规则，`en` 使用英文规则；分段时间、词时间、说话人、情绪和语速字段保持不变。
+`failure_mode = "passthrough"` 时依赖缺失、FST 构图失败或单段异常都会保留 ASR 原文，
+不会丢弃整条转写。ITN 是确定性格式化规则，不负责修复 ASR 错听；语义错误仍需人工复核。
 
 #### 平台注册与运行配置
 
@@ -202,6 +225,8 @@ curl -X POST "http://localhost:8083/v1.1.8/seacraft_asr" \
   "gpu_time_ms": "1349.49"
 }
 ```
+
+可通过 `/get_status` 查看 ITN 依赖是否可用：`itn.available=false` 表示服务会按回退模式返回原始文本。
 
 响应字段说明：
 

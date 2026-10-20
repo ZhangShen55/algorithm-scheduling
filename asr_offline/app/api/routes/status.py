@@ -3,6 +3,7 @@ from fastapi import APIRouter, Request
 
 from app.core.config import settings
 from app.utils.asr_stats import read_stats, clear_processing_tasks
+from app.utils.itn import itn_dependency_status
 
 router = APIRouter()
 
@@ -34,6 +35,7 @@ async def get_status(request: Request):
         "onlineDone": stats["online"],
         "queuedTaskList": stats["queued_task_ids"],
         "processingTaskList": stats["processing_task_ids"],
+        "itn": itn_dependency_status(settings.itn_config),
     }
 
 

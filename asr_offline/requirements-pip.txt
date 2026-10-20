@@ -21,3 +21,6 @@ soundfile==0.13.1
 librosa==0.11.0
 pydub==0.25.1
 tomli==2.4.0
+# Pynini/OpenFST 必须先由 Conda-forge 安装，避免 CentOS 7 源码编译。
+WeTextProcessing==1.2.0
+importlib_resources==6.5.2

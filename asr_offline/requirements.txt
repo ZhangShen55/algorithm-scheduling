@@ -21,3 +21,10 @@ soundfile==0.13.1
 librosa==0.11.0
 pydub==0.25.1
 tomli==2.4.0
+# WeTextProcessing 1.2.0 的 Python 规则包；pynini/OpenFST 由 Conda-forge 安装。
+WeTextProcessing==1.2.0
+importlib_resources==6.5.2
+# 仅供 Conda 环境锁定，Docker 不通过 pip 编译该包。
+pynini==2.1.7
+# Pynini 2.1.7 的 Conda-forge 运行时配套版本。
+openfst==1.8.4
