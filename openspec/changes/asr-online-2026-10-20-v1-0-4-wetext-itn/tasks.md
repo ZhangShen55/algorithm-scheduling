@@ -36,7 +36,7 @@
 
 ## 6. 中文提交和推送
 
-- [ ] 6.1 只暂存本变更相关的 v1.0.4 代码、配置、依赖、测试、文档和 OpenSpec 文件
-- [ ] 6.2 创建中文规范提交，提交信息明确包含 v1.0.4 接入 WeTextProcessing ITN
-- [ ] 6.3 推送当前分支并记录提交 SHA、服务器验证摘要和 Mac 同步结果
-- [ ] 6.4 最终复查工作区，确认未修改 v1.0.1-v1.0.3、`online_gateway_service`、已有 `asr_offline` ITN 变更或用户无关改动
+- [x] 6.1 只暂存本变更相关的 v1.0.4 代码、配置、依赖、测试、文档和 OpenSpec 文件
+- [x] 6.2 创建中文规范提交，提交信息明确包含 v1.0.4 接入 WeTextProcessing ITN
+- [x] 6.3 推送当前分支并记录提交 SHA、服务器验证摘要和 Mac 同步结果
+- [x] 6.4 最终复查工作区，确认未修改 v1.0.1-v1.0.3、`online_gateway_service`、已有 `asr_offline` ITN 变更或用户无关改动
