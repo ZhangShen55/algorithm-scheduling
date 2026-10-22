@@ -168,6 +168,99 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(arrivals), 1)
         self.assertEqual(self.summary()["status"], "failed")
 
+    async def test_concurrent_clients_share_wav_and_save_separate_outputs(self):
+        arrivals = {}
+
+        async def handler(ws):
+            connection_id = len(arrivals) + 1
+            arrivals[connection_id] = []
+            async for _ in ws:
+                arrivals[connection_id].append(time.monotonic())
+                response = dict(
+                    key=f"segment-{connection_id}",
+                    text=f"client-{connection_id}",
+                    finished=False,
+                    bg=0,
+                    ed=round(len(arrivals[connection_id]) * client.CHUNK_SECONDS, 2),
+                )
+                await ws.send(json.dumps(response))
+
+        async with websockets.serve(handler, "127.0.0.1", 0) as server:
+            port = server.sockets[0].getsockname()[1]
+            with contextlib.redirect_stdout(io.StringIO()):
+                aggregate = await asyncio.wait_for(
+                    client.run_concurrent(
+                        self.wav,
+                        f"ws://127.0.0.1:{port}",
+                        self.output,
+                        2,
+                        tail_chunks=1,
+                        drain_seconds=0.05,
+                        send_mode="realtime",
+                    ),
+                    timeout=5,
+                )
+
+        self.assertEqual(aggregate["status"], "completed")
+        self.assertEqual(aggregate["completed_clients"], 2)
+        self.assertEqual(aggregate["responses"], 6)
+        self.assertEqual(len(arrivals), 2)
+        self.assertTrue(all(len(times) == 3 for times in arrivals.values()))
+        self.assertTrue(
+            client.concurrent_summary_path(self.output).exists()
+        )
+        for index in (1, 2):
+            output = client.concurrent_output_path(self.output, index, 2)
+            summary = json.loads(output.with_suffix(".summary.json").read_text())
+            self.assertEqual(summary["status"], "completed")
+            self.assertEqual(summary["output"], str(output))
+
+    async def test_concurrent_summary_keeps_partial_results_on_capacity_error(self):
+        connection_count = 0
+
+        async def handler(ws):
+            nonlocal connection_count
+            connection_count += 1
+            connection_id = connection_count
+            if connection_id > 1:
+                await ws.recv()
+                await ws.close(code=1013, reason="qwen stream session capacity exhausted")
+                return
+
+            received = 0
+            async for _ in ws:
+                received += 1
+                await ws.send(json.dumps(dict(
+                    key="segment-1",
+                    text="client-1",
+                    finished=False,
+                    bg=0,
+                    ed=round(received * client.CHUNK_SECONDS, 2),
+                )))
+
+        async with websockets.serve(handler, "127.0.0.1", 0) as server:
+            port = server.sockets[0].getsockname()[1]
+            with contextlib.redirect_stdout(io.StringIO()):
+                aggregate = await asyncio.wait_for(
+                    client.run_concurrent(
+                        self.wav,
+                        f"ws://127.0.0.1:{port}",
+                        self.output,
+                        2,
+                        tail_chunks=1,
+                        drain_seconds=0.05,
+                        send_mode="realtime",
+                    ),
+                    timeout=5,
+                )
+
+        self.assertEqual(aggregate["status"], "partial")
+        self.assertEqual(aggregate["completed_clients"], 1)
+        self.assertEqual(aggregate["failed_clients"], 1)
+        failed = [item for item in aggregate["clients"] if item["status"] == "failed"]
+        self.assertEqual(failed[0]["close_code"], 1013)
+        self.assertIn("session capacity exhausted", failed[0]["close_reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

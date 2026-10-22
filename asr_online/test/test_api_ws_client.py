@@ -12,8 +12,10 @@ from websockets.exceptions import ConnectionClosed
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_WAV = DEFAULT_ROOT / "test" / "教师1_16k.wav"
-DEFAULT_OUTPUT = DEFAULT_ROOT / "test" / "v1_0_4_results.jsonl"
-DEFAULT_URL = "ws://192.168.29.12:8084/v1.0.4/seacraft_asr_online"
+# DEFAULT_WAV = "/Users/zhangshen/Downloads/多模态机器学习/音频文件/课堂实录.wav"
+DEFAULT_OUTPUT = DEFAULT_ROOT / "test" / "v1_0_5_results_zh.jsonl"
+DEFAULT_URL = "ws://127.0.0.1:18084/v1.0.5/seacraft_asr_online"
+DEFAULT_CONCURRENCY = 4
 CHUNK_SAMPLES = 960 * 8
 CHUNK_SECONDS = CHUNK_SAMPLES / 16000
 
@@ -48,6 +50,15 @@ def read_pcm_chunks(
             yield chunk
 
 
+def concurrent_output_path(output_path: Path, client_index: int, concurrency: int) -> Path:
+    suffix = f".client-{client_index:03d}-of-{concurrency:03d}"
+    return output_path.with_name(f"{output_path.stem}{suffix}{output_path.suffix}")
+
+
+def concurrent_summary_path(output_path: Path) -> Path:
+    return output_path.with_name(f"{output_path.stem}.concurrent.summary.json")
+
+
 async def run(
     wav_path: Path,
     ws_url: str,
@@ -60,6 +71,7 @@ async def run(
     response_timeout: float = 30.0,
     send_mode: str = "fast",
     window_seconds: float = 2.88,
+    emit_summary: bool = True,
 ) -> None:
     if send_mode not in {"fast", "realtime"}:
         raise ValueError("send_mode 必须为 fast 或 realtime")
@@ -176,7 +188,105 @@ async def run(
         output_path.with_suffix(".summary.json").write_text(
             json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
-        print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
+        if emit_summary:
+            print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
+
+
+async def run_concurrent(
+    wav_path: Path,
+    ws_url: str,
+    output_path: Path,
+    concurrency: int,
+    **run_options,
+) -> dict:
+    if concurrency < 2:
+        raise ValueError("concurrency 必须至少为 2")
+
+    started = time.perf_counter()
+    output_paths = [
+        concurrent_output_path(output_path, index, concurrency)
+        for index in range(1, concurrency + 1)
+    ]
+
+    async def run_client(index: int, client_output: Path) -> str | None:
+        try:
+            await run(
+                wav_path,
+                ws_url,
+                client_output,
+                emit_summary=False,
+                **run_options,
+            )
+        except Exception as exc:
+            return f"{type(exc).__name__}: {exc}"
+        return None
+
+    task_errors = await asyncio.gather(
+        *(
+            run_client(index, client_output)
+            for index, client_output in enumerate(output_paths, start=1)
+        ),
+        return_exceptions=False,
+    )
+
+    clients = []
+    for index, (client_output, task_error) in enumerate(
+        zip(output_paths, task_errors), start=1
+    ):
+        summary_path = client_output.with_suffix(".summary.json")
+        if summary_path.exists():
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        else:
+            summary = {
+                "wav": str(wav_path),
+                "url": ws_url,
+                "status": "failed",
+                "error": task_error or "客户端未生成汇总文件",
+                "output": str(client_output),
+            }
+        summary["client_index"] = index
+        if task_error and not summary.get("error"):
+            summary["error"] = task_error
+        clients.append(summary)
+
+    completed = sum(client.get("status") == "completed" for client in clients)
+    failed = sum(client.get("status") == "failed" for client in clients)
+    interrupted = sum(client.get("status") == "interrupted" for client in clients)
+    if completed == concurrency:
+        status = "completed"
+    elif completed == 0:
+        status = "failed" if interrupted == 0 else "interrupted"
+    else:
+        status = "partial"
+
+    aggregate_path = concurrent_summary_path(output_path)
+    aggregate = {
+        "wav": str(wav_path),
+        "url": ws_url,
+        "concurrency": concurrency,
+        "status": status,
+        "completed_clients": completed,
+        "failed_clients": failed,
+        "interrupted_clients": interrupted,
+        "responses": sum(client.get("responses", 0) for client in clients),
+        "final_results": sum(client.get("final_results", 0) for client in clients),
+        "source_chunks": sum(client.get("source_chunks", 0) for client in clients),
+        "tail_chunks": sum(client.get("tail_chunks", 0) for client in clients),
+        "elapsed_seconds": round(time.perf_counter() - started, 3),
+        "max_client_elapsed_seconds": max(
+            (float(client.get("elapsed_seconds", 0) or 0) for client in clients),
+            default=0,
+        ),
+        "aggregate_summary": str(aggregate_path),
+        "clients": clients,
+    }
+    aggregate_path.parent.mkdir(parents=True, exist_ok=True)
+    aggregate_path.write_text(
+        json.dumps(aggregate, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(json.dumps(aggregate, ensure_ascii=False, indent=2), flush=True)
+    return aggregate
 
 
 def main() -> None:
@@ -185,6 +295,12 @@ def main() -> None:
     parser.add_argument("--url", default=os.getenv("ASR_TEST_URL", DEFAULT_URL))
     parser.add_argument(
         "--output", type=Path, default=Path(os.getenv("ASR_TEST_OUTPUT", DEFAULT_OUTPUT))
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=int(os.getenv("ASR_TEST_CONCURRENCY", str(DEFAULT_CONCURRENCY))),
+        help="同时连接数，默认读取 DEFAULT_CONCURRENCY；大于 1 时每路使用独立 JSONL 输出",
     )
     parser.add_argument("--tail-chunks", type=int, default=3)
     parser.add_argument("--drain-seconds", type=float, default=10.0)
@@ -200,21 +316,32 @@ def main() -> None:
     args = parser.parse_args()
     if not CHUNK_SECONDS <= args.window_seconds <= 9.6:
         parser.error("--window-seconds 必须在 0.48 到 9.6 秒之间")
-    asyncio.run(
-        run(
-            args.wav,
-            args.url,
-            args.output,
-            max(1, args.tail_chunks),
-            drain_seconds=max(0.1, args.drain_seconds),
-            max_seconds=args.max_seconds,
-            start_seconds=args.start_seconds,
-            open_timeout=max(1.0, args.open_timeout),
-            response_timeout=max(1.0, args.response_timeout),
-            send_mode=args.send_mode,
-            window_seconds=args.window_seconds,
+    if not 1 <= args.concurrency <= 256:
+        parser.error("--concurrency 必须在 1 到 256 之间")
+    run_options = {
+        "tail_chunks": max(1, args.tail_chunks),
+        "drain_seconds": max(0.1, args.drain_seconds),
+        "max_seconds": args.max_seconds,
+        "start_seconds": args.start_seconds,
+        "open_timeout": max(1.0, args.open_timeout),
+        "response_timeout": max(1.0, args.response_timeout),
+        "send_mode": args.send_mode,
+        "window_seconds": args.window_seconds,
+    }
+    if args.concurrency == 1:
+        asyncio.run(run(args.wav, args.url, args.output, **run_options))
+    else:
+        aggregate = asyncio.run(
+            run_concurrent(
+                args.wav,
+                args.url,
+                args.output,
+                args.concurrency,
+                **run_options,
+            )
         )
-    )
+        if aggregate["status"] != "completed":
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":
