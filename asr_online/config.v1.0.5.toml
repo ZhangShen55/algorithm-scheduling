@@ -1,0 +1,38 @@
+# v1.0.5 独立部署配置：只调用 Qwen3-ASR 有状态流式服务，不加载本地模型。
+id_engine = "online-1"
+version = "seacraft-asr-online-v1.0.5"
+device = "cpu"
+ngpu = 0
+
+qwen_stream_enabled = true
+qwen_stream_only_mode = true
+qwen_stream_base_url = "http://192.168.29.12:8806"
+# 多实例部署时填写每个容器地址，例如 8806、8807、8808。
+qwen_stream_base_urls = ["http://192.168.29.12:8806"]
+qwen_stream_chunk_seconds = 0.48
+qwen_stream_connect_timeout_ms = 5000
+qwen_stream_chunk_timeout_ms = 15000
+qwen_stream_silence_rms = 0.0003
+qwen_stream_silence_chunks = 3
+qwen_stream_max_segment_seconds = 20
+qwen_stream_max_sessions = 8
+# 官方流式 Demo 的单容器并发稳定性有限，默认每个容器只租给一路会话。
+qwen_stream_backend_capacity = 1
+
+[logging]
+level = "INFO"
+directory = "logs"
+file_name = "application.log"
+max_file_size_mib = 100
+retention_days = 7
+stdout_enabled = true
+file_enabled = true
+
+[platform]
+registration_enabled = false
+control_service_url = ""
+heartbeat_interval_seconds = 5
+max_concurrent_requests = 1
+
+[runtime]
+require_gpu = false

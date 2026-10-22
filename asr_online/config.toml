@@ -40,6 +40,19 @@ v4_itn_remove_interjections = true
 v4_itn_enable_standalone_number = true
 v4_itn_enable_0_to_9 = false
 v4_itn_enable_million = false
+# v1.0.5 使用官方 Qwen3-ASR 有状态流式服务，不在本进程加载本地 ASR 模型。
+qwen_stream_enabled = true
+qwen_stream_only_mode = false
+qwen_stream_base_url = "http://192.168.29.12:8806"
+qwen_stream_chunk_seconds = 0.48
+qwen_stream_connect_timeout_ms = 5000
+qwen_stream_chunk_timeout_ms = 15000
+# 0.48 秒 PCM 的能量阈值和连续静音块数，用于轻量 finished 分段。
+qwen_stream_silence_rms = 0.004
+qwen_stream_silence_chunks = 3
+qwen_stream_max_segment_seconds = 20
+# 官方流式 Demo 多会话稳定性有限，默认仅允许单会话，验证后再提高。
+qwen_stream_max_sessions = 1
 
 [logging]
 # 日志级别。

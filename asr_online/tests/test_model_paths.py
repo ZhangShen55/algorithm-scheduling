@@ -184,6 +184,41 @@ class ModelPathConfigTests(unittest.TestCase):
             self.assertFalse(runtime.exists())
             decrypt.assert_called_once()
 
+    def test_qwen_stream_configuration_is_validated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.toml"
+            config_path.write_text(
+                """
+qwen_stream_enabled = true
+qwen_stream_only_mode = true
+qwen_stream_base_url = "http://127.0.0.1:8826"
+qwen_stream_base_urls = [
+  "http://127.0.0.1:8826",
+  "http://127.0.0.1:8827",
+]
+qwen_stream_chunk_seconds = 0.48
+qwen_stream_connect_timeout_ms = 5000
+qwen_stream_chunk_timeout_ms = 15000
+qwen_stream_silence_rms = 0.004
+qwen_stream_silence_chunks = 3
+qwen_stream_max_segment_seconds = 20
+qwen_stream_max_sessions = 2
+qwen_stream_backend_capacity = 1
+""",
+                encoding="utf-8",
+            )
+            settings = Settings(config_path=str(config_path))
+            self.assertTrue(settings.qwen_stream_enabled)
+            self.assertTrue(settings.qwen_stream_only_mode)
+            self.assertEqual(settings.qwen_stream_base_url, "http://127.0.0.1:8826")
+            self.assertEqual(
+                settings.qwen_stream_base_urls,
+                ("http://127.0.0.1:8826", "http://127.0.0.1:8827"),
+            )
+            self.assertEqual(settings.qwen_stream_backend_capacity, 1)
+            self.assertEqual(settings.qwen_stream_chunk_seconds, 0.48)
+            self.assertEqual(settings.qwen_stream_silence_chunks, 3)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -85,6 +85,10 @@ async def load_models_if_needed():
 
     async with _model_lock:
         try:
+            if settings.qwen_stream_only_mode:
+                if not settings.qwen_stream_enabled:
+                    raise RuntimeError("qwen_stream_only_mode 要求启用 qwen_stream")
+                return
             resolve_runtime_device()
 
             if _model_online is None:

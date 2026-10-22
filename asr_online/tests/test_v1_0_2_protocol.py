@@ -148,12 +148,13 @@ class V1_0_2ProtocolTests(unittest.TestCase):
         self.app = FastAPI()
         self.app.include_router(ws_online.router)
 
-    def test_routes_include_v1_v2_v3_and_v4(self):
+    def test_routes_include_v1_through_v5(self):
         paths = {route.path for route in ws_online.router.routes}
         self.assertIn("/v1.0.1/seacraft_asr_online", paths)
         self.assertIn("/v1.0.2/seacraft_asr_online", paths)
         self.assertIn("/v1.0.3/seacraft_asr_online", paths)
         self.assertIn("/v1.0.4/seacraft_asr_online", paths)
+        self.assertIn("/v1.0.5/seacraft_asr_online", paths)
 
         endpoints = {route.path: route.endpoint for route in ws_online.router.routes}
         self.assertIs(
@@ -167,6 +168,14 @@ class V1_0_2ProtocolTests(unittest.TestCase):
         self.assertIs(
             endpoints["/v1.0.3/seacraft_asr_online"],
             ws_online.websocket_endpoint_v3,
+        )
+        self.assertIs(
+            endpoints["/v1.0.4/seacraft_asr_online"],
+            ws_online.websocket_endpoint_v4,
+        )
+        self.assertIs(
+            endpoints["/v1.0.5/seacraft_asr_online"],
+            ws_online.websocket_endpoint_v5,
         )
 
     def test_v1_0_1_keeps_legacy_response_shape(self):

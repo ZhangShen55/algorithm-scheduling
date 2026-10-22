@@ -215,6 +215,23 @@ class GpuRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.models.get_vad_model())
         self.assertIsNone(self.models.get_correction_model())
 
+    async def test_qwen_stream_only_mode_skips_all_local_models(self) -> None:
+        self.config.update(
+            qwen_stream_enabled=True,
+            qwen_stream_only_mode=True,
+        )
+
+        with (
+            self._settings_config_patch(),
+            patch.object(self.models, "AutoModel") as auto_model,
+            patch.object(self.models, "pipeline") as punctuation_pipeline,
+        ):
+            await self.models.load_models_if_needed()
+
+        auto_model.assert_not_called()
+        punctuation_pipeline.assert_not_called()
+        self.assertIsNone(self.models.get_online_model())
+
 
 if __name__ == "__main__":
     unittest.main()

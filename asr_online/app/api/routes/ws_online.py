@@ -23,6 +23,7 @@ from app.core.config import settings
 from app.utils.character_utils import normalize_punct_by_context, safe_concat, count_chinese_and_words
 from app.utils.asr_stats import update_stat
 from app.api.routes.ws_online_v4 import run_v4_session
+from app.api.routes.ws_online_v5 import run_v5_session
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -1303,3 +1304,8 @@ async def websocket_endpoint_v3(ws: WebSocket):
 @router.websocket("/v1.0.4/seacraft_asr_online")
 async def websocket_endpoint_v4(ws: WebSocket):
     await run_v4_session(ws)
+
+
+@router.websocket("/v1.0.5/seacraft_asr_online")
+async def websocket_endpoint_v5(ws: WebSocket):
+    await run_v5_session(ws)

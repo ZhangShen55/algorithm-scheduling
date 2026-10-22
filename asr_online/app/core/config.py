@@ -218,6 +218,89 @@ class Settings:
     def v4_itn_enable_million(self) -> bool:
         return self._v4_itn_bool("v4_itn_enable_million", False)
 
+    def _bool(self, key: str, default: bool) -> bool:
+        value = self._cfg.get(key, default)
+        if not isinstance(value, bool):
+            raise ValueError(f"{key} 必须为布尔值")
+        return value
+
+    @property
+    def qwen_stream_enabled(self) -> bool:
+        return self._bool("qwen_stream_enabled", True)
+
+    @property
+    def qwen_stream_only_mode(self) -> bool:
+        return self._bool("qwen_stream_only_mode", False)
+
+    @property
+    def qwen_stream_base_url(self) -> str:
+        value = str(self._cfg.get("qwen_stream_base_url", "")).strip().rstrip("/")
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("qwen_stream_base_url 必须是 http:// 或 https:// 地址")
+        return value
+
+    @property
+    def qwen_stream_base_urls(self) -> tuple[str, ...]:
+        configured = self._cfg.get("qwen_stream_base_urls")
+        if configured is None:
+            return (self.qwen_stream_base_url,)
+        if not isinstance(configured, list) or not configured:
+            raise ValueError("qwen_stream_base_urls 必须是非空字符串数组")
+        urls = tuple(str(value).strip().rstrip("/") for value in configured)
+        if any(not value.startswith(("http://", "https://")) for value in urls):
+            raise ValueError("qwen_stream_base_urls 只能包含 http:// 或 https:// 地址")
+        return tuple(dict.fromkeys(urls))
+
+    @property
+    def qwen_stream_chunk_seconds(self) -> float:
+        value = float(self._cfg.get("qwen_stream_chunk_seconds", 0.48))
+        if value <= 0 or value > 5:
+            raise ValueError("qwen_stream_chunk_seconds 必须大于 0 且不超过 5")
+        return value
+
+    @property
+    def qwen_stream_connect_timeout_ms(self) -> int:
+        return self._positive_int("qwen_stream_connect_timeout_ms", 5000)
+
+    @property
+    def qwen_stream_chunk_timeout_ms(self) -> int:
+        return self._positive_int("qwen_stream_chunk_timeout_ms", 15000)
+
+    @property
+    def qwen_stream_silence_rms(self) -> float:
+        value = float(self._cfg.get("qwen_stream_silence_rms", 0.004))
+        if value <= 0 or value >= 1:
+            raise ValueError("qwen_stream_silence_rms 必须大于 0 且小于 1")
+        return value
+
+    @property
+    def qwen_stream_silence_chunks(self) -> int:
+        value = self._positive_int("qwen_stream_silence_chunks", 3)
+        if value > 100:
+            raise ValueError("qwen_stream_silence_chunks 不能大于 100")
+        return value
+
+    @property
+    def qwen_stream_max_segment_seconds(self) -> int:
+        value = self._positive_int("qwen_stream_max_segment_seconds", 20)
+        if value > 120:
+            raise ValueError("qwen_stream_max_segment_seconds 不能大于 120")
+        return value
+
+    @property
+    def qwen_stream_max_sessions(self) -> int:
+        value = self._positive_int("qwen_stream_max_sessions", 1)
+        if value > 64:
+            raise ValueError("qwen_stream_max_sessions 不能大于 64")
+        return value
+
+    @property
+    def qwen_stream_backend_capacity(self) -> int:
+        value = self._positive_int("qwen_stream_backend_capacity", 1)
+        if value > 8:
+            raise ValueError("qwen_stream_backend_capacity 不能大于 8")
+        return value
+
     # 在线模型路径
     @property
     def asr_online_model_dir(self) -> str:
