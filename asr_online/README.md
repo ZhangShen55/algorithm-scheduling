@@ -9,6 +9,7 @@
 | 流式 ASR | Paraformer 在线模型，低延迟增量输出 |
 | 实时标点 | ModelScope 标点模型，按静音/长度触发 |
 | 累计纠正 | v1.0.4 使用普通非流式 Paraformer 周期识别当前段累计音频，并单独补标点 |
+| Qwen 流式 | v1.0.5 代理 Qwen3-ASR-0.6B 有状态流式会话，不加载本地 ASR、VAD、纠正和标点模型 |
 | 实例路由 | 每个容器只运行一个 Uvicorn 端点，由算法调度平台按 WebSocket 会话选实例 |
 | 状态接口 | 运行时长、会话统计、任务列表查询与清理 |
 
@@ -18,6 +19,7 @@
 asr_online/
 ├── app/main.py          # FastAPI 应用入口
 ├── config.toml             # 服务与模型配置（容器内挂载为 /config.toml）
+├── config.v1.0.5.toml      # 仅 Qwen 流式、跳过本地模型加载的独立配置
 ├── docker/
 │   ├── Dockerfile          # CUDA 12.1 + Conda 普通镜像构建
 │   ├── Dockerfile.cython   # Cython 编译镜像构建
@@ -26,6 +28,7 @@ asr_online/
 ├── requirements.txt        # Python 依赖
 ├── api/routes/
 │   ├── ws_online.py        # WebSocket 在线识别
+│   ├── ws_online_v5.py     # Qwen3-ASR 有状态流式 WebSocket 适配
 │   └── status.py           # /get_status、/clear_tasks_list
 ├── core/
 │   ├── config.py           # 读取 TOML 配置
@@ -50,6 +53,7 @@ Uvicorn :8084  (app.main:app, workers=1)
    ├── WebSocket /v1.0.2/seacraft_asr_online
    ├── WebSocket /v1.0.3/seacraft_asr_online
    ├── WebSocket /v1.0.4/seacraft_asr_online
+   ├── WebSocket /v1.0.5/seacraft_asr_online
    └── HTTP /get_status 等
 ```
 
@@ -268,6 +272,60 @@ ITN 只规范化数字、日期、时间、比例、金额和单位等书面形�
 98 秒起的 30 秒片段；独立目录保留完整 JSONL、音频及纠正位置，脚本退出时关闭其后端。
 运行方式见脚本说明。此次仅验证短片段功能，准确率与纠正好坏待用户核验，不提供容量结论。
 
+### WebSocket v1.0.5（Qwen3-ASR 有状态流式接口）
+
+- **路径**：`/v1.0.5/seacraft_asr_online`
+- **直连地址**：`ws://<host>:8084/v1.0.5/seacraft_asr_online`
+- **上行和响应**：与 v1.0.4 相同；上行是 16 kHz、单声道、int16 PCM，
+  下行严格保持 `key/text/finished/bg/ed`。
+- **内部处理**：每个 WebSocket 会话单独调用 Qwen3-ASR-0.6B 官方有状态流式接口
+  `/api/start`、`/api/chunk`、`/api/finish`。输入按 `0.48` 秒转换为 float32 PCM
+  后提交，服务端保存跨块声学状态。
+- **本地模型**：v1.0.5 不加载在线 Paraformer、FSMN-VAD、SenseVoice、
+  Paraformer-large、ITN 或独立标点模型。Qwen 返回的累计文本直接作为当前段文本。
+- **分段**：使用轻量 PCM 能量检测，不加载 VAD 模型。连续默认 `3` 个静音块
+  （约 1.44 秒）发送 `finished=true`；20 秒或 200 字作为保护性段末。Qwen
+  累计文本中已经完成的前缀不会再次出现在下一段。
+- **时间戳**：`bg/ed` 来自 WebSocket 会话收到的 PCM 样本边界，不是 Qwen 字级时间戳。
+- **故障语义**：Qwen 服务启动、分块或收尾失败时关闭 WebSocket，错误码为
+  `1011`；不会退化为每个 0.48 秒块独立调用普通请求式接口。
+
+v1.0.5 独立配置为 `config.v1.0.5.toml`。`qwen_stream_only_mode=true` 会跳过所有
+本地模型加载，启动时只检查外部 Qwen 流式服务配置：
+
+```toml
+qwen_stream_enabled = true
+qwen_stream_only_mode = true
+qwen_stream_base_url = "http://192.168.29.12:8826"
+qwen_stream_base_urls = [
+  "http://192.168.29.12:8826",
+  "http://192.168.29.12:8827",
+]
+qwen_stream_chunk_seconds = 0.48
+qwen_stream_connect_timeout_ms = 5000
+qwen_stream_chunk_timeout_ms = 15000
+qwen_stream_silence_rms = 0.004
+qwen_stream_silence_chunks = 3
+qwen_stream_max_segment_seconds = 20
+qwen_stream_max_sessions = 2
+qwen_stream_backend_capacity = 1
+```
+
+v1.0.5 在进程内维护 Qwen backend pool。新 WebSocket 建立时原子租用一个
+`qwen_stream_base_urls` 实例，连接存续期间所有 `/api/start`、`/api/chunk`
+和 `/api/finish` 都固定发送到该实例，连接结束后释放。`qwen_stream_max_sessions`
+是总容量上限，`qwen_stream_backend_capacity` 是单个 Qwen 容器的容量上限。
+官方 Flask 流式 Demo 默认可用的并发状态机未通过稳定性验证，因此单容器容量默认
+保持为 `1`；扩容应优先增加独立 Qwen 容器，而不是提高该值。
+
+本地开发可以只启动 v1.0.5 应用，实际音频会转发到 `qwen_stream_base_url`：
+
+```bash
+conda activate asr
+CONFIG_PATH=config.v1.0.5.toml python -m uvicorn app.main:app \
+  --host 127.0.0.1 --port 8084 --workers 1
+```
+
 ### HTTP 状态
 
 | 方法 | 路径 | 说明 |
@@ -291,7 +349,7 @@ python main.py
 # 服务监听 http://0.0.0.0:8084
 ```
 
-WebSocket 测试可参考 `test/test_api_ws_client.py`（需自备 16 kHz PCM/WAV 测试音频）。默认 `--send-mode fast` 按服务端 `ed` 推进加速发送，最多领先 2.88 秒音频；`--window-seconds` 可在 0.48~9.6 秒内调整，低于服务端 20 秒缓存上限。纠正响应的重复 `ed` 不释放发送额度。实际速度取决于服务端处理能力，加速测试不等同于实时输入下的纠正效果测试；模拟实时输入使用 `--send-mode realtime`，每 0.48 秒发送一块。所有流式及纠正响应独立接收保存。默认音频处理进度 30 秒未推进即退出，可通过 `--response-timeout` 调整；断连会报告关闭码和原因。成功、失败或中断均保存 `.summary.json`，包含发送模式、窗口、发送块数、已发送音频时长（包含末块补齐和尾部静音）、最后响应 `ed` 和退出状态。`--output` 指定 JSONL 路径，重复使用同一路径会覆盖旧结果。
+WebSocket 测试可参考 `test/test_api_ws_client.py`（需自备 16 kHz PCM/WAV 测试音频）。默认 `--send-mode fast` 按服务端 `ed` 推进加速发送，最多领先 2.88 秒音频；`--window-seconds` 可在 0.48~9.6 秒内调整，低于服务端 20 秒缓存上限。纠正响应的重复 `ed` 不释放发送额度。实际速度取决于服务端处理能力，加速测试不等同于实时输入下的纠正效果测试；模拟实时输入使用 `--send-mode realtime`，每 0.48 秒发送一块。所有流式及纠正响应独立接收保存。默认音频处理进度 30 秒未推进即退出，可通过 `--response-timeout` 调整；断连会报告关闭码和原因。成功、失败或中断均保存 `.summary.json`，包含发送模式、窗口、发送块数、已发送音频时长（包含末块补齐和尾部静音）、最后响应 `ed` 和退出状态。`--output` 指定 JSONL 路径，重复使用同一路径会覆盖旧结果。使用 `--concurrency N` 时，同一 WAV 由 N 路客户端同时发送，各客户端输出为 `<name>.client-001-of-N.jsonl` 等独立文件，并额外生成 `<name>.concurrent.summary.json` 汇总成功路数、失败路数和累计响应数。
 
 ## Docker 构建与运行
 
